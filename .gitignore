@@ -1,0 +1,12 @@
+/target/
+**/*.rs.bk
+.idea/
+.vscode/Trellis Instructions
+
+.ace-tool/
+.cursor
+.agents
+.claude
+.codex
+.pi
+.trellis

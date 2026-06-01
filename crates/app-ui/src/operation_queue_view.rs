@@ -1,0 +1,270 @@
+use iced::widget::{button, column, container, progress_bar, row, scrollable, svg, Svg};
+use iced::{Alignment, Element, Length};
+
+use crate::appearance::{
+    context_menu_button_style, context_menu_style, error_notification_style,
+    navigation_icon_button_style, path_suggestion_item_style,
+};
+use crate::formatting::format_middle_ellipsized_text;
+use crate::model::Message;
+use crate::operation_queue::{FileOperationQueue, FileOperationStatus, FileOperationTask};
+use crate::typography::readable_text;
+
+pub(crate) const OPERATION_QUEUE_PANEL_WIDTH: f32 = 360.0;
+pub(crate) const OPERATION_QUEUE_PANEL_BOTTOM: f32 = 18.0;
+pub(crate) const OPERATION_QUEUE_INDICATOR_SIZE: f32 = 30.0;
+pub(crate) const OPERATION_QUEUE_INDICATOR_RIGHT: f32 = 14.0;
+pub(crate) const OPERATION_QUEUE_INDICATOR_BOTTOM: f32 = 14.0;
+
+const TASK_DETAIL_MAX_CHARS: usize = 44;
+const TASK_ERROR_MAX_CHARS: usize = 140;
+const TASK_LIST_MAX_HEIGHT: f32 = 320.0;
+
+pub(crate) fn operation_queue_indicator(
+    queue: &FileOperationQueue,
+) -> Option<Element<'_, Message>> {
+    let svg = Svg::new(svg::Handle::from_memory(
+        indicator_svg(
+            queue.indicator_progress(),
+            queue.unread_count(),
+            queue.has_active_task(),
+            queue.has_unread_failed_task(),
+            queue.is_active_paused(),
+        )
+        .into_bytes(),
+    ))
+    .width(Length::Fixed(OPERATION_QUEUE_INDICATOR_SIZE))
+    .height(Length::Fixed(OPERATION_QUEUE_INDICATOR_SIZE));
+
+    Some(
+        button(svg)
+            .on_press(Message::FileOperationIndicatorPressed)
+            .padding(0)
+            .style(navigation_icon_button_style())
+            .into(),
+    )
+}
+
+pub(crate) fn operation_queue_panel(queue: &FileOperationQueue) -> Element<'_, Message> {
+    let header = row![
+        readable_text("File Tasks").size(16).width(Length::Fill),
+        readable_text(format!("{} tasks", queue.task_count())).size(12),
+    ]
+    .spacing(8)
+    .align_items(Alignment::Center);
+
+    let mut tasks = column![].spacing(8);
+    if queue.tasks().is_empty() {
+        tasks = tasks.push(empty_queue_row());
+    } else {
+        for task in queue.tasks() {
+            tasks = tasks.push(operation_task_row(task));
+        }
+    }
+
+    let content = column![
+        header,
+        scrollable(tasks)
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                iced::widget::scrollable::Properties::new()
+                    .width(6.0)
+                    .scroller_width(6.0),
+            ))
+            .height(Length::Fixed(TASK_LIST_MAX_HEIGHT)),
+    ]
+    .spacing(10);
+
+    container(content)
+        .padding(12)
+        .width(Length::Fixed(OPERATION_QUEUE_PANEL_WIDTH))
+        .style(context_menu_style)
+        .into()
+}
+
+fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
+    let detail = format_middle_ellipsized_text(&task.operation.detail(), TASK_DETAIL_MAX_CHARS);
+    let title = row![
+        readable_text(task.operation.title())
+            .size(14)
+            .width(Length::Fill),
+        readable_text(task.status.label()).size(12),
+    ]
+    .spacing(8)
+    .align_items(Alignment::Center);
+
+    let progress = progress_bar(
+        0.0..=1.0,
+        task.progress.fraction().unwrap_or_else(|| {
+            if task.status == FileOperationStatus::Failed {
+                1.0
+            } else {
+                0.0
+            }
+        }),
+    )
+    .height(Length::Fixed(4.0));
+
+    let mut body = column![title, readable_text(detail).size(12), progress]
+        .spacing(6)
+        .width(Length::Fill);
+
+    if let Some(error) = task.error.as_deref() {
+        body = body.push(
+            readable_text(format_middle_ellipsized_text(error, TASK_ERROR_MAX_CHARS))
+                .size(12)
+                .width(Length::Fill),
+        );
+    }
+
+    let controls = operation_task_controls(task);
+    let content = column![body, controls].spacing(8);
+    let item = container(content).padding(10).width(Length::Fill);
+    let item = if task.status == FileOperationStatus::Failed {
+        item.style(error_notification_style)
+    } else {
+        item.style(path_suggestion_item_style)
+    };
+
+    item.into()
+}
+
+fn empty_queue_row() -> Element<'static, Message> {
+    container(readable_text("No file tasks").size(13).width(Length::Fill))
+        .padding(10)
+        .width(Length::Fill)
+        .style(path_suggestion_item_style)
+        .into()
+}
+
+fn operation_task_controls(task: &FileOperationTask) -> Element<'_, Message> {
+    let pause_label = match task.status {
+        FileOperationStatus::Paused => "Resume",
+        _ => "Pause",
+    };
+
+    let mut controls = row![].spacing(6).align_items(Alignment::Center);
+    if matches!(
+        task.status,
+        FileOperationStatus::Running | FileOperationStatus::Paused
+    ) {
+        controls = controls.push(task_control_button(
+            pause_label,
+            Message::FileOperationPauseToggled(task.id),
+        ));
+    }
+    if matches!(
+        task.status,
+        FileOperationStatus::Pending | FileOperationStatus::Running | FileOperationStatus::Paused
+    ) {
+        controls = controls.push(task_control_button(
+            "Cancel",
+            Message::FileOperationCancelRequested(task.id),
+        ));
+    }
+
+    controls.into()
+}
+
+fn task_control_button(label: &'static str, message: Message) -> Element<'static, Message> {
+    button(readable_text(label).size(12))
+        .on_press(message)
+        .padding([4, 8])
+        .style(context_menu_button_style())
+        .into()
+}
+
+fn indicator_svg(
+    progress: Option<f32>,
+    unread_count: usize,
+    has_active_task: bool,
+    has_unread_error: bool,
+    is_paused: bool,
+) -> String {
+    let has_visible_progress =
+        has_active_task || has_unread_error || is_paused || progress.is_some();
+    let progress = progress
+        .unwrap_or(if has_visible_progress { 0.35 } else { 0.0 })
+        .clamp(0.0, 1.0);
+    let circumference = 2.0 * std::f32::consts::PI * 12.0;
+    let offset = circumference * (1.0 - progress);
+    let stroke = if has_unread_error {
+        "#ef4444"
+    } else if is_paused {
+        "#f59e0b"
+    } else {
+        "#3b82f6"
+    };
+    let badge = if unread_count > 1 {
+        Some(unread_count.min(99).to_string())
+    } else if has_unread_error {
+        Some("!".to_owned())
+    } else if is_paused {
+        Some("||".to_owned())
+    } else {
+        None
+    };
+    let badge_fill = if has_unread_error {
+        "#ef4444"
+    } else if is_paused {
+        "#f59e0b"
+    } else {
+        "#2563eb"
+    };
+    let badge_svg = if let Some(label) = badge {
+        format!(
+            r##"<circle cx="23" cy="7" r="5.2" fill="{badge_fill}"/>
+<text x="23" y="9.8" text-anchor="middle" font-family="sans-serif" font-size="7.4" font-weight="700" fill="#ffffff">{label}</text>"##
+        )
+    } else {
+        String::new()
+    };
+    let progress_svg = if has_visible_progress {
+        format!(
+            r#"<circle cx="15" cy="15" r="12" fill="none" stroke="{stroke}" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="{circumference:.2}" stroke-dashoffset="{offset:.2}" transform="rotate(-90 15 15)"/>"#
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">
+<circle cx="15" cy="15" r="14" fill="#111827" fill-opacity="0.78"/>
+<circle cx="15" cy="15" r="12" fill="none" stroke="#64748b" stroke-opacity="0.34" stroke-width="2.6"/>
+{progress_svg}
+<g transform="translate(6.4 6.4) scale(0.72)" fill="none" stroke="#f8fafc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+<rect x="3" y="5" width="6" height="6" rx="1"/>
+<path d="m3 17 2 2 4-4"/>
+<path d="M13 6h8"/>
+<path d="M13 12h8"/>
+<path d="M13 18h8"/>
+</g>
+{badge_svg}
+</svg>"##
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indicator_hides_progress_ring_for_completed_only_tasks() {
+        let svg = indicator_svg(None, 1, false, false, false);
+
+        assert!(!svg.contains("stroke-dasharray"));
+    }
+
+    #[test]
+    fn indicator_hides_badge_after_tasks_are_read() {
+        let svg = indicator_svg(None, 0, false, false, false);
+
+        assert!(!svg.contains("<text"));
+    }
+
+    #[test]
+    fn indicator_keeps_progress_ring_for_active_indeterminate_task() {
+        let svg = indicator_svg(None, 1, true, false, false);
+
+        assert!(svg.contains("stroke-dasharray"));
+    }
+}
