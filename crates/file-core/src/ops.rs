@@ -475,14 +475,16 @@ async fn prepare_copy_target(
             Ok(Some(to.to_path_buf()))
         }
         TransferConflictStrategy::Skip => Ok(None),
-        TransferConflictStrategy::KeepBoth => unique_available_path(to)
-            .await
-            .map(Some)
-            .map_err(|source| FileError::Copy {
-                from: from.to_path_buf(),
-                to: to.to_path_buf(),
-                source,
-            }),
+        TransferConflictStrategy::KeepBoth => {
+            unique_available_path(to)
+                .await
+                .map(Some)
+                .map_err(|source| FileError::Copy {
+                    from: from.to_path_buf(),
+                    to: to.to_path_buf(),
+                    source,
+                })
+        }
         TransferConflictStrategy::Merge => {
             if source_metadata.is_dir() && target_metadata.is_dir() {
                 Ok(Some(to.to_path_buf()))
@@ -713,14 +715,16 @@ async fn prepare_move_target(
             Ok(Some(to.to_path_buf()))
         }
         TransferConflictStrategy::Skip | TransferConflictStrategy::Merge => Ok(None),
-        TransferConflictStrategy::KeepBoth => unique_available_path(to)
-            .await
-            .map(Some)
-            .map_err(|source| FileError::Move {
-                from: from.to_path_buf(),
-                to: to.to_path_buf(),
-                source,
-            }),
+        TransferConflictStrategy::KeepBoth => {
+            unique_available_path(to)
+                .await
+                .map(Some)
+                .map_err(|source| FileError::Move {
+                    from: from.to_path_buf(),
+                    to: to.to_path_buf(),
+                    source,
+                })
+        }
     }
 }
 

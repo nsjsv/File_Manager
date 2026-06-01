@@ -29,7 +29,8 @@ pub(crate) enum Message {
     FileOperationAutoHideElapsed(u64),
     FileOperationPauseToggled(u64),
     FileOperationCancelRequested(u64),
-    ArchiveDirectoryToggled(usize),
+    PreviewTreeDirectoryToggled(usize),
+    PreviewTreeAnimationTick,
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
     ColumnEntryClicked(PathBuf),
     ColumnBlankClicked(PathBuf),
@@ -52,6 +53,7 @@ pub(crate) enum Message {
     AuxiliaryWindowCloseRequested(window::Id),
     AuxiliaryWindowResized(window::Id, u32, u32),
     WindowFocused(window::Id),
+    WindowUnfocused(window::Id),
     FocusedWindowEscapePressed,
     WindowPointerPressed {
         button: mouse::Button,
@@ -256,9 +258,10 @@ pub(crate) enum PreviewState {
 pub(crate) enum PreviewContent {
     Directory {
         path: PathBuf,
-        entries: Vec<PreviewEntry>,
+        entries: Vec<PreviewTreeEntry>,
         total: usize,
         skipped: usize,
+        truncated: bool,
     },
     Text {
         path: PathBuf,
@@ -267,7 +270,7 @@ pub(crate) enum PreviewContent {
     },
     Archive {
         path: PathBuf,
-        entries: Vec<PreviewArchiveEntry>,
+        entries: Vec<PreviewTreeEntry>,
         total: usize,
         truncated: bool,
     },
@@ -287,22 +290,17 @@ pub(crate) struct PreviewSize {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PreviewEntry {
-    pub(crate) name: String,
-    pub(crate) kind: FileKind,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PreviewArchiveEntry {
+pub(crate) struct PreviewTreeEntry {
     pub(crate) id: usize,
     pub(crate) name: String,
     pub(crate) kind: FileKind,
     pub(crate) depth: usize,
     pub(crate) parent: Option<usize>,
     pub(crate) is_expanded: bool,
+    pub(crate) toggle_rotation_progress: f32,
 }
 
-impl PreviewArchiveEntry {
+impl PreviewTreeEntry {
     pub(crate) fn is_directory(&self) -> bool {
         self.kind == FileKind::Directory
     }

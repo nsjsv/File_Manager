@@ -13,6 +13,7 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
                 Some(Message::AuxiliaryWindowResized(*id, *width, *height))
             }
             iced::window::Event::Focused => Some(Message::WindowFocused(*id)),
+            iced::window::Event::Unfocused => Some(Message::WindowUnfocused(*id)),
             _ => None,
         };
     }
@@ -285,6 +286,18 @@ mod tests {
         assert!(matches!(
             message,
             Some(Message::WindowFocused(window)) if window == iced::window::Id::MAIN
+        ));
+    }
+
+    #[test]
+    fn unfocused_window_event_updates_window_focus_state() {
+        let event = Event::Window(iced::window::Id::MAIN, iced::window::Event::Unfocused);
+
+        let message = global_event_message(event, event::Status::Ignored);
+
+        assert!(matches!(
+            message,
+            Some(Message::WindowUnfocused(window)) if window == iced::window::Id::MAIN
         ));
     }
 

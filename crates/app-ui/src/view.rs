@@ -23,10 +23,12 @@ use crate::floating_surface::{
     dismissable_floating_surface, floating_surface, FloatingContent, FloatingPlacement,
 };
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
-use crate::icons::{file_entry_icon_symbol, preview_entry_icon_symbol, IconSymbol};
+use crate::icons::{
+    file_entry_icon_symbol, preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol,
+};
 use crate::model::{
-    trash_location_path, ColumnViewMode, ContextMenuState, Message, PreviewArchiveEntry,
-    PreviewContent, PreviewSize, PreviewState, SearchScope, SearchState, SidebarLocation,
+    trash_location_path, ColumnViewMode, ContextMenuState, Message, PreviewContent, PreviewSize,
+    PreviewState, PreviewTreeEntry, SearchScope, SearchState, SidebarLocation,
     TransferConflictChoice, TransferConflictItem, TransferConflictMetadata, TransferConflictState,
     TRASH_LOCATION_LABEL,
 };
@@ -66,8 +68,9 @@ const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
 const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
 const PREVIEW_PATH_MAX_CHARS: usize = 64;
 const PREVIEW_ENTRY_NAME_MAX_CHARS: usize = 48;
-const PREVIEW_ARCHIVE_INDENT_WIDTH: f32 = 18.0;
-const PREVIEW_ARCHIVE_TOGGLE_WIDTH: f32 = 16.0;
+const PREVIEW_TREE_INDENT_WIDTH: f32 = 18.0;
+const PREVIEW_TREE_TOGGLE_WIDTH: f32 = 16.0;
+const PREVIEW_TREE_TOGGLE_ROTATION_DEGREES: f32 = 90.0;
 const DRAG_PREVIEW_ICON_SIZE: f32 = 18.0;
 const DRAG_PREVIEW_LABEL_MAX_CHARS: usize = 34;
 const DRAG_PREVIEW_OFFSET_X: f32 = 14.0;
@@ -1136,7 +1139,8 @@ fn preview_panel(preview: &PreviewState, size: PreviewSize) -> Element<'_, Messa
             entries,
             total,
             skipped,
-        }) => directory_preview_panel(path, entries, *total, *skipped, scroll_height),
+            truncated,
+        }) => directory_preview_panel(path, entries, *total, *skipped, *truncated, scroll_height),
         PreviewState::Ready(PreviewContent::Text {
             path,
             content,
@@ -1178,55 +1182,56 @@ fn preview_scroll_height(size: PreviewSize) -> f32 {
 
 fn directory_preview_panel(
     path: &std::path::PathBuf,
-    entries: &[crate::model::PreviewEntry],
+    entries: &[PreviewTreeEntry],
     total: usize,
     skipped: usize,
+    truncated: bool,
     scroll_height: f32,
 ) -> Column<'static, Message> {
-    let mut listing = Column::new().spacing(3);
-    if entries.is_empty() {
-        listing = listing.push(text("Empty directory").size(14));
-    } else {
-        for entry in entries {
-            listing = listing.push(preview_entry_row(entry));
-        }
-    }
-
-    let summary = if total > entries.len() {
-        format!("Showing {} of {} items", entries.len(), total)
-    } else {
-        format!("{} items", total)
-    };
-    let summary = if skipped > 0 {
-        format!("{summary}, {skipped} skipped")
-    } else {
-        summary
-    };
+    let listing = preview_tree_listing(entries, "Empty directory");
 
     column![
         readable_text(preview_title(path)).size(14),
-        text(summary).size(14),
+        text(directory_preview_summary(
+            entries.len(),
+            total,
+            skipped,
+            truncated
+        ))
+        .size(14),
         scrollable(listing)
             .direction(preview_scroll_direction())
             .height(Length::Fixed(scroll_height)),
     ]
 }
 
+fn directory_preview_summary(
+    loaded_count: usize,
+    total: usize,
+    skipped: usize,
+    truncated: bool,
+) -> String {
+    let summary = if truncated {
+        format!("Showing first {loaded_count} entries")
+    } else {
+        format!("{total} entries")
+    };
+
+    if skipped > 0 {
+        format!("{summary}, {skipped} skipped")
+    } else {
+        summary
+    }
+}
+
 fn archive_preview_panel(
     path: &std::path::PathBuf,
-    entries: &[PreviewArchiveEntry],
+    entries: &[PreviewTreeEntry],
     total: usize,
     truncated: bool,
     scroll_height: f32,
 ) -> Column<'static, Message> {
-    let mut listing = Column::new().spacing(3);
-    if entries.is_empty() {
-        listing = listing.push(readable_text("Empty archive").size(14));
-    } else {
-        for entry in visible_archive_entries(entries) {
-            listing = listing.push(preview_archive_entry_row(entry));
-        }
-    }
+    let listing = preview_tree_listing(entries, "Empty archive");
 
     column![
         readable_text(preview_title(path)).size(14),
@@ -1245,20 +1250,36 @@ fn archive_preview_summary(loaded_count: usize, total: usize, truncated: bool) -
     }
 }
 
-fn visible_archive_entries(entries: &[PreviewArchiveEntry]) -> Vec<&PreviewArchiveEntry> {
+fn preview_tree_listing(
+    entries: &[PreviewTreeEntry],
+    empty_message: &'static str,
+) -> Column<'static, Message> {
+    let mut listing = Column::new().spacing(3);
+    if entries.is_empty() {
+        return listing.push(readable_text(empty_message).size(14));
+    }
+
+    for entry in visible_preview_tree_entries(entries) {
+        listing = listing.push(preview_tree_entry_row(entry));
+    }
+
+    listing
+}
+
+fn visible_preview_tree_entries(entries: &[PreviewTreeEntry]) -> Vec<&PreviewTreeEntry> {
     entries
         .iter()
-        .filter(|entry| archive_entry_visible(entry, entries))
+        .filter(|entry| preview_tree_entry_visible(entry, entries))
         .collect()
 }
 
-fn archive_entry_visible(entry: &PreviewArchiveEntry, entries: &[PreviewArchiveEntry]) -> bool {
+fn preview_tree_entry_visible(entry: &PreviewTreeEntry, entries: &[PreviewTreeEntry]) -> bool {
     let mut parent = entry.parent;
     while let Some(parent_id) = parent {
         let Some(parent_entry) = entries.get(parent_id) else {
             return false;
         };
-        if !parent_entry.is_expanded {
+        if !(parent_entry.is_expanded || parent_entry.toggle_rotation_progress > 0.0) {
             return false;
         }
         parent = parent_entry.parent;
@@ -1267,18 +1288,26 @@ fn archive_entry_visible(entry: &PreviewArchiveEntry, entries: &[PreviewArchiveE
     true
 }
 
-fn preview_archive_entry_row(entry: &PreviewArchiveEntry) -> Element<'static, Message> {
+fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message> {
     let name = format_middle_ellipsized_text(&entry.name, PREVIEW_ENTRY_NAME_MAX_CHARS);
     let indent = Space::with_width(Length::Fixed(
-        entry.depth as f32 * PREVIEW_ARCHIVE_INDENT_WIDTH,
+        entry.depth as f32 * PREVIEW_TREE_INDENT_WIDTH,
     ));
     let toggle: Element<'static, Message> = if entry.is_directory() {
-        text(if entry.is_expanded { "v" } else { ">" })
-            .size(13)
-            .width(Length::Fixed(PREVIEW_ARCHIVE_TOGGLE_WIDTH))
-            .into()
+        container(
+            rotated_chevron_right_view(
+                entry.toggle_rotation_progress * PREVIEW_TREE_TOGGLE_ROTATION_DEGREES,
+                PREVIEW_TREE_TOGGLE_WIDTH,
+            )
+            .style(icon_tone_style(IconTone::Normal)),
+        )
+        .width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
+        .height(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
+        .center_x()
+        .center_y()
+        .into()
     } else {
-        Space::with_width(Length::Fixed(PREVIEW_ARCHIVE_TOGGLE_WIDTH)).into()
+        Space::with_width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH)).into()
     };
     let row_content = row![
         indent,
@@ -1296,7 +1325,7 @@ fn preview_archive_entry_row(entry: &PreviewArchiveEntry) -> Element<'static, Me
 
     if entry.is_directory() {
         mouse_area(row_container)
-            .on_press(Message::ArchiveDirectoryToggled(entry.id))
+            .on_press(Message::PreviewTreeDirectoryToggled(entry.id))
             .interaction(iced::mouse::Interaction::Pointer)
             .into()
     } else {
@@ -1380,21 +1409,6 @@ fn preview_scroll_direction() -> iced::widget::scrollable::Direction {
             .width(6.0)
             .scroller_width(6.0),
     )
-}
-
-fn preview_entry_row(entry: &crate::model::PreviewEntry) -> Row<'static, Message> {
-    let name = format_middle_ellipsized_text(&entry.name, PREVIEW_ENTRY_NAME_MAX_CHARS);
-
-    row![
-        themed_icon(
-            preview_entry_icon_symbol(entry.kind, &entry.name),
-            IconTone::Normal,
-            PREVIEW_ICON_SIZE
-        ),
-        readable_text(name).size(14),
-    ]
-    .spacing(8)
-    .align_items(Alignment::Center)
 }
 
 fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<Theme> {

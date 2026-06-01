@@ -4,13 +4,13 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use file_core::{scan_directory, FileKind, ScanOptions};
+use file_core::{scan_directory, DirectoryEntry, FileKind, ScanOptions};
 use tokio::io::AsyncReadExt;
 
-use crate::model::{PreviewArchiveEntry, PreviewContent, PreviewEntry};
+use crate::model::{PreviewContent, PreviewTreeEntry};
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 256 * 1024;
-pub(crate) const PREVIEW_DIRECTORY_LIMIT: usize = 50;
+pub(crate) const PREVIEW_DIRECTORY_LIMIT: usize = 500;
 pub(crate) const PREVIEW_ARCHIVE_ENTRY_LIMIT: usize = 500;
 
 const SUPPORTED_ARCHIVE_FORMAT_MESSAGE: &str =
@@ -45,27 +45,93 @@ async fn load_directory_preview(
     path: PathBuf,
     options: ScanOptions,
 ) -> Result<PreviewContent, String> {
-    let scan = scan_directory(path, options)
-        .await
-        .map_err(|error| error.to_string())?;
-    let total = scan.entries.len();
-    let skipped = scan.skipped.len();
-    let entries = scan
-        .entries
-        .iter()
-        .take(PREVIEW_DIRECTORY_LIMIT)
-        .map(|entry| PreviewEntry {
-            name: entry.name().to_string_lossy().into_owned(),
-            kind: entry.kind,
-        })
-        .collect();
+    let preview_path = path.clone();
+    let mut entries = Vec::new();
+    let mut skipped = 0;
+    let truncated = load_directory_preview_tree(path, options, &mut entries, &mut skipped).await?;
+    let total = entries.len();
 
     Ok(PreviewContent::Directory {
-        path: scan.path,
+        path: preview_path,
         entries,
         total,
         skipped,
+        truncated,
     })
+}
+
+async fn load_directory_preview_tree(
+    path: PathBuf,
+    options: ScanOptions,
+    entries: &mut Vec<PreviewTreeEntry>,
+    skipped: &mut usize,
+) -> Result<bool, String> {
+    let mut pending_steps = vec![DirectoryPreviewStep::ScanDirectory {
+        path,
+        parent: None,
+        depth: 0,
+        is_root: true,
+    }];
+
+    while let Some(step) = pending_steps.pop() {
+        if entries.len() >= PREVIEW_DIRECTORY_LIMIT {
+            return Ok(true);
+        }
+
+        match step {
+            DirectoryPreviewStep::ScanDirectory {
+                path,
+                parent,
+                depth,
+                is_root,
+            } => {
+                let scan = match scan_directory(path, options.clone()).await {
+                    Ok(scan) => scan,
+                    Err(error) if is_root => return Err(error.to_string()),
+                    Err(_) => {
+                        *skipped += 1;
+                        continue;
+                    }
+                };
+                *skipped += scan.skipped.len();
+                for entry in scan.entries.into_iter().rev() {
+                    pending_steps.push(DirectoryPreviewStep::Entry {
+                        entry,
+                        parent,
+                        depth,
+                    });
+                }
+            }
+            DirectoryPreviewStep::Entry {
+                entry,
+                parent,
+                depth,
+            } => {
+                let entry_id = entries.len();
+                let is_directory = entry.kind == FileKind::Directory;
+                let entry_path = entry.path.clone();
+                entries.push(PreviewTreeEntry {
+                    id: entry_id,
+                    name: entry.name().to_string_lossy().into_owned(),
+                    kind: entry.kind,
+                    depth,
+                    parent,
+                    is_expanded: false,
+                    toggle_rotation_progress: 0.0,
+                });
+                if is_directory {
+                    pending_steps.push(DirectoryPreviewStep::ScanDirectory {
+                        path: entry_path,
+                        parent: Some(entry_id),
+                        depth: depth + 1,
+                        is_root: false,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 async fn load_archive_preview(
@@ -329,9 +395,23 @@ enum TarCompression {
 }
 
 struct ArchivePreview {
-    entries: Vec<PreviewArchiveEntry>,
+    entries: Vec<PreviewTreeEntry>,
     total: usize,
     truncated: bool,
+}
+
+enum DirectoryPreviewStep {
+    ScanDirectory {
+        path: PathBuf,
+        parent: Option<usize>,
+        depth: usize,
+        is_root: bool,
+    },
+    Entry {
+        entry: DirectoryEntry,
+        parent: Option<usize>,
+        depth: usize,
+    },
 }
 
 struct ArchiveMember {
@@ -434,7 +514,7 @@ impl ArchiveTreeBuilder {
         parent: Option<usize>,
         depth: usize,
         limit: usize,
-        entries: &mut Vec<PreviewArchiveEntry>,
+        entries: &mut Vec<PreviewTreeEntry>,
     ) {
         if entries.len() >= limit {
             return;
@@ -442,13 +522,18 @@ impl ArchiveTreeBuilder {
 
         let node = &self.nodes[node_index];
         let entry_id = entries.len();
-        entries.push(PreviewArchiveEntry {
+        entries.push(PreviewTreeEntry {
             id: entry_id,
             name: node.name.clone(),
             kind: node.kind,
             depth,
             parent,
             is_expanded: true,
+            toggle_rotation_progress: if node.kind == FileKind::Directory {
+                1.0
+            } else {
+                0.0
+            },
         });
 
         if node.kind != FileKind::Directory {
@@ -561,10 +646,48 @@ mod tests {
         assert_eq!(path, archive_path);
         assert!(!truncated);
         assert_eq!(total, entries.len());
-        assert_archive_entry(&entries[0], "src", FileKind::Directory, 0, None);
-        assert_archive_entry(&entries[1], "main.rs", FileKind::File, 1, Some(0));
-        assert_archive_entry(&entries[2], "README.md", FileKind::File, 0, None);
+        assert_preview_tree_entry(&entries[0], "src", FileKind::Directory, 0, None);
+        assert_preview_tree_entry(&entries[1], "main.rs", FileKind::File, 1, Some(0));
+        assert_preview_tree_entry(&entries[2], "README.md", FileKind::File, 0, None);
         assert!(entries[0].is_expanded);
+        assert_eq!(entries[0].toggle_rotation_progress, 1.0);
+    }
+
+    #[tokio::test]
+    async fn load_preview_reads_directory_tree_collapsed_after_root_layer() {
+        let temp_dir = tempdir().expect("temp dir");
+        let nested_dir = temp_dir.path().join("src");
+        std::fs::create_dir(&nested_dir).expect("create nested dir");
+        std::fs::write(nested_dir.join("main.rs"), "fn main() {}\n").expect("write nested file");
+        std::fs::write(temp_dir.path().join("README.md"), "# sample\n").expect("write readme");
+
+        let preview_content = load_preview(
+            temp_dir.path().to_path_buf(),
+            FileKind::Directory,
+            ScanOptions::default(),
+        )
+        .await
+        .expect("directory preview");
+
+        let PreviewContent::Directory {
+            entries,
+            total,
+            skipped,
+            truncated,
+            ..
+        } = preview_content
+        else {
+            panic!("expected directory preview");
+        };
+
+        assert!(!truncated);
+        assert_eq!(skipped, 0);
+        assert_eq!(total, entries.len());
+        assert_preview_tree_entry(&entries[0], "src", FileKind::Directory, 0, None);
+        assert_preview_tree_entry(&entries[1], "main.rs", FileKind::File, 1, Some(0));
+        assert_preview_tree_entry(&entries[2], "README.md", FileKind::File, 0, None);
+        assert!(!entries[0].is_expanded);
+        assert_eq!(entries[0].toggle_rotation_progress, 0.0);
     }
 
     #[tokio::test]
@@ -581,8 +704,8 @@ mod tests {
             panic!("expected archive preview");
         };
 
-        assert_archive_entry(&entries[0], "nested", FileKind::Directory, 0, None);
-        assert_archive_entry(&entries[1], "file.txt", FileKind::File, 1, Some(0));
+        assert_preview_tree_entry(&entries[0], "nested", FileKind::Directory, 0, None);
+        assert_preview_tree_entry(&entries[1], "file.txt", FileKind::File, 1, Some(0));
     }
 
     #[tokio::test]
@@ -664,8 +787,8 @@ Attributes = A_ -rw-r--r--
         encoder.finish().expect("finish gzip");
     }
 
-    fn assert_archive_entry(
-        entry: &PreviewArchiveEntry,
+    fn assert_preview_tree_entry(
+        entry: &PreviewTreeEntry,
         name: &str,
         kind: FileKind,
         depth: usize,

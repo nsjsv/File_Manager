@@ -25,7 +25,9 @@ use iced::keyboard;
 use iced::multi_window::Application;
 use iced::widget::text_input;
 use iced::window;
-use iced::{executor, Command, Element, Point, Rectangle, Settings, Size, Subscription, Theme};
+use iced::{
+    executor, time, Command, Element, Point, Rectangle, Settings, Size, Subscription, Theme,
+};
 
 use crate::app::events::{global_event_message, system_theme};
 use crate::commands::{
@@ -46,6 +48,7 @@ const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
 const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
+const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
 const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
 const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
@@ -344,6 +347,13 @@ impl Application for FileBrowser {
             subscriptions.push(file_operation_subscription(operation));
         }
 
+        if self.preview_tree_animation_is_active() {
+            subscriptions.push(
+                time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
+                    .map(|_| Message::PreviewTreeAnimationTick),
+            );
+        }
+
         Subscription::batch(subscriptions)
     }
 
@@ -412,9 +422,10 @@ impl Application for FileBrowser {
                 }
                 Command::none()
             }
-            Message::ArchiveDirectoryToggled(entry_id) => {
-                self.toggle_archive_preview_directory(entry_id)
+            Message::PreviewTreeDirectoryToggled(entry_id) => {
+                self.toggle_preview_tree_directory(entry_id)
             }
+            Message::PreviewTreeAnimationTick => self.advance_preview_tree_animation(),
             Message::ThumbnailBatchLoaded(outcomes) => self.accept_thumbnail_batch(outcomes),
             Message::ColumnEntryClicked(path) => self.handle_column_entry_clicked(path),
             Message::ColumnBlankClicked(path) => self.handle_column_blank_clicked(path),
@@ -479,6 +490,7 @@ impl Application for FileBrowser {
                 self.handle_auxiliary_window_resized(window, width, height)
             }
             Message::WindowFocused(window) => self.handle_window_focused(window),
+            Message::WindowUnfocused(window) => self.handle_window_unfocused(window),
             Message::FocusedWindowEscapePressed => self.handle_focused_window_escape_pressed(),
             Message::WindowPointerPressed { button, status } => {
                 self.handle_window_pointer_pressed(button, status)

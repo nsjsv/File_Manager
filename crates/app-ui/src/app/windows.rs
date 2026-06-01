@@ -97,6 +97,14 @@ impl FileBrowser {
         Command::none()
     }
 
+    pub(super) fn handle_window_unfocused(&mut self, window: window::Id) -> Command<Message> {
+        if self.preview_window == Some(window) {
+            self.close_preview_window()
+        } else {
+            Command::none()
+        }
+    }
+
     pub(super) fn handle_focused_window_escape_pressed(&mut self) -> Command<Message> {
         if self.search_window == Some(self.focused_window) {
             return self.close_search_window();
@@ -113,10 +121,10 @@ impl FileBrowser {
         status: event::Status,
     ) -> Command<Message> {
         if self.preview_window == Some(self.focused_window) {
-            return self.close_preview_window();
+            return Command::none();
         }
 
-        match (button, status) {
+        let pointer_command = match (button, status) {
             (mouse::Button::Left | mouse::Button::Right, event::Status::Captured) => {
                 if self.renaming.is_some() {
                     rename_input_focus_check_command()
@@ -126,6 +134,12 @@ impl FileBrowser {
             }
             (mouse::Button::Left, event::Status::Ignored) => self.dismiss_floating(),
             _ => Command::none(),
+        };
+
+        if self.preview_window.is_some() {
+            Command::batch([self.close_preview_window(), pointer_command])
+        } else {
+            pointer_command
         }
     }
 

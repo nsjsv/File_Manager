@@ -34,6 +34,32 @@ pub(crate) fn preview_entry_icon_symbol(kind: FileKind, name: &str) -> IconSymbo
     file_kind_icon_symbol(kind, Path::new(name).extension().and_then(OsStr::to_str))
 }
 
+pub(crate) fn rotated_chevron_right_view(rotation_degrees: f32, size: f32) -> Svg<Theme> {
+    Svg::new(svg::Handle::from_memory(rotated_chevron_right_bytes(
+        rotation_degrees,
+    )))
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+}
+
+fn rotated_chevron_right_bytes(rotation_degrees: f32) -> Vec<u8> {
+    let rotation_degrees = rotation_degrees.clamp(0.0, 90.0);
+    let Some(path_start) = CHEVRON_RIGHT_SVG.find("<path") else {
+        return CHEVRON_RIGHT_SVG.as_bytes().to_vec();
+    };
+    let Some(svg_end) = CHEVRON_RIGHT_SVG.rfind("</svg>") else {
+        return CHEVRON_RIGHT_SVG.as_bytes().to_vec();
+    };
+
+    format!(
+        "{}<g transform=\"rotate({rotation_degrees:.2} 12 12)\">{}</g>{}",
+        &CHEVRON_RIGHT_SVG[..path_start],
+        &CHEVRON_RIGHT_SVG[path_start..svg_end],
+        &CHEVRON_RIGHT_SVG[svg_end..]
+    )
+    .into_bytes()
+}
+
 fn file_kind_icon_symbol(kind: FileKind, extension: Option<&str>) -> IconSymbol {
     match kind {
         FileKind::Directory => IconSymbol::Folder,
@@ -106,7 +132,7 @@ impl IconSymbol {
             Self::ArrowLeft => include_bytes!("../assets/icons/lucide/arrow-left.svg"),
             Self::ArrowRight => include_bytes!("../assets/icons/lucide/arrow-right.svg"),
             Self::ArrowUp => include_bytes!("../assets/icons/lucide/arrow-up.svg"),
-            Self::ChevronRight => include_bytes!("../assets/icons/lucide/chevron-right.svg"),
+            Self::ChevronRight => CHEVRON_RIGHT_ICON,
             Self::Close => CLOSE_ICON,
             Self::Copy => include_bytes!("../assets/icons/lucide/copy.svg"),
             Self::File => include_bytes!("../assets/icons/lucide/file.svg"),
@@ -124,5 +150,7 @@ impl IconSymbol {
     }
 }
 
+const CHEVRON_RIGHT_ICON: &[u8] = include_bytes!("../assets/icons/lucide/chevron-right.svg");
+const CHEVRON_RIGHT_SVG: &str = include_str!("../assets/icons/lucide/chevron-right.svg");
 const CLOSE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>"#;
 const SETTINGS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.32-1.915"/><circle cx="12" cy="12" r="3"/></svg>"#;
