@@ -14,7 +14,7 @@ where
     Element::new(FloatingSurface {
         content: content.into(),
         floating,
-        dismiss_message: None,
+        outside_click_dismissal: None,
     })
 }
 
@@ -29,8 +29,41 @@ where
     Element::new(FloatingSurface {
         content: content.into(),
         floating,
-        dismiss_message: Some(dismiss_message),
+        outside_click_dismissal: Some(OutsideClickDismissal {
+            message: dismiss_message,
+            clicked_event_flow: DismissedClickFlow::Capture,
+        }),
     })
+}
+
+pub(crate) fn pass_through_dismissable_floating_surface<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+    floating: Vec<FloatingContent<'a, Message>>,
+    dismiss_message: Message,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    Element::new(FloatingSurface {
+        content: content.into(),
+        floating,
+        outside_click_dismissal: Some(OutsideClickDismissal {
+            message: dismiss_message,
+            clicked_event_flow: DismissedClickFlow::Continue,
+        }),
+    })
+}
+
+#[derive(Clone)]
+struct OutsideClickDismissal<Message> {
+    message: Message,
+    clicked_event_flow: DismissedClickFlow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DismissedClickFlow {
+    Capture,
+    Continue,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,7 +96,7 @@ where
 {
     content: Element<'a, Message, Theme, Renderer>,
     floating: Vec<FloatingContent<'a, Message, Theme, Renderer>>,
-    dismiss_message: Option<Message>,
+    outside_click_dismissal: Option<OutsideClickDismissal<Message>>,
 }
 
 impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -141,10 +174,12 @@ where
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) -> iced::event::Status {
-        if self.should_dismiss(&event, &mut tree.children, layout, cursor, renderer) {
-            if let Some(message) = self.dismiss_message.clone() {
-                shell.publish(message);
-                return iced::event::Status::Captured;
+        if self.is_outside_dismiss_click(&event, &mut tree.children, layout, cursor, renderer) {
+            if let Some(dismissal) = self.outside_click_dismissal.clone() {
+                shell.publish(dismissal.message);
+                if dismissal.clicked_event_flow == DismissedClickFlow::Capture {
+                    return iced::event::Status::Captured;
+                }
             }
         }
 
@@ -236,7 +271,7 @@ where
     Theme: 'a,
     Renderer: iced::advanced::Renderer + 'a,
 {
-    fn should_dismiss(
+    fn is_outside_dismiss_click(
         &self,
         event: &Event,
         children: &mut [widget::Tree],
@@ -244,7 +279,7 @@ where
         cursor: mouse::Cursor,
         renderer: &Renderer,
     ) -> bool {
-        if self.dismiss_message.is_none()
+        if self.outside_click_dismissal.is_none()
             || !matches!(
                 event,
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
@@ -257,16 +292,20 @@ where
         };
 
         let surface_size = Size::new(layout.bounds().width, layout.bounds().height);
-        let Some((floating, tree)) = self.floating.iter().zip(children.iter_mut().skip(1)).next()
-        else {
-            return false;
-        };
-        let limits = layout::Limits::new(
-            Size::ZERO,
-            floating_max_size(floating.placement, surface_size),
-        );
-        let node = floating.element.as_widget().layout(tree, renderer, &limits);
-        !floating_bounds(floating.placement, node.size(), surface_size).contains(position)
+        let mut checked_any_floating = false;
+        for (floating, tree) in self.floating.iter().zip(children.iter_mut().skip(1)) {
+            checked_any_floating = true;
+            let limits = layout::Limits::new(
+                Size::ZERO,
+                floating_max_size(floating.placement, surface_size),
+            );
+            let node = floating.element.as_widget().layout(tree, renderer, &limits);
+            if floating_bounds(floating.placement, node.size(), surface_size).contains(position) {
+                return false;
+            }
+        }
+
+        checked_any_floating
     }
 }
 

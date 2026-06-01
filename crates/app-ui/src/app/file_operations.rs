@@ -2,7 +2,7 @@ use iced::widget::text_input;
 use iced::Command;
 
 use super::{operation_queue_auto_hide_command, FileBrowser};
-use crate::model::Message;
+use crate::model::{Message, OperationQueuePanelMode};
 use crate::operation_queue::QueuedFileOperation;
 use crate::view::rename_input_id;
 
@@ -106,6 +106,7 @@ impl FileBrowser {
     }
 
     fn show_operation_queue_temporarily(&mut self) -> Command<Message> {
+        self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
         self.operation_queue.open_panel();
         self.operation_queue_auto_hide_generation =
             self.operation_queue_auto_hide_generation.wrapping_add(1);

@@ -274,13 +274,6 @@ impl FileOperationQueue {
         self.is_panel_open
     }
 
-    pub(crate) fn toggle_panel(&mut self) {
-        self.is_panel_open = !self.is_panel_open;
-        if self.is_panel_open {
-            self.mark_all_read();
-        }
-    }
-
     pub(crate) fn open_panel(&mut self) {
         self.is_panel_open = true;
         self.mark_all_read();

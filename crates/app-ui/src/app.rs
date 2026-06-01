@@ -36,8 +36,8 @@ use crate::commands::{
 use crate::config;
 use crate::model::{
     BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory, FileDragState, Message,
-    NavigationMode, PendingOperation, PreviewSize, PreviewState, SearchIndexRuntime, SearchState,
-    SelectionMarquee, SidebarLocation, TransferConflictState,
+    NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState,
+    SearchIndexRuntime, SearchState, SelectionMarquee, SidebarLocation, TransferConflictState,
 };
 use crate::operation_queue::FileOperationQueue;
 use crate::startup_trace;
@@ -221,6 +221,7 @@ pub(crate) struct FileBrowser {
     column_resize_drag: Option<ColumnResizeDrag>,
     last_click: Option<crate::model::LastClick>,
     pub(crate) operation_queue: FileOperationQueue,
+    pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
     pending_search_reveal: Option<PathBuf>,
     back_stack: Vec<PathBuf>,
@@ -307,6 +308,7 @@ impl Application for FileBrowser {
             column_resize_drag: None,
             last_click: None,
             operation_queue: FileOperationQueue::new(),
+            operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
             pending_search_reveal: None,
             back_stack: Vec::new(),
@@ -399,7 +401,15 @@ impl Application for FileBrowser {
             Message::FileOperationIndicatorPressed => {
                 self.context_menu = None;
                 self.is_column_view_settings_open = false;
-                self.operation_queue.toggle_panel();
+                if self.operation_queue.is_panel_open()
+                    && self.operation_queue_panel_mode == OperationQueuePanelMode::InteractiveList
+                {
+                    self.operation_queue.close_panel();
+                    self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
+                } else {
+                    self.operation_queue.open_panel();
+                    self.operation_queue_panel_mode = OperationQueuePanelMode::InteractiveList;
+                }
                 self.operation_queue_auto_hide_generation =
                     self.operation_queue_auto_hide_generation.wrapping_add(1);
                 Command::none()
@@ -407,6 +417,7 @@ impl Application for FileBrowser {
             Message::FileOperationAutoHideElapsed(generation) => {
                 if generation == self.operation_queue_auto_hide_generation {
                     self.operation_queue.close_panel();
+                    self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
                 }
                 Command::none()
             }

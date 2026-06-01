@@ -20,17 +20,18 @@ use crate::appearance::{
 };
 use crate::config::COLUMN_FIXED_COUNT_OPTIONS;
 use crate::floating_surface::{
-    dismissable_floating_surface, floating_surface, FloatingContent, FloatingPlacement,
+    dismissable_floating_surface, floating_surface, pass_through_dismissable_floating_surface,
+    FloatingContent, FloatingPlacement,
 };
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::{
     file_entry_icon_symbol, preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol,
 };
 use crate::model::{
-    trash_location_path, ColumnViewMode, ContextMenuState, Message, PreviewContent, PreviewSize,
-    PreviewState, PreviewTreeEntry, SearchScope, SearchState, SidebarLocation,
-    TransferConflictChoice, TransferConflictItem, TransferConflictMetadata, TransferConflictState,
-    TRASH_LOCATION_LABEL,
+    trash_location_path, ColumnViewMode, ContextMenuState, Message, OperationQueuePanelMode,
+    PreviewContent, PreviewSize, PreviewState, PreviewTreeEntry, SearchScope, SearchState,
+    SidebarLocation, TransferConflictChoice, TransferConflictItem, TransferConflictMetadata,
+    TransferConflictState, TRASH_LOCATION_LABEL,
 };
 use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
@@ -75,6 +76,12 @@ const DRAG_PREVIEW_ICON_SIZE: f32 = 18.0;
 const DRAG_PREVIEW_LABEL_MAX_CHARS: usize = 34;
 const DRAG_PREVIEW_OFFSET_X: f32 = 14.0;
 const DRAG_PREVIEW_OFFSET_Y: f32 = 14.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserFloatingDismissal {
+    Capture,
+    PassThrough,
+}
 
 pub(crate) fn rename_input_id() -> text_input::Id {
     text_input::Id::new("rename-input")
@@ -154,7 +161,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     .height(Length::Fill);
 
     let mut floating = Vec::new();
-    let mut dismiss_on_outside = false;
+    let mut floating_dismissal = None;
     if let Some(conflict) = &browser.transfer_conflict {
         floating.push(FloatingContent {
             element: transfer_conflict_panel(conflict),
@@ -168,13 +175,13 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
         });
     } else if let Some(context_menu) = &browser.context_menu {
-        dismiss_on_outside = true;
+        floating_dismissal = Some(BrowserFloatingDismissal::Capture);
         floating.push(FloatingContent {
             element: context_menu_panel(context_menu, browser.is_trash_view),
             placement: FloatingPlacement::At(context_menu.position),
         });
     } else if browser.is_column_view_settings_open {
-        dismiss_on_outside = true;
+        floating_dismissal = Some(BrowserFloatingDismissal::Capture);
         floating.push(FloatingContent {
             element: column_settings_panel(browser),
             placement: FloatingPlacement::Center,
@@ -192,7 +199,14 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     }
 
     if browser.operation_queue.is_panel_open() {
-        dismiss_on_outside = true;
+        let queue_dismissal = match browser.operation_queue_panel_mode {
+            OperationQueuePanelMode::PassivePreview => BrowserFloatingDismissal::PassThrough,
+            OperationQueuePanelMode::InteractiveList => BrowserFloatingDismissal::Capture,
+        };
+        floating_dismissal = Some(match floating_dismissal {
+            Some(BrowserFloatingDismissal::Capture) => BrowserFloatingDismissal::Capture,
+            _ => queue_dismissal,
+        });
         floating.push(FloatingContent {
             element: operation_queue_panel(&browser.operation_queue),
             placement: FloatingPlacement::BottomLeft {
@@ -213,10 +227,14 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if dismiss_on_outside {
-        dismissable_floating_surface(content, floating, Message::DismissFloating)
-    } else {
-        floating_surface(content, floating)
+    match floating_dismissal {
+        Some(BrowserFloatingDismissal::Capture) => {
+            dismissable_floating_surface(content, floating, Message::DismissFloating)
+        }
+        Some(BrowserFloatingDismissal::PassThrough) => {
+            pass_through_dismissable_floating_surface(content, floating, Message::DismissFloating)
+        }
+        None => floating_surface(content, floating),
     }
 }
 

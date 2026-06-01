@@ -141,6 +141,12 @@ pub(crate) enum PendingOperation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OperationQueuePanelMode {
+    PassivePreview,
+    InteractiveList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransferConflictMode {
     Copy,
     Move,
