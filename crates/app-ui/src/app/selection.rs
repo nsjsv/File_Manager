@@ -293,6 +293,9 @@ impl FileBrowser {
             return Command::none();
         }
 
+        if sources.first().and_then(|source| source.parent()).is_some_and(|source_parent| target_directory != source_parent && target_directory.starts_with(source_parent)) {
+            self.select_path(target_directory);
+        }
         self.enqueue_or_confirm_transfers(TransferConflictMode::Move, transfers)
     }
 
