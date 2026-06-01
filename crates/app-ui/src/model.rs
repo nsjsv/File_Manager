@@ -10,7 +10,7 @@ use file_core::{
 use file_operation_store::TaskQueueStore;
 use iced::keyboard;
 use iced::widget::image;
-use iced::{mouse, window, Point, Theme};
+use iced::{event, mouse, window, Point, Theme};
 
 use crate::config::UserConfig;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
@@ -51,6 +51,12 @@ pub(crate) enum Message {
     DismissFloating,
     AuxiliaryWindowCloseRequested(window::Id),
     AuxiliaryWindowResized(window::Id, u32, u32),
+    WindowFocused(window::Id),
+    FocusedWindowEscapePressed,
+    WindowPointerPressed {
+        button: mouse::Button,
+        status: event::Status,
+    },
     RequestPreview,
     PathInputChanged(String),
     PathInputSubmitted,
@@ -87,7 +93,6 @@ pub(crate) enum Message {
     Up,
     Back,
     Forward,
-    RenameFocusCheckRequested,
     RenameInputFocusChecked(bool),
     RenameInputChanged(String),
     BeginRename(PathBuf),

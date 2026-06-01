@@ -12,6 +12,7 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
             iced::window::Event::Resized { width, height } => {
                 Some(Message::AuxiliaryWindowResized(*id, *width, *height))
             }
+            iced::window::Event::Focused => Some(Message::WindowFocused(*id)),
             _ => None,
         };
     }
@@ -32,6 +33,10 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
         return Some(Message::CursorMoved(*position));
     }
 
+    if let Some(message) = pointer_pressed_message(&event, status) {
+        return Some(message);
+    }
+
     if matches!(status, event::Status::Captured) {
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = &event {
             return Some(Message::ColumnBrowserWheelScrolled(*delta));
@@ -46,24 +51,11 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
         return Some(Message::TabDragFinished);
     }
 
-    if matches!(
-        &event,
-        Event::Mouse(mouse::Event::ButtonPressed(
-            mouse::Button::Left | mouse::Button::Right
-        ))
-    ) && matches!(status, event::Status::Captured)
-    {
-        return Some(Message::RenameFocusCheckRequested);
-    }
-
     if matches!(status, event::Status::Captured) {
         return None;
     }
 
     match event {
-        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-            Some(Message::DismissFloating)
-        }
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
             Some(Message::DragSelectionFinished)
         }
@@ -73,6 +65,22 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
         }) => Some(Message::RequestPreview),
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Back)) => Some(Message::Back),
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Forward)) => Some(Message::Forward),
+        _ => None,
+    }
+}
+
+fn pointer_pressed_message(event: &Event, status: event::Status) -> Option<Message> {
+    let Event::Mouse(mouse::Event::ButtonPressed(button)) = event else {
+        return None;
+    };
+
+    match button {
+        mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle => {
+            Some(Message::WindowPointerPressed {
+                button: button.clone(),
+                status,
+            })
+        }
         _ => None,
     }
 }
@@ -105,7 +113,7 @@ fn keyboard_shortcut_message(event: &Event) -> Option<Message> {
         Key::Character("x") | Key::Character("X") if primary_modifier(*modifiers) => {
             Some(Message::MoveSelected)
         }
-        Key::Named(key::Named::Escape) => Some(Message::DismissFloating),
+        Key::Named(key::Named::Escape) => Some(Message::FocusedWindowEscapePressed),
         Key::Named(key::Named::Copy) => Some(Message::CopySelected),
         Key::Named(key::Named::Paste) => Some(Message::PastePending),
         Key::Named(key::Named::Cut) => Some(Message::MoveSelected),
@@ -255,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn escape_dismisses_floating_even_when_widget_captured_keyboard() {
+    fn escape_reports_focused_window_shortcut_even_when_widget_captured_keyboard() {
         let event = Event::Keyboard(keyboard::Event::KeyPressed {
             key: Key::Named(key::Named::Escape),
             location: keyboard::Location::Standard,
@@ -265,6 +273,33 @@ mod tests {
 
         let message = global_event_message(event, event::Status::Captured);
 
-        assert!(matches!(message, Some(Message::DismissFloating)));
+        assert!(matches!(message, Some(Message::FocusedWindowEscapePressed)));
+    }
+
+    #[test]
+    fn focused_window_event_updates_window_focus_state() {
+        let event = Event::Window(iced::window::Id::MAIN, iced::window::Event::Focused);
+
+        let message = global_event_message(event, event::Status::Ignored);
+
+        assert!(matches!(
+            message,
+            Some(Message::WindowFocused(window)) if window == iced::window::Id::MAIN
+        ));
+    }
+
+    #[test]
+    fn captured_left_press_reports_pointer_press() {
+        let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+
+        let message = global_event_message(event, event::Status::Captured);
+
+        assert!(matches!(
+            message,
+            Some(Message::WindowPointerPressed {
+                button: mouse::Button::Left,
+                status: event::Status::Captured,
+            })
+        ));
     }
 }

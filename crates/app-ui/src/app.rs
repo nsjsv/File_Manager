@@ -1,7 +1,9 @@
 mod column_scroll;
 mod events;
+mod file_operations;
 mod navigation;
 mod paths;
+mod preview_state;
 mod search;
 mod selection;
 mod startup;
@@ -32,15 +34,13 @@ use crate::commands::{
 use crate::config;
 use crate::model::{
     BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory, FileDragState, Message,
-    NavigationMode, PendingOperation, PreviewContent, PreviewSize, PreviewState,
-    SearchIndexRuntime, SearchState, SelectionMarquee, SidebarLocation, TransferConflictState,
+    NavigationMode, PendingOperation, PreviewSize, PreviewState, SearchIndexRuntime, SearchState,
+    SelectionMarquee, SidebarLocation, TransferConflictState,
 };
-use crate::operation_queue::{FileOperationQueue, QueuedFileOperation};
+use crate::operation_queue::FileOperationQueue;
 use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
-use crate::view::{
-    path_input_id, rename_input_id, view_browser, view_preview_window, view_search_window,
-};
+use crate::view::{rename_input_id, view_browser, view_preview_window, view_search_window};
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -180,6 +180,7 @@ pub(crate) struct FileBrowser {
     pub(crate) preview: Option<PreviewState>,
     pub(crate) preview_size: PreviewSize,
     preview_window: Option<window::Id>,
+    focused_window: window::Id,
     pub(crate) thumbnail_cache: ThumbnailCache,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
@@ -253,6 +254,7 @@ impl Application for FileBrowser {
                 height: DEFAULT_PREVIEW_HEIGHT,
             },
             preview_window: None,
+            focused_window: window::Id::MAIN,
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
             column_viewports: HashMap::new(),
             context_menu: None,
@@ -471,27 +473,15 @@ impl Application for FileBrowser {
                     self.finish_drag_selection(),
                 ])
             }
-            Message::DismissFloating => {
-                if self.transfer_conflict.is_some() {
-                    self.transfer_conflict = None;
-                    return Command::none();
-                }
-                let had_path_suggestions = !self.path_suggestions.is_empty();
-                self.context_menu = None;
-                self.is_column_view_settings_open = false;
-                self.operation_queue.close_panel();
-                self.path_suggestions.clear();
-                self.path_suggestion_selection = None;
-                let command = self.commit_rename_if_active();
-                if had_path_suggestions {
-                    Command::batch([command, text_input::focus(path_input_id())])
-                } else {
-                    command
-                }
-            }
+            Message::DismissFloating => self.dismiss_floating(),
             Message::AuxiliaryWindowCloseRequested(window) => self.close_auxiliary_window(window),
             Message::AuxiliaryWindowResized(window, width, height) => {
                 self.handle_auxiliary_window_resized(window, width, height)
+            }
+            Message::WindowFocused(window) => self.handle_window_focused(window),
+            Message::FocusedWindowEscapePressed => self.handle_focused_window_escape_pressed(),
+            Message::WindowPointerPressed { button, status } => {
+                self.handle_window_pointer_pressed(button, status)
             }
             Message::RequestPreview => self.request_preview(),
             Message::PathInputChanged(value) => self.update_path_input(value),
@@ -615,13 +605,6 @@ impl Application for FileBrowser {
             Message::Forward => {
                 Command::batch([self.commit_rename_if_active(), self.navigate_forward()])
             }
-            Message::RenameFocusCheckRequested => {
-                if self.renaming.is_some() {
-                    rename_input_focus_check_command()
-                } else {
-                    Command::none()
-                }
-            }
             Message::RenameInputFocusChecked(is_focused) => {
                 if is_focused {
                     Command::none()
@@ -713,80 +696,6 @@ impl Application for FileBrowser {
 }
 
 impl FileBrowser {
-    fn accept_preview(
-        &mut self,
-        path: PathBuf,
-        preview_outcome: Result<PreviewContent, String>,
-    ) -> Command<Message> {
-        let is_active_preview_request = matches!(
-            &self.preview,
-            Some(PreviewState::Loading(loading_path)) if loading_path == &path
-        );
-        if !is_active_preview_request {
-            return Command::none();
-        }
-
-        match preview_outcome {
-            Ok(preview) => {
-                self.preview = Some(PreviewState::Ready(preview));
-                self.error = None;
-            }
-            Err(error) => {
-                self.preview = Some(PreviewState::Error(error));
-            }
-        }
-
-        Command::none()
-    }
-
-    fn accept_file_operation_finished(
-        &mut self,
-        task_id: u64,
-        result: Result<(), String>,
-    ) -> Command<Message> {
-        let completed_successfully = result.is_ok();
-        let created_path = completed_successfully
-            .then(|| {
-                self.operation_queue
-                    .operation(task_id)
-                    .and_then(QueuedFileOperation::created_path)
-            })
-            .flatten();
-
-        if completed_successfully {
-            self.rename_input.clear();
-            if let Some(path) = created_path {
-                self.pending_created_entry_rename = Some(path);
-            }
-        }
-
-        let (finished, storage_error) = self.operation_queue.finish(task_id, result);
-        if let Some(error) = storage_error {
-            self.error = Some(error);
-        }
-
-        if finished {
-            self.reload_current()
-        } else {
-            Command::none()
-        }
-    }
-
-    fn toggle_archive_preview_directory(&mut self, entry_id: usize) -> Command<Message> {
-        let Some(PreviewState::Ready(PreviewContent::Archive { entries, .. })) = &mut self.preview
-        else {
-            return Command::none();
-        };
-        let Some(entry) = entries.get_mut(entry_id) else {
-            return Command::none();
-        };
-        if entry.is_directory() {
-            entry.is_expanded = !entry.is_expanded;
-        }
-
-        Command::none()
-    }
-
     fn start_column_resize_drag(&mut self) -> Command<Message> {
         if self.renaming.is_some() {
             return self.commit_rename_if_active();
@@ -844,77 +753,5 @@ impl FileBrowser {
         let persist_command = self.persist_user_config_command();
         let reload_command = self.reload_current();
         Command::batch([persist_command, reload_command])
-    }
-
-    fn commit_rename(&mut self) -> Command<Message> {
-        let Some(path) = self.renaming.clone().or_else(|| self.selected.clone()) else {
-            return Command::none();
-        };
-
-        let name = self.rename_input.trim();
-        if name.is_empty() {
-            self.renaming = None;
-            return Command::none();
-        }
-
-        let old_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_default();
-        if old_name == name {
-            self.renaming = None;
-            return Command::none();
-        }
-
-        self.renaming = None;
-        self.context_menu = None;
-        self.enqueue_file_operation(QueuedFileOperation::Rename {
-            path,
-            new_name: name.to_owned(),
-        })
-    }
-
-    pub(super) fn commit_rename_if_active(&mut self) -> Command<Message> {
-        if self.renaming.is_some() {
-            self.commit_rename()
-        } else {
-            Command::none()
-        }
-    }
-
-    pub(super) fn focus_created_entry_for_rename(&mut self) -> Command<Message> {
-        let Some(path) = self.pending_created_entry_rename.clone() else {
-            return Command::none();
-        };
-        if self.entry_for_path(&path).is_none() {
-            return Command::none();
-        }
-
-        self.pending_created_entry_rename = None;
-        self.select_path(path.clone());
-        self.renaming = Some(path);
-        let input_id = rename_input_id();
-        Command::batch([
-            text_input::focus(input_id.clone()),
-            text_input::select_all(input_id),
-        ])
-    }
-
-    pub(super) fn enqueue_file_operation(
-        &mut self,
-        operation: QueuedFileOperation,
-    ) -> Command<Message> {
-        self.error = None;
-        if let Some(error) = self.operation_queue.enqueue(operation) {
-            self.error = Some(error);
-        }
-        self.show_operation_queue_temporarily()
-    }
-
-    fn show_operation_queue_temporarily(&mut self) -> Command<Message> {
-        self.operation_queue.open_panel();
-        self.operation_queue_auto_hide_generation =
-            self.operation_queue_auto_hide_generation.wrapping_add(1);
-        operation_queue_auto_hide_command(self.operation_queue_auto_hide_generation)
     }
 }
