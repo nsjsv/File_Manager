@@ -101,3 +101,10 @@ Terminal=false
 - 文件操作、搜索、预览等功能是否稳定
 - 哪些功能应该优先补齐
 
+## 许可证
+
+GPL 3.0
+
+## 友链
+
+[LinuxDo](https://linux.do/)
