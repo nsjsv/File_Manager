@@ -293,16 +293,22 @@ impl FileBrowser {
             return Command::none();
         }
 
-        if sources
+        let open_drop_target = if sources
             .first()
             .and_then(|source| source.parent())
             .is_some_and(|source_parent| {
                 target_directory != source_parent && target_directory.starts_with(source_parent)
             })
         {
-            self.select_path(target_directory);
-        }
-        self.enqueue_or_confirm_transfers(TransferConflictMode::Move, transfers)
+            self.select_path(target_directory.clone());
+            self.open_column_for_directory(target_directory)
+        } else {
+            Command::none()
+        };
+        Command::batch([
+            open_drop_target,
+            self.enqueue_or_confirm_transfers(TransferConflictMode::Move, transfers),
+        ])
     }
 
     pub(super) fn extend_drag_selection_to(&mut self, path: PathBuf) {
