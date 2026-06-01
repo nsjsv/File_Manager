@@ -107,7 +107,6 @@ pub(crate) enum Message {
         content: Result<Option<DesktopClipboardContent>, String>,
     },
     ClipboardFileCreated(Result<PathBuf, String>),
-    ExternalFileDropped(PathBuf),
     PrimarySelectAllRequested,
     TransferConflictsChecked {
         mode: TransferConflictMode,

@@ -485,25 +485,6 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn handle_external_file_dropped(&mut self, source: PathBuf) -> Command<Message> {
-        if self.is_trash_view {
-            return Command::none();
-        }
-        let paste_directory = self.paste_target_directory();
-        self.context_menu = None;
-        let sources = vec![source];
-        let transfers = paths::transfer_targets(&paste_directory, &sources, PasteTargetMode::Copy)
-            .into_iter()
-            .map(|(source, target)| QueuedTransfer::new(source, target))
-            .collect::<Vec<_>>();
-
-        if transfers.is_empty() {
-            return Command::none();
-        }
-
-        self.enqueue_or_confirm_transfers(TransferConflictMode::Copy, transfers)
-    }
-
     fn paste_desktop_clipboard_content(
         &mut self,
         paste_directory: PathBuf,
@@ -606,7 +587,7 @@ impl FileBrowser {
             .unwrap_or_else(|| self.current_dir.clone())
     }
 
-    fn enqueue_or_confirm_transfers(
+    pub(super) fn enqueue_or_confirm_transfers(
         &mut self,
         mode: TransferConflictMode,
         transfers: Vec<QueuedTransfer>,

@@ -12,9 +12,6 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
             iced::window::Event::Resized { width, height } => {
                 Some(Message::AuxiliaryWindowResized(*id, *width, *height))
             }
-            iced::window::Event::FileDropped(path) => {
-                Some(Message::ExternalFileDropped(path.clone()))
-            }
             _ => None,
         };
     }
@@ -269,20 +266,5 @@ mod tests {
         let message = global_event_message(event, event::Status::Captured);
 
         assert!(matches!(message, Some(Message::DismissFloating)));
-    }
-
-    #[test]
-    fn file_drop_event_reaches_external_drop_flow() {
-        let path = std::path::PathBuf::from("/tmp/from-other-app.txt");
-        let event = Event::Window(
-            iced::window::Id::MAIN,
-            iced::window::Event::FileDropped(path.clone()),
-        );
-
-        let message = global_event_message(event, event::Status::Ignored);
-
-        assert!(
-            matches!(message, Some(Message::ExternalFileDropped(received)) if received == path)
-        );
     }
 }

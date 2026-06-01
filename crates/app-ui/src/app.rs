@@ -659,7 +659,6 @@ impl Application for FileBrowser {
                 content,
             } => self.accept_desktop_clipboard_paste(paste_directory, fallback_operation, content),
             Message::ClipboardFileCreated(result) => self.accept_clipboard_file_created(result),
-            Message::ExternalFileDropped(path) => self.handle_external_file_dropped(path),
             Message::PrimarySelectAllRequested => {
                 text_input_shortcuts::select_focused_text_or_visible_files_command()
             }
