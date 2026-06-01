@@ -52,7 +52,7 @@ impl FileBrowser {
         };
 
         if let Some(ready) = self.thumbnail_cache.ready_for_request(&request).cloned() {
-            self.preview = Some(PreviewState::Ready(image_preview_content(
+            self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
                 entry.path, ready,
             )));
             return Command::none();
@@ -104,8 +104,9 @@ impl FileBrowser {
                     if outcome.work.purpose == ThumbnailPurpose::Preview
                         && self.is_active_preview_loading(&source)
                     {
-                        self.preview =
-                            Some(PreviewState::Ready(image_preview_content(source, ready)));
+                        self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
+                            source, ready,
+                        )));
                     }
                 }
                 Err(error) => {
@@ -253,7 +254,7 @@ fn visible_column_directories_for_browser(browser: &FileBrowser) -> Vec<PathBuf>
     }
 }
 
-fn image_preview_content(path: PathBuf, ready: ThumbnailHandleEntry) -> PreviewContent {
+fn thumbnail_preview_content(path: PathBuf, ready: ThumbnailHandleEntry) -> PreviewContent {
     PreviewContent::Image {
         path,
         handle: ready.handle,

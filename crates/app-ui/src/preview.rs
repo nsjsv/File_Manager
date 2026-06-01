@@ -4,9 +4,13 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use file_core::{scan_directory, DirectoryEntry, FileKind, ScanOptions};
+use file_core::{
+    is_supported_audio_path, is_supported_video_path, scan_directory, DirectoryEntry, FileKind,
+    ScanOptions,
+};
 use tokio::io::AsyncReadExt;
 
+use crate::audio_preview::inspect_audio_preview_metadata;
 use crate::model::{PreviewContent, PreviewTreeEntry};
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 256 * 1024;
@@ -31,12 +35,19 @@ pub(crate) async fn load_preview(
                 Err(format!(
                     "This archive format is not supported yet. {SUPPORTED_ARCHIVE_FORMAT_MESSAGE}"
                 ))
+            } else if is_supported_audio_path(&path) {
+                load_audio_preview(path).await
+            } else if is_supported_video_path(&path) {
+                Err(
+                    "Video preview is handled by the video preview player; install ffmpeg if it cannot be loaded"
+                        .to_owned(),
+                )
             } else {
                 load_text_preview(path).await
             }
         }
         FileKind::Symlink | FileKind::Other => {
-            Err("Preview is only available for directories and UTF-8 text files".to_owned())
+            Err("Preview is only available for directories, archives, audio files, images, and UTF-8 text files".to_owned())
         }
     }
 }
@@ -377,6 +388,17 @@ fn is_known_archive_path(path: &Path) -> bool {
             .iter()
             .any(|candidate| extension.eq_ignore_ascii_case(candidate))
         })
+}
+
+async fn load_audio_preview(path: PathBuf) -> Result<PreviewContent, String> {
+    let preview_path = path.clone();
+    let metadata = inspect_audio_preview_metadata(path).await?;
+
+    Ok(PreviewContent::Audio {
+        path: preview_path,
+        duration: metadata.duration,
+        len: metadata.len,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]

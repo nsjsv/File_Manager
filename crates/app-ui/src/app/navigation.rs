@@ -365,7 +365,7 @@ impl FileBrowser {
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
         self.last_click = None;
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
         self.renaming = None;
         self.selection_marquee = None;
@@ -379,7 +379,7 @@ impl FileBrowser {
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
         self.last_click = None;
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
         self.renaming = None;
         self.selection_marquee = None;

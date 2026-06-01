@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 pub(crate) fn format_file_size(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
 
@@ -17,6 +19,19 @@ pub(crate) fn format_file_size(bytes: u64) -> String {
         format!("{value:.1} {}", UNITS[unit])
     } else {
         format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
+pub(crate) fn format_duration(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
     }
 }
 
@@ -74,7 +89,9 @@ fn format_ascii_middle_ellipsized_text(content: &str, max_chars: usize) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use super::format_middle_ellipsized_text;
+    use std::time::Duration;
+
+    use super::{format_duration, format_middle_ellipsized_text};
 
     #[test]
     fn keeps_short_text() {
@@ -87,5 +104,11 @@ mod tests {
             format_middle_ellipsized_text("very-long-directory-name", 12),
             "very-...name"
         );
+    }
+
+    #[test]
+    fn formats_audio_duration() {
+        assert_eq!(format_duration(Duration::from_secs(65)), "1:05");
+        assert_eq!(format_duration(Duration::from_secs(3661)), "1:01:01");
     }
 }

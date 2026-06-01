@@ -1,4 +1,5 @@
 pub mod entry;
+pub mod media;
 pub mod ops;
 pub mod scan;
 pub mod search;
@@ -7,6 +8,11 @@ pub mod trash_bin;
 pub mod watch;
 
 pub use entry::{DirectoryEntry, EntryMetadata, FileKind};
+pub use media::{
+    is_supported_audio_extension, is_supported_audio_path, is_supported_image_extension,
+    is_supported_image_path, is_supported_video_extension, is_supported_video_path,
+    supported_media_kind_for_path, SupportedMediaKind,
+};
 pub use ops::{
     copy_path, copy_path_with_conflict_strategy, copy_path_with_controls,
     copy_path_with_controls_and_strategy, create_directory, create_empty_file,

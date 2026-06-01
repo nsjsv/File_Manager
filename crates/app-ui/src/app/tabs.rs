@@ -31,7 +31,7 @@ impl FileBrowser {
     pub(super) fn open_directory_in_new_tab(&mut self, directory: PathBuf) -> Command<Message> {
         self.sync_active_tab_state();
         self.context_menu = None;
-        self.preview = None;
+        self.clear_preview();
         self.is_column_view_settings_open = false;
 
         let tab_id = self.next_tab_id;
@@ -59,7 +59,7 @@ impl FileBrowser {
     pub(super) fn open_trash_in_new_tab(&mut self) -> Command<Message> {
         self.sync_active_tab_state();
         self.context_menu = None;
-        self.preview = None;
+        self.clear_preview();
         self.is_column_view_settings_open = false;
 
         let tab_id = self.next_tab_id;

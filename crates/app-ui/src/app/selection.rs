@@ -5,7 +5,10 @@ use std::time::Instant;
 use desktop_linux::{
     ClipboardImage, DesktopClipboardContent, FileClipboardOperation, FileClipboardSelection,
 };
-use file_core::{DirectoryEntry, FileKind, TransferConflictStrategy};
+use file_core::{
+    is_supported_audio_path, is_supported_video_path, DirectoryEntry, FileKind,
+    TransferConflictStrategy,
+};
 use iced::Command;
 
 use super::paths::{self, PasteTargetMode};
@@ -13,12 +16,14 @@ use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
     check_transfer_conflicts_command, check_transfer_rename_target_command,
     create_clipboard_file_command, load_expanded_directory_command, open_file_command,
-    preview_command, read_desktop_clipboard_command, write_file_clipboard_command,
+    preview_command, read_desktop_clipboard_command, start_audio_preview_command,
+    write_file_clipboard_command,
 };
 use crate::model::{
-    ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus, FileDragPhase, FileDragState,
-    LastClick, Message, NavigationMode, PendingOperation, PreviewState, SelectionMarquee,
-    TransferConflictChoice, TransferConflictItem, TransferConflictMode, TransferConflictState,
+    AudioPreviewPlayback, ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus,
+    FileDragPhase, FileDragState, LastClick, Message, NavigationMode, PendingOperation,
+    PreviewContent, PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictChoice,
+    TransferConflictItem, TransferConflictMode, TransferConflictState,
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
@@ -146,7 +151,7 @@ impl FileBrowser {
 
     pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Command<Message> {
         let rename_command = self.commit_rename_if_active();
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
@@ -168,7 +173,7 @@ impl FileBrowser {
     pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Command<Message> {
         let rename_command = self.commit_rename_if_active();
         self.select_context_menu_target(path.clone());
-        self.preview = None;
+        self.clear_preview();
         self.drag_selection_anchor = None;
         self.file_drag = None;
         self.context_menu = Some(ContextMenuState {
@@ -185,7 +190,7 @@ impl FileBrowser {
         directory: PathBuf,
     ) -> Command<Message> {
         let rename_command = self.commit_rename_if_active();
-        self.preview = None;
+        self.clear_preview();
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.context_menu = Some(ContextMenuState {
@@ -202,7 +207,7 @@ impl FileBrowser {
             return self.commit_rename_if_active();
         }
 
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
         self.drag_selection_anchor = None;
         self.is_column_view_settings_open = false;
@@ -298,8 +303,7 @@ impl FileBrowser {
             .and_then(|source| source.parent())
             .is_some_and(|source_parent| {
                 target_directory != source_parent && target_directory.starts_with(source_parent)
-            })
-        {
+            }) {
             self.select_path(target_directory.clone());
             self.open_column_for_directory(target_directory)
         } else {
@@ -332,12 +336,17 @@ impl FileBrowser {
             self.selected = None;
             self.rename_input.clear();
         }
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
         Command::none()
     }
 
     pub(super) fn request_preview(&mut self) -> Command<Message> {
+        if self.audio_preview.is_some() {
+            self.context_menu = None;
+            return self.toggle_audio_preview_playback();
+        }
+
         if self.preview.is_some() {
             self.context_menu = None;
             return self.close_preview_window();
@@ -427,7 +436,7 @@ impl FileBrowser {
         if self.is_trash_view {
             return Command::none();
         }
-        self.preview = None;
+        self.clear_preview();
         self.renaming = None;
         self.drag_selection_anchor = None;
         self.file_drag = None;
@@ -439,7 +448,7 @@ impl FileBrowser {
         if self.is_trash_view {
             return Command::none();
         }
-        self.preview = None;
+        self.clear_preview();
         self.renaming = None;
         self.drag_selection_anchor = None;
         self.file_drag = None;
@@ -814,17 +823,35 @@ impl FileBrowser {
 
     fn open_preview(&mut self) -> Command<Message> {
         self.context_menu = None;
-        let window_command = self.ensure_preview_window();
 
         let Some(path) = self.selected.clone() else {
+            let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+            self.clear_preview();
             self.preview = Some(PreviewState::Error("Select an item to preview".to_owned()));
             return window_command;
         };
 
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
+        let is_audio_preview = kind == FileKind::File && is_supported_audio_path(&path);
+        let window_profile = if is_audio_preview {
+            PreviewWindowProfile::Audio
+        } else {
+            PreviewWindowProfile::Regular
+        };
+        let window_command = self.ensure_preview_window(window_profile);
+        self.clear_preview();
         self.preview = Some(PreviewState::Loading(path.clone()));
         self.error = None;
-        if kind == FileKind::File && crate::thumbnail_cache::is_supported_image_path(&path) {
+        if kind == FileKind::File && is_supported_video_path(&path) {
+            self.preview = Some(PreviewState::Ready(PreviewContent::Video {
+                path,
+                frame: None,
+                width: 0,
+                height: 0,
+            }));
+            return window_command;
+        }
+        if kind == FileKind::File && thumbnails::is_supported_thumbnail_path(&path) {
             let Some(entry) = self.entry_for_path(&path).cloned() else {
                 self.preview = Some(PreviewState::Error(
                     "Selected item is no longer available".to_owned(),
@@ -834,6 +861,14 @@ impl FileBrowser {
             return Command::batch([
                 window_command,
                 self.request_preview_thumbnail_for_entry(entry),
+            ]);
+        }
+        if is_audio_preview {
+            self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
+            return Command::batch([
+                window_command,
+                preview_command(path.clone(), kind, self.options.clone()),
+                start_audio_preview_command(path),
             ]);
         }
         Command::batch([
@@ -882,7 +917,7 @@ impl FileBrowser {
             self.selected_paths.insert(path.clone());
             self.focus_path(path);
         }
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
     }
 
@@ -972,7 +1007,7 @@ impl FileBrowser {
     fn focus_path(&mut self, path: PathBuf) {
         self.update_rename_input(&path);
         self.selected = Some(path);
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
     }
 

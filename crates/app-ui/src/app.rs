@@ -35,13 +35,15 @@ use crate::commands::{
 };
 use crate::config;
 use crate::model::{
-    BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory, FileDragState, Message,
-    NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState,
-    SearchIndexRuntime, SearchState, SelectionMarquee, SidebarLocation, TransferConflictState,
+    AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory,
+    FileDragState, Message, NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize,
+    PreviewState, PreviewWindowProfile, SearchIndexRuntime, SearchState, SelectionMarquee,
+    SidebarLocation, TransferConflictState,
 };
 use crate::operation_queue::FileOperationQueue;
 use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
+use crate::video_preview::video_preview_subscription;
 use crate::view::{rename_input_id, view_browser, view_preview_window, view_search_window};
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
@@ -49,6 +51,7 @@ const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
 const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
 const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
 const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
@@ -56,6 +59,12 @@ const MIN_PREVIEW_WIDTH: f32 = 420.0;
 const MIN_PREVIEW_HEIGHT: f32 = 260.0;
 const MAX_PREVIEW_WIDTH: f32 = 1080.0;
 const MAX_PREVIEW_HEIGHT: f32 = 760.0;
+const DEFAULT_AUDIO_PREVIEW_WIDTH: f32 = 780.0;
+const DEFAULT_AUDIO_PREVIEW_HEIGHT: f32 = 168.0;
+const MIN_AUDIO_PREVIEW_WIDTH: f32 = 560.0;
+const MIN_AUDIO_PREVIEW_HEIGHT: f32 = 136.0;
+const MAX_AUDIO_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_AUDIO_PREVIEW_HEIGHT: f32 = 240.0;
 const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
 const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
 const MIN_SEARCH_WIDTH: f32 = 520.0;
@@ -181,7 +190,9 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_sidebar: Option<PathBuf>,
     cursor_paste_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
+    pub(crate) audio_preview: Option<AudioPreviewPlayback>,
     pub(crate) preview_size: PreviewSize,
+    preview_window_profile: PreviewWindowProfile,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
     pub(crate) thumbnail_cache: ThumbnailCache,
@@ -253,10 +264,12 @@ impl Application for FileBrowser {
             hovered_sidebar: None,
             cursor_paste_directory: None,
             preview: None,
+            audio_preview: None,
             preview_size: PreviewSize {
                 width: DEFAULT_PREVIEW_WIDTH,
                 height: DEFAULT_PREVIEW_HEIGHT,
             },
+            preview_window_profile: PreviewWindowProfile::Regular,
             preview_window: None,
             focused_window: window::Id::MAIN,
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
@@ -356,6 +369,15 @@ impl Application for FileBrowser {
             );
         }
 
+        if self.audio_preview_is_active() {
+            subscriptions
+                .push(time::every(AUDIO_PREVIEW_TICK_INTERVAL).map(|_| Message::AudioPreviewTick));
+        }
+
+        if let Some(path) = self.active_video_preview_path() {
+            subscriptions.push(video_preview_subscription(path));
+        }
+
         Subscription::batch(subscriptions)
     }
 
@@ -388,6 +410,20 @@ impl Application for FileBrowser {
             }
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
+            }
+            Message::AudioPreviewPlaybackToggled => self.toggle_audio_preview_playback(),
+            Message::AudioPreviewStopRequested => self.stop_audio_preview_playback(),
+            Message::AudioPreviewStarted(path, playback_outcome) => {
+                self.accept_audio_preview_started(path, playback_outcome)
+            }
+            Message::AudioPreviewSeekRequested(position) => {
+                self.seek_audio_preview_playback(position)
+            }
+            Message::AudioPreviewVolumeChanged(volume) => self.change_audio_preview_volume(volume),
+            Message::AudioPreviewTick => self.update_audio_preview_playback(),
+            Message::VideoPreviewFrameLoaded(frame) => self.accept_video_preview_frame(frame),
+            Message::VideoPreviewFailed(path, error) => {
+                self.accept_video_preview_error(path, error)
             }
             Message::FileOperationProgressed(task_id, progress) => {
                 if let Some(error) = self.operation_queue.update_progress(task_id, progress) {
@@ -708,7 +744,11 @@ impl Application for FileBrowser {
         if self.search_window == Some(window) {
             view_search_window(self.search.as_ref())
         } else if self.preview_window == Some(window) {
-            view_preview_window(self.preview.as_ref(), self.preview_size)
+            view_preview_window(
+                self.preview.as_ref(),
+                self.preview_size,
+                self.audio_preview.as_ref(),
+            )
         } else {
             if !self.is_loading {
                 startup_trace::mark_once("first_browser_view_after_initial_load");
@@ -734,7 +774,7 @@ impl FileBrowser {
         });
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.preview = None;
+        self.clear_preview();
         self.context_menu = None;
         self.is_column_view_settings_open = false;
         Command::none()

@@ -2,11 +2,14 @@ use iced::widget::text_input;
 use iced::{event, mouse, window, Command, Size};
 
 use super::{
-    rename_input_focus_check_command, FileBrowser, DEFAULT_SEARCH_HEIGHT, DEFAULT_SEARCH_WIDTH,
-    MAX_PREVIEW_HEIGHT, MAX_PREVIEW_WIDTH, MIN_PREVIEW_HEIGHT, MIN_PREVIEW_WIDTH,
-    MIN_SEARCH_HEIGHT, MIN_SEARCH_WIDTH, PREVIEW_WINDOW_APP_ID, SEARCH_WINDOW_APP_ID,
+    rename_input_focus_check_command, FileBrowser, DEFAULT_AUDIO_PREVIEW_HEIGHT,
+    DEFAULT_AUDIO_PREVIEW_WIDTH, DEFAULT_PREVIEW_HEIGHT, DEFAULT_PREVIEW_WIDTH,
+    DEFAULT_SEARCH_HEIGHT, DEFAULT_SEARCH_WIDTH, MAX_AUDIO_PREVIEW_HEIGHT, MAX_AUDIO_PREVIEW_WIDTH,
+    MAX_PREVIEW_HEIGHT, MAX_PREVIEW_WIDTH, MIN_AUDIO_PREVIEW_HEIGHT, MIN_AUDIO_PREVIEW_WIDTH,
+    MIN_PREVIEW_HEIGHT, MIN_PREVIEW_WIDTH, MIN_SEARCH_HEIGHT, MIN_SEARCH_WIDTH,
+    PREVIEW_WINDOW_APP_ID, SEARCH_WINDOW_APP_ID,
 };
-use crate::model::{Message, PreviewSize};
+use crate::model::{Message, PreviewSize, PreviewWindowProfile};
 use crate::view::path_input_id;
 
 fn search_window_settings() -> window::Settings {
@@ -20,19 +23,55 @@ fn search_window_settings() -> window::Settings {
     settings
 }
 
-fn preview_window_settings(size: PreviewSize) -> window::Settings {
+fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> window::Settings {
+    let size = clamp_preview_size(profile, size);
+    let min_size = preview_min_size(profile);
+    let max_size = preview_max_size(profile);
     let mut settings = window::Settings {
-        size: Size::new(
-            size.width.clamp(MIN_PREVIEW_WIDTH, MAX_PREVIEW_WIDTH),
-            size.height.clamp(MIN_PREVIEW_HEIGHT, MAX_PREVIEW_HEIGHT),
-        ),
-        min_size: Some(Size::new(MIN_PREVIEW_WIDTH, MIN_PREVIEW_HEIGHT)),
-        max_size: Some(Size::new(MAX_PREVIEW_WIDTH, MAX_PREVIEW_HEIGHT)),
+        size: Size::new(size.width, size.height),
+        min_size: Some(min_size),
+        max_size: Some(max_size),
         exit_on_close_request: false,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = PREVIEW_WINDOW_APP_ID.to_owned();
     settings
+}
+
+fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize {
+    match profile {
+        PreviewWindowProfile::Regular => PreviewSize {
+            width: DEFAULT_PREVIEW_WIDTH,
+            height: DEFAULT_PREVIEW_HEIGHT,
+        },
+        PreviewWindowProfile::Audio => PreviewSize {
+            width: DEFAULT_AUDIO_PREVIEW_WIDTH,
+            height: DEFAULT_AUDIO_PREVIEW_HEIGHT,
+        },
+    }
+}
+
+fn clamp_preview_size(profile: PreviewWindowProfile, size: PreviewSize) -> PreviewSize {
+    let min_size = preview_min_size(profile);
+    let max_size = preview_max_size(profile);
+    PreviewSize {
+        width: size.width.clamp(min_size.width, max_size.width),
+        height: size.height.clamp(min_size.height, max_size.height),
+    }
+}
+
+fn preview_min_size(profile: PreviewWindowProfile) -> Size {
+    match profile {
+        PreviewWindowProfile::Regular => Size::new(MIN_PREVIEW_WIDTH, MIN_PREVIEW_HEIGHT),
+        PreviewWindowProfile::Audio => Size::new(MIN_AUDIO_PREVIEW_WIDTH, MIN_AUDIO_PREVIEW_HEIGHT),
+    }
+}
+
+fn preview_max_size(profile: PreviewWindowProfile) -> Size {
+    match profile {
+        PreviewWindowProfile::Regular => Size::new(MAX_PREVIEW_WIDTH, MAX_PREVIEW_HEIGHT),
+        PreviewWindowProfile::Audio => Size::new(MAX_AUDIO_PREVIEW_WIDTH, MAX_AUDIO_PREVIEW_HEIGHT),
+    }
 }
 
 impl FileBrowser {
@@ -69,20 +108,29 @@ impl FileBrowser {
         window::close(window)
     }
 
-    pub(super) fn ensure_preview_window(&mut self) -> Command<Message> {
+    pub(super) fn ensure_preview_window(
+        &mut self,
+        profile: PreviewWindowProfile,
+    ) -> Command<Message> {
+        self.preview_window_profile = profile;
+        self.preview_size = default_preview_size(profile);
         if let Some(window) = self.preview_window {
             self.focused_window = window;
-            return window::gain_focus(window);
+            let size = clamp_preview_size(profile, self.preview_size);
+            return Command::batch([
+                window::resize(window, Size::new(size.width, size.height)),
+                window::gain_focus(window),
+            ]);
         }
 
-        let (window, command) = window::spawn(preview_window_settings(self.preview_size));
+        let (window, command) = window::spawn(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
         command
     }
 
     pub(super) fn close_preview_window(&mut self) -> Command<Message> {
-        self.preview = None;
+        self.clear_preview();
         let Some(window) = self.preview_window.take() else {
             return Command::none();
         };
@@ -185,7 +233,7 @@ impl FileBrowser {
         self.is_shutting_down = true;
         let _ = self.operation_queue.cancel_all();
         self.search = None;
-        self.preview = None;
+        self.clear_preview();
 
         let mut commands = Vec::with_capacity(3);
         if let Some(window) = self.search_window.take() {
@@ -206,10 +254,13 @@ impl FileBrowser {
         height: u32,
     ) -> Command<Message> {
         if self.preview_window == Some(window) {
-            self.preview_size = PreviewSize {
-                width: (width as f32).clamp(MIN_PREVIEW_WIDTH, MAX_PREVIEW_WIDTH),
-                height: (height as f32).clamp(MIN_PREVIEW_HEIGHT, MAX_PREVIEW_HEIGHT),
-            };
+            self.preview_size = clamp_preview_size(
+                self.preview_window_profile,
+                PreviewSize {
+                    width: width as f32,
+                    height: height as f32,
+                },
+            );
             return self.refresh_preview_thumbnail_for_size();
         }
         Command::none()

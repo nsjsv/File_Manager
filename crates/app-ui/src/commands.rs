@@ -21,6 +21,7 @@ use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::SinkExt;
 use iced::{Command, Subscription};
 
+use crate::audio_preview::start_audio_preview;
 use crate::config;
 use crate::model::{
     InitialLoad, Message, PendingOperation, SearchRequest, SidebarLocation, TransferConflictItem,
@@ -116,6 +117,13 @@ pub(crate) fn preview_command(
     let preview_path = path.clone();
     Command::perform(load_preview(path, kind, options), move |preview_outcome| {
         Message::PreviewLoaded(preview_path, preview_outcome)
+    })
+}
+
+pub(crate) fn start_audio_preview_command(path: PathBuf) -> Command<Message> {
+    let audio_path = path.clone();
+    Command::perform(start_audio_preview(path), move |playback_outcome| {
+        Message::AudioPreviewStarted(audio_path.clone(), playback_outcome)
     })
 }
 
@@ -753,7 +761,7 @@ async fn load_thumbnail_batch(
 ) -> Vec<ThumbnailLoadOutcome> {
     let mut outcomes = Vec::with_capacity(works.len());
     for work in works {
-        let result = thumbnails::load_or_generate_image_thumbnail(&cache_dir, work.request.clone())
+        let result = thumbnails::load_or_generate_thumbnail(&cache_dir, work.request.clone())
             .await
             .map_err(|error| error.to_string());
         outcomes.push(ThumbnailLoadOutcome { work, result });

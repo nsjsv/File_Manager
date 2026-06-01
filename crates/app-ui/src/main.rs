@@ -1,6 +1,7 @@
 mod anchored_popup;
 mod app;
 mod appearance;
+mod audio_preview;
 mod commands;
 mod config;
 mod floating_surface;
@@ -16,6 +17,7 @@ mod startup_trace;
 mod three_column_view;
 mod thumbnail_cache;
 mod typography;
+mod video_preview;
 mod view;
 
 fn main() -> iced::Result {

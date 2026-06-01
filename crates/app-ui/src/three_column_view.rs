@@ -525,7 +525,7 @@ fn entry_thumbnail_or_icon<'a>(
         .into();
     }
 
-    if !crate::thumbnail_cache::is_supported_image_path(&entry.path) {
+    if !thumbnails::is_supported_thumbnail_path(&entry.path) {
         return entry_icon(entry, tone).into();
     }
 

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use file_core::{DirectoryEntry, FileKind};
@@ -249,7 +249,7 @@ impl ThumbnailCache {
 }
 
 pub(crate) fn request_for_entry(entry: &DirectoryEntry, max_edge: u32) -> Option<ThumbnailRequest> {
-    if entry.kind != FileKind::File || !thumbnails::is_supported_image_path(&entry.path) {
+    if entry.kind != FileKind::File || !thumbnails::is_supported_thumbnail_path(&entry.path) {
         return None;
     }
 
@@ -258,8 +258,4 @@ pub(crate) fn request_for_entry(entry: &DirectoryEntry, max_edge: u32) -> Option
         ThumbnailSourceMetadata::from(&entry.metadata),
         max_edge,
     ))
-}
-
-pub(crate) fn is_supported_image_path(path: &Path) -> bool {
-    thumbnails::is_supported_image_path(path)
 }

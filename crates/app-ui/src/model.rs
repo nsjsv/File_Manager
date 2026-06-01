@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use desktop_linux::DesktopClipboardContent;
 use file_core::{
@@ -12,6 +12,7 @@ use iced::keyboard;
 use iced::widget::image;
 use iced::{event, mouse, window, Point, Theme};
 
+use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::UserConfig;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
@@ -23,6 +24,14 @@ pub(crate) enum Message {
     TrashLoaded(Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    AudioPreviewPlaybackToggled,
+    AudioPreviewStopRequested,
+    AudioPreviewStarted(PathBuf, Result<AudioPreviewRuntime, String>),
+    AudioPreviewSeekRequested(f32),
+    AudioPreviewVolumeChanged(f32),
+    AudioPreviewTick,
+    VideoPreviewFrameLoaded(VideoPreviewFrame),
+    VideoPreviewFailed(PathBuf, String),
     FileOperationProgressed(u64, FileOperationProgressUpdate),
     FileOperationFinished(u64, Result<(), String>),
     FileOperationIndicatorPressed,
@@ -287,12 +296,70 @@ pub(crate) enum PreviewContent {
         height: u32,
         max_edge: u32,
     },
+    Audio {
+        path: PathBuf,
+        duration: Option<Duration>,
+        len: u64,
+    },
+    Video {
+        path: PathBuf,
+        frame: Option<image::Handle>,
+        width: u32,
+        height: u32,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AudioPreviewPlayback {
+    pub(crate) path: PathBuf,
+    pub(crate) runtime: Option<AudioPreviewRuntime>,
+    pub(crate) status: AudioPreviewPlaybackStatus,
+    pub(crate) position: Duration,
+    pub(crate) volume: f32,
+    pub(crate) error: Option<String>,
+}
+
+impl AudioPreviewPlayback {
+    pub(crate) fn loading(path: PathBuf) -> Self {
+        Self {
+            path,
+            runtime: None,
+            status: AudioPreviewPlaybackStatus::Loading,
+            position: Duration::ZERO,
+            volume: 1.0,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AudioPreviewPlaybackStatus {
+    Loading,
+    Playing,
+    Paused,
+    Stopped,
+    Finished,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct VideoPreviewFrame {
+    pub(crate) path: PathBuf,
+    pub(crate) handle: image::Handle,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PreviewSize {
     pub(crate) width: f32,
     pub(crate) height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewWindowProfile {
+    Regular,
+    Audio,
 }
 
 #[derive(Debug, Clone)]
