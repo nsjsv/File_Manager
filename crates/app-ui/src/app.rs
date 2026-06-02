@@ -448,14 +448,18 @@ impl Application for FileBrowser {
             Message::VideoPreviewAudioStarted(path, generation, audio_outcome) => {
                 self.accept_video_preview_audio_started(path, generation, audio_outcome)
             }
+            Message::VideoPreviewMetadataLoaded(path, metadata_outcome) => {
+                self.accept_video_preview_metadata(path, metadata_outcome)
+            }
             Message::VideoPreviewSeekRequested(position) => {
                 self.seek_video_preview_playback(position)
             }
+            Message::VideoPreviewSeekCommitted => self.commit_video_preview_seek(),
             Message::VideoPreviewVolumeChanged(volume) => self.change_video_preview_volume(volume),
             Message::VideoPreviewTick => self.update_video_preview_playback(),
             Message::VideoPreviewFrameLoaded(frame) => self.accept_video_preview_frame(frame),
-            Message::VideoPreviewSeekFrameFailed(path, generation, error) => {
-                self.accept_video_preview_seek_frame_error(path, generation, error)
+            Message::VideoPreviewSeekFrameFailed(path, generation, position, error) => {
+                self.accept_video_preview_seek_frame_error(path, generation, position, error)
             }
             Message::VideoPreviewFinished(path, generation) => {
                 self.accept_video_preview_finished(path, generation)

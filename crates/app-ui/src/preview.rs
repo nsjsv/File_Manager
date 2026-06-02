@@ -12,7 +12,6 @@ use tokio::io::AsyncReadExt;
 
 use crate::audio_preview::inspect_audio_preview_metadata;
 use crate::model::{PreviewContent, PreviewTreeEntry};
-use crate::video_preview::inspect_video_preview_metadata;
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 256 * 1024;
 pub(crate) const PREVIEW_DIRECTORY_LIMIT: usize = 500;
@@ -400,15 +399,12 @@ async fn load_audio_preview(path: PathBuf) -> Result<PreviewContent, String> {
 }
 
 async fn load_video_preview(path: PathBuf) -> Result<PreviewContent, String> {
-    let preview_path = path.clone();
-    let metadata = inspect_video_preview_metadata(path).await?;
-
     Ok(PreviewContent::Video {
-        path: preview_path,
+        path,
         frame: None,
         width: 0,
         height: 0,
-        duration: metadata.duration,
+        duration: None,
     })
 }
 

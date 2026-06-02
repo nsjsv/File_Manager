@@ -35,7 +35,7 @@ use crate::preview::load_preview;
 use crate::sidebar::{home_sidebar_location, sidebar_locations};
 use crate::startup_trace;
 use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
-use crate::video_preview::load_video_preview_frame;
+use crate::video_preview::{inspect_video_preview_metadata, load_video_preview_frame};
 
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
@@ -149,6 +149,20 @@ pub(crate) fn start_video_preview_audio_command(
     )
 }
 
+pub(crate) fn video_preview_metadata_command(path: PathBuf) -> Command<Message> {
+    let video_path = path.clone();
+    Command::perform(
+        async move {
+            inspect_video_preview_metadata(path)
+                .await
+                .map(|metadata| metadata.duration)
+        },
+        move |metadata_outcome| {
+            Message::VideoPreviewMetadataLoaded(video_path.clone(), metadata_outcome)
+        },
+    )
+}
+
 pub(crate) fn video_preview_frame_command(
     path: PathBuf,
     generation: u64,
@@ -159,9 +173,12 @@ pub(crate) fn video_preview_frame_command(
         load_video_preview_frame(path, generation, position),
         move |frame_outcome| match frame_outcome {
             Ok(frame) => Message::VideoPreviewFrameLoaded(frame),
-            Err(error) => {
-                Message::VideoPreviewSeekFrameFailed(video_path.clone(), generation, error)
-            }
+            Err(error) => Message::VideoPreviewSeekFrameFailed(
+                video_path.clone(),
+                generation,
+                position,
+                error,
+            ),
         },
     )
 }

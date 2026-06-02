@@ -6,11 +6,12 @@ use iced::Command;
 use super::FileBrowser;
 use crate::commands::{
     start_audio_preview_command, start_video_preview_audio_command, video_preview_frame_command,
+    video_preview_metadata_command,
 };
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewState,
     PreviewTreeEntry, PreviewWindowProfile, VideoPreviewFrame, VideoPreviewPlayback,
-    VideoPreviewPlaybackStatus,
+    VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
 
 const PREVIEW_TREE_TOGGLE_ROTATION_STEP: f32 = 0.18;
@@ -68,6 +69,9 @@ impl FileBrowser {
         &mut self,
         video_frame: VideoPreviewFrame,
     ) -> Command<Message> {
+        let frame_path = video_frame.path.clone();
+        let frame_generation = video_frame.generation;
+        let frame_position = video_frame.position;
         let Some(playback) = self.video_preview.as_ref() else {
             return Command::none();
         };
@@ -93,11 +97,47 @@ impl FileBrowser {
         *current_frame = Some(video_frame.handle);
         *width = video_frame.width;
         *height = video_frame.height;
-        if should_resize_window {
+        let resize_command = if should_resize_window {
             self.fit_preview_window_to_video_frame(video_frame.width, video_frame.height)
         } else {
             Command::none()
+        };
+        Command::batch([
+            resize_command,
+            self.finish_video_seek_frame_decode(frame_path, frame_generation, frame_position),
+        ])
+    }
+
+    pub(super) fn accept_video_preview_metadata(
+        &mut self,
+        path: PathBuf,
+        metadata_outcome: Result<Option<Duration>, String>,
+    ) -> Command<Message> {
+        let Ok(metadata_duration) = metadata_outcome else {
+            return Command::none();
+        };
+        let Some(PreviewState::Ready(PreviewContent::Video {
+            path: preview_path,
+            duration,
+            ..
+        })) = &mut self.preview
+        else {
+            return Command::none();
+        };
+        if preview_path != &path {
+            return Command::none();
         }
+
+        *duration = metadata_duration;
+        if let Some(playback) = self
+            .video_preview
+            .as_mut()
+            .filter(|playback| playback.path == path)
+        {
+            playback.duration = metadata_duration;
+            playback.position = clamp_video_preview_position(playback.position, metadata_duration);
+        }
+        Command::none()
     }
 
     pub(super) fn accept_video_preview_error(
@@ -117,6 +157,9 @@ impl FileBrowser {
         if let Some(playback) = self.video_preview.as_mut() {
             finish_video_preview_audio(playback);
             playback.status = VideoPreviewPlaybackStatus::Error;
+            playback.seek_completion = None;
+            playback.seek_frame_in_flight = None;
+            playback.pending_seek_frame = None;
             playback.error = Some(error.clone());
         }
         if active_video_preview_path(self.preview.as_ref()) == Some(path.as_path()) {
@@ -132,15 +175,25 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         generation: u64,
+        position: Duration,
         error: String,
     ) -> Command<Message> {
-        if let Some(playback) = self
+        let Some(playback) = self
             .video_preview
             .as_mut()
             .filter(|playback| playback.path == path && playback.generation == generation)
-        {
-            playback.error = Some(error);
+        else {
+            return Command::none();
+        };
+
+        if playback.seek_frame_in_flight != Some(position) {
+            return Command::none();
         }
+        playback.seek_frame_in_flight = None;
+        if let Some(next_position) = playback.pending_seek_frame.take() {
+            return start_video_seek_frame_decode(playback, next_position);
+        }
+        playback.error = Some(error);
         Command::none()
     }
 
@@ -160,6 +213,9 @@ impl FileBrowser {
         refresh_video_preview_position(playback);
         finish_video_preview_audio(playback);
         playback.status = VideoPreviewPlaybackStatus::Finished;
+        playback.seek_completion = None;
+        playback.seek_frame_in_flight = None;
+        playback.pending_seek_frame = None;
         playback.started_at = None;
         if let Some(duration) = playback.duration {
             playback.position = duration;
@@ -383,6 +439,9 @@ impl FileBrowser {
                     runtime.pause();
                 }
                 playback.status = VideoPreviewPlaybackStatus::Paused;
+                playback.seek_completion = None;
+                playback.seek_frame_in_flight = None;
+                playback.pending_seek_frame = None;
                 playback.started_at = None;
                 Command::none()
             }
@@ -444,20 +503,47 @@ impl FileBrowser {
         let Some(playback) = self.video_preview.as_mut() else {
             return Command::none();
         };
+        if playback.seek_completion.is_none() {
+            playback.seek_completion = Some(match playback.status {
+                VideoPreviewPlaybackStatus::Playing => VideoPreviewSeekCompletion::ResumePlayback,
+                VideoPreviewPlaybackStatus::Paused
+                | VideoPreviewPlaybackStatus::Finished
+                | VideoPreviewPlaybackStatus::Error => VideoPreviewSeekCompletion::StayPaused,
+            });
+            playback.seek_frame_in_flight = None;
+            playback.pending_seek_frame = None;
+            playback.generation = playback.generation.saturating_add(1);
+        }
+        if playback.status == VideoPreviewPlaybackStatus::Playing {
+            if let Some(runtime) = playback.audio_runtime.as_ref() {
+                runtime.pause();
+            }
+        }
         let position = Duration::from_secs_f32(position_seconds.max(0.0));
         playback.position = clamp_video_preview_position(position, playback.duration);
-        let resume_command = self.resume_video_preview_playback();
-        let Some(playback) = self.video_preview.as_ref() else {
-            return resume_command;
+        playback.status = VideoPreviewPlaybackStatus::Paused;
+        playback.started_at = None;
+        playback.error = None;
+        if playback.seek_frame_in_flight.is_some() {
+            playback.pending_seek_frame = Some(playback.position);
+            Command::none()
+        } else {
+            let seek_position = playback.position;
+            start_video_seek_frame_decode(playback, seek_position)
+        }
+    }
+
+    pub(super) fn commit_video_preview_seek(&mut self) -> Command<Message> {
+        let Some(playback) = self.video_preview.as_mut() else {
+            return Command::none();
         };
-        Command::batch([
-            resume_command,
-            video_preview_frame_command(
-                playback.path.clone(),
-                playback.generation,
-                playback.position,
-            ),
-        ])
+        let seek_completion = playback.seek_completion.take();
+        match seek_completion {
+            Some(VideoPreviewSeekCompletion::ResumePlayback) => {
+                self.resume_video_preview_playback()
+            }
+            Some(VideoPreviewSeekCompletion::StayPaused) | None => Command::none(),
+        }
     }
 
     pub(super) fn change_video_preview_volume(&mut self, volume: f32) -> Command<Message> {
@@ -484,6 +570,9 @@ impl FileBrowser {
         if video_preview_reached_end(playback) {
             finish_video_preview_audio(playback);
             playback.status = VideoPreviewPlaybackStatus::Finished;
+            playback.seek_completion = None;
+            playback.seek_frame_in_flight = None;
+            playback.pending_seek_frame = None;
             playback.started_at = None;
         }
         Command::none()
@@ -525,7 +614,11 @@ impl FileBrowser {
         let playback = VideoPreviewPlayback::playing(path.clone(), duration);
         let generation = playback.generation;
         self.video_preview = Some(playback);
-        start_video_preview_audio_command(path, generation, Duration::ZERO)
+        Command::batch([
+            start_video_preview_audio_command(path.clone(), generation, Duration::ZERO),
+            video_preview_frame_command(path.clone(), generation, Duration::ZERO),
+            video_preview_metadata_command(path),
+        ])
     }
 
     fn resume_video_preview_playback(&mut self) -> Command<Message> {
@@ -536,6 +629,9 @@ impl FileBrowser {
         let position = playback.position;
         playback.generation = playback.generation.saturating_add(1);
         playback.status = VideoPreviewPlaybackStatus::Playing;
+        playback.seek_completion = None;
+        playback.seek_frame_in_flight = None;
+        playback.pending_seek_frame = None;
         playback.started_at = Some(Instant::now());
         playback.error = None;
         let generation = playback.generation;
@@ -556,12 +652,43 @@ impl FileBrowser {
             true
         };
 
+        let frame_command = video_preview_frame_command(path.clone(), generation, position);
         if should_start_audio {
             finish_video_preview_audio(playback);
-            start_video_preview_audio_command(path, generation, position)
+            Command::batch([
+                start_video_preview_audio_command(path, generation, position),
+                frame_command,
+            ])
         } else {
-            Command::none()
+            frame_command
         }
+    }
+
+    fn finish_video_seek_frame_decode(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        position: Duration,
+    ) -> Command<Message> {
+        let Some(playback) = self
+            .video_preview
+            .as_mut()
+            .filter(|playback| playback.path == path && playback.generation == generation)
+        else {
+            return Command::none();
+        };
+
+        if playback.seek_frame_in_flight != Some(position) {
+            return Command::none();
+        }
+        playback.seek_frame_in_flight = None;
+        let Some(next_position) = playback.pending_seek_frame.take() else {
+            return Command::none();
+        };
+        if next_position == position {
+            return Command::none();
+        }
+        start_video_seek_frame_decode(playback, next_position)
     }
 
     fn clear_video_preview(&mut self) {
@@ -602,6 +729,15 @@ fn clamp_video_preview_position(position: Duration, duration: Option<Duration>) 
         Some(duration) => position.min(duration),
         None => position,
     }
+}
+
+fn start_video_seek_frame_decode(
+    playback: &mut VideoPreviewPlayback,
+    position: Duration,
+) -> Command<Message> {
+    let position = clamp_video_preview_position(position, playback.duration);
+    playback.seek_frame_in_flight = Some(position);
+    video_preview_frame_command(playback.path.clone(), playback.generation, position)
 }
 
 fn video_preview_reached_end(playback: &VideoPreviewPlayback) -> bool {

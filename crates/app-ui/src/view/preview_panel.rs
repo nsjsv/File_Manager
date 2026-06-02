@@ -598,6 +598,7 @@ fn video_controls(
             Message::VideoPreviewSeekRequested,
         )
         .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
+        .on_release(Message::VideoPreviewSeekCommitted)
         .width(Length::FillPortion(VIDEO_PROGRESS_SLIDER_PORTION)),
         container(video_volume_control(playback))
             .width(Length::FillPortion(VIDEO_VOLUME_SLIDER_PORTION)),

@@ -32,11 +32,13 @@ pub(crate) enum Message {
     AudioPreviewTick,
     VideoPreviewPlaybackToggled,
     VideoPreviewAudioStarted(PathBuf, u64, Result<AudioPreviewRuntime, String>),
+    VideoPreviewMetadataLoaded(PathBuf, Result<Option<Duration>, String>),
     VideoPreviewSeekRequested(f32),
+    VideoPreviewSeekCommitted,
     VideoPreviewVolumeChanged(f32),
     VideoPreviewTick,
     VideoPreviewFrameLoaded(VideoPreviewFrame),
-    VideoPreviewSeekFrameFailed(PathBuf, u64, String),
+    VideoPreviewSeekFrameFailed(PathBuf, u64, Duration, String),
     VideoPreviewFinished(PathBuf, u64),
     VideoPreviewFailed(PathBuf, u64, String),
     FileOperationProgressed(u64, FileOperationProgressUpdate),
@@ -360,6 +362,9 @@ pub(crate) struct VideoPreviewPlayback {
     pub(crate) duration: Option<Duration>,
     pub(crate) volume: f32,
     pub(crate) generation: u64,
+    pub(crate) seek_completion: Option<VideoPreviewSeekCompletion>,
+    pub(crate) seek_frame_in_flight: Option<Duration>,
+    pub(crate) pending_seek_frame: Option<Duration>,
     pub(crate) started_at: Option<Instant>,
     pub(crate) error: Option<String>,
 }
@@ -374,10 +379,19 @@ impl VideoPreviewPlayback {
             duration,
             volume: 1.0,
             generation: 1,
+            seek_completion: None,
+            seek_frame_in_flight: None,
+            pending_seek_frame: None,
             started_at: Some(Instant::now()),
             error: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VideoPreviewSeekCompletion {
+    ResumePlayback,
+    StayPaused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,6 +406,7 @@ pub(crate) enum VideoPreviewPlaybackStatus {
 pub(crate) struct VideoPreviewFrame {
     pub(crate) path: PathBuf,
     pub(crate) generation: u64,
+    pub(crate) position: Duration,
     pub(crate) handle: image::Handle,
     pub(crate) width: u32,
     pub(crate) height: u32,

@@ -8,6 +8,7 @@ use iced::widget::image;
 use iced::Subscription;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command as TokioCommand;
+use tokio::time;
 
 use crate::model::{Message, VideoPreviewFrame};
 
@@ -89,6 +90,7 @@ pub(crate) async fn load_video_preview_frame(
     Ok(VideoPreviewFrame {
         path,
         generation,
+        position,
         handle: image::Handle::from_pixels(frame.width, frame.height, frame.pixels),
         width: frame.width,
         height: frame.height,
@@ -100,6 +102,7 @@ async fn decode_video_preview_frame(path: &Path, position: Duration) -> Result<P
     command
         .kill_on_drop(true)
         .arg("-hide_banner")
+        .arg("-nostdin")
         .arg("-loglevel")
         .arg("error");
     if position > Duration::ZERO {
@@ -110,7 +113,7 @@ async fn decode_video_preview_frame(path: &Path, position: Duration) -> Result<P
         .arg(path)
         .arg("-an")
         .arg("-vf")
-        .arg(video_filter())
+        .arg(video_seek_frame_filter())
         .arg("-frames:v")
         .arg("1")
         .arg("-f")
@@ -156,18 +159,18 @@ async fn stream_video_preview(
     command
         .kill_on_drop(true)
         .arg("-hide_banner")
+        .arg("-nostdin")
         .arg("-loglevel")
         .arg("error");
     if start_position > Duration::ZERO {
         command.arg("-ss").arg(ffmpeg_position(start_position));
     }
     let mut child = command
-        .arg("-re")
         .arg("-i")
         .arg(&path)
         .arg("-an")
         .arg("-vf")
-        .arg(video_filter())
+        .arg(video_stream_filter())
         .arg("-f")
         .arg("image2pipe")
         .arg("-vcodec")
@@ -184,18 +187,24 @@ async fn stream_video_preview(
     let stderr_task = child.stderr.take().map(limited_ffmpeg_stderr_task);
 
     let mut sent_any_frame = false;
+    let stream_started_at = time::Instant::now();
+    let mut frame_index = 0_u64;
     while let Some(frame) = read_ppm_frame(&mut stdout).await? {
         sent_any_frame = true;
+        let position = start_position + video_stream_frame_offset(frame_index);
         output
             .send(Message::VideoPreviewFrameLoaded(VideoPreviewFrame {
                 path: path.clone(),
                 generation,
+                position,
                 handle: image::Handle::from_pixels(frame.width, frame.height, frame.pixels),
                 width: frame.width,
                 height: frame.height,
             }))
             .await
             .map_err(|_| "video preview window was closed".to_owned())?;
+        frame_index = frame_index.saturating_add(1);
+        time::sleep_until(stream_started_at + video_stream_frame_offset(frame_index)).await;
     }
 
     let status = child
@@ -232,9 +241,19 @@ fn ffmpeg_position(position: Duration) -> String {
     format!("{:.3}", position.as_secs_f64())
 }
 
-fn video_filter() -> String {
+fn video_stream_frame_offset(frame_index: u64) -> Duration {
+    Duration::from_secs_f64(frame_index as f64 / VIDEO_PREVIEW_FPS as f64)
+}
+
+fn video_stream_filter() -> String {
     format!(
         "fps={VIDEO_PREVIEW_FPS},scale={VIDEO_PREVIEW_MAX_EDGE}:{VIDEO_PREVIEW_MAX_EDGE}:force_original_aspect_ratio=decrease,format=rgb24"
+    )
+}
+
+fn video_seek_frame_filter() -> String {
+    format!(
+        "scale={VIDEO_PREVIEW_MAX_EDGE}:{VIDEO_PREVIEW_MAX_EDGE}:force_original_aspect_ratio=decrease,format=rgb24"
     )
 }
 
