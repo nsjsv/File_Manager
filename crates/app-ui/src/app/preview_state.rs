@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::Command;
 
 use super::FileBrowser;
-use crate::commands::start_audio_preview_command;
+use crate::commands::{
+    start_audio_preview_command, start_video_preview_audio_command, video_preview_frame_command,
+};
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewState,
-    PreviewTreeEntry, VideoPreviewFrame,
+    PreviewTreeEntry, PreviewWindowProfile, VideoPreviewFrame, VideoPreviewPlayback,
+    VideoPreviewPlaybackStatus,
 };
 
 const PREVIEW_TREE_TOGGLE_ROTATION_STEP: f32 = 0.18;
@@ -29,60 +32,155 @@ impl FileBrowser {
 
         match preview_outcome {
             Ok(preview) => {
-                if !matches!(preview, PreviewContent::Audio { .. }) {
-                    self.clear_audio_preview();
-                }
+                let command = match &preview {
+                    PreviewContent::Audio { .. } => {
+                        self.clear_video_preview();
+                        Command::none()
+                    }
+                    PreviewContent::Video { path, duration, .. } => {
+                        self.clear_audio_preview();
+                        self.start_video_preview_playback(path.clone(), *duration)
+                    }
+                    _ => {
+                        self.clear_audio_preview();
+                        self.clear_video_preview();
+                        Command::none()
+                    }
+                };
                 self.preview = Some(PreviewState::Ready(preview));
                 self.error = None;
+                command
             }
             Err(error) => {
                 self.clear_audio_preview();
+                self.clear_video_preview();
                 self.preview = Some(PreviewState::Error(error));
+                if self.preview_window.is_none() {
+                    self.ensure_preview_window(PreviewWindowProfile::Video)
+                } else {
+                    Command::none()
+                }
             }
         }
-
-        Command::none()
     }
 
     pub(super) fn accept_video_preview_frame(
         &mut self,
-        frame: VideoPreviewFrame,
+        video_frame: VideoPreviewFrame,
     ) -> Command<Message> {
+        let Some(playback) = self.video_preview.as_ref() else {
+            return Command::none();
+        };
+        if playback.path != video_frame.path || playback.generation != video_frame.generation {
+            return Command::none();
+        }
+
         let Some(PreviewState::Ready(PreviewContent::Video {
             path,
             frame: current_frame,
             width,
             height,
+            ..
         })) = &mut self.preview
         else {
             return Command::none();
         };
-        if path != &frame.path {
+        if path != &video_frame.path {
             return Command::none();
         }
 
-        *current_frame = Some(frame.handle);
-        *width = frame.width;
-        *height = frame.height;
-        Command::none()
+        let should_resize_window = *width != video_frame.width || *height != video_frame.height;
+        *current_frame = Some(video_frame.handle);
+        *width = video_frame.width;
+        *height = video_frame.height;
+        if should_resize_window {
+            self.fit_preview_window_to_video_frame(video_frame.width, video_frame.height)
+        } else {
+            Command::none()
+        }
     }
 
     pub(super) fn accept_video_preview_error(
         &mut self,
         path: PathBuf,
+        generation: u64,
         error: String,
     ) -> Command<Message> {
-        if self.active_video_preview_path().as_ref() == Some(&path) {
+        let matches_playback = self
+            .video_preview
+            .as_ref()
+            .is_some_and(|playback| playback.path == path && playback.generation == generation);
+        if !matches_playback {
+            return Command::none();
+        }
+
+        if let Some(playback) = self.video_preview.as_mut() {
+            finish_video_preview_audio(playback);
+            playback.status = VideoPreviewPlaybackStatus::Error;
+            playback.error = Some(error.clone());
+        }
+        if active_video_preview_path(self.preview.as_ref()) == Some(path.as_path()) {
             self.preview = Some(PreviewState::Error(error));
+            if self.preview_window.is_none() {
+                return self.ensure_preview_window(PreviewWindowProfile::Video);
+            }
         }
         Command::none()
     }
 
-    pub(super) fn active_video_preview_path(&self) -> Option<PathBuf> {
-        match &self.preview {
-            Some(PreviewState::Ready(PreviewContent::Video { path, .. })) => Some(path.clone()),
-            _ => None,
+    pub(super) fn accept_video_preview_seek_frame_error(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        error: String,
+    ) -> Command<Message> {
+        if let Some(playback) = self
+            .video_preview
+            .as_mut()
+            .filter(|playback| playback.path == path && playback.generation == generation)
+        {
+            playback.error = Some(error);
         }
+        Command::none()
+    }
+
+    pub(super) fn accept_video_preview_finished(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+    ) -> Command<Message> {
+        let Some(playback) = self
+            .video_preview
+            .as_mut()
+            .filter(|playback| playback.path == path && playback.generation == generation)
+        else {
+            return Command::none();
+        };
+
+        refresh_video_preview_position(playback);
+        finish_video_preview_audio(playback);
+        playback.status = VideoPreviewPlaybackStatus::Finished;
+        playback.started_at = None;
+        if let Some(duration) = playback.duration {
+            playback.position = duration;
+        }
+        Command::none()
+    }
+
+    pub(super) fn active_video_preview_stream(&self) -> Option<(PathBuf, u64, Duration)> {
+        let playback = self.video_preview.as_ref()?;
+        if playback.status != VideoPreviewPlaybackStatus::Playing {
+            return None;
+        }
+        if active_video_preview_path(self.preview.as_ref())? != playback.path.as_path() {
+            return None;
+        }
+
+        Some((
+            playback.path.clone(),
+            playback.generation,
+            playback.position,
+        ))
     }
 
     pub(super) fn toggle_preview_tree_directory(&mut self, entry_id: usize) -> Command<Message> {
@@ -166,19 +264,6 @@ impl FileBrowser {
         }
 
         self.start_audio_preview_playback(path)
-    }
-
-    pub(super) fn stop_audio_preview_playback(&mut self) -> Command<Message> {
-        let Some(playback) = self.audio_preview.as_mut() else {
-            return Command::none();
-        };
-        if let Some(runtime) = playback.runtime.take() {
-            runtime.stop();
-        }
-        playback.position = std::time::Duration::ZERO;
-        playback.status = AudioPreviewPlaybackStatus::Stopped;
-        playback.error = None;
-        Command::none()
     }
 
     pub(super) fn accept_audio_preview_started(
@@ -283,8 +368,137 @@ impl FileBrowser {
         })
     }
 
+    pub(super) fn toggle_video_preview_playback(&mut self) -> Command<Message> {
+        let Some(status) = self.video_preview.as_ref().map(|playback| playback.status) else {
+            return Command::none();
+        };
+
+        match status {
+            VideoPreviewPlaybackStatus::Playing => {
+                let Some(playback) = self.video_preview.as_mut() else {
+                    return Command::none();
+                };
+                refresh_video_preview_position(playback);
+                if let Some(runtime) = playback.audio_runtime.as_ref() {
+                    runtime.pause();
+                }
+                playback.status = VideoPreviewPlaybackStatus::Paused;
+                playback.started_at = None;
+                Command::none()
+            }
+            VideoPreviewPlaybackStatus::Paused | VideoPreviewPlaybackStatus::Error => {
+                self.resume_video_preview_playback()
+            }
+            VideoPreviewPlaybackStatus::Finished => {
+                let Some(playback) = self.video_preview.as_mut() else {
+                    return Command::none();
+                };
+                playback.position = Duration::ZERO;
+                self.resume_video_preview_playback()
+            }
+        }
+    }
+
+    pub(super) fn accept_video_preview_audio_started(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        audio_outcome: Result<crate::audio_preview::AudioPreviewRuntime, String>,
+    ) -> Command<Message> {
+        let Some(playback) = self
+            .video_preview
+            .as_mut()
+            .filter(|playback| playback.path == path && playback.generation == generation)
+        else {
+            if let Ok(runtime) = audio_outcome {
+                runtime.stop();
+            }
+            return Command::none();
+        };
+
+        if playback.status != VideoPreviewPlaybackStatus::Playing {
+            if let Ok(runtime) = audio_outcome {
+                runtime.stop();
+            }
+            return Command::none();
+        }
+
+        match audio_outcome {
+            Ok(runtime) => {
+                runtime.set_volume(playback.volume);
+                playback.audio_runtime = Some(runtime);
+                playback.error = None;
+            }
+            Err(error) => {
+                playback.audio_runtime = None;
+                playback.error = Some(format!("Audio unavailable: {error}"));
+            }
+        }
+        Command::none()
+    }
+
+    pub(super) fn seek_video_preview_playback(
+        &mut self,
+        position_seconds: f32,
+    ) -> Command<Message> {
+        let Some(playback) = self.video_preview.as_mut() else {
+            return Command::none();
+        };
+        let position = Duration::from_secs_f32(position_seconds.max(0.0));
+        playback.position = clamp_video_preview_position(position, playback.duration);
+        let resume_command = self.resume_video_preview_playback();
+        let Some(playback) = self.video_preview.as_ref() else {
+            return resume_command;
+        };
+        Command::batch([
+            resume_command,
+            video_preview_frame_command(
+                playback.path.clone(),
+                playback.generation,
+                playback.position,
+            ),
+        ])
+    }
+
+    pub(super) fn change_video_preview_volume(&mut self, volume: f32) -> Command<Message> {
+        let Some(playback) = self.video_preview.as_mut() else {
+            return Command::none();
+        };
+        let volume = volume.clamp(0.0, 1.0);
+        playback.volume = volume;
+        if let Some(runtime) = playback.audio_runtime.as_ref() {
+            runtime.set_volume(volume);
+        }
+        Command::none()
+    }
+
+    pub(super) fn update_video_preview_playback(&mut self) -> Command<Message> {
+        let Some(playback) = self.video_preview.as_mut() else {
+            return Command::none();
+        };
+        if playback.status != VideoPreviewPlaybackStatus::Playing {
+            return Command::none();
+        }
+
+        refresh_video_preview_position(playback);
+        if video_preview_reached_end(playback) {
+            finish_video_preview_audio(playback);
+            playback.status = VideoPreviewPlaybackStatus::Finished;
+            playback.started_at = None;
+        }
+        Command::none()
+    }
+
+    pub(super) fn video_preview_is_active(&self) -> bool {
+        self.video_preview.as_ref().is_some_and(|playback| {
+            playback.status == VideoPreviewPlaybackStatus::Playing
+                && active_video_preview_path(self.preview.as_ref()) == Some(playback.path.as_path())
+        })
+    }
+
     pub(super) fn clear_preview(&mut self) {
         self.clear_audio_preview();
+        self.clear_video_preview();
         self.preview = None;
     }
 
@@ -301,6 +515,60 @@ impl FileBrowser {
             }
         }
     }
+
+    fn start_video_preview_playback(
+        &mut self,
+        path: PathBuf,
+        duration: Option<Duration>,
+    ) -> Command<Message> {
+        self.clear_video_preview();
+        let playback = VideoPreviewPlayback::playing(path.clone(), duration);
+        let generation = playback.generation;
+        self.video_preview = Some(playback);
+        start_video_preview_audio_command(path, generation, Duration::ZERO)
+    }
+
+    fn resume_video_preview_playback(&mut self) -> Command<Message> {
+        let Some(playback) = self.video_preview.as_mut() else {
+            return Command::none();
+        };
+        let path = playback.path.clone();
+        let position = playback.position;
+        playback.generation = playback.generation.saturating_add(1);
+        playback.status = VideoPreviewPlaybackStatus::Playing;
+        playback.started_at = Some(Instant::now());
+        playback.error = None;
+        let generation = playback.generation;
+
+        let should_start_audio = if let Some(runtime) = playback.audio_runtime.as_ref() {
+            runtime.set_volume(playback.volume);
+            match runtime.seek_to(position) {
+                Ok(()) => {
+                    runtime.play();
+                    false
+                }
+                Err(error) => {
+                    playback.error = Some(error);
+                    true
+                }
+            }
+        } else {
+            true
+        };
+
+        if should_start_audio {
+            finish_video_preview_audio(playback);
+            start_video_preview_audio_command(path, generation, position)
+        } else {
+            Command::none()
+        }
+    }
+
+    fn clear_video_preview(&mut self) {
+        if let Some(mut playback) = self.video_preview.take() {
+            finish_video_preview_audio(&mut playback);
+        }
+    }
 }
 
 fn active_audio_preview_path(preview: Option<&PreviewState>) -> Option<&Path> {
@@ -308,6 +576,43 @@ fn active_audio_preview_path(preview: Option<&PreviewState>) -> Option<&Path> {
         PreviewState::Loading(path) => Some(path.as_path()),
         PreviewState::Ready(PreviewContent::Audio { path, .. }) => Some(path.as_path()),
         _ => None,
+    }
+}
+
+fn active_video_preview_path(preview: Option<&PreviewState>) -> Option<&Path> {
+    match preview? {
+        PreviewState::Ready(PreviewContent::Video { path, .. }) => Some(path.as_path()),
+        _ => None,
+    }
+}
+
+fn refresh_video_preview_position(playback: &mut VideoPreviewPlayback) {
+    if playback.status != VideoPreviewPlaybackStatus::Playing {
+        return;
+    }
+    let Some(started_at) = playback.started_at.replace(Instant::now()) else {
+        return;
+    };
+    playback.position =
+        clamp_video_preview_position(playback.position + started_at.elapsed(), playback.duration);
+}
+
+fn clamp_video_preview_position(position: Duration, duration: Option<Duration>) -> Duration {
+    match duration {
+        Some(duration) => position.min(duration),
+        None => position,
+    }
+}
+
+fn video_preview_reached_end(playback: &VideoPreviewPlayback) -> bool {
+    playback
+        .duration
+        .is_some_and(|duration| playback.position >= duration)
+}
+
+fn finish_video_preview_audio(playback: &mut VideoPreviewPlayback) {
+    if let Some(runtime) = playback.audio_runtime.take() {
+        runtime.stop();
     }
 }
 

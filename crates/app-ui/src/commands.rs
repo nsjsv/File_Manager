@@ -21,7 +21,7 @@ use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::SinkExt;
 use iced::{Command, Subscription};
 
-use crate::audio_preview::start_audio_preview;
+use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
     InitialLoad, Message, PendingOperation, SearchRequest, SidebarLocation, TransferConflictItem,
@@ -35,6 +35,7 @@ use crate::preview::load_preview;
 use crate::sidebar::{home_sidebar_location, sidebar_locations};
 use crate::startup_trace;
 use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
+use crate::video_preview::load_video_preview_frame;
 
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
@@ -120,11 +121,49 @@ pub(crate) fn preview_command(
     })
 }
 
+pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Command<Message> {
+    let image_path = path.clone();
+    Command::perform(load_image_dimensions(path), move |dimensions| {
+        Message::ImagePreviewDimensionsLoaded(image_path.clone(), dimensions)
+    })
+}
+
 pub(crate) fn start_audio_preview_command(path: PathBuf) -> Command<Message> {
     let audio_path = path.clone();
     Command::perform(start_audio_preview(path), move |playback_outcome| {
         Message::AudioPreviewStarted(audio_path.clone(), playback_outcome)
     })
+}
+
+pub(crate) fn start_video_preview_audio_command(
+    path: PathBuf,
+    generation: u64,
+    position: Duration,
+) -> Command<Message> {
+    let video_path = path.clone();
+    Command::perform(
+        start_audio_preview_at(path, position),
+        move |audio_outcome| {
+            Message::VideoPreviewAudioStarted(video_path.clone(), generation, audio_outcome)
+        },
+    )
+}
+
+pub(crate) fn video_preview_frame_command(
+    path: PathBuf,
+    generation: u64,
+    position: Duration,
+) -> Command<Message> {
+    let video_path = path.clone();
+    Command::perform(
+        load_video_preview_frame(path, generation, position),
+        move |frame_outcome| match frame_outcome {
+            Ok(frame) => Message::VideoPreviewFrameLoaded(frame),
+            Err(error) => {
+                Message::VideoPreviewSeekFrameFailed(video_path.clone(), generation, error)
+            }
+        },
+    )
 }
 
 pub(crate) fn thumbnail_batch_command(
@@ -767,6 +806,12 @@ async fn load_thumbnail_batch(
         outcomes.push(ThumbnailLoadOutcome { work, result });
     }
     outcomes
+}
+
+async fn load_image_dimensions(path: PathBuf) -> Result<(u32, u32), String> {
+    thumbnails::load_image_dimensions(path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn load_sidebar_locations(home: PathBuf) -> Vec<SidebarLocation> {

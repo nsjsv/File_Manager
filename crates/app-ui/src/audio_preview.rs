@@ -95,12 +95,22 @@ fn inspect_audio_preview_metadata_blocking(path: &Path) -> Result<AudioPreviewMe
 }
 
 pub(crate) async fn start_audio_preview(path: PathBuf) -> Result<AudioPreviewRuntime, String> {
-    tokio::task::spawn_blocking(move || start_audio_preview_blocking(path))
+    start_audio_preview_at(path, Duration::ZERO).await
+}
+
+pub(crate) async fn start_audio_preview_at(
+    path: PathBuf,
+    position: Duration,
+) -> Result<AudioPreviewRuntime, String> {
+    tokio::task::spawn_blocking(move || start_audio_preview_blocking(path, position))
         .await
         .map_err(|error| format!("could not start audio preview: {error}"))?
 }
 
-fn start_audio_preview_blocking(path: PathBuf) -> Result<AudioPreviewRuntime, String> {
+fn start_audio_preview_blocking(
+    path: PathBuf,
+    position: Duration,
+) -> Result<AudioPreviewRuntime, String> {
     let file =
         File::open(&path).map_err(|error| format!("could not open audio preview: {error}"))?;
     let source = Decoder::try_from(file)
@@ -110,6 +120,11 @@ fn start_audio_preview_blocking(path: PathBuf) -> Result<AudioPreviewRuntime, St
     device_sink.log_on_drop(false);
     let player = Player::connect_new(device_sink.mixer());
     player.append(source);
+    if position > Duration::ZERO {
+        player
+            .try_seek(position)
+            .map_err(|error| format!("could not seek audio preview: {error}"))?;
+    }
     player.play();
 
     Ok(AudioPreviewRuntime::new(device_sink, player))

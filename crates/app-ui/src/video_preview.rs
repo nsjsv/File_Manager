@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
 
 use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::SinkExt;
 use iced::widget::image;
 use iced::Subscription;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command;
+use tokio::process::Command as TokioCommand;
 
 use crate::model::{Message, VideoPreviewFrame};
 
@@ -14,33 +15,153 @@ pub(crate) const VIDEO_PREVIEW_MAX_EDGE: u32 = 720;
 const VIDEO_PREVIEW_FPS: u32 = 15;
 const VIDEO_PREVIEW_STDERR_LIMIT: usize = 16 * 1024;
 
-pub(crate) fn video_preview_subscription(path: PathBuf) -> Subscription<Message> {
+pub(crate) struct VideoPreviewMetadata {
+    pub(crate) duration: Option<Duration>,
+}
+
+pub(crate) async fn inspect_video_preview_metadata(
+    path: PathBuf,
+) -> Result<VideoPreviewMetadata, String> {
+    tokio::task::spawn_blocking(move || inspect_video_preview_metadata_blocking(path.as_path()))
+        .await
+        .map_err(|error| format!("could not inspect video preview: {error}"))?
+}
+
+fn inspect_video_preview_metadata_blocking(path: &Path) -> Result<VideoPreviewMetadata, String> {
+    Ok(VideoPreviewMetadata {
+        duration: ffprobe_video_duration(path),
+    })
+}
+
+fn ffprobe_video_duration(path: &Path) -> Option<Duration> {
+    let output = std::process::Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1:nokey=1")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let seconds = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f32>()
+        .ok()?;
+    if seconds.is_finite() && seconds > 0.0 {
+        Some(Duration::from_secs_f32(seconds))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn video_preview_subscription(
+    path: PathBuf,
+    generation: u64,
+    start_position: Duration,
+) -> Subscription<Message> {
     iced::subscription::channel(
-        ("video-preview", path.clone()),
+        ("video-preview", path.clone(), generation),
         2,
         move |mut output| async move {
-            let outcome = stream_video_preview(path.clone(), &mut output).await;
-            if let Err(error) = outcome {
-                let _ = output
-                    .send(Message::VideoPreviewFailed(path.clone(), error))
-                    .await;
-            }
+            let outcome =
+                stream_video_preview(path.clone(), generation, start_position, &mut output).await;
+            let message = match outcome {
+                Ok(()) => Message::VideoPreviewFinished(path.clone(), generation),
+                Err(error) => Message::VideoPreviewFailed(path.clone(), generation, error),
+            };
+            let _ = output.send(message).await;
             iced::futures::future::pending().await
         },
     )
 }
 
-async fn stream_video_preview(
+pub(crate) async fn load_video_preview_frame(
     path: PathBuf,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    let mut child = Command::new("ffmpeg")
+    generation: u64,
+    position: Duration,
+) -> Result<VideoPreviewFrame, String> {
+    let frame = decode_video_preview_frame(path.as_path(), position).await?;
+    Ok(VideoPreviewFrame {
+        path,
+        generation,
+        handle: image::Handle::from_pixels(frame.width, frame.height, frame.pixels),
+        width: frame.width,
+        height: frame.height,
+    })
+}
+
+async fn decode_video_preview_frame(path: &Path, position: Duration) -> Result<PpmFrame, String> {
+    let mut command = TokioCommand::new("ffmpeg");
+    command
         .kill_on_drop(true)
         .arg("-hide_banner")
         .arg("-loglevel")
-        .arg("error")
-        .arg("-stream_loop")
-        .arg("-1")
+        .arg("error");
+    if position > Duration::ZERO {
+        command.arg("-ss").arg(ffmpeg_position(position));
+    }
+    let mut child = command
+        .arg("-i")
+        .arg(path)
+        .arg("-an")
+        .arg("-vf")
+        .arg(video_filter())
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-vcodec")
+        .arg("ppm")
+        .arg("-")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| video_preview_spawn_error(path, error))?;
+
+    let Some(mut stdout) = child.stdout.take() else {
+        return Err("could not read video preview seek frame from ffmpeg".to_owned());
+    };
+    let stderr_task = child.stderr.take().map(limited_ffmpeg_stderr_task);
+    let frame = read_ppm_frame(&mut stdout).await?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|error| format!("could not finish video preview seek: {error}"))?;
+    let stderr = match stderr_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    if let Some(frame) = frame {
+        return Ok(frame);
+    }
+    if status.success() {
+        return Err("could not decode video preview frame at selected position".to_owned());
+    }
+    Err(video_preview_failure_message(status, &stderr))
+}
+
+async fn stream_video_preview(
+    path: PathBuf,
+    generation: u64,
+    start_position: Duration,
+    output: &mut IcedSender<Message>,
+) -> Result<(), String> {
+    let mut command = TokioCommand::new("ffmpeg");
+    command
+        .kill_on_drop(true)
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error");
+    if start_position > Duration::ZERO {
+        command.arg("-ss").arg(ffmpeg_position(start_position));
+    }
+    let mut child = command
         .arg("-re")
         .arg("-i")
         .arg(&path)
@@ -60,17 +181,7 @@ async fn stream_video_preview(
     let Some(mut stdout) = child.stdout.take() else {
         return Err("could not read video preview frames from ffmpeg".to_owned());
     };
-    let stderr_task = child.stderr.take().map(|mut stderr| {
-        tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            let _ = stderr.read_to_end(&mut bytes).await;
-            if bytes.len() > VIDEO_PREVIEW_STDERR_LIMIT {
-                bytes.split_off(bytes.len() - VIDEO_PREVIEW_STDERR_LIMIT)
-            } else {
-                bytes
-            }
-        })
-    });
+    let stderr_task = child.stderr.take().map(limited_ffmpeg_stderr_task);
 
     let mut sent_any_frame = false;
     while let Some(frame) = read_ppm_frame(&mut stdout).await? {
@@ -78,6 +189,7 @@ async fn stream_video_preview(
         output
             .send(Message::VideoPreviewFrameLoaded(VideoPreviewFrame {
                 path: path.clone(),
+                generation,
                 handle: image::Handle::from_pixels(frame.width, frame.height, frame.pixels),
                 width: frame.width,
                 height: frame.height,
@@ -99,6 +211,25 @@ async fn stream_video_preview(
     }
 
     Err(video_preview_failure_message(status, &stderr))
+}
+
+fn limited_ffmpeg_stderr_task<R>(mut stderr: R) -> tokio::task::JoinHandle<Vec<u8>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes).await;
+        if bytes.len() > VIDEO_PREVIEW_STDERR_LIMIT {
+            bytes.split_off(bytes.len() - VIDEO_PREVIEW_STDERR_LIMIT)
+        } else {
+            bytes
+        }
+    })
+}
+
+fn ffmpeg_position(position: Duration) -> String {
+    format!("{:.3}", position.as_secs_f64())
 }
 
 fn video_filter() -> String {

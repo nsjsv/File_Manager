@@ -12,6 +12,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::audio_preview::inspect_audio_preview_metadata;
 use crate::model::{PreviewContent, PreviewTreeEntry};
+use crate::video_preview::inspect_video_preview_metadata;
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 256 * 1024;
 pub(crate) const PREVIEW_DIRECTORY_LIMIT: usize = 500;
@@ -38,10 +39,7 @@ pub(crate) async fn load_preview(
             } else if is_supported_audio_path(&path) {
                 load_audio_preview(path).await
             } else if is_supported_video_path(&path) {
-                Err(
-                    "Video preview is handled by the video preview player; install ffmpeg if it cannot be loaded"
-                        .to_owned(),
-                )
+                load_video_preview(path).await
             } else {
                 load_text_preview(path).await
             }
@@ -398,6 +396,19 @@ async fn load_audio_preview(path: PathBuf) -> Result<PreviewContent, String> {
         path: preview_path,
         duration: metadata.duration,
         len: metadata.len,
+    })
+}
+
+async fn load_video_preview(path: PathBuf) -> Result<PreviewContent, String> {
+    let preview_path = path.clone();
+    let metadata = inspect_video_preview_metadata(path).await?;
+
+    Ok(PreviewContent::Video {
+        path: preview_path,
+        frame: None,
+        width: 0,
+        height: 0,
+        duration: metadata.duration,
     })
 }
 

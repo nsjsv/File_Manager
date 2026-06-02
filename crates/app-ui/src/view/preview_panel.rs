@@ -7,12 +7,12 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
-use crate::appearance::preview_panel_style;
+use crate::appearance::{navigation_icon_button_style, preview_panel_style};
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
-use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view};
+use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
-    PreviewState, PreviewTreeEntry,
+    PreviewState, PreviewTreeEntry, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
 };
 use crate::preview::PREVIEW_TEXT_LIMIT;
 use crate::typography::readable_text;
@@ -28,16 +28,27 @@ const PREVIEW_TREE_INDENT_WIDTH: f32 = 18.0;
 const PREVIEW_TREE_TOGGLE_WIDTH: f32 = 16.0;
 const PREVIEW_TREE_TOGGLE_ROTATION_DEGREES: f32 = 90.0;
 const AUDIO_PREVIEW_CONTROL_HEIGHT: f32 = 92.0;
+const AUDIO_CONTROL_BUTTON_SIZE: f32 = 30.0;
+const AUDIO_CONTROL_ICON_SIZE: f32 = 14.0;
+const AUDIO_TIMELINE_CONTROL_GAP: f32 = 10.0;
 const AUDIO_PROGRESS_SLIDER_WIDTH: f32 = 280.0;
+const AUDIO_PROGRESS_SLIDER_STEP_SECONDS: f32 = 0.05;
 const AUDIO_VOLUME_SLIDER_WIDTH: f32 = 100.0;
+const AUDIO_VOLUME_SLIDER_STEP: f32 = 0.01;
+const VIDEO_PREVIEW_CONTROL_HEIGHT: f32 = 88.0;
+const VIDEO_PROGRESS_SLIDER_PORTION: u16 = 3;
+const VIDEO_VOLUME_SLIDER_PORTION: u16 = 1;
+const VIDEO_CONTROL_SLIDER_GAP: f32 = 14.0;
+const VIDEO_VOLUME_ICON_GAP: f32 = 6.0;
 
 pub(crate) fn view_preview_window<'a>(
     preview: Option<&'a PreviewState>,
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
+    video_preview: Option<&'a VideoPreviewPlayback>,
 ) -> Element<'a, Message> {
     preview
-        .map(|preview| preview_panel(preview, size, audio_preview))
+        .map(|preview| preview_panel(preview, size, audio_preview, video_preview))
         .unwrap_or_else(|| {
             auxiliary_window_message("Select a file and press Space to load preview")
         })
@@ -47,6 +58,7 @@ fn preview_panel<'a>(
     preview: &'a PreviewState,
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
+    video_preview: Option<&'a VideoPreviewPlayback>,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
     let panel = match preview {
@@ -73,12 +85,11 @@ fn preview_panel<'a>(
             truncated,
         }) => archive_preview_panel(path, entries, *total, *truncated, scroll_height),
         PreviewState::Ready(PreviewContent::Image {
-            path,
             handle,
             width,
             height,
             ..
-        }) => image_preview_panel(path, handle, *width, *height, scroll_height),
+        }) => return image_preview_panel(handle, *width, *height, size),
         PreviewState::Ready(PreviewContent::Audio {
             path,
             duration,
@@ -89,8 +100,19 @@ fn preview_panel<'a>(
             frame,
             width,
             height,
+            duration,
             ..
-        }) => video_preview_panel(path, frame.as_ref(), *width, *height, scroll_height),
+        }) => {
+            return video_preview_panel(
+                path,
+                frame.as_ref(),
+                *width,
+                *height,
+                *duration,
+                video_preview,
+                size,
+            )
+        }
         PreviewState::Error(error) => column![
             readable_text("Preview").size(14),
             readable_text(error).size(14),
@@ -291,23 +313,28 @@ fn text_preview_panel(
 }
 
 fn image_preview_panel(
-    path: &std::path::PathBuf,
     handle: &image::Handle,
     width: u32,
     height: u32,
-    scroll_height: f32,
-) -> Column<'static, Message> {
-    column![
-        readable_text(preview_title(path)).size(14),
-        text(format!("Image preview · {width} × {height}")).size(14),
-        container(
-            image::Image::new(handle.clone())
-                .width(Length::Fill)
-                .height(Length::Fixed(scroll_height)),
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(scroll_height)),
-    ]
+    size: PreviewSize,
+) -> Element<'static, Message> {
+    let (image_width, image_height) = image_preview_size(size, width, height);
+    container(
+        image::Image::new(handle.clone())
+            .width(Length::Fixed(image_width))
+            .height(Length::Fixed(image_height)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .center_x()
+    .center_y()
+    .into()
+}
+
+fn image_preview_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
+    let max_width = size.width.max(1.0);
+    let max_height = size.height.max(1.0);
+    scaled_media_size(max_width, max_height, width, height)
 }
 
 fn audio_preview_panel(
@@ -327,9 +354,7 @@ fn audio_preview_panel(
 
     let controls = row![
         title,
-        audio_primary_button(playback),
-        audio_stop_button(playback),
-        audio_progress_control(playback, duration),
+        audio_timeline_control(playback, duration),
         audio_volume_control(playback),
     ]
     .spacing(12)
@@ -345,12 +370,15 @@ fn audio_preview_panel(
 }
 
 fn audio_primary_button(playback: Option<&AudioPreviewPlayback>) -> Button<'static, Message> {
-    let label = match playback.map(|playback| playback.status) {
-        Some(AudioPreviewPlaybackStatus::Loading) => "Opening...",
-        Some(AudioPreviewPlaybackStatus::Playing) => "Pause",
-        _ => "Play",
+    let icon = match playback.map(|playback| playback.status) {
+        Some(AudioPreviewPlaybackStatus::Playing) => IconSymbol::Pause,
+        _ => IconSymbol::Play,
     };
-    let button = button(readable_text(label).size(14)).padding([8, 18]);
+    let button = button(themed_icon(icon, IconTone::Normal, AUDIO_CONTROL_ICON_SIZE))
+        .padding(8)
+        .width(Length::Fixed(AUDIO_CONTROL_BUTTON_SIZE))
+        .height(Length::Fixed(AUDIO_CONTROL_BUTTON_SIZE))
+        .style(navigation_icon_button_style());
     if matches!(
         playback.map(|playback| playback.status),
         Some(AudioPreviewPlaybackStatus::Loading)
@@ -361,16 +389,7 @@ fn audio_primary_button(playback: Option<&AudioPreviewPlayback>) -> Button<'stat
     }
 }
 
-fn audio_stop_button(playback: Option<&AudioPreviewPlayback>) -> Button<'static, Message> {
-    let button = button(readable_text("Stop").size(14)).padding([8, 18]);
-    if playback.is_some_and(|playback| playback.runtime.is_some()) {
-        button.on_press(Message::AudioPreviewStopRequested)
-    } else {
-        button
-    }
-}
-
-fn audio_progress_control(
+fn audio_timeline_control(
     playback: Option<&AudioPreviewPlayback>,
     duration: Option<Duration>,
 ) -> Element<'static, Message> {
@@ -383,17 +402,29 @@ fn audio_progress_control(
         .max(1.0);
     let position_seconds = position.as_secs_f32().min(duration_seconds);
 
-    column![
+    let slider_row = row![
+        audio_primary_button(playback),
         slider(
             0.0..=duration_seconds,
             position_seconds,
             Message::AudioPreviewSeekRequested,
         )
+        .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
         .width(Length::Fixed(AUDIO_PROGRESS_SLIDER_WIDTH)),
-        readable_text(audio_position_text(position, duration)).size(12),
+    ]
+    .spacing(AUDIO_TIMELINE_CONTROL_GAP)
+    .align_items(Alignment::Center);
+    let label_offset = AUDIO_CONTROL_BUTTON_SIZE + AUDIO_TIMELINE_CONTROL_GAP;
+
+    column![
+        slider_row,
+        row![
+            Space::with_width(Length::Fixed(label_offset)),
+            readable_text(audio_position_text(position, duration)).size(12),
+        ],
     ]
     .spacing(4)
-    .width(Length::Fixed(AUDIO_PROGRESS_SLIDER_WIDTH))
+    .width(Length::Fixed(label_offset + AUDIO_PROGRESS_SLIDER_WIDTH))
     .into()
 }
 
@@ -402,6 +433,7 @@ fn audio_volume_control(playback: Option<&AudioPreviewPlayback>) -> Element<'sta
     column![
         readable_text(format!("Volume {:.0}%", volume * 100.0)).size(12),
         slider(0.0..=1.0, volume, Message::AudioPreviewVolumeChanged)
+            .step(AUDIO_VOLUME_SLIDER_STEP)
             .width(Length::Fixed(AUDIO_VOLUME_SLIDER_WIDTH)),
     ]
     .spacing(4)
@@ -463,36 +495,150 @@ fn video_preview_panel(
     frame: Option<&image::Handle>,
     width: u32,
     height: u32,
-    scroll_height: f32,
-) -> Column<'static, Message> {
-    let frame_view: Element<'static, Message> = if let Some(frame) = frame {
-        container(
-            image::Image::new(frame.clone())
-                .width(Length::Fill)
-                .height(Length::Fixed(scroll_height)),
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(scroll_height))
-        .into()
+    duration: Option<Duration>,
+    playback: Option<&VideoPreviewPlayback>,
+    size: PreviewSize,
+) -> Element<'static, Message> {
+    let playback = playback.filter(|playback| playback.path.as_path() == path.as_path());
+    let (frame_width, frame_height) = video_frame_size(size, width, height);
+    let frame_content: Element<'static, Message> = if let Some(frame) = frame {
+        image::Image::new(frame.clone())
+            .width(Length::Fixed(frame_width))
+            .height(Length::Fixed(frame_height))
+            .into()
     } else {
-        container(readable_text("Starting video preview...").size(14))
-            .width(Length::Fill)
-            .height(Length::Fixed(scroll_height))
+        container(Space::with_width(Length::Fixed(frame_width)))
+            .width(Length::Fixed(frame_width))
+            .height(Length::Fixed(frame_height))
             .center_x()
             .center_y()
             .into()
     };
-    let status = if width > 0 && height > 0 {
-        format!("Video preview · {width} × {height}")
-    } else {
-        "Video preview".to_owned()
+    let frame_view: Element<'static, Message> = container(frame_content)
+        .width(Length::Fill)
+        .height(Length::Fixed(frame_height))
+        .center_x()
+        .center_y()
+        .into();
+    let controls = video_controls(playback, duration, frame_width);
+
+    container(
+        column![
+            frame_view,
+            container(controls)
+                .width(Length::Fill)
+                .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+                .center_x()
+                .center_y(),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .center_x()
+    .center_y()
+    .into()
+}
+
+fn video_frame_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
+    let max_width = size.width.max(1.0);
+    let max_height = (size.height - VIDEO_PREVIEW_CONTROL_HEIGHT).max(1.0);
+    scaled_media_size(max_width, max_height, width, height)
+}
+
+fn scaled_media_size(max_width: f32, max_height: f32, width: u32, height: u32) -> (f32, f32) {
+    if width == 0 || height == 0 {
+        return (max_width, max_height);
+    }
+
+    let aspect_ratio = width as f32 / height as f32;
+    let mut frame_width = max_width;
+    let mut frame_height = frame_width / aspect_ratio;
+    if frame_height > max_height {
+        frame_height = max_height;
+        frame_width = frame_height * aspect_ratio;
+    }
+
+    (frame_width.max(1.0), frame_height.max(1.0))
+}
+
+fn video_primary_button(playback: Option<&VideoPreviewPlayback>) -> Button<'static, Message> {
+    let icon = match playback.map(|playback| playback.status) {
+        Some(VideoPreviewPlaybackStatus::Playing) => IconSymbol::Pause,
+        _ => IconSymbol::Play,
     };
+    button(themed_icon(icon, IconTone::Normal, AUDIO_CONTROL_ICON_SIZE))
+        .on_press(Message::VideoPreviewPlaybackToggled)
+        .padding(8)
+        .width(Length::Fixed(AUDIO_CONTROL_BUTTON_SIZE))
+        .height(Length::Fixed(AUDIO_CONTROL_BUTTON_SIZE))
+        .style(navigation_icon_button_style())
+}
+
+fn video_controls(
+    playback: Option<&VideoPreviewPlayback>,
+    duration: Option<Duration>,
+    width: f32,
+) -> Element<'static, Message> {
+    let position = playback
+        .map(|playback| playback.position)
+        .unwrap_or(Duration::ZERO);
+    let duration = playback.and_then(|playback| playback.duration).or(duration);
+    let duration_seconds = duration
+        .map(|duration| duration.as_secs_f32())
+        .unwrap_or_else(|| (position.as_secs_f32() + 1.0).max(1.0))
+        .max(1.0);
+    let position_seconds = position.as_secs_f32().min(duration_seconds);
+
+    let slider_row = row![
+        slider(
+            0.0..=duration_seconds,
+            position_seconds,
+            Message::VideoPreviewSeekRequested,
+        )
+        .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
+        .width(Length::FillPortion(VIDEO_PROGRESS_SLIDER_PORTION)),
+        container(video_volume_control(playback))
+            .width(Length::FillPortion(VIDEO_VOLUME_SLIDER_PORTION)),
+    ]
+    .spacing(VIDEO_CONTROL_SLIDER_GAP)
+    .width(Length::Fixed(width))
+    .align_items(Alignment::Center);
 
     column![
-        readable_text(preview_title(path)).size(14),
-        text(status).size(14),
-        frame_view,
+        row![
+            video_primary_button(playback),
+            readable_text(audio_position_text(position, duration)).size(12),
+        ]
+        .spacing(AUDIO_TIMELINE_CONTROL_GAP)
+        .align_items(Alignment::Center),
+        slider_row,
     ]
+    .spacing(8)
+    .width(Length::Fixed(width))
+    .into()
+}
+
+fn video_volume_control(playback: Option<&VideoPreviewPlayback>) -> Element<'static, Message> {
+    row![
+        themed_icon(
+            IconSymbol::Volume2,
+            IconTone::Normal,
+            AUDIO_CONTROL_ICON_SIZE
+        ),
+        video_volume_slider(playback).width(Length::Fill),
+    ]
+    .spacing(VIDEO_VOLUME_ICON_GAP)
+    .align_items(Alignment::Center)
+    .into()
+}
+
+fn video_volume_slider(
+    playback: Option<&VideoPreviewPlayback>,
+) -> iced::widget::Slider<'static, f32, Message> {
+    let volume = playback.map(|playback| playback.volume).unwrap_or(1.0);
+    slider(0.0..=1.0, volume, Message::VideoPreviewVolumeChanged).step(AUDIO_VOLUME_SLIDER_STEP)
 }
 
 fn numbered_preview_text(content: &str) -> String {

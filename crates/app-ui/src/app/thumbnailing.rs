@@ -84,10 +84,46 @@ impl FileBrowser {
         self.request_preview_thumbnail_for_entry(entry)
     }
 
+    pub(super) fn accept_image_preview_dimensions(
+        &mut self,
+        path: PathBuf,
+        dimensions: Result<(u32, u32), String>,
+    ) -> Command<Message> {
+        if !self.is_active_preview_loading(&path) {
+            return Command::none();
+        }
+        let (width, height) = match dimensions {
+            Ok((width, height)) if width > 0 && height > 0 => (width, height),
+            Ok(_) => {
+                self.preview = Some(PreviewState::Error(
+                    "Image preview has invalid dimensions".to_owned(),
+                ));
+                return self.open_image_preview_error_window();
+            }
+            Err(error) => {
+                self.preview = Some(PreviewState::Error(error));
+                return self.open_image_preview_error_window();
+            }
+        };
+
+        let Some(entry) = self.entry_for_path(&path).cloned() else {
+            self.preview = Some(PreviewState::Error(
+                "Selected item is no longer available".to_owned(),
+            ));
+            return self.open_image_preview_error_window();
+        };
+
+        Command::batch([
+            self.open_image_preview_window_for_dimensions(width, height),
+            self.request_preview_thumbnail_for_entry(entry),
+        ])
+    }
+
     pub(super) fn accept_thumbnail_batch(
         &mut self,
         outcomes: Vec<ThumbnailLoadOutcome>,
     ) -> Command<Message> {
+        let mut commands = Vec::new();
         for outcome in outcomes {
             let key = outcome.work.key();
             self.thumbnail_cache.finish(&key);
@@ -122,7 +158,8 @@ impl FileBrowser {
         }
 
         self.schedule_interaction_thumbnails();
-        self.pump_thumbnail_queue()
+        commands.push(self.pump_thumbnail_queue());
+        Command::batch(commands)
     }
 
     pub(super) fn pump_thumbnail_queue(&mut self) -> Command<Message> {

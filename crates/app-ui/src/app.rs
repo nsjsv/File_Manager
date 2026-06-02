@@ -38,7 +38,7 @@ use crate::model::{
     AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory,
     FileDragState, Message, NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowProfile, SearchIndexRuntime, SearchState, SelectionMarquee,
-    SidebarLocation, TransferConflictState,
+    SidebarLocation, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_queue::FileOperationQueue;
 use crate::startup_trace;
@@ -59,12 +59,24 @@ const MIN_PREVIEW_WIDTH: f32 = 420.0;
 const MIN_PREVIEW_HEIGHT: f32 = 260.0;
 const MAX_PREVIEW_WIDTH: f32 = 1080.0;
 const MAX_PREVIEW_HEIGHT: f32 = 760.0;
+const DEFAULT_IMAGE_PREVIEW_WIDTH: f32 = 748.0;
+const DEFAULT_IMAGE_PREVIEW_HEIGHT: f32 = 636.0;
+const MIN_IMAGE_PREVIEW_WIDTH: f32 = 360.0;
+const MIN_IMAGE_PREVIEW_HEIGHT: f32 = 260.0;
+const MAX_IMAGE_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_IMAGE_PREVIEW_HEIGHT: f32 = 940.0;
 const DEFAULT_AUDIO_PREVIEW_WIDTH: f32 = 780.0;
 const DEFAULT_AUDIO_PREVIEW_HEIGHT: f32 = 168.0;
 const MIN_AUDIO_PREVIEW_WIDTH: f32 = 560.0;
 const MIN_AUDIO_PREVIEW_HEIGHT: f32 = 136.0;
 const MAX_AUDIO_PREVIEW_WIDTH: f32 = 1080.0;
 const MAX_AUDIO_PREVIEW_HEIGHT: f32 = 240.0;
+const DEFAULT_VIDEO_PREVIEW_WIDTH: f32 = 748.0;
+const DEFAULT_VIDEO_PREVIEW_HEIGHT: f32 = 589.0;
+const MIN_VIDEO_PREVIEW_WIDTH: f32 = 360.0;
+const MIN_VIDEO_PREVIEW_HEIGHT: f32 = 320.0;
+const MAX_VIDEO_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_VIDEO_PREVIEW_HEIGHT: f32 = 940.0;
 const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
 const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
 const MIN_SEARCH_WIDTH: f32 = 520.0;
@@ -191,7 +203,9 @@ pub(crate) struct FileBrowser {
     cursor_paste_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
+    pub(crate) video_preview: Option<VideoPreviewPlayback>,
     pub(crate) preview_size: PreviewSize,
+    pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
@@ -265,10 +279,12 @@ impl Application for FileBrowser {
             cursor_paste_directory: None,
             preview: None,
             audio_preview: None,
+            video_preview: None,
             preview_size: PreviewSize {
                 width: DEFAULT_PREVIEW_WIDTH,
                 height: DEFAULT_PREVIEW_HEIGHT,
             },
+            pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
             preview_window: None,
             focused_window: window::Id::MAIN,
@@ -374,8 +390,13 @@ impl Application for FileBrowser {
                 .push(time::every(AUDIO_PREVIEW_TICK_INTERVAL).map(|_| Message::AudioPreviewTick));
         }
 
-        if let Some(path) = self.active_video_preview_path() {
-            subscriptions.push(video_preview_subscription(path));
+        if self.video_preview_is_active() {
+            subscriptions
+                .push(time::every(AUDIO_PREVIEW_TICK_INTERVAL).map(|_| Message::VideoPreviewTick));
+        }
+
+        if let Some((path, generation, position)) = self.active_video_preview_stream() {
+            subscriptions.push(video_preview_subscription(path, generation, position));
         }
 
         Subscription::batch(subscriptions)
@@ -411,8 +432,10 @@ impl Application for FileBrowser {
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
             }
+            Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
+                self.accept_image_preview_dimensions(path, dimensions_outcome)
+            }
             Message::AudioPreviewPlaybackToggled => self.toggle_audio_preview_playback(),
-            Message::AudioPreviewStopRequested => self.stop_audio_preview_playback(),
             Message::AudioPreviewStarted(path, playback_outcome) => {
                 self.accept_audio_preview_started(path, playback_outcome)
             }
@@ -421,9 +444,24 @@ impl Application for FileBrowser {
             }
             Message::AudioPreviewVolumeChanged(volume) => self.change_audio_preview_volume(volume),
             Message::AudioPreviewTick => self.update_audio_preview_playback(),
+            Message::VideoPreviewPlaybackToggled => self.toggle_video_preview_playback(),
+            Message::VideoPreviewAudioStarted(path, generation, audio_outcome) => {
+                self.accept_video_preview_audio_started(path, generation, audio_outcome)
+            }
+            Message::VideoPreviewSeekRequested(position) => {
+                self.seek_video_preview_playback(position)
+            }
+            Message::VideoPreviewVolumeChanged(volume) => self.change_video_preview_volume(volume),
+            Message::VideoPreviewTick => self.update_video_preview_playback(),
             Message::VideoPreviewFrameLoaded(frame) => self.accept_video_preview_frame(frame),
-            Message::VideoPreviewFailed(path, error) => {
-                self.accept_video_preview_error(path, error)
+            Message::VideoPreviewSeekFrameFailed(path, generation, error) => {
+                self.accept_video_preview_seek_frame_error(path, generation, error)
+            }
+            Message::VideoPreviewFinished(path, generation) => {
+                self.accept_video_preview_finished(path, generation)
+            }
+            Message::VideoPreviewFailed(path, generation, error) => {
+                self.accept_video_preview_error(path, generation, error)
             }
             Message::FileOperationProgressed(task_id, progress) => {
                 if let Some(error) = self.operation_queue.update_progress(task_id, progress) {
@@ -542,6 +580,7 @@ impl Application for FileBrowser {
             Message::WindowPointerPressed { button, status } => {
                 self.handle_window_pointer_pressed(button, status)
             }
+            Message::CapturedPreviewShortcutPressed => self.handle_captured_preview_shortcut(),
             Message::RequestPreview => self.request_preview(),
             Message::PathInputChanged(value) => self.update_path_input(value),
             Message::PathInputSubmitted => self.submit_path_input(),
@@ -748,6 +787,7 @@ impl Application for FileBrowser {
                 self.preview.as_ref(),
                 self.preview_size,
                 self.audio_preview.as_ref(),
+                self.video_preview.as_ref(),
             )
         } else {
             if !self.is_loading {

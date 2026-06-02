@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,7 @@ pub(crate) const PREVIEW_THUMBNAIL_MAX_EDGE: u32 = 2048;
 
 const MAX_READY_THUMBNAILS: usize = 1200;
 const MAX_IN_FLIGHT: usize = 2;
+const PREVIEW_IN_FLIGHT_EXTRA: usize = 1;
 const FAILURE_BACKOFF: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +69,7 @@ pub(crate) struct ThumbnailCache {
     ready_order: VecDeque<ThumbnailKey>,
     queued: HashMap<ThumbnailKey, ThumbnailWork>,
     queue_order: VecDeque<ThumbnailKey>,
-    inflight: HashSet<ThumbnailKey>,
+    inflight: HashMap<ThumbnailKey, ThumbnailPurpose>,
     failures: HashMap<ThumbnailKey, Instant>,
 }
 
@@ -80,7 +81,7 @@ impl ThumbnailCache {
             ready_order: VecDeque::new(),
             queued: HashMap::new(),
             queue_order: VecDeque::new(),
-            inflight: HashSet::new(),
+            inflight: HashMap::new(),
             failures: HashMap::new(),
         }
     }
@@ -122,7 +123,7 @@ impl ThumbnailCache {
         priority: ThumbnailPriority,
     ) {
         let key = request.key();
-        if self.ready.contains_key(&key) || self.inflight.contains(&key) {
+        if self.ready.contains_key(&key) || self.inflight.contains_key(&key) {
             return;
         }
         if self.failure_is_active(&key) {
@@ -146,12 +147,12 @@ impl ThumbnailCache {
     }
 
     pub(crate) fn take_next_batch(&mut self) -> Vec<ThumbnailWork> {
-        let available = MAX_IN_FLIGHT.saturating_sub(self.inflight.len());
-        if available == 0 || self.queued.is_empty() {
+        if self.queued.is_empty() {
             return Vec::new();
         }
 
         let mut works = Vec::new();
+        let available = MAX_IN_FLIGHT.saturating_sub(self.inflight.len());
         for _ in 0..available {
             let Some(key) = self.pop_highest_priority_key() else {
                 break;
@@ -159,8 +160,16 @@ impl ThumbnailCache {
             let Some(work) = self.queued.remove(&key) else {
                 continue;
             };
-            self.inflight.insert(key);
+            self.inflight.insert(key, work.purpose);
             works.push(work);
+        }
+        if self.preview_extra_slot_is_available() {
+            if let Some(key) = self.pop_highest_priority_preview_key() {
+                if let Some(work) = self.queued.remove(&key) {
+                    self.inflight.insert(key, work.purpose);
+                    works.push(work);
+                }
+            }
         }
         works
     }
@@ -221,6 +230,17 @@ impl ThumbnailCache {
     }
 
     fn pop_highest_priority_key(&mut self) -> Option<ThumbnailKey> {
+        self.pop_highest_priority_key_matching(|_| true)
+    }
+
+    fn pop_highest_priority_preview_key(&mut self) -> Option<ThumbnailKey> {
+        self.pop_highest_priority_key_matching(|work| work.purpose == ThumbnailPurpose::Preview)
+    }
+
+    fn pop_highest_priority_key_matching(
+        &mut self,
+        mut accepts_work: impl FnMut(&ThumbnailWork) -> bool,
+    ) -> Option<ThumbnailKey> {
         let mut best_index = None;
         let mut best_priority = ThumbnailPriority::Background;
 
@@ -228,6 +248,9 @@ impl ThumbnailCache {
             let Some(work) = self.queued.get(key) else {
                 continue;
             };
+            if !accepts_work(work) {
+                continue;
+            }
             if best_index.is_none() || work.priority > best_priority {
                 best_index = Some(index);
                 best_priority = work.priority;
@@ -236,6 +259,16 @@ impl ThumbnailCache {
 
         let index = best_index?;
         self.queue_order.remove(index)
+    }
+
+    fn preview_extra_slot_is_available(&self) -> bool {
+        self.inflight.len() >= MAX_IN_FLIGHT
+            && self
+                .inflight
+                .values()
+                .filter(|purpose| **purpose == ThumbnailPurpose::Preview)
+                .count()
+                < PREVIEW_IN_FLIGHT_EXTRA
     }
 
     fn trim_ready_cache(&mut self) {
@@ -258,4 +291,86 @@ pub(crate) fn request_for_entry(entry: &DirectoryEntry, max_edge: u32) -> Option
         ThumbnailSourceMetadata::from(&entry.metadata),
         max_edge,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn thumbnail_request(file_name: &str, len: u64) -> ThumbnailRequest {
+        ThumbnailRequest::new(
+            PathBuf::from(file_name),
+            ThumbnailSourceMetadata {
+                len,
+                modified: None,
+            },
+            LIST_THUMBNAIL_EDGE,
+        )
+    }
+
+    #[test]
+    fn preview_work_uses_extra_slot_when_list_work_fills_normal_slots() {
+        let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
+        cache.enqueue_request(
+            thumbnail_request("list-a.png", 1),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Focused,
+        );
+        cache.enqueue_request(
+            thumbnail_request("list-b.png", 2),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Focused,
+        );
+
+        let first_batch = cache.take_next_batch();
+
+        assert_eq!(first_batch.len(), MAX_IN_FLIGHT);
+        assert!(first_batch
+            .iter()
+            .all(|work| work.purpose == ThumbnailPurpose::List));
+
+        let preview_request = thumbnail_request("preview.png", 3);
+        cache.enqueue_request(
+            preview_request.clone(),
+            ThumbnailPurpose::Preview,
+            ThumbnailPriority::Preview,
+        );
+
+        let preview_batch = cache.take_next_batch();
+
+        assert_eq!(preview_batch.len(), PREVIEW_IN_FLIGHT_EXTRA);
+        assert_eq!(preview_batch[0].purpose, ThumbnailPurpose::Preview);
+        assert_eq!(preview_batch[0].request, preview_request);
+    }
+
+    #[test]
+    fn preview_extra_slot_allows_only_one_preview_work() {
+        let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
+        cache.enqueue_request(
+            thumbnail_request("list-a.png", 1),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Focused,
+        );
+        cache.enqueue_request(
+            thumbnail_request("list-b.png", 2),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Focused,
+        );
+        assert_eq!(cache.take_next_batch().len(), MAX_IN_FLIGHT);
+
+        cache.enqueue_request(
+            thumbnail_request("preview-a.png", 3),
+            ThumbnailPurpose::Preview,
+            ThumbnailPriority::Preview,
+        );
+        assert_eq!(cache.take_next_batch().len(), PREVIEW_IN_FLIGHT_EXTRA);
+
+        cache.enqueue_request(
+            thumbnail_request("preview-b.png", 4),
+            ThumbnailPurpose::Preview,
+            ThumbnailPriority::Preview,
+        );
+
+        assert!(cache.take_next_batch().is_empty());
+    }
 }

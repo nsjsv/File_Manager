@@ -253,6 +253,20 @@ pub async fn generate_image_thumbnail(
         .map_err(|source| ThumbnailError::Join(source.to_string()))?
 }
 
+pub async fn load_image_dimensions(source: impl AsRef<Path>) -> Result<(u32, u32), ThumbnailError> {
+    let source = source.as_ref().to_path_buf();
+    tokio::task::spawn_blocking(move || load_image_dimensions_blocking(source))
+        .await
+        .map_err(|source| ThumbnailError::Join(source.to_string()))?
+}
+
+fn load_image_dimensions_blocking(source: PathBuf) -> Result<(u32, u32), ThumbnailError> {
+    image::image_dimensions(&source).map_err(|source_error| ThumbnailError::ReadImage {
+        path: source,
+        source: source_error,
+    })
+}
+
 async fn cached_thumbnail_dimensions(path: PathBuf) -> Result<(u32, u32), ThumbnailError> {
     tokio::task::spawn_blocking(move || {
         image::image_dimensions(&path)
@@ -635,6 +649,18 @@ mod tests {
         assert!(second.cache_hit);
         assert_eq!(first.key, second.key);
         assert_eq!(first.output, second.output);
+    }
+
+    #[tokio::test]
+    async fn load_image_dimensions_reads_source_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.png");
+        let image = image::RgbImage::new(37, 19);
+        image.save(&source).unwrap();
+
+        let dimensions = load_image_dimensions(&source).await.unwrap();
+
+        assert_eq!(dimensions, (37, 19));
     }
 
     #[test]

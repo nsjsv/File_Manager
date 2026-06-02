@@ -15,14 +15,14 @@ use super::paths::{self, PasteTargetMode};
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
     check_transfer_conflicts_command, check_transfer_rename_target_command,
-    create_clipboard_file_command, load_expanded_directory_command, open_file_command,
-    preview_command, read_desktop_clipboard_command, start_audio_preview_command,
-    write_file_clipboard_command,
+    create_clipboard_file_command, image_preview_dimensions_command,
+    load_expanded_directory_command, open_file_command, preview_command,
+    read_desktop_clipboard_command, start_audio_preview_command, write_file_clipboard_command,
 };
 use crate::model::{
     AudioPreviewPlayback, ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus,
     FileDragPhase, FileDragState, LastClick, Message, NavigationMode, PendingOperation,
-    PreviewContent, PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictChoice,
+    PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictChoice,
     TransferConflictItem, TransferConflictMode, TransferConflictState,
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
@@ -342,11 +342,6 @@ impl FileBrowser {
     }
 
     pub(super) fn request_preview(&mut self) -> Command<Message> {
-        if self.audio_preview.is_some() {
-            self.context_menu = None;
-            return self.toggle_audio_preview_playback();
-        }
-
         if self.preview.is_some() {
             self.context_menu = None;
             return self.close_preview_window();
@@ -833,6 +828,26 @@ impl FileBrowser {
 
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
         let is_audio_preview = kind == FileKind::File && is_supported_audio_path(&path);
+        let is_video_preview = kind == FileKind::File && is_supported_video_path(&path);
+        let is_image_preview = kind == FileKind::File
+            && thumbnails::is_supported_thumbnail_path(&path)
+            && !is_video_preview;
+        if is_image_preview {
+            let close_window_command = self.close_preview_window();
+            self.preview = Some(PreviewState::Loading(path.clone()));
+            self.error = None;
+            return Command::batch([close_window_command, image_preview_dimensions_command(path)]);
+        }
+        if is_video_preview {
+            let close_window_command = self.close_preview_window();
+            self.preview = Some(PreviewState::Loading(path.clone()));
+            self.error = None;
+            return Command::batch([
+                close_window_command,
+                preview_command(path, kind, self.options.clone()),
+            ]);
+        }
+
         let window_profile = if is_audio_preview {
             PreviewWindowProfile::Audio
         } else {
@@ -842,27 +857,6 @@ impl FileBrowser {
         self.clear_preview();
         self.preview = Some(PreviewState::Loading(path.clone()));
         self.error = None;
-        if kind == FileKind::File && is_supported_video_path(&path) {
-            self.preview = Some(PreviewState::Ready(PreviewContent::Video {
-                path,
-                frame: None,
-                width: 0,
-                height: 0,
-            }));
-            return window_command;
-        }
-        if kind == FileKind::File && thumbnails::is_supported_thumbnail_path(&path) {
-            let Some(entry) = self.entry_for_path(&path).cloned() else {
-                self.preview = Some(PreviewState::Error(
-                    "Selected item is no longer available".to_owned(),
-                ));
-                return window_command;
-            };
-            return Command::batch([
-                window_command,
-                self.request_preview_thumbnail_for_entry(entry),
-            ]);
-        }
         if is_audio_preview {
             self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
             return Command::batch([

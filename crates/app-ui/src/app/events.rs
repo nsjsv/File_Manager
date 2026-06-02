@@ -52,6 +52,10 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
         return Some(Message::TabDragFinished);
     }
 
+    if captured_preview_shortcut(&event, status) {
+        return Some(Message::CapturedPreviewShortcutPressed);
+    }
+
     if matches!(status, event::Status::Captured) {
         return None;
     }
@@ -68,6 +72,17 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Forward)) => Some(Message::Forward),
         _ => None,
     }
+}
+
+fn captured_preview_shortcut(event: &Event, status: event::Status) -> bool {
+    matches!(status, event::Status::Captured)
+        && matches!(
+            event,
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Space),
+                ..
+            })
+        )
 }
 
 fn pointer_pressed_message(event: &Event, status: event::Status) -> Option<Message> {
@@ -261,6 +276,23 @@ mod tests {
         let message = global_event_message(event, event::Status::Ignored);
 
         assert!(matches!(message, Some(Message::SearchOpened)));
+    }
+
+    #[test]
+    fn captured_space_reports_preview_shortcut() {
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: Key::Named(key::Named::Space),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+        });
+
+        let message = global_event_message(event, event::Status::Captured);
+
+        assert!(matches!(
+            message,
+            Some(Message::CapturedPreviewShortcutPressed)
+        ));
     }
 
     #[test]
