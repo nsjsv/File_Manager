@@ -12,6 +12,6 @@ fn open_error_failed_keeps_path() {
 
     match error {
         OpenError::Spawn { path: actual, .. } => assert_eq!(actual, path),
-        OpenError::Failed { .. } => panic!("unexpected variant"),
+        _ => panic!("unexpected variant"),
     }
 }
