@@ -1,5 +1,7 @@
-use iced::widget::{container, svg};
+use iced::widget::{container, scrollable, svg, text_editor};
 use iced::{theme, Background, Border, Color, Shadow, Theme, Vector};
+
+use crate::model::ScrollbarVisibility;
 
 pub(crate) fn app_content_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
@@ -92,6 +94,43 @@ pub(crate) fn navigation_icon_button_style() -> theme::Button {
 
 pub(crate) fn context_menu_button_style() -> theme::Button {
     theme::Button::custom(TransparentButtonStyle)
+}
+
+pub(crate) fn text_preview_editor_style() -> theme::TextEditor {
+    theme::TextEditor::Custom(Box::new(TransparentTextPreviewEditorStyle))
+}
+
+pub(crate) fn auto_hide_scrollbar_style(visibility: ScrollbarVisibility) -> theme::Scrollable {
+    theme::Scrollable::custom(AutoHideScrollbarStyle { visibility })
+}
+
+pub(crate) fn auto_hide_vertical_scrollbar_direction(
+    visibility: ScrollbarVisibility,
+    width: f32,
+) -> scrollable::Direction {
+    scrollable::Direction::Vertical(auto_hide_scrollbar_properties(visibility, width))
+}
+
+pub(crate) fn auto_hide_horizontal_scrollbar_direction(
+    visibility: ScrollbarVisibility,
+    width: f32,
+) -> scrollable::Direction {
+    scrollable::Direction::Horizontal(auto_hide_scrollbar_properties(visibility, width))
+}
+
+fn auto_hide_scrollbar_properties(
+    visibility: ScrollbarVisibility,
+    width: f32,
+) -> scrollable::Properties {
+    let width = if visibility.opacity() <= f32::EPSILON {
+        0.0
+    } else {
+        width
+    };
+
+    scrollable::Properties::new()
+        .width(width)
+        .scroller_width(width)
 }
 
 pub(crate) fn path_suggestions_style(theme: &Theme) -> container::Appearance {
@@ -433,6 +472,13 @@ fn warning_icon_svg_appearance(_theme: &Theme) -> svg::Appearance {
 
 struct TransparentButtonStyle;
 
+#[derive(Debug, Clone, Copy)]
+struct AutoHideScrollbarStyle {
+    visibility: ScrollbarVisibility,
+}
+
+struct TransparentTextPreviewEditorStyle;
+
 impl iced::widget::button::StyleSheet for TransparentButtonStyle {
     type Style = Theme;
 
@@ -456,11 +502,125 @@ fn transparent_button_appearance(theme: &Theme) -> iced::widget::button::Appeara
     }
 }
 
+impl scrollable::StyleSheet for AutoHideScrollbarStyle {
+    type Style = Theme;
+
+    fn active(&self, theme: &Self::Style) -> scrollable::Appearance {
+        mac_scrollbar_appearance(theme, self.visibility.opacity())
+    }
+
+    fn hovered(
+        &self,
+        theme: &Self::Style,
+        is_mouse_over_scrollbar: bool,
+    ) -> scrollable::Appearance {
+        let mut opacity = self.visibility.opacity();
+        if opacity > 0.0 && is_mouse_over_scrollbar {
+            opacity = (opacity + 0.18).min(1.0);
+        }
+        mac_scrollbar_appearance(theme, opacity)
+    }
+
+    fn dragging(&self, theme: &Self::Style) -> scrollable::Appearance {
+        let opacity = self.visibility.opacity();
+        let opacity = if opacity > 0.0 {
+            opacity.max(0.86)
+        } else {
+            0.0
+        };
+        mac_scrollbar_appearance(theme, opacity)
+    }
+}
+
+fn default_scrollbar_active_appearance(theme: &Theme) -> scrollable::Appearance {
+    <Theme as scrollable::StyleSheet>::active(theme, &theme::Scrollable::Default)
+}
+
+fn mac_scrollbar_appearance(theme: &Theme, opacity: f32) -> scrollable::Appearance {
+    let mut appearance = default_scrollbar_active_appearance(theme);
+    appearance.scrollbar.background = None;
+    appearance.scrollbar.border = Border {
+        radius: 999.0.into(),
+        ..Border::default()
+    };
+    appearance.scrollbar.scroller.color = mac_scrollbar_scroller_color(theme, opacity);
+    appearance.scrollbar.scroller.border = Border {
+        radius: 999.0.into(),
+        ..Border::default()
+    };
+    appearance.gap = None;
+    appearance
+}
+
+fn mac_scrollbar_scroller_color(theme: &Theme, opacity: f32) -> Color {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if is_dark_theme(theme) {
+        Color::from_rgba8(255, 255, 255, 0.42 * opacity)
+    } else {
+        Color::from_rgba8(20, 24, 31, 0.32 * opacity)
+    }
+}
+
+impl text_editor::StyleSheet for TransparentTextPreviewEditorStyle {
+    type Style = Theme;
+
+    fn active(&self, _theme: &Self::Style) -> text_editor::Appearance {
+        transparent_text_preview_editor_appearance()
+    }
+
+    fn focused(&self, _theme: &Self::Style) -> text_editor::Appearance {
+        transparent_text_preview_editor_appearance()
+    }
+
+    fn hovered(&self, _theme: &Self::Style) -> text_editor::Appearance {
+        transparent_text_preview_editor_appearance()
+    }
+
+    fn disabled(&self, _theme: &Self::Style) -> text_editor::Appearance {
+        transparent_text_preview_editor_appearance()
+    }
+
+    fn placeholder_color(&self, theme: &Self::Style) -> Color {
+        muted_text_color(theme)
+    }
+
+    fn value_color(&self, theme: &Self::Style) -> Color {
+        base_text_color(theme)
+    }
+
+    fn disabled_color(&self, theme: &Self::Style) -> Color {
+        muted_text_color(theme)
+    }
+
+    fn selection_color(&self, theme: &Self::Style) -> Color {
+        if is_dark_theme(theme) {
+            Color::from_rgba8(82, 126, 190, 0.55)
+        } else {
+            Color::from_rgba8(74, 137, 220, 0.25)
+        }
+    }
+}
+
+fn transparent_text_preview_editor_appearance() -> text_editor::Appearance {
+    text_editor::Appearance {
+        background: Background::Color(Color::from_rgba8(0, 0, 0, 0.0)),
+        border: Border::default(),
+    }
+}
+
 fn base_text_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(226, 233, 242)
     } else {
         Color::from_rgb8(36, 43, 54)
+    }
+}
+
+fn muted_text_color(theme: &Theme) -> Color {
+    if is_dark_theme(theme) {
+        Color::from_rgb8(137, 146, 159)
+    } else {
+        Color::from_rgb8(119, 127, 139)
     }
 }
 

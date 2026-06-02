@@ -3,11 +3,12 @@ use iced::widget::{column, container, mouse_area, row, scrollable, text_input, C
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{
-    path_suggestion_item_style, preview_panel_style, selected_path_suggestion_item_style,
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, path_suggestion_item_style,
+    preview_panel_style, selected_path_suggestion_item_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::file_entry_icon_symbol;
-use crate::model::{Message, SearchScope, SearchState};
+use crate::model::{Message, ScrollbarVisibility, SearchScope, SearchState};
 use crate::typography::readable_text;
 
 use super::{auxiliary_window_message, themed_icon, IconTone, MENU_ICON_SIZE};
@@ -29,13 +30,19 @@ pub(crate) fn search_results_id() -> scrollable::Id {
     scrollable::Id::new("search-results")
 }
 
-pub(crate) fn view_search_window(search: Option<&SearchState>) -> Element<'_, Message> {
+pub(crate) fn view_search_window(
+    search: Option<&SearchState>,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     search
-        .map(search_panel)
+        .map(|search| search_panel(search, scrollbar_visibility))
         .unwrap_or_else(|| auxiliary_window_message("Search window is closed"))
 }
 
-fn search_panel(search: &SearchState) -> Element<'_, Message> {
+fn search_panel(
+    search: &SearchState,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     let root = search.root.to_string_lossy();
     let root = format_middle_ellipsized_text(root.as_ref(), SEARCH_ROOT_MAX_CHARS);
     let header = row![
@@ -56,7 +63,7 @@ fn search_panel(search: &SearchState) -> Element<'_, Message> {
     let content = column![
         header,
         input,
-        search_results_panel(search),
+        search_results_panel(search, scrollbar_visibility),
         search_footer(search)
     ]
     .spacing(10)
@@ -70,7 +77,10 @@ fn search_panel(search: &SearchState) -> Element<'_, Message> {
         .into()
 }
 
-fn search_results_panel(search: &SearchState) -> Element<'_, Message> {
+fn search_results_panel(
+    search: &SearchState,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     if search.query.trim().is_empty() {
         let message = if search.is_indexing {
             "Building the index in the background. You can search by file name now"
@@ -112,11 +122,11 @@ fn search_results_panel(search: &SearchState) -> Element<'_, Message> {
 
     scrollable(matches)
         .id(search_results_id())
-        .direction(iced::widget::scrollable::Direction::Vertical(
-            iced::widget::scrollable::Properties::new()
-                .width(6.0)
-                .scroller_width(6.0),
+        .direction(auto_hide_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
         ))
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .height(Length::Fixed(SEARCH_RESULTS_HEIGHT))
         .into()
 }

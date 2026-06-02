@@ -14,6 +14,7 @@ mod preview;
 mod selection_marquee;
 mod sidebar;
 mod startup_trace;
+mod text_preview;
 mod three_column_view;
 mod thumbnail_cache;
 mod typography;

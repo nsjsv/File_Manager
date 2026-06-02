@@ -9,7 +9,7 @@ use file_core::{
 };
 use file_operation_store::TaskQueueStore;
 use iced::keyboard;
-use iced::widget::image;
+use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Theme};
 
 use crate::audio_preview::AudioPreviewRuntime;
@@ -24,6 +24,7 @@ pub(crate) enum Message {
     TrashLoaded(Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    TextPreviewAction(text_editor::Action),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
     AudioPreviewPlaybackToggled,
     AudioPreviewStarted(PathBuf, Result<AudioPreviewRuntime, String>),
@@ -100,7 +101,9 @@ pub(crate) enum Message {
     ShowHiddenFilesToggled,
     ColumnViewModeSelected(ColumnViewMode),
     ColumnFixedCountSelected(usize),
-    ColumnBrowserWheelScrolled(mouse::ScrollDelta),
+    CapturedWheelScrolled(mouse::ScrollDelta),
+    ScrollbarAutoHideElapsed(u64),
+    ScrollbarAnimationTick,
     ColumnScrolled(PathBuf, f32, f32),
     ColumnResizeStarted,
     OpenDirectoryInNewTab(PathBuf),
@@ -163,6 +166,34 @@ pub(crate) enum PendingOperation {
 pub(crate) enum OperationQueuePanelMode {
     PassivePreview,
     InteractiveList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ScrollbarVisibility {
+    Hidden,
+    VisibleWithOpacity(f32),
+    Visible,
+}
+
+impl ScrollbarVisibility {
+    pub(crate) fn with_opacity(opacity: f32) -> Self {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= f32::EPSILON {
+            Self::Hidden
+        } else if (1.0 - opacity) <= f32::EPSILON {
+            Self::Visible
+        } else {
+            Self::VisibleWithOpacity(opacity)
+        }
+    }
+
+    pub(crate) fn opacity(self) -> f32 {
+        match self {
+            Self::Hidden => 0.0,
+            Self::VisibleWithOpacity(opacity) => opacity,
+            Self::Visible => 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,7 +321,8 @@ pub(crate) enum PreviewContent {
     },
     Text {
         path: PathBuf,
-        content: String,
+        rendered: String,
+        format: TextPreviewFormat,
         truncated: bool,
     },
     Archive {
@@ -318,6 +350,61 @@ pub(crate) enum PreviewContent {
         height: u32,
         duration: Option<Duration>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextPreviewFormat {
+    Plain,
+    Markdown,
+}
+
+pub(crate) struct TextPreviewDocument {
+    path: PathBuf,
+    content: text_editor::Content,
+}
+
+impl TextPreviewDocument {
+    pub(crate) fn new(path: PathBuf, content: &str) -> Self {
+        Self {
+            path,
+            content: text_editor::Content::with_text(&numbered_preview_text(content)),
+        }
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        self.path.as_path()
+    }
+
+    pub(crate) fn content(&self) -> &text_editor::Content {
+        &self.content
+    }
+
+    pub(crate) fn perform(&mut self, action: text_editor::Action) {
+        if action.is_edit() {
+            return;
+        }
+
+        self.content.perform(action);
+    }
+}
+
+pub(crate) fn numbered_preview_text(content: &str) -> String {
+    if content.is_empty() {
+        return "1 | (empty file)".to_owned();
+    }
+
+    let line_count = content.lines().count().max(1);
+    let width = line_count.to_string().len();
+    let mut numbered = String::new();
+    for (index, line) in content.lines().enumerate() {
+        numbered.push_str(&format!(
+            "{:>width$} | {}\n",
+            index + 1,
+            line,
+            width = width
+        ));
+    }
+    numbered
 }
 
 #[derive(Debug, Clone)]

@@ -1,22 +1,54 @@
+use iced::advanced::widget as advanced_widget;
+use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
 use iced::widget::text_input;
-use iced::{event, mouse, window, Command, Size};
+use iced::{event, mouse, window, Command, Rectangle, Size};
 
-use super::{
-    rename_input_focus_check_command, FileBrowser, DEFAULT_AUDIO_PREVIEW_HEIGHT,
-    DEFAULT_AUDIO_PREVIEW_WIDTH, DEFAULT_IMAGE_PREVIEW_HEIGHT, DEFAULT_IMAGE_PREVIEW_WIDTH,
-    DEFAULT_PREVIEW_HEIGHT, DEFAULT_PREVIEW_WIDTH, DEFAULT_SEARCH_HEIGHT, DEFAULT_SEARCH_WIDTH,
-    DEFAULT_VIDEO_PREVIEW_HEIGHT, DEFAULT_VIDEO_PREVIEW_WIDTH, MAX_AUDIO_PREVIEW_HEIGHT,
-    MAX_AUDIO_PREVIEW_WIDTH, MAX_IMAGE_PREVIEW_HEIGHT, MAX_IMAGE_PREVIEW_WIDTH, MAX_PREVIEW_HEIGHT,
-    MAX_PREVIEW_WIDTH, MAX_VIDEO_PREVIEW_HEIGHT, MAX_VIDEO_PREVIEW_WIDTH, MIN_AUDIO_PREVIEW_HEIGHT,
-    MIN_AUDIO_PREVIEW_WIDTH, MIN_IMAGE_PREVIEW_HEIGHT, MIN_IMAGE_PREVIEW_WIDTH, MIN_PREVIEW_HEIGHT,
-    MIN_PREVIEW_WIDTH, MIN_SEARCH_HEIGHT, MIN_SEARCH_WIDTH, MIN_VIDEO_PREVIEW_HEIGHT,
-    MIN_VIDEO_PREVIEW_WIDTH, PREVIEW_WINDOW_APP_ID, SEARCH_WINDOW_APP_ID,
-};
+use super::FileBrowser;
 use crate::model::{Message, PreviewSize, PreviewWindowProfile};
-use crate::view::path_input_id;
+use crate::view::{path_input_id, rename_input_id};
 
+const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
+const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
+const MIN_PREVIEW_WIDTH: f32 = 420.0;
+const MIN_PREVIEW_HEIGHT: f32 = 260.0;
+const MAX_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_PREVIEW_HEIGHT: f32 = 760.0;
+const DEFAULT_IMAGE_PREVIEW_WIDTH: f32 = 748.0;
+const DEFAULT_IMAGE_PREVIEW_HEIGHT: f32 = 636.0;
+const MIN_IMAGE_PREVIEW_WIDTH: f32 = 360.0;
+const MIN_IMAGE_PREVIEW_HEIGHT: f32 = 260.0;
+const MAX_IMAGE_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_IMAGE_PREVIEW_HEIGHT: f32 = 940.0;
+const DEFAULT_AUDIO_PREVIEW_WIDTH: f32 = 780.0;
+const DEFAULT_AUDIO_PREVIEW_HEIGHT: f32 = 168.0;
+const MIN_AUDIO_PREVIEW_WIDTH: f32 = 560.0;
+const MIN_AUDIO_PREVIEW_HEIGHT: f32 = 136.0;
+const MAX_AUDIO_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_AUDIO_PREVIEW_HEIGHT: f32 = 240.0;
+const DEFAULT_VIDEO_PREVIEW_WIDTH: f32 = 748.0;
+const DEFAULT_VIDEO_PREVIEW_HEIGHT: f32 = 589.0;
+const MIN_VIDEO_PREVIEW_WIDTH: f32 = 360.0;
+const MIN_VIDEO_PREVIEW_HEIGHT: f32 = 320.0;
+const MAX_VIDEO_PREVIEW_WIDTH: f32 = 1080.0;
+const MAX_VIDEO_PREVIEW_HEIGHT: f32 = 940.0;
+const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
+const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
+const MIN_SEARCH_WIDTH: f32 = 520.0;
+const MIN_SEARCH_HEIGHT: f32 = 360.0;
+const MAIN_WINDOW_APP_ID: &str = "file-manager";
+const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
+const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
 const VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT: f32 = 88.0;
 const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
+
+pub(super) fn main_window_settings() -> window::Settings {
+    let mut settings = window::Settings {
+        size: Size::new(1180.0, 680.0),
+        ..window::Settings::default()
+    };
+    settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
+    settings
+}
 
 fn search_window_settings() -> window::Settings {
     let mut settings = window::Settings {
@@ -44,7 +76,7 @@ fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> 
     settings
 }
 
-fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize {
+pub(super) fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize {
     match profile {
         PreviewWindowProfile::Regular => PreviewSize {
             width: DEFAULT_PREVIEW_WIDTH,
@@ -63,6 +95,45 @@ fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize {
             height: DEFAULT_VIDEO_PREVIEW_HEIGHT,
         },
     }
+}
+
+struct RenameInputFocusCheck {
+    target: advanced_widget::Id,
+    is_focused: bool,
+}
+
+impl RenameInputFocusCheck {
+    fn new(target: text_input::Id) -> Self {
+        Self {
+            target: target.into(),
+            is_focused: false,
+        }
+    }
+}
+
+impl Operation<Message> for RenameInputFocusCheck {
+    fn container(
+        &mut self,
+        _id: Option<&advanced_widget::Id>,
+        _bounds: Rectangle,
+        operate_on_children: &mut dyn FnMut(&mut dyn Operation<Message>),
+    ) {
+        operate_on_children(self);
+    }
+
+    fn focusable(&mut self, state: &mut dyn Focusable, id: Option<&advanced_widget::Id>) {
+        if id == Some(&self.target) {
+            self.is_focused = state.is_focused();
+        }
+    }
+
+    fn finish(&self) -> Outcome<Message> {
+        Outcome::Some(Message::RenameInputFocusChecked(self.is_focused))
+    }
+}
+
+fn rename_input_focus_check_command() -> Command<Message> {
+    Command::widget(RenameInputFocusCheck::new(rename_input_id()))
 }
 
 fn clamp_preview_size(profile: PreviewWindowProfile, size: PreviewSize) -> PreviewSize {

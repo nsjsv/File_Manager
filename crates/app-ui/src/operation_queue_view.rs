@@ -2,11 +2,12 @@ use iced::widget::{button, column, container, progress_bar, row, scrollable, svg
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{
-    context_menu_button_style, context_menu_style, error_notification_style,
-    navigation_icon_button_style, path_suggestion_item_style,
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
+    context_menu_style, error_notification_style, navigation_icon_button_style,
+    path_suggestion_item_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
-use crate::model::Message;
+use crate::model::{Message, ScrollbarVisibility};
 use crate::operation_queue::{FileOperationQueue, FileOperationStatus, FileOperationTask};
 use crate::typography::readable_text;
 
@@ -45,7 +46,10 @@ pub(crate) fn operation_queue_indicator(
     )
 }
 
-pub(crate) fn operation_queue_panel(queue: &FileOperationQueue) -> Element<'_, Message> {
+pub(crate) fn operation_queue_panel(
+    queue: &FileOperationQueue,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     let header = row![
         readable_text("File Tasks").size(16).width(Length::Fill),
         readable_text(format!("{} tasks", queue.task_count())).size(12),
@@ -65,11 +69,11 @@ pub(crate) fn operation_queue_panel(queue: &FileOperationQueue) -> Element<'_, M
     let content = column![
         header,
         scrollable(tasks)
-            .direction(iced::widget::scrollable::Direction::Vertical(
-                iced::widget::scrollable::Properties::new()
-                    .width(6.0)
-                    .scroller_width(6.0),
+            .direction(auto_hide_vertical_scrollbar_direction(
+                scrollbar_visibility,
+                6.0,
             ))
+            .style(auto_hide_scrollbar_style(scrollbar_visibility))
             .height(Length::Fixed(TASK_LIST_MAX_HEIGHT)),
     ]
     .spacing(10);

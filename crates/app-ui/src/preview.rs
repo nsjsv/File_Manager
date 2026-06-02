@@ -12,6 +12,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::audio_preview::inspect_audio_preview_metadata;
 use crate::model::{PreviewContent, PreviewTreeEntry};
+use crate::text_preview::render_text_preview;
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 256 * 1024;
 pub(crate) const PREVIEW_DIRECTORY_LIMIT: usize = 500;
@@ -634,10 +635,12 @@ async fn load_text_preview(path: PathBuf) -> Result<PreviewContent, String> {
 
     let content = String::from_utf8(buffer)
         .map_err(|_| "Preview is only available for UTF-8 text files".to_owned())?;
+    let (rendered, format) = render_text_preview(path.as_path(), &content);
 
     Ok(PreviewContent::Text {
         path,
-        content,
+        rendered,
+        format,
         truncated,
     })
 }
@@ -648,6 +651,8 @@ mod tests {
 
     use tempfile::tempdir;
     use zip::write::SimpleFileOptions;
+
+    use crate::model::TextPreviewFormat;
 
     use super::*;
 
@@ -747,10 +752,36 @@ mod tests {
             .await
             .expect("text preview");
 
-        let PreviewContent::Text { content, .. } = preview_content else {
+        let PreviewContent::Text {
+            rendered, format, ..
+        } = preview_content
+        else {
             panic!("expected text preview");
         };
-        assert_eq!(content, "hello\n");
+        assert_eq!(rendered, "hello\n");
+        assert_eq!(format, TextPreviewFormat::Plain);
+    }
+
+    #[tokio::test]
+    async fn load_preview_renders_markdown_text_preview() {
+        let temp_dir = tempdir().expect("temp dir");
+        let text_path = temp_dir.path().join("README.md");
+        std::fs::write(&text_path, "# Title\n\nHello **world**.\n").expect("write markdown file");
+
+        let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
+            .await
+            .expect("markdown preview");
+
+        let PreviewContent::Text {
+            rendered, format, ..
+        } = preview_content
+        else {
+            panic!("expected text preview");
+        };
+        assert_eq!(format, TextPreviewFormat::Markdown);
+        assert!(rendered.contains("Title\n====="));
+        assert!(rendered.contains("Hello world."));
+        assert!(!rendered.contains("**world**"));
     }
 
     #[test]

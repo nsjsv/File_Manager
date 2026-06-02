@@ -2,17 +2,21 @@ use std::path::Path;
 use std::time::Duration;
 
 use iced::widget::{
-    button, column, container, image, mouse_area, row, scrollable, slider, text, Button, Column,
-    Space,
+    button, column, container, image, mouse_area, row, scrollable, slider, text, text_editor,
+    Button, Column, Space,
 };
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Element, Font, Length};
 
-use crate::appearance::{navigation_icon_button_style, preview_panel_style};
+use crate::appearance::{
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
+    navigation_icon_button_style, preview_panel_style, text_preview_editor_style,
+};
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
-    PreviewState, PreviewTreeEntry, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    PreviewState, PreviewTreeEntry, ScrollbarVisibility, TextPreviewDocument, TextPreviewFormat,
+    VideoPreviewPlayback, VideoPreviewPlaybackStatus,
 };
 use crate::preview::PREVIEW_TEXT_LIMIT;
 use crate::typography::readable_text;
@@ -43,12 +47,23 @@ const VIDEO_VOLUME_ICON_GAP: f32 = 6.0;
 
 pub(crate) fn view_preview_window<'a>(
     preview: Option<&'a PreviewState>,
+    text_preview_document: Option<&'a TextPreviewDocument>,
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
+    scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     preview
-        .map(|preview| preview_panel(preview, size, audio_preview, video_preview))
+        .map(|preview| {
+            preview_panel(
+                preview,
+                text_preview_document,
+                size,
+                audio_preview,
+                video_preview,
+                scrollbar_visibility,
+            )
+        })
         .unwrap_or_else(|| {
             auxiliary_window_message("Select a file and press Space to load preview")
         })
@@ -56,9 +71,11 @@ pub(crate) fn view_preview_window<'a>(
 
 fn preview_panel<'a>(
     preview: &'a PreviewState,
+    text_preview_document: Option<&'a TextPreviewDocument>,
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
+    scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
     let panel = match preview {
@@ -72,18 +89,40 @@ fn preview_panel<'a>(
             total,
             skipped,
             truncated,
-        }) => directory_preview_panel(path, entries, *total, *skipped, *truncated, scroll_height),
+        }) => directory_preview_panel(
+            path,
+            entries,
+            *total,
+            *skipped,
+            *truncated,
+            scroll_height,
+            scrollbar_visibility,
+        ),
         PreviewState::Ready(PreviewContent::Text {
             path,
-            content,
+            format,
             truncated,
-        }) => text_preview_panel(path, content, *truncated, scroll_height),
+            ..
+        }) => text_preview_panel(
+            path,
+            *format,
+            *truncated,
+            text_preview_document.filter(|document| document.path() == path.as_path()),
+            scroll_height,
+        ),
         PreviewState::Ready(PreviewContent::Archive {
             path,
             entries,
             total,
             truncated,
-        }) => archive_preview_panel(path, entries, *total, *truncated, scroll_height),
+        }) => archive_preview_panel(
+            path,
+            entries,
+            *total,
+            *truncated,
+            scroll_height,
+            scrollbar_visibility,
+        ),
         PreviewState::Ready(PreviewContent::Image {
             handle,
             width,
@@ -141,6 +180,7 @@ fn directory_preview_panel(
     skipped: usize,
     truncated: bool,
     scroll_height: f32,
+    scrollbar_visibility: ScrollbarVisibility,
 ) -> Column<'static, Message> {
     let listing = preview_tree_listing(entries, "Empty directory");
 
@@ -154,7 +194,8 @@ fn directory_preview_panel(
         ))
         .size(14),
         scrollable(listing)
-            .direction(preview_scroll_direction())
+            .direction(preview_scroll_direction(scrollbar_visibility))
+            .style(auto_hide_scrollbar_style(scrollbar_visibility))
             .height(Length::Fixed(scroll_height)),
     ]
 }
@@ -184,6 +225,7 @@ fn archive_preview_panel(
     total: usize,
     truncated: bool,
     scroll_height: f32,
+    scrollbar_visibility: ScrollbarVisibility,
 ) -> Column<'static, Message> {
     let listing = preview_tree_listing(entries, "Empty archive");
 
@@ -191,7 +233,8 @@ fn archive_preview_panel(
         readable_text(preview_title(path)).size(14),
         readable_text(archive_preview_summary(entries.len(), total, truncated)).size(14),
         scrollable(listing)
-            .direction(preview_scroll_direction())
+            .direction(preview_scroll_direction(scrollbar_visibility))
+            .style(auto_hide_scrollbar_style(scrollbar_visibility))
             .height(Length::Fixed(scroll_height)),
     ]
 }
@@ -287,29 +330,48 @@ fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message>
     }
 }
 
-fn text_preview_panel(
-    path: &std::path::PathBuf,
-    content: &str,
+fn text_preview_panel<'a>(
+    path: &'a std::path::PathBuf,
+    format: TextPreviewFormat,
     truncated: bool,
+    document: Option<&'a TextPreviewDocument>,
     scroll_height: f32,
-) -> Column<'static, Message> {
-    let preview_text = numbered_preview_text(content);
-    let status = if truncated {
-        format!(
-            "Showing first {}",
-            format_file_size(PREVIEW_TEXT_LIMIT as u64)
-        )
+) -> Column<'a, Message> {
+    let status = text_preview_status(format, truncated);
+    let body: Element<'_, Message> = if let Some(document) = document {
+        text_editor(document.content())
+            .height(Length::Fixed(scroll_height))
+            .font(Font::MONOSPACE)
+            .padding(8)
+            .style(text_preview_editor_style())
+            .on_action(Message::TextPreviewAction)
+            .into()
     } else {
-        "Complete text preview".to_owned()
+        readable_text("Text preview is not ready").size(14).into()
     };
 
     column![
         readable_text(preview_title(path)).size(14),
-        text(status).size(14),
-        scrollable(readable_text(preview_text).size(14))
-            .direction(preview_scroll_direction())
-            .height(Length::Fixed(scroll_height)),
+        readable_text(status).size(14),
+        body,
     ]
+}
+
+fn text_preview_status(format: TextPreviewFormat, truncated: bool) -> String {
+    let label = match format {
+        TextPreviewFormat::Plain => "Selectable text preview",
+        TextPreviewFormat::Markdown => "Rendered Markdown preview",
+    };
+    let copy_hint = "drag to select, Ctrl+C to copy";
+
+    if truncated {
+        format!(
+            "{label} · showing first {} · {copy_hint}",
+            format_file_size(PREVIEW_TEXT_LIMIT as u64)
+        )
+    } else {
+        format!("{label} · {copy_hint}")
+    }
 }
 
 fn image_preview_panel(
@@ -642,35 +704,14 @@ fn video_volume_slider(
     slider(0.0..=1.0, volume, Message::VideoPreviewVolumeChanged).step(AUDIO_VOLUME_SLIDER_STEP)
 }
 
-fn numbered_preview_text(content: &str) -> String {
-    if content.is_empty() {
-        return "1 | (empty file)".to_owned();
-    }
-
-    let line_count = content.lines().count().max(1);
-    let width = line_count.to_string().len();
-    let mut numbered = String::new();
-    for (index, line) in content.lines().enumerate() {
-        numbered.push_str(&format!(
-            "{:>width$} | {}\n",
-            index + 1,
-            line,
-            width = width
-        ));
-    }
-    numbered
-}
-
 fn preview_title(path: &Path) -> String {
     let path = path.to_string_lossy();
     let path = format_middle_ellipsized_text(path.as_ref(), PREVIEW_PATH_MAX_CHARS);
     format!("Preview: {path}")
 }
 
-fn preview_scroll_direction() -> iced::widget::scrollable::Direction {
-    iced::widget::scrollable::Direction::Vertical(
-        iced::widget::scrollable::Properties::new()
-            .width(6.0)
-            .scroller_width(6.0),
-    )
+fn preview_scroll_direction(
+    scrollbar_visibility: ScrollbarVisibility,
+) -> iced::widget::scrollable::Direction {
+    auto_hide_vertical_scrollbar_direction(scrollbar_visibility, 6.0)
 }

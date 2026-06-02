@@ -7,9 +7,10 @@ use iced::{Alignment, Element, Length};
 
 use crate::app::FileBrowser;
 use crate::appearance::{
-    context_menu_button_style, context_menu_style, error_notification_style,
-    hovered_sidebar_item_style, navigation_icon_button_style, selected_sidebar_item_style,
-    sidebar_style, switch_thumb_style, switch_track_off_style, switch_track_on_style,
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
+    context_menu_style, error_notification_style, hovered_sidebar_item_style,
+    navigation_icon_button_style, selected_sidebar_item_style, sidebar_style, switch_thumb_style,
+    switch_track_off_style, switch_track_on_style,
 };
 use crate::config::COLUMN_FIXED_COUNT_OPTIONS;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
@@ -309,11 +310,19 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         .interaction(iced::mouse::Interaction::Pointer);
     sidebar = sidebar.push(trash_item);
 
-    container(scrollable(sidebar).height(Length::Fill))
-        .width(Length::Fixed(SIDEBAR_WIDTH))
-        .height(Length::Fill)
-        .style(sidebar_style)
-        .into()
+    container(
+        scrollable(sidebar)
+            .direction(auto_hide_vertical_scrollbar_direction(
+                browser.scrollbar_visibility,
+                6.0,
+            ))
+            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+            .height(Length::Fill),
+    )
+    .width(Length::Fixed(SIDEBAR_WIDTH))
+    .height(Length::Fill)
+    .style(sidebar_style)
+    .into()
 }
 
 pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Message> {

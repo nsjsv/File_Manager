@@ -10,9 +10,10 @@ use iced::{Alignment, Element, Length, Theme};
 
 use crate::app::FileBrowser;
 use crate::appearance::{
-    column_browser_style, column_panel_style, column_resize_divider_style, dragged_row_style,
-    hovered_row_style, icon_svg_style, muted_icon_svg_style, selected_icon_svg_style,
-    selected_row_style, warning_icon_svg_style,
+    auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
+    auto_hide_vertical_scrollbar_direction, column_browser_style, column_panel_style,
+    column_resize_divider_style, dragged_row_style, hovered_row_style, icon_svg_style,
+    muted_icon_svg_style, selected_icon_svg_style, selected_row_style, warning_icon_svg_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
@@ -64,11 +65,11 @@ pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message>
     let column_content: Element<'_, Message> = match browser.column_view_mode {
         ColumnViewMode::Unbounded => scrollable(columns)
             .id(column_browser_scroll_id())
-            .direction(iced::widget::scrollable::Direction::Horizontal(
-                iced::widget::scrollable::Properties::new()
-                    .width(8.0)
-                    .scroller_width(8.0),
+            .direction(auto_hide_horizontal_scrollbar_direction(
+                browser.scrollbar_visibility,
+                8.0,
             ))
+            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
             .width(Length::Fill)
             .height(Length::Fill)
             .into(),
@@ -124,7 +125,12 @@ fn directory_column<'a>(
     let scroll_directory = directory.to_path_buf();
     let column_scroll = scrollable(content)
         .id(column_scroll_id(directory))
+        .direction(auto_hide_vertical_scrollbar_direction(
+            browser.scrollbar_visibility,
+            8.0,
+        ))
         .height(Length::Fill)
+        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
         .on_scroll(move |viewport| {
             let offset = viewport.absolute_offset();
             let bounds = viewport.bounds();

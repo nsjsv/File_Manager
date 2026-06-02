@@ -4,6 +4,8 @@ mod file_operations;
 mod navigation;
 mod paths;
 mod preview_state;
+mod runtime;
+mod scrollbar;
 mod search;
 mod selection;
 mod startup;
@@ -16,20 +18,20 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use file_core::{watch_directory, DirectoryEntry, ScanOptions, TrashEntry};
-use iced::advanced::widget as advanced_widget;
-use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
+use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
-use iced::futures::SinkExt;
 use iced::keyboard;
 use iced::multi_window::Application;
 use iced::widget::text_input;
 use iced::window;
-use iced::{
-    executor, time, Command, Element, Point, Rectangle, Settings, Size, Subscription, Theme,
-};
+use iced::{executor, time, Command, Element, Point, Settings, Subscription, Theme};
 
-use crate::app::events::{global_event_message, system_theme};
+use crate::app::events::global_event_message;
+use crate::app::runtime::{
+    directory_watch_subscription, operation_queue_auto_hide_command, system_theme_command,
+};
+use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
+use crate::app::windows::{default_preview_size, main_window_settings};
 use crate::commands::{
     file_operation_subscription, initial_load_command, save_user_config_command,
 };
@@ -37,8 +39,9 @@ use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory,
     FileDragState, Message, NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, SearchIndexRuntime, SearchState, SelectionMarquee,
-    SidebarLocation, TransferConflictState, VideoPreviewPlayback,
+    PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
+    SelectionMarquee, SidebarLocation, TextPreviewDocument, TransferConflictState,
+    VideoPreviewPlayback,
 };
 use crate::operation_queue::FileOperationQueue;
 use crate::startup_trace;
@@ -47,141 +50,14 @@ use crate::video_preview::video_preview_subscription;
 use crate::view::{rename_input_id, view_browser, view_preview_window, view_search_window};
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
-const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
-const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
-const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
-const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
-const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
-const MIN_PREVIEW_WIDTH: f32 = 420.0;
-const MIN_PREVIEW_HEIGHT: f32 = 260.0;
-const MAX_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_PREVIEW_HEIGHT: f32 = 760.0;
-const DEFAULT_IMAGE_PREVIEW_WIDTH: f32 = 748.0;
-const DEFAULT_IMAGE_PREVIEW_HEIGHT: f32 = 636.0;
-const MIN_IMAGE_PREVIEW_WIDTH: f32 = 360.0;
-const MIN_IMAGE_PREVIEW_HEIGHT: f32 = 260.0;
-const MAX_IMAGE_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_IMAGE_PREVIEW_HEIGHT: f32 = 940.0;
-const DEFAULT_AUDIO_PREVIEW_WIDTH: f32 = 780.0;
-const DEFAULT_AUDIO_PREVIEW_HEIGHT: f32 = 168.0;
-const MIN_AUDIO_PREVIEW_WIDTH: f32 = 560.0;
-const MIN_AUDIO_PREVIEW_HEIGHT: f32 = 136.0;
-const MAX_AUDIO_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_AUDIO_PREVIEW_HEIGHT: f32 = 240.0;
-const DEFAULT_VIDEO_PREVIEW_WIDTH: f32 = 748.0;
-const DEFAULT_VIDEO_PREVIEW_HEIGHT: f32 = 589.0;
-const MIN_VIDEO_PREVIEW_WIDTH: f32 = 360.0;
-const MIN_VIDEO_PREVIEW_HEIGHT: f32 = 320.0;
-const MAX_VIDEO_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_VIDEO_PREVIEW_HEIGHT: f32 = 940.0;
-const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
-const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
-const MIN_SEARCH_WIDTH: f32 = 520.0;
-const MIN_SEARCH_HEIGHT: f32 = 360.0;
-const MAIN_WINDOW_APP_ID: &str = "file-manager";
-const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
-const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
-
-fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {
-    iced::subscription::channel(
-        ("directory-watch", path.clone()),
-        DIRECTORY_WATCH_CHANNEL_SIZE,
-        |mut output| async move {
-            if let Ok(mut watcher) = watch_directory(path, DIRECTORY_WATCH_DEBOUNCE) {
-                while let Some(change) = watcher.recv().await {
-                    if output
-                        .send(Message::ObservedDirectoryChanged(change.path))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-
-            iced::futures::future::pending().await
-        },
-    )
-}
-
-fn system_theme_command() -> Command<Message> {
-    Command::perform(
-        async {
-            let theme = tokio::task::spawn_blocking(system_theme)
-                .await
-                .unwrap_or(Theme::Light);
-            startup_trace::mark_once("system_theme_detected");
-            theme
-        },
-        Message::SystemThemeDetected,
-    )
-}
-
-fn operation_queue_auto_hide_command(generation: u64) -> Command<Message> {
-    Command::perform(
-        async move {
-            tokio::time::sleep(OPERATION_QUEUE_AUTO_HIDE_DURATION).await;
-            generation
-        },
-        Message::FileOperationAutoHideElapsed,
-    )
-}
-
-fn main_window_settings() -> window::Settings {
-    let mut settings = window::Settings {
-        size: Size::new(1180.0, 680.0),
-        ..window::Settings::default()
-    };
-    settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
-    settings
-}
 
 #[derive(Debug, Clone, Copy)]
 struct ColumnResizeDrag {
     cursor_start_x: f32,
     width_start: f32,
-}
-
-struct RenameInputFocusCheck {
-    target: advanced_widget::Id,
-    is_focused: bool,
-}
-
-impl RenameInputFocusCheck {
-    fn new(target: text_input::Id) -> Self {
-        Self {
-            target: target.into(),
-            is_focused: false,
-        }
-    }
-}
-
-impl Operation<Message> for RenameInputFocusCheck {
-    fn container(
-        &mut self,
-        _id: Option<&advanced_widget::Id>,
-        _bounds: Rectangle,
-        operate_on_children: &mut dyn FnMut(&mut dyn Operation<Message>),
-    ) {
-        operate_on_children(self);
-    }
-
-    fn focusable(&mut self, state: &mut dyn Focusable, id: Option<&advanced_widget::Id>) {
-        if id == Some(&self.target) {
-            self.is_focused = state.is_focused();
-        }
-    }
-
-    fn finish(&self) -> Outcome<Message> {
-        Outcome::Some(Message::RenameInputFocusChecked(self.is_focused))
-    }
-}
-
-fn rename_input_focus_check_command() -> Command<Message> {
-    Command::widget(RenameInputFocusCheck::new(rename_input_id()))
 }
 
 pub(crate) fn run() -> iced::Result {
@@ -202,6 +78,7 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_sidebar: Option<PathBuf>,
     cursor_paste_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
+    pub(crate) text_preview_document: Option<TextPreviewDocument>,
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
     pub(crate) video_preview: Option<VideoPreviewPlayback>,
     pub(crate) preview_size: PreviewSize,
@@ -248,6 +125,9 @@ pub(crate) struct FileBrowser {
     pub(crate) operation_queue: FileOperationQueue,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
+    pub(crate) scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_auto_hide_generation: u64,
+    scrollbar_animation: Option<ScrollbarAnimation>,
     pending_search_reveal: Option<PathBuf>,
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
@@ -278,12 +158,10 @@ impl Application for FileBrowser {
             hovered_sidebar: None,
             cursor_paste_directory: None,
             preview: None,
+            text_preview_document: None,
             audio_preview: None,
             video_preview: None,
-            preview_size: PreviewSize {
-                width: DEFAULT_PREVIEW_WIDTH,
-                height: DEFAULT_PREVIEW_HEIGHT,
-            },
+            preview_size: default_preview_size(PreviewWindowProfile::Regular),
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
             preview_window: None,
@@ -339,6 +217,9 @@ impl Application for FileBrowser {
             operation_queue: FileOperationQueue::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
+            scrollbar_visibility: ScrollbarVisibility::Hidden,
+            scrollbar_auto_hide_generation: 0,
+            scrollbar_animation: None,
             pending_search_reveal: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
@@ -382,6 +263,12 @@ impl Application for FileBrowser {
             subscriptions.push(
                 time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
                     .map(|_| Message::PreviewTreeAnimationTick),
+            );
+        }
+
+        if self.scrollbar_animation_is_active() {
+            subscriptions.push(
+                time::every(SCROLLBAR_ANIMATION_INTERVAL).map(|_| Message::ScrollbarAnimationTick),
             );
         }
 
@@ -432,6 +319,7 @@ impl Application for FileBrowser {
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
             }
+            Message::TextPreviewAction(action) => self.handle_text_preview_action(action),
             Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
                 self.accept_image_preview_dimensions(path, dimensions_outcome)
             }
@@ -666,9 +554,17 @@ impl Application for FileBrowser {
                 self.is_column_view_settings_open = false;
                 self.persist_user_config_command()
             }
-            Message::ColumnBrowserWheelScrolled(delta) => {
-                self.handle_column_browser_wheel_scrolled(delta)
+            Message::CapturedWheelScrolled(delta) => Command::batch([
+                self.show_scrollbars_temporarily(),
+                self.handle_column_browser_wheel_scrolled(delta),
+            ]),
+            Message::ScrollbarAutoHideElapsed(generation) => {
+                if generation == self.scrollbar_auto_hide_generation {
+                    self.start_scrollbar_hide();
+                }
+                Command::none()
             }
+            Message::ScrollbarAnimationTick => self.advance_scrollbar_animation(),
             Message::ColumnScrolled(directory, offset_y, height) => {
                 self.handle_column_scrolled(directory, offset_y, height)
             }
@@ -785,13 +681,15 @@ impl Application for FileBrowser {
 
     fn view(&self, window: window::Id) -> Element<'_, Self::Message> {
         if self.search_window == Some(window) {
-            view_search_window(self.search.as_ref())
+            view_search_window(self.search.as_ref(), self.scrollbar_visibility)
         } else if self.preview_window == Some(window) {
             view_preview_window(
                 self.preview.as_ref(),
+                self.text_preview_document.as_ref(),
                 self.preview_size,
                 self.audio_preview.as_ref(),
                 self.video_preview.as_ref(),
+                self.scrollbar_visibility,
             )
         } else {
             if !self.is_loading {

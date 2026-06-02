@@ -40,7 +40,7 @@ pub(super) fn global_event_message(event: Event, status: event::Status) -> Optio
 
     if matches!(status, event::Status::Captured) {
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = &event {
-            return Some(Message::ColumnBrowserWheelScrolled(*delta));
+            return Some(Message::CapturedWheelScrolled(*delta));
         }
     }
 
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn captured_wheel_scroll_reaches_column_browser() {
+    fn captured_wheel_scroll_reports_scrollbar_activity() {
         let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 };
         let event = Event::Mouse(mouse::Event::WheelScrolled { delta });
 
@@ -246,7 +246,7 @@ mod tests {
 
         assert!(matches!(
             message,
-            Some(Message::ColumnBrowserWheelScrolled(received)) if received == delta
+            Some(Message::CapturedWheelScrolled(received)) if received == delta
         ));
     }
 

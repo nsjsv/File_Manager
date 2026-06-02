@@ -12,6 +12,7 @@ file-core = { path = "../file-core" }
 file-operation-store = { version = "0.1.0", path = "../file-operation-store" }
 flate2 = "1.1.9"
 iced.workspace = true
+pulldown-cmark = "0.13.4"
 rodio = "0.22.2"
 tar = "0.4.46"
 thumbnails = { path = "../thumbnails" }

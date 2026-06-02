@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use iced::widget::text_editor;
 use iced::Command;
 
 use super::FileBrowser;
@@ -10,8 +11,8 @@ use crate::commands::{
 };
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewState,
-    PreviewTreeEntry, PreviewWindowProfile, VideoPreviewFrame, VideoPreviewPlayback,
-    VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
+    PreviewTreeEntry, PreviewWindowProfile, TextPreviewDocument, VideoPreviewFrame,
+    VideoPreviewPlayback, VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
 
 const PREVIEW_TREE_TOGGLE_ROTATION_STEP: f32 = 0.18;
@@ -34,15 +35,25 @@ impl FileBrowser {
         match preview_outcome {
             Ok(preview) => {
                 let command = match &preview {
+                    PreviewContent::Text { path, rendered, .. } => {
+                        self.clear_audio_preview();
+                        self.clear_video_preview();
+                        self.text_preview_document =
+                            Some(TextPreviewDocument::new(path.clone(), rendered));
+                        Command::none()
+                    }
                     PreviewContent::Audio { .. } => {
+                        self.text_preview_document = None;
                         self.clear_video_preview();
                         Command::none()
                     }
                     PreviewContent::Video { path, duration, .. } => {
+                        self.text_preview_document = None;
                         self.clear_audio_preview();
                         self.start_video_preview_playback(path.clone(), *duration)
                     }
                     _ => {
+                        self.text_preview_document = None;
                         self.clear_audio_preview();
                         self.clear_video_preview();
                         Command::none()
@@ -53,6 +64,7 @@ impl FileBrowser {
                 command
             }
             Err(error) => {
+                self.text_preview_document = None;
                 self.clear_audio_preview();
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Error(error));
@@ -63,6 +75,25 @@ impl FileBrowser {
                 }
             }
         }
+    }
+
+    pub(super) fn handle_text_preview_action(
+        &mut self,
+        action: text_editor::Action,
+    ) -> Command<Message> {
+        let Some(path) = active_text_preview_path(self.preview.as_ref()) else {
+            return Command::none();
+        };
+        let Some(document) = self
+            .text_preview_document
+            .as_mut()
+            .filter(|document| document.path() == path)
+        else {
+            return Command::none();
+        };
+
+        document.perform(action);
+        Command::none()
     }
 
     pub(super) fn accept_video_preview_frame(
@@ -586,6 +617,7 @@ impl FileBrowser {
     }
 
     pub(super) fn clear_preview(&mut self) {
+        self.text_preview_document = None;
         self.clear_audio_preview();
         self.clear_video_preview();
         self.preview = None;
@@ -695,6 +727,13 @@ impl FileBrowser {
         if let Some(mut playback) = self.video_preview.take() {
             finish_video_preview_audio(&mut playback);
         }
+    }
+}
+
+fn active_text_preview_path(preview: Option<&PreviewState>) -> Option<&Path> {
+    match preview? {
+        PreviewState::Ready(PreviewContent::Text { path, .. }) => Some(path.as_path()),
+        _ => None,
     }
 }
 

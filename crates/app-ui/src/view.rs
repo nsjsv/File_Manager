@@ -19,9 +19,10 @@ use iced::{Alignment, Element, Length, Point, Theme};
 use crate::anchored_popup::anchored_popup;
 use crate::app::FileBrowser;
 use crate::appearance::{
-    app_content_style, drag_preview_style, icon_svg_style, navigation_icon_button_style,
-    path_suggestion_item_style, path_suggestions_style, selected_icon_svg_style,
-    selected_path_suggestion_item_style, selected_sidebar_item_style, warning_icon_svg_style,
+    app_content_style, auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
+    drag_preview_style, icon_svg_style, navigation_icon_button_style, path_suggestion_item_style,
+    path_suggestions_style, selected_icon_svg_style, selected_path_suggestion_item_style,
+    selected_sidebar_item_style, warning_icon_svg_style,
 };
 use crate::floating_surface::{
     dismissable_floating_surface, floating_surface, pass_through_dismissable_floating_surface,
@@ -163,7 +164,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             _ => queue_dismissal,
         });
         floating.push(FloatingContent {
-            element: operation_queue_panel(&browser.operation_queue),
+            element: operation_queue_panel(&browser.operation_queue, browser.scrollbar_visibility),
             placement: FloatingPlacement::BottomLeft {
                 left: SIDEBAR_WIDTH + 12.0,
                 bottom: OPERATION_QUEUE_PANEL_BOTTOM,
@@ -271,11 +272,11 @@ fn tab_bar(browser: &FileBrowser) -> Element<'_, Message> {
 
     container(
         scrollable(tabs)
-            .direction(iced::widget::scrollable::Direction::Horizontal(
-                iced::widget::scrollable::Properties::new()
-                    .width(6.0)
-                    .scroller_width(6.0),
+            .direction(auto_hide_horizontal_scrollbar_direction(
+                browser.scrollbar_visibility,
+                6.0,
             ))
+            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
             .height(Length::Shrink)
             .width(Length::Fill),
     )
