@@ -163,6 +163,7 @@ impl FileBrowser {
             self.selected = None;
             self.selection_anchor = None;
             self.rename_input.clear();
+            self.sync_path_input_to_current_directory();
         } else {
             self.select_path(directory);
         }
@@ -911,9 +912,10 @@ impl FileBrowser {
         if self.selected_paths.remove(&path) {
             self.selected = self.last_visible_selected_path();
             if let Some(selected) = self.selected.clone() {
-                self.update_rename_input(&selected);
+                self.focus_path(selected);
             } else {
                 self.rename_input.clear();
+                self.sync_path_input_to_current_directory();
             }
         } else {
             self.selected_paths.insert(path.clone());
@@ -1007,10 +1009,24 @@ impl FileBrowser {
     }
 
     fn focus_path(&mut self, path: PathBuf) {
+        self.sync_path_input_to_selected_directory(&path);
         self.update_rename_input(&path);
         self.selected = Some(path);
         self.clear_preview();
         self.context_menu = None;
+    }
+
+    fn sync_path_input_to_selected_directory(&mut self, path: &Path) {
+        let directory = if self.entry_kind(path) == Some(FileKind::Directory) {
+            path.to_path_buf()
+        } else {
+            self.entry_parent_directory(path)
+        };
+        self.path_input = paths::path_text(&directory);
+    }
+
+    fn sync_path_input_to_current_directory(&mut self) {
+        self.path_input = paths::path_text(&self.current_dir);
     }
 
     fn update_rename_input(&mut self, path: &Path) {
