@@ -1,5 +1,5 @@
 use iced::widget::{container, scrollable, svg, text_editor};
-use iced::{theme, Background, Border, Color, Shadow, Theme, Vector};
+use iced::{theme, Background, Border, Color, Theme};
 
 use crate::model::ScrollbarVisibility;
 
@@ -136,20 +136,15 @@ fn auto_hide_scrollbar_properties(
 pub(crate) fn path_suggestions_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(25, 32, 44, 0.98)
+            Color::from_rgb8(25, 32, 44)
         } else {
-            Color::from_rgba8(250, 251, 253, 0.98)
+            Color::from_rgb8(250, 251, 253)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
             radius: 8.0.into(),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, if is_dark_theme(theme) { 0.35 } else { 0.16 }),
-            offset: Vector::new(0.0, 10.0),
-            blur_radius: 22.0,
         },
         ..container::Appearance::default()
     }
@@ -194,20 +189,15 @@ pub(crate) fn selected_path_suggestion_item_style(theme: &Theme) -> container::A
 pub(crate) fn preview_panel_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(24, 31, 43, 0.97)
+            Color::from_rgb8(24, 31, 43)
         } else {
-            Color::from_rgba8(245, 247, 250, 0.97)
+            Color::from_rgb8(245, 247, 250)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
             radius: 14.0.into(),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, 0.22),
-            offset: Vector::new(0.0, 12.0),
-            blur_radius: 28.0,
         },
         ..container::Appearance::default()
     }
@@ -233,9 +223,9 @@ pub(crate) fn preview_window_panel_style(theme: &Theme) -> container::Appearance
 pub(crate) fn error_notification_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(55, 31, 34, 0.97)
+            Color::from_rgb8(55, 31, 34)
         } else {
-            Color::from_rgba8(255, 247, 247, 0.98)
+            Color::from_rgb8(255, 247, 247)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {
@@ -246,11 +236,6 @@ pub(crate) fn error_notification_style(theme: &Theme) -> container::Appearance {
             },
             width: 1.0,
             radius: 12.0.into(),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, 0.2),
-            offset: Vector::new(0.0, 10.0),
-            blur_radius: 24.0,
         },
         ..container::Appearance::default()
     }
@@ -348,20 +333,15 @@ pub(crate) fn hovered_sidebar_item_style(theme: &Theme) -> container::Appearance
 pub(crate) fn context_menu_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(24, 31, 43, 0.98)
+            Color::from_rgb8(24, 31, 43)
         } else {
-            Color::from_rgba8(250, 251, 253, 0.98)
+            Color::from_rgb8(250, 251, 253)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
             radius: 8.0.into(),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, 0.18),
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 18.0,
         },
         ..container::Appearance::default()
     }
@@ -370,20 +350,15 @@ pub(crate) fn context_menu_style(theme: &Theme) -> container::Appearance {
 pub(crate) fn drag_preview_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(31, 38, 50, 0.94)
+            Color::from_rgb8(31, 38, 50)
         } else {
-            Color::from_rgba8(255, 255, 255, 0.96)
+            Color::from_rgb8(255, 255, 255)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
             radius: 10.0.into(),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, if is_dark_theme(theme) { 0.35 } else { 0.18 }),
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 18.0,
         },
         ..container::Appearance::default()
     }
@@ -425,11 +400,6 @@ pub(crate) fn switch_thumb_style(_theme: &Theme) -> container::Appearance {
         border: Border {
             radius: 7.0.into(),
             ..Border::default()
-        },
-        shadow: Shadow {
-            color: Color::from_rgba8(0, 0, 0, 0.22),
-            offset: Vector::new(0.0, 1.0),
-            blur_radius: 3.0,
         },
         ..container::Appearance::default()
     }
