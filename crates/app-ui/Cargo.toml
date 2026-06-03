@@ -1,6 +1,6 @@
 [package]
 name = "app-ui"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 
@@ -9,7 +9,7 @@ dark-light = "2.0.0"
 desktop-linux = { path = "../desktop-linux" }
 dirs.workspace = true
 file-core = { path = "../file-core" }
-file-operation-store = { version = "0.1.0", path = "../file-operation-store" }
+file-operation-store = { path = "../file-operation-store" }
 flate2 = "1.1.9"
 iced.workspace = true
 pulldown-cmark = "0.13.4"
