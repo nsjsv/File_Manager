@@ -1,4 +1,5 @@
 mod floating_panels;
+mod markdown_preview;
 mod preview_panel;
 mod search_panel;
 

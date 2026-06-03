@@ -4,7 +4,7 @@ use iced::widget::scrollable;
 use iced::{mouse, Command, Rectangle, Vector};
 
 use super::{FileBrowser, COLUMN_BROWSER_WHEEL_LINE_PIXELS};
-use crate::model::{ColumnViewMode, Message};
+use crate::model::Message;
 use crate::view::column_browser_scroll_id;
 
 struct ColumnBrowserScrollBy {
@@ -49,10 +49,6 @@ impl Operation<Message> for ColumnBrowserScrollBy {
 
 impl FileBrowser {
     pub(super) fn focus_latest_column(&self) -> Command<Message> {
-        if self.column_view_mode != ColumnViewMode::Unbounded {
-            return Command::none();
-        }
-
         scrollable::snap_to(
             column_browser_scroll_id(),
             scrollable::RelativeOffset { x: 1.0, y: 0.0 },
@@ -63,8 +59,7 @@ impl FileBrowser {
         &self,
         delta: mouse::ScrollDelta,
     ) -> Command<Message> {
-        if self.column_view_mode != ColumnViewMode::Unbounded || !self.is_cursor_over_column_browser
-        {
+        if !self.is_cursor_over_column_browser {
             return Command::none();
         }
 

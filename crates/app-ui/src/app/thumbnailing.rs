@@ -21,7 +21,7 @@ const PREVIEW_RESIZE_EXTRA_PIXELS: u32 = 128;
 impl FileBrowser {
     pub(super) fn schedule_thumbnail_refresh(&mut self) -> Command<Message> {
         self.schedule_interaction_thumbnails();
-        self.schedule_visible_column_thumbnails();
+        self.schedule_rendered_column_thumbnails();
         self.pump_thumbnail_queue()
     }
 
@@ -197,8 +197,8 @@ impl FileBrowser {
         }
     }
 
-    fn schedule_visible_column_thumbnails(&mut self) {
-        let directories = visible_column_directories_for_browser(self);
+    fn schedule_rendered_column_thumbnails(&mut self) {
+        let directories = rendered_column_directories_for_browser(self);
         let focused_index = directories.len().saturating_sub(1);
         for (index, directory) in directories.iter().enumerate() {
             let priority = if index == focused_index {
@@ -280,17 +280,8 @@ impl FileBrowser {
     }
 }
 
-fn visible_column_directories_for_browser(browser: &FileBrowser) -> Vec<PathBuf> {
-    let directories = crate::three_column_view::column_directories(browser);
-    match browser.column_view_mode {
-        crate::model::ColumnViewMode::Unbounded => directories,
-        crate::model::ColumnViewMode::Fixed => {
-            let skip = directories
-                .len()
-                .saturating_sub(browser.column_fixed_count.max(1));
-            directories.into_iter().skip(skip).collect()
-        }
-    }
+fn rendered_column_directories_for_browser(browser: &FileBrowser) -> Vec<PathBuf> {
+    crate::three_column_view::column_directories(browser)
 }
 
 fn thumbnail_preview_content(path: PathBuf, ready: ThumbnailHandleEntry) -> PreviewContent {

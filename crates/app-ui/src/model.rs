@@ -26,6 +26,7 @@ pub(crate) enum Message {
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
     TextPreviewAction(text_editor::Action),
+    MarkdownPreviewModeSelected(MarkdownPreviewMode),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
     AudioPreviewPlaybackToggled,
     AudioPreviewStarted(PathBuf, Result<AudioPreviewRuntime, String>),
@@ -316,23 +317,15 @@ pub(crate) enum PreviewState {
 #[derive(Debug, Clone)]
 pub(crate) enum PreviewContent {
     Directory {
-        path: PathBuf,
         entries: Vec<PreviewTreeEntry>,
-        total: usize,
-        skipped: usize,
-        truncated: bool,
     },
     Text {
         path: PathBuf,
         rendered: String,
         format: TextPreviewFormat,
-        truncated: bool,
     },
     Archive {
-        path: PathBuf,
         entries: Vec<PreviewTreeEntry>,
-        total: usize,
-        truncated: bool,
     },
     Image {
         path: PathBuf,
@@ -361,16 +354,24 @@ pub(crate) enum TextPreviewFormat {
     Markdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MarkdownPreviewMode {
+    Rendered,
+    Raw,
+}
+
 pub(crate) struct TextPreviewDocument {
     path: PathBuf,
     content: text_editor::Content,
+    markdown_preview_mode: MarkdownPreviewMode,
 }
 
 impl TextPreviewDocument {
-    pub(crate) fn new(path: PathBuf, content: &str) -> Self {
+    pub(crate) fn new(path: PathBuf, content: &str, format: TextPreviewFormat) -> Self {
         Self {
             path,
             content: text_editor::Content::with_text(&numbered_preview_text(content)),
+            markdown_preview_mode: initial_markdown_preview_mode(format),
         }
     }
 
@@ -382,12 +383,27 @@ impl TextPreviewDocument {
         &self.content
     }
 
+    pub(crate) fn markdown_preview_mode(&self) -> MarkdownPreviewMode {
+        self.markdown_preview_mode
+    }
+
+    pub(crate) fn select_markdown_preview_mode(&mut self, mode: MarkdownPreviewMode) {
+        self.markdown_preview_mode = mode;
+    }
+
     pub(crate) fn perform(&mut self, action: text_editor::Action) {
         if action.is_edit() {
             return;
         }
 
         self.content.perform(action);
+    }
+}
+
+fn initial_markdown_preview_mode(format: TextPreviewFormat) -> MarkdownPreviewMode {
+    match format {
+        TextPreviewFormat::Plain => MarkdownPreviewMode::Raw,
+        TextPreviewFormat::Markdown => MarkdownPreviewMode::Rendered,
     }
 }
 

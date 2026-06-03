@@ -213,6 +213,23 @@ pub(crate) fn preview_panel_style(theme: &Theme) -> container::Appearance {
     }
 }
 
+pub(crate) fn preview_window_panel_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgb8(24, 31, 43)
+        } else {
+            Color::from_rgb8(245, 247, 250)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            radius: 14.0.into(),
+        },
+        ..container::Appearance::default()
+    }
+}
+
 pub(crate) fn error_notification_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {

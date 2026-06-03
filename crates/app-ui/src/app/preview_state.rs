@@ -35,11 +35,16 @@ impl FileBrowser {
         match preview_outcome {
             Ok(preview) => {
                 let command = match &preview {
-                    PreviewContent::Text { path, rendered, .. } => {
+                    PreviewContent::Text {
+                        path,
+                        rendered,
+                        format,
+                        ..
+                    } => {
                         self.clear_audio_preview();
                         self.clear_video_preview();
                         self.text_preview_document =
-                            Some(TextPreviewDocument::new(path.clone(), rendered));
+                            Some(TextPreviewDocument::new(path.clone(), rendered, *format));
                         Command::none()
                     }
                     PreviewContent::Audio { .. } => {

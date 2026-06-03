@@ -18,6 +18,7 @@ use crate::appearance::{
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::model::{ColumnViewMode, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
+use crate::sidebar::SIDEBAR_WIDTH;
 use crate::thumbnail_cache::{LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE};
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id};
@@ -30,17 +31,17 @@ const COLUMN_TITLE_MAX_CHARS: usize = 28;
 const COMPRESSED_COLUMN_TITLE_MAX_CHARS: usize = 12;
 const ENTRY_NAME_MAX_CHARS: usize = 30;
 const COMPRESSED_ENTRY_NAME_MAX_CHARS: usize = 12;
+const MIN_FIXED_COLUMN_WIDTH: f32 = 180.0;
+
 pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message> {
-    let directories = column_directories(browser);
+    let rendered_directories = column_directories(browser);
     let fixed_count = browser.column_fixed_count.max(1);
-    let visible_directories =
-        visible_column_directories(&directories, browser.column_view_mode, fixed_count);
-    let focused_index = visible_directories.len().saturating_sub(1);
+    let focused_index = rendered_directories.len().saturating_sub(1);
     let mut columns = Row::new().spacing(0).height(Length::Fill);
 
-    for (index, directory) in visible_directories.iter().enumerate() {
+    for (index, directory) in rendered_directories.iter().enumerate() {
         let active_child =
-            active_child_for_column(browser, directory, visible_directories.get(index + 1));
+            active_child_for_column(browser, directory, rendered_directories.get(index + 1));
         let presentation = column_presentation(browser.column_view_mode, index, focused_index);
         columns = columns.push(directory_column(
             browser,
@@ -50,31 +51,29 @@ pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message>
         ));
 
         if browser.column_view_mode == ColumnViewMode::Unbounded
-            && index + 1 < visible_directories.len()
+            && index + 1 < rendered_directories.len()
         {
             columns = columns.push(column_resize_divider());
         }
     }
 
     if browser.column_view_mode == ColumnViewMode::Fixed {
-        for _ in visible_directories.len()..fixed_count {
-            columns = columns.push(empty_fixed_column());
+        let placeholder_width = fixed_column_width(browser);
+        for _ in rendered_directories.len()..fixed_count {
+            columns = columns.push(empty_fixed_column(placeholder_width));
         }
     }
 
-    let column_content: Element<'_, Message> = match browser.column_view_mode {
-        ColumnViewMode::Unbounded => scrollable(columns)
-            .id(column_browser_scroll_id())
-            .direction(auto_hide_horizontal_scrollbar_direction(
-                browser.scrollbar_visibility,
-                8.0,
-            ))
-            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        ColumnViewMode::Fixed => columns.width(Length::Fill).into(),
-    };
+    let column_content: Element<'_, Message> = scrollable(columns)
+        .id(column_browser_scroll_id())
+        .direction(auto_hide_horizontal_scrollbar_direction(
+            browser.scrollbar_visibility,
+            8.0,
+        ))
+        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
 
     mouse_area(
         container(column_content)
@@ -151,9 +150,9 @@ fn directory_column<'a>(
         .into()
 }
 
-fn empty_fixed_column() -> Element<'static, Message> {
+fn empty_fixed_column(width: f32) -> Element<'static, Message> {
     container(Space::with_height(Length::Fill))
-        .width(Length::FillPortion(1))
+        .width(Length::Fixed(width))
         .height(Length::Fill)
         .style(column_panel_style)
         .into()
@@ -363,21 +362,6 @@ pub(crate) fn column_directories(browser: &FileBrowser) -> Vec<PathBuf> {
     directories
 }
 
-fn visible_column_directories(
-    directories: &[PathBuf],
-    column_view_mode: ColumnViewMode,
-    fixed_count: usize,
-) -> Vec<PathBuf> {
-    match column_view_mode {
-        ColumnViewMode::Unbounded => directories.to_vec(),
-        ColumnViewMode::Fixed => directories
-            .iter()
-            .skip(directories.len().saturating_sub(fixed_count))
-            .cloned()
-            .collect(),
-    }
-}
-
 fn column_presentation(
     column_view_mode: ColumnViewMode,
     index: usize,
@@ -402,7 +386,7 @@ impl ColumnPresentation {
         match self {
             ColumnPresentation::Focused => Length::Fixed(browser.unbounded_column_width),
             ColumnPresentation::Compressed => Length::Fixed(COMPRESSED_UNBOUNDED_COLUMN_WIDTH),
-            ColumnPresentation::Balanced => Length::FillPortion(1),
+            ColumnPresentation::Balanced => Length::Fixed(fixed_column_width(browser)),
         }
     }
 
@@ -468,6 +452,12 @@ impl ColumnPresentation {
             ColumnPresentation::Focused | ColumnPresentation::Balanced => ENTRY_NAME_MAX_CHARS,
         }
     }
+}
+
+fn fixed_column_width(browser: &FileBrowser) -> f32 {
+    let fixed_count = browser.column_fixed_count.max(1) as f32;
+    let browser_width = (browser.main_window_width - SIDEBAR_WIDTH).max(MIN_FIXED_COLUMN_WIDTH);
+    (browser_width / fixed_count).max(MIN_FIXED_COLUMN_WIDTH)
 }
 
 fn active_child_for_column(

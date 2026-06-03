@@ -32,7 +32,7 @@ use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command, system_theme_command,
 };
 use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
-use crate::app::windows::{default_preview_size, main_window_settings};
+use crate::app::windows::{default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_WIDTH};
 use crate::commands::{
     file_operation_subscription, initial_load_command, save_user_config_command,
 };
@@ -118,6 +118,7 @@ pub(crate) struct FileBrowser {
     pub(crate) is_loading: bool,
     pub(crate) error: Option<String>,
     pub(crate) cursor_position: Point,
+    pub(crate) main_window_width: f32,
     is_cursor_over_column_browser: bool,
     keyboard_modifiers: keyboard::Modifiers,
     selection_anchor: Option<PathBuf>,
@@ -211,6 +212,7 @@ impl Application for FileBrowser {
             is_loading: true,
             error: None,
             cursor_position: Point::new(0.0, 0.0),
+            main_window_width: MAIN_WINDOW_INITIAL_WIDTH,
             is_cursor_over_column_browser: false,
             keyboard_modifiers: keyboard::Modifiers::default(),
             selection_anchor: None,
@@ -331,6 +333,12 @@ impl Application for FileBrowser {
                 self.accept_preview(path, preview_outcome)
             }
             Message::TextPreviewAction(action) => self.handle_text_preview_action(action),
+            Message::MarkdownPreviewModeSelected(mode) => {
+                if let Some(document) = self.text_preview_document.as_mut() {
+                    document.select_markdown_preview_mode(mode);
+                }
+                Command::none()
+            }
             Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
                 self.accept_image_preview_dimensions(path, dimensions_outcome)
             }
@@ -553,7 +561,10 @@ impl Application for FileBrowser {
                 self.user_config.column_view_mode = mode;
                 self.finish_column_resize_drag();
                 self.is_column_view_settings_open = false;
-                self.persist_user_config_command()
+                Command::batch([
+                    self.persist_user_config_command(),
+                    self.focus_latest_column(),
+                ])
             }
             Message::ColumnFixedCountSelected(count) => {
                 self.column_view_mode = ColumnViewMode::Fixed;
@@ -563,7 +574,10 @@ impl Application for FileBrowser {
                 self.column_fixed_count = count;
                 self.user_config.column_fixed_count = count;
                 self.is_column_view_settings_open = false;
-                self.persist_user_config_command()
+                Command::batch([
+                    self.persist_user_config_command(),
+                    self.focus_latest_column(),
+                ])
             }
             Message::TerminalEmulatorSelected(terminal_emulator) => {
                 self.terminal_emulator = terminal_emulator;

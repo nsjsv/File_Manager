@@ -35,6 +35,8 @@ const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
 const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
 const MIN_SEARCH_WIDTH: f32 = 520.0;
 const MIN_SEARCH_HEIGHT: f32 = 360.0;
+pub(super) const MAIN_WINDOW_INITIAL_WIDTH: f32 = 1180.0;
+const MAIN_WINDOW_INITIAL_HEIGHT: f32 = 680.0;
 const MAIN_WINDOW_APP_ID: &str = "file-manager";
 const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
 const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
@@ -43,7 +45,7 @@ const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
 
 pub(super) fn main_window_settings() -> window::Settings {
     let mut settings = window::Settings {
-        size: Size::new(1180.0, 680.0),
+        size: Size::new(MAIN_WINDOW_INITIAL_WIDTH, MAIN_WINDOW_INITIAL_HEIGHT),
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
@@ -447,6 +449,11 @@ impl FileBrowser {
         width: u32,
         height: u32,
     ) -> Command<Message> {
+        if window == window::Id::MAIN {
+            self.main_window_width = (width as f32).max(1.0);
+            return Command::none();
+        }
+
         if self.preview_window == Some(window) {
             let resized_size = clamp_preview_size(
                 self.preview_window_profile,
