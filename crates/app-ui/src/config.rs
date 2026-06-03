@@ -3,6 +3,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use desktop_linux::TerminalEmulator;
+
 use crate::model::ColumnViewMode;
 
 const APP_DIR_NAME: &str = "file-manager";
@@ -14,10 +16,12 @@ const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
 const COLUMN_VIEW_MODE_KEY: &str = "column_view_mode";
 const COLUMN_FIXED_COUNT_KEY: &str = "column_fixed_count";
 const UNBOUNDED_COLUMN_WIDTH_KEY: &str = "unbounded_column_width";
+const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 
 pub(crate) const DEFAULT_COLUMN_VIEW_MODE: ColumnViewMode = ColumnViewMode::Unbounded;
 pub(crate) const DEFAULT_COLUMN_FIXED_COUNT: usize = 3;
 pub(crate) const DEFAULT_UNBOUNDED_COLUMN_WIDTH: f32 = 260.0;
+pub(crate) const DEFAULT_TERMINAL_EMULATOR: TerminalEmulator = TerminalEmulator::Automatic;
 pub(crate) const MIN_UNBOUNDED_COLUMN_WIDTH: f32 = 180.0;
 pub(crate) const MAX_UNBOUNDED_COLUMN_WIDTH: f32 = 520.0;
 pub(crate) const COLUMN_FIXED_COUNT_OPTIONS: [usize; 4] = [2, 3, 4, 5];
@@ -30,6 +34,7 @@ pub(crate) struct UserConfig {
     pub(crate) column_view_mode: ColumnViewMode,
     pub(crate) column_fixed_count: usize,
     pub(crate) unbounded_column_width: f32,
+    pub(crate) terminal_emulator: TerminalEmulator,
 }
 
 pub(crate) fn load_user_config() -> UserConfig {
@@ -84,6 +89,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         column_view_mode: DEFAULT_COLUMN_VIEW_MODE,
         column_fixed_count: DEFAULT_COLUMN_FIXED_COUNT,
         unbounded_column_width: DEFAULT_UNBOUNDED_COLUMN_WIDTH,
+        terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
     }
 }
 
@@ -143,6 +149,11 @@ fn parse_user_config(content: &str, default: UserConfig) -> UserConfig {
                     config.unbounded_column_width = normalize_unbounded_column_width(width);
                 }
             }
+            TERMINAL_EMULATOR_KEY => {
+                if let Some(terminal_emulator) = TerminalEmulator::from_config_value(value) {
+                    config.terminal_emulator = terminal_emulator;
+                }
+            }
             _ => {}
         }
     }
@@ -177,7 +188,7 @@ fn write_user_config(path: &Path, config: &UserConfig) -> io::Result<()> {
     fs::write(
         path,
         format!(
-            "# File Manager user configuration\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n",
+            "# File Manager user configuration\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n",
             SEARCH_INDEX_DIR_KEY,
             config.search_index_dir.to_string_lossy(),
             THUMBNAIL_CACHE_DIR_KEY,
@@ -189,7 +200,9 @@ fn write_user_config(path: &Path, config: &UserConfig) -> io::Result<()> {
             COLUMN_FIXED_COUNT_KEY,
             config.column_fixed_count,
             UNBOUNDED_COLUMN_WIDTH_KEY,
-            config.unbounded_column_width
+            config.unbounded_column_width,
+            TERMINAL_EMULATOR_KEY,
+            config.terminal_emulator.config_value()
         ),
     )
 }
@@ -221,7 +234,7 @@ mod tests {
     #[test]
     fn parses_column_view_preferences() {
         let parsed = parse_user_config(
-            "show_hidden_files=true\ncolumn_view_mode=fixed\ncolumn_fixed_count=5\nunbounded_column_width=320.5\n",
+            "show_hidden_files=true\ncolumn_view_mode=fixed\ncolumn_fixed_count=5\nunbounded_column_width=320.5\nterminal_emulator=ghostty\n",
             default_user_config(),
         );
 
@@ -229,13 +242,14 @@ mod tests {
         assert_eq!(parsed.column_view_mode, ColumnViewMode::Fixed);
         assert_eq!(parsed.column_fixed_count, 5);
         assert_eq!(parsed.unbounded_column_width, 320.5);
+        assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
     }
 
     #[test]
     fn invalid_column_view_preferences_fall_back_to_defaults() {
         let default = default_user_config();
         let parsed = parse_user_config(
-            "show_hidden_files=maybe\ncolumn_view_mode=wide\ncolumn_fixed_count=8\nunbounded_column_width=nan\n",
+            "show_hidden_files=maybe\ncolumn_view_mode=wide\ncolumn_fixed_count=8\nunbounded_column_width=nan\nterminal_emulator=missing\n",
             default.clone(),
         );
 
@@ -246,5 +260,6 @@ mod tests {
             parsed.unbounded_column_width,
             DEFAULT_UNBOUNDED_COLUMN_WIDTH
         );
+        assert_eq!(parsed.terminal_emulator, DEFAULT_TERMINAL_EMULATOR);
     }
 }

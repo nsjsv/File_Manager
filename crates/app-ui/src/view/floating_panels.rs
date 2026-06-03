@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
 use iced::widget::{
     button, column, container, mouse_area, row, scrollable, text, text_input, Button, Row, Space,
 };
@@ -349,6 +350,8 @@ pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Messag
             .spacing(6),
             readable_text("Fixed Columns").size(13),
             fixed_count_row,
+            readable_text("Terminal").size(13),
+            terminal_emulator_options(browser.terminal_emulator),
         ]
         .spacing(6),
     )
@@ -356,6 +359,14 @@ pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Messag
     .width(Length::Fixed(COLUMN_SETTINGS_FLOAT_WIDTH))
     .style(context_menu_style)
     .into()
+}
+
+fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Message> {
+    let mut options = iced::widget::Column::new().spacing(4);
+    for terminal_emulator in TERMINAL_EMULATOR_OPTIONS {
+        options = options.push(terminal_emulator_button(*terminal_emulator, selected));
+    }
+    options.into()
 }
 
 fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Message> {
@@ -447,6 +458,25 @@ fn column_fixed_count_button(count: usize, selected_count: usize) -> Button<'sta
         .style(context_menu_button_style())
 }
 
+fn terminal_emulator_button(
+    terminal_emulator: TerminalEmulator,
+    selected_emulator: TerminalEmulator,
+) -> Button<'static, Message> {
+    let label = container(readable_text(terminal_emulator.label()).size(12))
+        .padding([5, 8])
+        .width(Length::Fill);
+    let label = if terminal_emulator == selected_emulator {
+        label.style(selected_sidebar_item_style)
+    } else {
+        label
+    };
+
+    button(label)
+        .on_press(Message::TerminalEmulatorSelected(terminal_emulator))
+        .width(Length::Fill)
+        .style(context_menu_button_style())
+}
+
 fn sidebar_presentation(browser: &FileBrowser, location: &SidebarLocation) -> SidebarPresentation {
     if !browser.is_trash_view && location.path == browser.current_dir {
         SidebarPresentation::Selected
@@ -489,6 +519,13 @@ pub(super) fn context_menu_panel(
     }
 
     let paste_button = menu_button(IconSymbol::Copy, "Paste", Message::PastePending);
+    let terminal_directory = if menu.target_is_directory {
+        menu.target
+            .clone()
+            .unwrap_or_else(|| menu.paste_directory.clone())
+    } else {
+        menu.paste_directory.clone()
+    };
 
     let mut menu_content = iced::widget::Column::new().spacing(4).padding(8);
     menu_content = menu_content
@@ -501,6 +538,11 @@ pub(super) fn context_menu_panel(
             IconSymbol::File,
             "New File",
             Message::CreateEmptyFile(menu.paste_directory.clone()),
+        ))
+        .push(menu_button(
+            IconSymbol::Terminal,
+            "Open Terminal Here",
+            Message::OpenTerminalHere(terminal_directory),
         ));
     if let Some(path) = &menu.target {
         menu_content = menu_content.push(menu_button(

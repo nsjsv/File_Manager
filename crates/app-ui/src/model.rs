@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
-use desktop_linux::DesktopClipboardContent;
+use desktop_linux::{DesktopClipboardContent, TerminalEmulator};
 use file_core::{
     DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexOutcome, FileSearchMatch,
     FileSearchOutcome, TrashEntry, TrashScan,
@@ -23,6 +23,7 @@ pub(crate) enum Message {
     Loaded(Result<DirectoryScan, String>),
     TrashLoaded(Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
+    OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
     TextPreviewAction(text_editor::Action),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
@@ -101,6 +102,7 @@ pub(crate) enum Message {
     ShowHiddenFilesToggled,
     ColumnViewModeSelected(ColumnViewMode),
     ColumnFixedCountSelected(usize),
+    TerminalEmulatorSelected(TerminalEmulator),
     CapturedWheelScrolled(mouse::ScrollDelta),
     ScrollbarAutoHideElapsed(u64),
     ScrollbarAnimationTick,
@@ -120,6 +122,7 @@ pub(crate) enum Message {
     RenameInputFocusChecked(bool),
     RenameInputChanged(String),
     BeginRename(PathBuf),
+    OpenTerminalHere(PathBuf),
     RenameSelected,
     CreateDirectory(PathBuf),
     CreateEmptyFile(PathBuf),

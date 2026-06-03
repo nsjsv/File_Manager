@@ -16,7 +16,7 @@ use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
     check_transfer_conflicts_command, check_transfer_rename_target_command,
     create_clipboard_file_command, image_preview_dimensions_command,
-    load_expanded_directory_command, open_file_command, preview_command,
+    load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
     read_desktop_clipboard_command, start_audio_preview_command, write_file_clipboard_command,
 };
 use crate::model::{
@@ -782,8 +782,16 @@ impl FileBrowser {
 
         match self.entry_kind(&path) {
             Some(FileKind::Directory) => self.navigate_to(path, NavigationMode::RecordHistory),
-            Some(_) | None => open_file_command(path),
+            Some(_) | None => open_file_command(path, self.terminal_emulator),
         }
+    }
+
+    pub(super) fn open_terminal_here(&mut self, directory: PathBuf) -> Command<Message> {
+        self.context_menu = None;
+        if self.is_trash_view {
+            return Command::none();
+        }
+        open_terminal_command(directory, self.terminal_emulator)
     }
 
     fn open_column_for_directory(&mut self, path: PathBuf) -> Command<Message> {

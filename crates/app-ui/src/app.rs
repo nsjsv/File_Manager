@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use desktop_linux::TerminalEmulator;
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
@@ -110,6 +111,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_view_mode: ColumnViewMode,
     pub(crate) column_fixed_count: usize,
     pub(crate) unbounded_column_width: f32,
+    pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) is_column_view_settings_open: bool,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) rename_input: String,
@@ -202,6 +204,7 @@ impl Application for FileBrowser {
             column_view_mode: user_config.column_view_mode,
             column_fixed_count: user_config.column_fixed_count,
             unbounded_column_width: user_config.unbounded_column_width,
+            terminal_emulator: user_config.terminal_emulator,
             is_column_view_settings_open: false,
             expanded_directories: HashMap::new(),
             rename_input: String::new(),
@@ -313,6 +316,14 @@ impl Application for FileBrowser {
                 Command::none()
             }
             Message::OpenFileFinished(Err(error)) => {
+                self.error = Some(error);
+                Command::none()
+            }
+            Message::OpenTerminalFinished(Ok(())) => {
+                self.error = None;
+                Command::none()
+            }
+            Message::OpenTerminalFinished(Err(error)) => {
                 self.error = Some(error);
                 Command::none()
             }
@@ -554,6 +565,12 @@ impl Application for FileBrowser {
                 self.is_column_view_settings_open = false;
                 self.persist_user_config_command()
             }
+            Message::TerminalEmulatorSelected(terminal_emulator) => {
+                self.terminal_emulator = terminal_emulator;
+                self.user_config.terminal_emulator = terminal_emulator;
+                self.is_column_view_settings_open = false;
+                self.persist_user_config_command()
+            }
             Message::CapturedWheelScrolled(delta) => Command::batch([
                 self.show_scrollbars_temporarily(),
                 self.handle_column_browser_wheel_scrolled(delta),
@@ -624,6 +641,7 @@ impl Application for FileBrowser {
                     text_input::select_all(input_id),
                 ])
             }
+            Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
             Message::RenameSelected => self.commit_rename(),
             Message::CreateDirectory(directory) => self.create_directory_in(directory),
             Message::CreateEmptyFile(directory) => self.create_empty_file_in(directory),

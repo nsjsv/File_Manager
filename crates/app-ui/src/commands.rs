@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use desktop_linux::{
-    open_path, read_desktop_clipboard, write_file_clipboard, FileClipboardSelection,
+    open_path_with_terminal_emulator, open_terminal_at_directory, read_desktop_clipboard,
+    write_file_clipboard, FileClipboardSelection, TerminalEmulator,
 };
 use file_core::{
     build_file_search_index, copy_path_with_controls_and_strategy, create_directory,
@@ -210,10 +211,31 @@ pub(crate) fn file_operation_subscription(task: RunningFileOperation) -> Subscri
     )
 }
 
-pub(crate) fn open_file_command(path: PathBuf) -> Command<Message> {
+pub(crate) fn open_file_command(
+    path: PathBuf,
+    terminal_emulator: TerminalEmulator,
+) -> Command<Message> {
     Command::perform(
-        async move { open_path(path).await.map_err(|error| error.to_string()) },
+        async move {
+            open_path_with_terminal_emulator(path, terminal_emulator)
+                .await
+                .map_err(|error| error.to_string())
+        },
         Message::OpenFileFinished,
+    )
+}
+
+pub(crate) fn open_terminal_command(
+    directory: PathBuf,
+    terminal_emulator: TerminalEmulator,
+) -> Command<Message> {
+    Command::perform(
+        async move {
+            open_terminal_at_directory(directory, terminal_emulator)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        Message::OpenTerminalFinished,
     )
 }
 

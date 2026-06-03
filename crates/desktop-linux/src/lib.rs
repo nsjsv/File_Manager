@@ -7,4 +7,7 @@ pub use file_clipboard::{
     DesktopClipboardContent, FileClipboardError, FileClipboardOperation, FileClipboardPayloadError,
     FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
 };
-pub use open::{open_path, OpenError};
+pub use open::{
+    open_path, open_path_with_terminal_emulator, open_terminal_at_directory, OpenError,
+    TerminalEmulator, TERMINAL_EMULATOR_OPTIONS,
+};

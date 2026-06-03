@@ -24,6 +24,7 @@ pub(crate) enum IconSymbol {
     Pencil,
     Play,
     Settings,
+    Terminal,
     Trash,
     TriangleAlert,
     Volume2,
@@ -149,6 +150,7 @@ impl IconSymbol {
             Self::Pencil => include_bytes!("../assets/icons/lucide/pencil.svg"),
             Self::Play => PLAY_ICON,
             Self::Settings => SETTINGS_ICON,
+            Self::Terminal => TERMINAL_ICON,
             Self::Trash => include_bytes!("../assets/icons/lucide/trash-2.svg"),
             Self::TriangleAlert => include_bytes!("../assets/icons/lucide/triangle-alert.svg"),
             Self::Volume2 => VOLUME_2_ICON,
@@ -162,4 +164,5 @@ const CLOSE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24"
 const PAUSE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>"#;
 const PLAY_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>"#;
 const SETTINGS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.32-1.915"/><circle cx="12" cy="12" r="3"/></svg>"#;
+const TERMINAL_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>"#;
 const VOLUME_2_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a1 1 0 0 0-1.707-.707L5.586 7.702A1 1 0 0 1 4.879 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1.879a1 1 0 0 1 .707.298l3.707 3.707A1 1 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>"#;
