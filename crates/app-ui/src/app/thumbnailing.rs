@@ -67,9 +67,12 @@ impl FileBrowser {
     }
 
     pub(super) fn refresh_preview_thumbnail_for_size(&mut self) -> Command<Message> {
-        let Some(PreviewState::Ready(PreviewContent::Image { path, max_edge, .. })) =
-            self.preview.clone()
-        else {
+        let Some((path, max_edge)) = self.preview.as_ref().and_then(|preview| match preview {
+            PreviewState::Ready(PreviewContent::Image { path, max_edge, .. }) => {
+                Some((path.clone(), *max_edge))
+            }
+            _ => None,
+        }) else {
             return Command::none();
         };
         let desired_edge = self.preview_thumbnail_edge();
@@ -208,18 +211,14 @@ impl FileBrowser {
     }
 
     fn schedule_directory_thumbnails(&mut self, directory: &Path, priority: ThumbnailPriority) {
-        let entries = self.entries_for_thumbnail_range(directory);
-        for entry in entries {
-            self.thumbnail_cache.enqueue_entry(
-                &entry,
-                LIST_THUMBNAIL_EDGE,
-                ThumbnailPurpose::List,
-                priority,
-            );
+        let requests = self.thumbnail_requests_for_directory_range(directory);
+        for request in requests {
+            self.thumbnail_cache
+                .enqueue_request(request, ThumbnailPurpose::List, priority);
         }
     }
 
-    fn entries_for_thumbnail_range(&self, directory: &Path) -> Vec<DirectoryEntry> {
+    fn thumbnail_requests_for_directory_range(&self, directory: &Path) -> Vec<ThumbnailRequest> {
         let Some(entries) = self.entries_for_directory(directory) else {
             return Vec::new();
         };
@@ -228,7 +227,10 @@ impl FileBrowser {
         }
 
         let (start, end) = self.thumbnail_range_for_directory(directory, entries.len());
-        entries[start..end].to_vec()
+        entries[start..end]
+            .iter()
+            .filter_map(|entry| request_for_entry(entry, LIST_THUMBNAIL_EDGE))
+            .collect()
     }
 
     fn entries_for_directory(&self, directory: &Path) -> Option<&[DirectoryEntry]> {

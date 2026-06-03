@@ -1,8 +1,10 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{fs as std_fs, thread};
 
@@ -95,7 +97,7 @@ pub async fn search_file_tree(
     options: FileSearchOptions,
 ) -> Result<FileSearchOutcome, FileError> {
     let root = root.as_ref().to_path_buf();
-    let query = query.as_ref().trim();
+    let query = query.as_ref().trim().to_owned();
     if query.is_empty() {
         return Ok(FileSearchOutcome {
             root,
@@ -105,9 +107,21 @@ pub async fn search_file_tree(
     }
 
     let (candidates, skipped) = collect_search_candidates(&root, &options).await?;
-    let tantivy_boosts = tantivy_boosts_for_query(&root, query, &candidates)?;
-    let mut matches = nucleo_ranked_matches(query, &candidates, &tantivy_boosts);
-    matches.truncate(options.limit.max(1));
+    let candidates = Arc::new(candidates);
+    let boost_root = root.clone();
+    let boost_query = query.clone();
+    let boost_candidates = Arc::clone(&candidates);
+    let tantivy_boosts = tokio::task::spawn_blocking(move || {
+        tantivy_boosts_for_query(&boost_root, &boost_query, boost_candidates.as_slice())
+    })
+    .await
+    .map_err(|error| search_index_error(&root, error))??;
+    let matches = nucleo_ranked_matches(
+        &query,
+        candidates.as_slice(),
+        &tantivy_boosts,
+        options.limit.max(1),
+    );
 
     Ok(FileSearchOutcome {
         root,
@@ -335,7 +349,7 @@ fn tantivy_boosts_for_index(
         )
         .map_err(|error| search_index_error(root, error))?;
 
-    let mut boosts = HashMap::new();
+    let mut boosts = HashMap::with_capacity(top_docs.len());
     for (rank, (_score, doc_address)) in top_docs.into_iter().enumerate() {
         let document = searcher
             .doc::<TantivyDocument>(doc_address)
@@ -381,6 +395,7 @@ fn nucleo_ranked_matches(
     query: &str,
     candidates: &[SearchCandidate],
     tantivy_boosts: &HashMap<String, u32>,
+    limit: usize,
 ) -> Vec<FileSearchMatch> {
     let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
     let mut matcher = Matcher::new(Config::DEFAULT);
@@ -401,13 +416,23 @@ fn nucleo_ranked_matches(
         })
         .collect::<Vec<_>>();
 
-    matches.sort_unstable_by(|left, right| {
-        right
-            .rank_score
-            .cmp(&left.rank_score)
-            .then_with(|| left.path.cmp(&right.path))
-    });
+    sort_limited_search_matches(&mut matches, limit);
     matches
+}
+
+fn sort_limited_search_matches(matches: &mut Vec<FileSearchMatch>, limit: usize) {
+    if matches.len() > limit {
+        matches.select_nth_unstable_by(limit, compare_search_matches);
+        matches.truncate(limit);
+    }
+    matches.sort_unstable_by(compare_search_matches);
+}
+
+fn compare_search_matches(left: &FileSearchMatch, right: &FileSearchMatch) -> Ordering {
+    right
+        .rank_score
+        .cmp(&left.rank_score)
+        .then_with(|| left.path.cmp(&right.path))
 }
 
 fn candidate_rank_score(
@@ -515,8 +540,7 @@ fn search_file_index_blocking(
     let fields = FileSearchFields::from_schema(root, &schema)?;
     let boosts = tantivy_boosts_for_index(root, &index, fields, query)?;
     let candidates = candidates_from_index(root, &index, fields)?;
-    let mut matches = nucleo_ranked_matches(query, &candidates, &boosts);
-    matches.truncate(options.limit.max(1));
+    let matches = nucleo_ranked_matches(query, &candidates, &boosts, options.limit.max(1));
 
     Ok(FileSearchOutcome {
         root: root.to_path_buf(),

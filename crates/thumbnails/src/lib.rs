@@ -210,21 +210,19 @@ async fn load_or_generate_thumbnail_with_kind(
         .as_ref()
         .join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION));
 
-    if fs::metadata(&output).await.is_ok() {
-        match cached_thumbnail_dimensions(output.clone()).await {
-            Ok((width, height)) => {
-                return Ok(CachedThumbnail {
-                    key,
-                    source: request.source,
-                    output,
-                    width,
-                    height,
-                    cache_hit: true,
-                });
-            }
-            Err(_) => {
-                let _ = fs::remove_file(&output).await;
-            }
+    match cached_thumbnail_dimensions(output.clone()).await {
+        Ok((width, height)) => {
+            return Ok(CachedThumbnail {
+                key,
+                source: request.source,
+                output,
+                width,
+                height,
+                cache_hit: true,
+            });
+        }
+        Err(_) => {
+            let _ = fs::remove_file(&output).await;
         }
     }
 

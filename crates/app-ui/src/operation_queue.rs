@@ -370,13 +370,7 @@ impl FileOperationQueue {
                 task.progress = FileOperationProgress::complete();
                 task.error = None;
                 task.is_read = self.is_panel_open;
-                combine_storage_errors(
-                    self.persist_task_status(position),
-                    combine_storage_errors(
-                        self.persist_task_progress(position),
-                        self.persist_task_error(position),
-                    ),
-                )
+                self.persist_task_state(position)
             }
             Err(error) if was_canceling => {
                 let task = &mut self.tasks[position];
@@ -384,26 +378,14 @@ impl FileOperationQueue {
                 task.status = FileOperationStatus::Canceled;
                 task.error = None;
                 task.is_read = self.is_panel_open;
-                combine_storage_errors(
-                    self.persist_task_status(position),
-                    combine_storage_errors(
-                        self.persist_task_progress(position),
-                        self.persist_task_error(position),
-                    ),
-                )
+                self.persist_task_state(position)
             }
             Err(error) => {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Failed;
                 task.error = Some(error);
                 task.is_read = self.is_panel_open;
-                combine_storage_errors(
-                    self.persist_task_status(position),
-                    combine_storage_errors(
-                        self.persist_task_progress(position),
-                        self.persist_task_error(position),
-                    ),
-                )
+                self.persist_task_state(position)
             }
         };
 
@@ -442,10 +424,7 @@ impl FileOperationQueue {
                 task.status = FileOperationStatus::Canceled;
                 task.error = None;
                 task.is_read = self.is_panel_open;
-                combine_storage_errors(
-                    self.persist_task_status(position),
-                    self.persist_task_error(position),
-                )
+                self.persist_task_state(position)
             }
             FileOperationStatus::Running | FileOperationStatus::Paused => {
                 let task = &mut self.tasks[position];
@@ -528,7 +507,7 @@ impl FileOperationQueue {
             task.progress = FileOperationProgress::pending();
             task.error = None;
             let _ = task.run_state_sender.send(FileOperationRunState::Running);
-            return self.persist_task_status(position);
+            return self.persist_task_state(position);
         }
         None
     }
@@ -561,26 +540,19 @@ impl FileOperationQueue {
             .map(storage_error)
     }
 
-    fn persist_task_progress(&self, position: usize) -> Option<String> {
+    fn persist_task_state(&self, position: usize) -> Option<String> {
         let task = &self.tasks[position];
         if !task.is_persisted {
             return None;
         }
         self.store
             .as_ref()?
-            .update_progress(task.id, task.progress.to_stored())
-            .err()
-            .map(storage_error)
-    }
-
-    fn persist_task_error(&self, position: usize) -> Option<String> {
-        let task = &self.tasks[position];
-        if !task.is_persisted {
-            return None;
-        }
-        self.store
-            .as_ref()?
-            .update_error(task.id, task.error.as_deref())
+            .update_task_state(
+                task.id,
+                task.status.to_stored(),
+                task.progress.to_stored(),
+                task.error.as_deref(),
+            )
             .err()
             .map(storage_error)
     }

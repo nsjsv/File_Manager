@@ -2,9 +2,9 @@ use iced::widget::text;
 use iced::Theme;
 
 pub(crate) fn readable_text(
-    content: impl ToString,
+    content: impl ReadableTextContent,
 ) -> iced::widget::Text<'static, Theme, iced::Renderer> {
-    let content = content.to_string();
+    let content = content.into_text_content();
     let needs_advanced_shaping = needs_advanced_text_shaping(&content);
     let label = text(content);
 
@@ -12,6 +12,34 @@ pub(crate) fn readable_text(
         label.shaping(iced::widget::text::Shaping::Advanced)
     } else {
         label
+    }
+}
+
+pub(crate) trait ReadableTextContent {
+    fn into_text_content(self) -> String;
+}
+
+impl ReadableTextContent for String {
+    fn into_text_content(self) -> String {
+        self
+    }
+}
+
+impl ReadableTextContent for &str {
+    fn into_text_content(self) -> String {
+        self.to_owned()
+    }
+}
+
+impl ReadableTextContent for &String {
+    fn into_text_content(self) -> String {
+        self.clone()
+    }
+}
+
+impl ReadableTextContent for std::borrow::Cow<'_, str> {
+    fn into_text_content(self) -> String {
+        self.into_owned()
     }
 }
 

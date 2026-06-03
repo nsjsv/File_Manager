@@ -340,6 +340,29 @@ impl TaskQueueStore {
         Ok(())
     }
 
+    pub fn update_task_state(
+        &self,
+        id: u64,
+        status: StoredTaskStatus,
+        progress: StoredProgress,
+        error: Option<&str>,
+    ) -> StoreResult<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE task_queue
+             SET status = ?1, progress_fraction = ?2, error = ?3, updated_at_ms = ?4
+             WHERE id = ?5",
+            params![
+                status.as_str(),
+                progress.fraction,
+                error,
+                current_time_ms(),
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_task(&self, id: u64) -> StoreResult<()> {
         let connection = self.connection()?;
         connection.execute("DELETE FROM task_queue WHERE id = ?1", params![id])?;
@@ -477,6 +500,19 @@ mod tests {
         assert_eq!(updated.status, StoredTaskStatus::Running);
         assert_eq!(updated.progress, StoredProgress::with_fraction(0.5));
         assert_eq!(updated.error.as_deref(), Some("boom"));
+
+        store
+            .update_task_state(
+                id,
+                StoredTaskStatus::Completed,
+                StoredProgress::with_fraction(1.0),
+                None,
+            )
+            .unwrap();
+        let completed = store.read_task(id).unwrap().unwrap();
+        assert_eq!(completed.status, StoredTaskStatus::Completed);
+        assert_eq!(completed.progress, StoredProgress::with_fraction(1.0));
+        assert_eq!(completed.error, None);
 
         store.delete_task(id).unwrap();
         assert!(store.read_task(id).unwrap().is_none());
