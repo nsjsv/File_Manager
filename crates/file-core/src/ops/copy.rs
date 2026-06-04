@@ -125,6 +125,18 @@ pub async fn copy_path_with_controls_and_strategy(
     progress: Option<ProgressSender>,
     conflict_strategy: TransferConflictStrategy,
 ) -> Result<(), FileError> {
+    copy_path_with_controls_and_strategy_target(from, to, controls, progress, conflict_strategy)
+        .await
+        .map(|_| ())
+}
+
+pub async fn copy_path_with_controls_and_strategy_target(
+    from: impl AsRef<Path>,
+    to: impl AsRef<Path>,
+    controls: FileOperationControls,
+    progress: Option<ProgressSender>,
+    conflict_strategy: TransferConflictStrategy,
+) -> Result<Option<PathBuf>, FileError> {
     let from = from.as_ref().to_path_buf();
     let to = to.as_ref().to_path_buf();
     let mut controls = controls;
@@ -138,18 +150,19 @@ pub async fn copy_path_with_controls_and_strategy(
         })?;
 
     let Some(to) = prepare_copy_target(&from, &to, &metadata, conflict_strategy).await? else {
-        return Ok(());
+        return Ok(None);
     };
 
     if metadata.is_dir() {
-        return copy_directory(
+        copy_directory(
             &from,
             &to,
             &mut controls,
             progress.as_ref(),
             conflict_strategy,
         )
-        .await;
+        .await?;
+        return Ok(Some(to));
     }
 
     let mut buffer = vec![0; COPY_BUFFER_SIZE];
@@ -161,7 +174,8 @@ pub async fn copy_path_with_controls_and_strategy(
         progress.as_ref(),
         &mut buffer,
     )
-    .await
+    .await?;
+    Ok(Some(to))
 }
 
 async fn copy_file(

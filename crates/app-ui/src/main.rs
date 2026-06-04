@@ -8,6 +8,7 @@ mod floating_surface;
 mod formatting;
 mod icons;
 mod model;
+mod operation_history;
 mod operation_queue;
 mod operation_queue_view;
 mod preview;

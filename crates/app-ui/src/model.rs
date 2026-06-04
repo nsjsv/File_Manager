@@ -14,6 +14,7 @@ use iced::{event, mouse, window, Point, Theme};
 
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::UserConfig;
+use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
 
@@ -45,7 +46,7 @@ pub(crate) enum Message {
     VideoPreviewFinished(PathBuf, u64),
     VideoPreviewFailed(PathBuf, u64, String),
     FileOperationProgressed(u64, FileOperationProgressUpdate),
-    FileOperationFinished(u64, Result<(), String>),
+    FileOperationFinished(u64, Result<FileOperationOutcome, String>),
     FileOperationIndicatorPressed,
     FileOperationAutoHideElapsed(u64),
     FileOperationPauseToggled(u64),
@@ -125,6 +126,8 @@ pub(crate) enum Message {
     BeginRename(PathBuf),
     OpenTerminalHere(PathBuf),
     RenameSelected,
+    UndoFileOperation,
+    RedoFileOperation,
     CreateDirectory(PathBuf),
     CreateEmptyFile(PathBuf),
     TrashSelected,

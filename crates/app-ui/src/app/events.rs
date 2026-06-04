@@ -129,6 +129,12 @@ fn keyboard_shortcut_message(event: &Event) -> Option<Message> {
         Key::Character("x") | Key::Character("X") if primary_modifier(*modifiers) => {
             Some(Message::MoveSelected)
         }
+        Key::Character("y") | Key::Character("Y") if primary_modifier(*modifiers) => {
+            Some(Message::RedoFileOperation)
+        }
+        Key::Character("z") | Key::Character("Z") if primary_modifier(*modifiers) => {
+            Some(Message::UndoFileOperation)
+        }
         Key::Named(key::Named::Escape) => Some(Message::FocusedWindowEscapePressed),
         Key::Named(key::Named::Copy) => Some(Message::CopySelected),
         Key::Named(key::Named::Paste) => Some(Message::PastePending),
@@ -262,6 +268,34 @@ mod tests {
         let message = global_event_message(event, event::Status::Captured);
 
         assert!(matches!(message, Some(Message::SearchOpened)));
+    }
+
+    #[test]
+    fn captured_ctrl_z_requests_file_operation_undo() {
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: Key::Character("z".into()),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::CTRL,
+            text: None,
+        });
+
+        let message = global_event_message(event, event::Status::Captured);
+
+        assert!(matches!(message, Some(Message::UndoFileOperation)));
+    }
+
+    #[test]
+    fn captured_ctrl_y_requests_file_operation_redo() {
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            key: Key::Character("y".into()),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::CTRL,
+            text: None,
+        });
+
+        let message = global_event_message(event, event::Status::Captured);
+
+        assert!(matches!(message, Some(Message::RedoFileOperation)));
     }
 
     #[test]

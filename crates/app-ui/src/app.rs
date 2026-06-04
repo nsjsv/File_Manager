@@ -44,6 +44,7 @@ use crate::model::{
     SelectionMarquee, SidebarLocation, TextPreviewDocument, TransferConflictState,
     VideoPreviewPlayback,
 };
+use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
 use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
@@ -126,6 +127,7 @@ pub(crate) struct FileBrowser {
     column_resize_drag: Option<ColumnResizeDrag>,
     last_click: Option<crate::model::LastClick>,
     pub(crate) operation_queue: FileOperationQueue,
+    operation_history: FileOperationHistory,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
     pub(crate) scrollbar_visibility: ScrollbarVisibility,
@@ -220,6 +222,7 @@ impl Application for FileBrowser {
             column_resize_drag: None,
             last_click: None,
             operation_queue: FileOperationQueue::new(),
+            operation_history: FileOperationHistory::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
             scrollbar_visibility: ScrollbarVisibility::Hidden,
@@ -657,6 +660,8 @@ impl Application for FileBrowser {
             }
             Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
             Message::RenameSelected => self.commit_rename(),
+            Message::UndoFileOperation => self.undo_file_operation(),
+            Message::RedoFileOperation => self.redo_file_operation(),
             Message::CreateDirectory(directory) => self.create_directory_in(directory),
             Message::CreateEmptyFile(directory) => self.create_empty_file_in(directory),
             Message::TrashSelected => self.trash_selected(),

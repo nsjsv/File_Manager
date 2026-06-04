@@ -138,6 +138,20 @@ pub async fn scan_trash(options: ScanOptions) -> Result<TrashScan, FileError> {
     Ok(TrashScan { entries, skipped })
 }
 
+pub async fn restore_entries_for_original_path(
+    original_path: &Path,
+) -> Result<Vec<TrashRestoreEntry>, FileError> {
+    let mut options = ScanOptions::default();
+    options.include_hidden = true;
+    let scan = scan_trash(options).await?;
+    Ok(scan
+        .entries
+        .into_iter()
+        .filter(|entry| entry.original_path == original_path)
+        .map(|entry| entry.restore_entry())
+        .collect())
+}
+
 pub async fn restore_trash_entry(
     entry: TrashRestoreEntry,
     conflict_strategy: TransferConflictStrategy,

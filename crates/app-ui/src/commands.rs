@@ -3,24 +3,19 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use desktop_linux::{
     open_path_with_terminal_emulator, open_terminal_at_directory, read_desktop_clipboard,
     write_file_clipboard, FileClipboardSelection, TerminalEmulator,
 };
 use file_core::{
-    build_file_search_index, copy_path_with_controls_and_strategy, create_directory,
-    create_empty_file, create_file_with_contents, delete_trash_entry, empty_trash,
-    move_path_with_controls_and_strategy, rename_path, restore_trash_entry, scan_directory,
-    scan_trash, search_file_index, search_file_tree, trash_path, CopyProgress, DirectoryScan,
-    FileKind, FileOperationControls, FileSearchIndexOptions, FileSearchOptions, ScanOptions,
-    TransferConflictStrategy, TrashRestoreEntry, TrashScan,
+    build_file_search_index, create_file_with_contents, scan_directory, scan_trash,
+    search_file_index, search_file_tree, DirectoryScan, FileKind, FileSearchIndexOptions,
+    FileSearchOptions, ScanOptions, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
-use iced::futures::channel::mpsc::Sender as IcedSender;
-use iced::futures::SinkExt;
-use iced::{Command, Subscription};
+use iced::Command;
 
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
@@ -28,20 +23,18 @@ use crate::model::{
     InitialLoad, Message, PendingOperation, SearchRequest, SidebarLocation, TransferConflictItem,
     TransferConflictMetadata, TransferConflictMode, TransferConflictState,
 };
-use crate::operation_queue::{
-    FileOperationProgressUpdate, QueuedFileOperation, QueuedTransfer, RunningFileOperation,
-    NEW_DIRECTORY_NAME, NEW_FILE_NAME,
-};
+use crate::operation_queue::QueuedTransfer;
 use crate::preview::load_preview;
 use crate::sidebar::{home_sidebar_location, sidebar_locations};
 use crate::startup_trace;
 use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
 use crate::video_preview::{inspect_video_preview_metadata, load_video_preview_frame};
 
+mod queued_file_operations;
+pub(crate) use queued_file_operations::file_operation_subscription;
+
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
-const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
-const COPY_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn initial_load_command() -> Command<Message> {
     Command::perform(load_initial_state(), Message::InitialLoadFinished)
@@ -73,7 +66,7 @@ pub(crate) fn path_suggestions_command(input: String, current_dir: PathBuf) -> C
     let query = input.clone();
     Command::perform(
         load_path_suggestions(input, current_dir),
-        move |suggestions| Message::PathSuggestionsLoaded(query, suggestions),
+        move |suggestions| Message::PathSuggestionsLoaded(query.clone(), suggestions),
     )
 }
 
@@ -118,7 +111,7 @@ pub(crate) fn preview_command(
 ) -> Command<Message> {
     let preview_path = path.clone();
     Command::perform(load_preview(path, kind, options), move |preview_outcome| {
-        Message::PreviewLoaded(preview_path, preview_outcome)
+        Message::PreviewLoaded(preview_path.clone(), preview_outcome)
     })
 }
 
@@ -191,23 +184,6 @@ pub(crate) fn thumbnail_batch_command(
     Command::perform(
         load_thumbnail_batch(cache_dir, works),
         Message::ThumbnailBatchLoaded,
-    )
-}
-
-pub(crate) fn file_operation_subscription(task: RunningFileOperation) -> Subscription<Message> {
-    let task_id = task.id;
-    iced::subscription::channel(
-        ("file-operation", task_id),
-        FILE_OPERATION_CHANNEL_SIZE,
-        move |mut output| async move {
-            let result =
-                run_queued_file_operation(task.operation, task.controls, task_id, &mut output)
-                    .await;
-            let _ = output
-                .send(Message::FileOperationFinished(task_id, result))
-                .await;
-            iced::futures::future::pending().await
-        },
     )
 }
 
@@ -383,387 +359,6 @@ async fn metadata_if_exists(path: &Path) -> Result<Option<std::fs::Metadata>, St
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("could not read metadata for {path:?}: {error}")),
     }
-}
-
-async fn run_queued_file_operation(
-    operation: QueuedFileOperation,
-    controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    match operation {
-        QueuedFileOperation::Rename { path, new_name } => {
-            run_queued_rename(path, new_name, controls, task_id, output).await
-        }
-        QueuedFileOperation::CreateDirectory { parent } => {
-            run_queued_create_directory(parent, controls, task_id, output).await
-        }
-        QueuedFileOperation::CreateEmptyFile { parent } => {
-            run_queued_create_empty_file(parent, controls, task_id, output).await
-        }
-        QueuedFileOperation::Trash { paths } => {
-            run_queued_trash(paths, controls, task_id, output).await
-        }
-        QueuedFileOperation::Restore { entries } => {
-            run_queued_restore(entries, controls, task_id, output).await
-        }
-        QueuedFileOperation::DeleteTrashEntries { entries } => {
-            run_queued_delete_trash_entries(entries, controls, task_id, output).await
-        }
-        QueuedFileOperation::EmptyTrash => run_queued_empty_trash(controls, task_id, output).await,
-        QueuedFileOperation::Copy { transfers } => {
-            run_queued_transfers(
-                transfers,
-                controls,
-                task_id,
-                output,
-                QueuedTransferMode::Copy,
-            )
-            .await
-        }
-        QueuedFileOperation::Move { transfers } => {
-            run_queued_transfers(
-                transfers,
-                controls,
-                task_id,
-                output,
-                QueuedTransferMode::Move,
-            )
-            .await
-        }
-    }
-}
-
-async fn run_queued_rename(
-    path: PathBuf,
-    new_name: String,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
-    rename_path(path, OsString::from(new_name))
-        .await
-        .map(|_| ())
-        .map_err(|error| error.to_string())?;
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: 1,
-            total: 1,
-        },
-    )
-    .await;
-    Ok(())
-}
-
-async fn run_queued_create_directory(
-    parent: PathBuf,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
-    create_directory(parent.join(NEW_DIRECTORY_NAME))
-        .await
-        .map_err(|error| error.to_string())?;
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: 1,
-            total: 1,
-        },
-    )
-    .await;
-    Ok(())
-}
-
-async fn run_queued_create_empty_file(
-    parent: PathBuf,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
-    create_empty_file(parent.join(NEW_FILE_NAME))
-        .await
-        .map_err(|error| error.to_string())?;
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: 1,
-            total: 1,
-        },
-    )
-    .await;
-    Ok(())
-}
-
-async fn run_queued_trash(
-    paths: Vec<PathBuf>,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    let total = paths.len();
-    for (index, path) in paths.into_iter().enumerate() {
-        controls
-            .wait_until_running()
-            .await
-            .map_err(|error| error.to_string())?;
-        trash_path(path).await.map_err(|error| error.to_string())?;
-        send_file_operation_progress(
-            output,
-            task_id,
-            FileOperationProgressUpdate::Items {
-                completed: index + 1,
-                total,
-            },
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn run_queued_restore(
-    entries: Vec<TrashRestoreEntry>,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    let total = entries.len();
-    for (index, entry) in entries.into_iter().enumerate() {
-        controls
-            .wait_until_running()
-            .await
-            .map_err(|error| error.to_string())?;
-        restore_trash_entry(entry, TransferConflictStrategy::KeepBoth)
-            .await
-            .map_err(|error| error.to_string())?;
-        send_file_operation_progress(
-            output,
-            task_id,
-            FileOperationProgressUpdate::Items {
-                completed: index + 1,
-                total,
-            },
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn run_queued_delete_trash_entries(
-    entries: Vec<TrashRestoreEntry>,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    let total = entries.len();
-    for (index, entry) in entries.into_iter().enumerate() {
-        controls
-            .wait_until_running()
-            .await
-            .map_err(|error| error.to_string())?;
-        delete_trash_entry(entry)
-            .await
-            .map_err(|error| error.to_string())?;
-        send_file_operation_progress(
-            output,
-            task_id,
-            FileOperationProgressUpdate::Items {
-                completed: index + 1,
-                total,
-            },
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn run_queued_empty_trash(
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<(), String> {
-    send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
-    empty_trash().await.map_err(|error| error.to_string())?;
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: 1,
-            total: 1,
-        },
-    )
-    .await;
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-enum QueuedTransferMode {
-    Copy,
-    Move,
-}
-
-async fn run_queued_transfers(
-    transfers: Vec<QueuedTransfer>,
-    controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-    mode: QueuedTransferMode,
-) -> Result<(), String> {
-    let total = transfers.len();
-    for (index, transfer) in transfers.into_iter().enumerate() {
-        run_queued_transfer(
-            transfer,
-            controls.clone(),
-            task_id,
-            output,
-            mode,
-            index,
-            total,
-        )
-        .await?;
-        send_file_operation_progress(
-            output,
-            task_id,
-            FileOperationProgressUpdate::Items {
-                completed: index + 1,
-                total,
-            },
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn run_queued_transfer(
-    transfer: QueuedTransfer,
-    controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-    mode: QueuedTransferMode,
-    completed_transfers: usize,
-    total_transfers: usize,
-) -> Result<(), String> {
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let transfer = async move {
-        match mode {
-            QueuedTransferMode::Copy => {
-                copy_path_with_controls_and_strategy(
-                    transfer.source,
-                    transfer.target,
-                    controls,
-                    Some(progress_sender),
-                    transfer.conflict_strategy,
-                )
-                .await
-            }
-            QueuedTransferMode::Move => {
-                move_path_with_controls_and_strategy(
-                    transfer.source,
-                    transfer.target,
-                    controls,
-                    Some(progress_sender),
-                    transfer.conflict_strategy,
-                )
-                .await
-            }
-        }
-    };
-    tokio::pin!(transfer);
-    let mut latest_copy_progress = None;
-    let mut last_copy_progress_sent_at = None;
-
-    loop {
-        tokio::select! {
-            progress = progress_receiver.recv() => {
-                if let Some(progress) = progress {
-                    latest_copy_progress = Some(progress);
-                    let now = Instant::now();
-                    if should_send_copy_progress(last_copy_progress_sent_at, now) {
-                        if let Some(progress) = latest_copy_progress.take() {
-                            send_copy_progress(
-                                output,
-                                task_id,
-                                progress,
-                                completed_transfers,
-                                total_transfers,
-                            ).await;
-                            last_copy_progress_sent_at = Some(now);
-                        }
-                    }
-                }
-            }
-            transfer_outcome = &mut transfer => {
-                if let Some(progress) = latest_copy_progress.take() {
-                    send_copy_progress(
-                        output,
-                        task_id,
-                        progress,
-                        completed_transfers,
-                        total_transfers,
-                    ).await;
-                }
-                return transfer_outcome.map_err(|error| error.to_string());
-            }
-        }
-    }
-}
-
-fn should_send_copy_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
-    match last_sent_at {
-        Some(last_sent_at) => now.duration_since(last_sent_at) >= COPY_PROGRESS_UI_INTERVAL,
-        None => true,
-    }
-}
-
-async fn send_copy_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: CopyProgress,
-    completed_transfers: usize,
-    total_transfers: usize,
-) {
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Bytes {
-            bytes_done: progress.bytes_done,
-            bytes_total: progress.bytes_total,
-            completed_transfers,
-            total_transfers,
-        },
-    )
-    .await;
-}
-
-async fn send_file_operation_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: FileOperationProgressUpdate,
-) {
-    let _ = output
-        .send(Message::FileOperationProgressed(task_id, progress))
-        .await;
 }
 
 async fn load_directory(path: PathBuf, options: ScanOptions) -> Result<DirectoryScan, String> {

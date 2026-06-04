@@ -11,8 +11,9 @@ use crate::FileError;
 mod copy;
 pub use copy::{
     copy_path, copy_path_with_conflict_strategy, copy_path_with_controls,
-    copy_path_with_controls_and_strategy, CopyProgress, FileOperationControls,
-    FileOperationRunState, ProgressSender, TransferConflictStrategy,
+    copy_path_with_controls_and_strategy, copy_path_with_controls_and_strategy_target,
+    CopyProgress, FileOperationControls, FileOperationRunState, ProgressSender,
+    TransferConflictStrategy,
 };
 
 pub async fn rename_path(
@@ -107,6 +108,20 @@ pub async fn trash_path(path: impl AsRef<Path>) -> Result<(), FileError> {
         })
 }
 
+pub async fn trash_path_with_restore_entry(
+    path: impl AsRef<Path>,
+) -> Result<Option<crate::TrashRestoreEntry>, FileError> {
+    let path = path.as_ref().to_path_buf();
+    let before = crate::trash_bin::restore_entries_for_original_path(&path)
+        .await
+        .unwrap_or_default();
+    trash_path(&path).await?;
+    let after = crate::trash_bin::restore_entries_for_original_path(&path)
+        .await
+        .unwrap_or_default();
+    Ok(after.into_iter().find(|entry| !before.contains(entry)))
+}
+
 async fn metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
     match fs::metadata(path).await {
         Ok(metadata) => Ok(Some(metadata)),
@@ -191,13 +206,25 @@ pub async fn move_path_with_controls_and_strategy(
     progress: Option<ProgressSender>,
     conflict_strategy: TransferConflictStrategy,
 ) -> Result<(), FileError> {
+    move_path_with_controls_and_strategy_target(from, to, controls, progress, conflict_strategy)
+        .await
+        .map(|_| ())
+}
+
+pub async fn move_path_with_controls_and_strategy_target(
+    from: impl AsRef<Path>,
+    to: impl AsRef<Path>,
+    controls: FileOperationControls,
+    progress: Option<ProgressSender>,
+    conflict_strategy: TransferConflictStrategy,
+) -> Result<Option<PathBuf>, FileError> {
     let from = from.as_ref().to_path_buf();
     let to = to.as_ref().to_path_buf();
     let mut controls = controls;
     controls.wait_until_running().await?;
 
     if from == to {
-        return Ok(());
+        return Ok(None);
     }
 
     let source_metadata = fs::metadata(&from)
@@ -228,15 +255,15 @@ pub async fn move_path_with_controls_and_strategy(
             .is_some_and(std::fs::Metadata::is_dir)
     {
         move_directory_merge(&from, &to, &mut controls).await?;
-        send_move_progress(progress, from, to, total);
-        return Ok(());
+        send_move_progress(progress, from, to.clone(), total);
+        return Ok(Some(to));
     }
 
     let Some(to) =
         prepare_move_target(&from, &to, target_metadata.as_ref(), conflict_strategy).await?
     else {
         send_move_progress(progress, from, to, total);
-        return Ok(());
+        return Ok(None);
     };
 
     fs::rename(&from, &to)
@@ -247,9 +274,9 @@ pub async fn move_path_with_controls_and_strategy(
             source,
         })?;
 
-    send_move_progress(progress, from, to, total);
+    send_move_progress(progress, from, to.clone(), total);
 
-    Ok(())
+    Ok(Some(to))
 }
 
 async fn prepare_move_target(
