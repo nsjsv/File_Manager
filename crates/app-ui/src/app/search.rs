@@ -297,7 +297,10 @@ impl FileBrowser {
 
     fn search_root_for_scope(&self, scope: SearchScope) -> PathBuf {
         match scope {
-            SearchScope::CurrentDirectory => self.current_dir.clone(),
+            SearchScope::CurrentDirectory => self
+                .cursor_search_directory
+                .clone()
+                .unwrap_or_else(|| self.current_dir.clone()),
             SearchScope::HomeDirectory => dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
         }
     }

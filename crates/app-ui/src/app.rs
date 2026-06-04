@@ -79,6 +79,7 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_entry: Option<PathBuf>,
     pub(crate) hovered_sidebar: Option<PathBuf>,
     cursor_paste_directory: Option<PathBuf>,
+    cursor_search_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
@@ -162,6 +163,7 @@ impl Application for FileBrowser {
             hovered_entry: None,
             hovered_sidebar: None,
             cursor_paste_directory: None,
+            cursor_search_directory: None,
             preview: None,
             text_preview_document: None,
             audio_preview: None,
@@ -436,10 +438,23 @@ impl Application for FileBrowser {
                 ])
             }
             Message::EntryRightClicked(path) => self.handle_entry_right_clicked(path),
-            Message::EntryHovered(path) => self.handle_entry_hovered(path),
+            Message::EntryHovered(path) => {
+                self.cursor_search_directory = Some(
+                    path.parent()
+                        .map(|parent| parent.to_path_buf())
+                        .unwrap_or_else(|| self.current_dir.clone()),
+                );
+                self.handle_entry_hovered(path)
+            }
             Message::EntryHoverCleared(path) => self.handle_entry_hover_cleared(path),
-            Message::DropTargetHovered(directory) => self.handle_drop_target_hovered(directory),
+            Message::DropTargetHovered(directory) => {
+                self.cursor_search_directory = Some(directory.clone());
+                self.handle_drop_target_hovered(directory)
+            }
             Message::DropTargetHoverCleared(directory) => {
+                if self.cursor_search_directory.as_ref() == Some(&directory) {
+                    self.cursor_search_directory = None;
+                }
                 self.handle_drop_target_hover_cleared(directory)
             }
             Message::BlankAreaPressed => self.start_selection_marquee(),
@@ -470,6 +485,7 @@ impl Application for FileBrowser {
             }
             Message::ColumnBrowserCursorExited => {
                 self.is_cursor_over_column_browser = false;
+                self.cursor_search_directory = None;
                 self.clear_cursor_paste_target()
             }
             Message::KeyboardModifiersChanged(modifiers) => {
