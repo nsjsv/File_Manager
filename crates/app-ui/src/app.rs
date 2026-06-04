@@ -1,3 +1,4 @@
+mod column_resize;
 mod column_scroll;
 mod events;
 mod file_operations;
@@ -27,22 +28,21 @@ use iced::widget::text_input;
 use iced::window;
 use iced::{executor, time, Command, Element, Point, Settings, Subscription, Theme};
 
+use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command, system_theme_command,
 };
 use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::windows::{default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_WIDTH};
-use crate::commands::{
-    file_operation_subscription, initial_load_command, save_user_config_command,
-};
+use crate::commands::{file_operation_subscription, initial_load_command};
 use crate::config;
 use crate::model::{
-    AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState, ExpandedDirectory,
-    FileDragState, Message, NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
-    SelectionMarquee, SidebarLocation, TextPreviewDocument, TransferConflictState,
-    VideoPreviewPlayback,
+    AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState,
+    DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message, NavigationMode,
+    OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
+    ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee, SidebarLocation,
+    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -55,12 +55,6 @@ const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
-
-#[derive(Debug, Clone, Copy)]
-struct ColumnResizeDrag {
-    cursor_start_x: f32,
-    width_start: f32,
-}
 
 pub(crate) fn run() -> iced::Result {
     FileBrowser::run(Settings {
@@ -97,6 +91,7 @@ pub(crate) struct FileBrowser {
     pending_created_entry_rename: Option<PathBuf>,
     pub(crate) pending_operation: Option<PendingOperation>,
     pub(crate) transfer_conflict: Option<TransferConflictState>,
+    pub(crate) destructive_action_confirmation: Option<DestructiveActionConfirmation>,
     pub(crate) search: Option<SearchState>,
     search_window: Option<window::Id>,
     pub(crate) search_index: SearchIndexRuntime,
@@ -181,6 +176,7 @@ impl Application for FileBrowser {
             pending_created_entry_rename: None,
             pending_operation: None,
             transfer_conflict: None,
+            destructive_action_confirmation: None,
             search: None,
             search_window: None,
             search_index: SearchIndexRuntime::new(PathBuf::new()),
@@ -461,17 +457,8 @@ impl Application for FileBrowser {
             Message::BlankAreaRightClicked(directory) => {
                 self.handle_blank_area_right_clicked(directory)
             }
-            Message::SidebarHovered(path) => {
-                self.hovered_sidebar = Some(path);
-                self.cursor_paste_directory = None;
-                Command::none()
-            }
-            Message::SidebarHoverCleared(path) => {
-                if self.hovered_sidebar.as_ref() == Some(&path) {
-                    self.hovered_sidebar = None;
-                }
-                Command::none()
-            }
+            Message::SidebarHovered(path) => self.handle_sidebar_hovered(path),
+            Message::SidebarHoverCleared(path) => self.handle_sidebar_hover_cleared(path),
             Message::CursorMoved(position) => {
                 self.cursor_position = position;
                 self.update_file_drag(position);
@@ -500,6 +487,8 @@ impl Application for FileBrowser {
                 ])
             }
             Message::DismissFloating => self.dismiss_floating(),
+            Message::DestructiveActionConfirmed => self.confirm_destructive_action(),
+            Message::DestructiveActionCanceled => self.cancel_destructive_action(),
             Message::AuxiliaryWindowCloseRequested(window) => self.close_auxiliary_window(window),
             Message::AuxiliaryWindowResized(window, width, height) => {
                 self.handle_auxiliary_window_resized(window, width, height)
@@ -750,66 +739,5 @@ impl Application for FileBrowser {
             }
             view_browser(self)
         }
-    }
-}
-
-impl FileBrowser {
-    fn start_column_resize_drag(&mut self) -> Command<Message> {
-        if self.renaming.is_some() {
-            return self.commit_rename_if_active();
-        }
-
-        if self.column_view_mode != ColumnViewMode::Unbounded {
-            return Command::none();
-        }
-
-        self.column_resize_drag = Some(ColumnResizeDrag {
-            cursor_start_x: self.cursor_position.x,
-            width_start: self.unbounded_column_width,
-        });
-        self.drag_selection_anchor = None;
-        self.selection_marquee = None;
-        self.clear_preview();
-        self.context_menu = None;
-        self.is_column_view_settings_open = false;
-        Command::none()
-    }
-
-    fn update_column_resize_drag(&mut self, position: Point) {
-        let Some(drag) = self.column_resize_drag else {
-            return;
-        };
-
-        self.unbounded_column_width = config::normalize_unbounded_column_width(
-            drag.width_start + position.x - drag.cursor_start_x,
-        );
-    }
-
-    fn finish_column_resize_drag(&mut self) -> bool {
-        let was_resizing = self.column_resize_drag.take().is_some();
-        if was_resizing {
-            self.user_config.unbounded_column_width = self.unbounded_column_width;
-        }
-        was_resizing
-    }
-
-    fn finish_column_resize_drag_command(&mut self) -> Command<Message> {
-        if self.finish_column_resize_drag() {
-            self.persist_user_config_command()
-        } else {
-            Command::none()
-        }
-    }
-
-    fn persist_user_config_command(&self) -> Command<Message> {
-        save_user_config_command(self.user_config.clone())
-    }
-
-    fn toggle_show_hidden_files(&mut self) -> Command<Message> {
-        self.options.include_hidden = !self.options.include_hidden;
-        self.user_config.show_hidden_files = self.options.include_hidden;
-        let persist_command = self.persist_user_config_command();
-        let reload_command = self.reload_current();
-        Command::batch([persist_command, reload_command])
     }
 }

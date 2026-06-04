@@ -10,10 +10,8 @@ use crate::FileError;
 
 mod copy;
 pub use copy::{
-    copy_path, copy_path_with_conflict_strategy, copy_path_with_controls,
-    copy_path_with_controls_and_strategy, copy_path_with_controls_and_strategy_target,
-    CopyProgress, FileOperationControls, FileOperationRunState, ProgressSender,
-    TransferConflictStrategy,
+    copy_path, copy_path_with_options, CopyProgress, FileOperationControls, FileOperationRunState,
+    FileTransferOptions, ProgressSender, TransferConflictStrategy,
 };
 
 pub async fn rename_path(
@@ -163,64 +161,25 @@ pub async fn move_path(
     cancel: CancellationToken,
     progress: Option<ProgressSender>,
 ) -> Result<(), FileError> {
-    move_path_with_controls(from, to, FileOperationControls::running(cancel), progress).await
-}
-
-pub async fn move_path_with_conflict_strategy(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    cancel: CancellationToken,
-    progress: Option<ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
-) -> Result<(), FileError> {
-    move_path_with_controls_and_strategy(
+    move_path_with_options(
         from,
         to,
-        FileOperationControls::running(cancel),
-        progress,
-        conflict_strategy,
+        FileTransferOptions::running(cancel).with_optional_progress(progress),
     )
     .await
+    .map(|_| ())
 }
 
-pub async fn move_path_with_controls(
+pub async fn move_path_with_options(
     from: impl AsRef<Path>,
     to: impl AsRef<Path>,
-    controls: FileOperationControls,
-    progress: Option<ProgressSender>,
-) -> Result<(), FileError> {
-    move_path_with_controls_and_strategy(
-        from,
-        to,
-        controls,
-        progress,
-        TransferConflictStrategy::Fail,
-    )
-    .await
-}
-
-pub async fn move_path_with_controls_and_strategy(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    controls: FileOperationControls,
-    progress: Option<ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
-) -> Result<(), FileError> {
-    move_path_with_controls_and_strategy_target(from, to, controls, progress, conflict_strategy)
-        .await
-        .map(|_| ())
-}
-
-pub async fn move_path_with_controls_and_strategy_target(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    controls: FileOperationControls,
-    progress: Option<ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
+    transfer_options: FileTransferOptions,
 ) -> Result<Option<PathBuf>, FileError> {
     let from = from.as_ref().to_path_buf();
     let to = to.as_ref().to_path_buf();
-    let mut controls = controls;
+    let mut controls = transfer_options.controls;
+    let progress = transfer_options.progress;
+    let conflict_strategy = transfer_options.conflict_strategy;
     controls.wait_until_running().await?;
 
     if from == to {
@@ -461,12 +420,11 @@ mod tests {
         fs::write(&target, b"old").await.unwrap();
         fs::write(&target_copy1, b"old copy").await.unwrap();
 
-        copy_path_with_conflict_strategy(
+        copy_path_with_options(
             &source,
             &target,
-            CancellationToken::new(),
-            None,
-            TransferConflictStrategy::KeepBoth,
+            FileTransferOptions::running(CancellationToken::new())
+                .with_conflict_strategy(TransferConflictStrategy::KeepBoth),
         )
         .await
         .unwrap();
@@ -488,12 +446,11 @@ mod tests {
         fs::write(&target, b"old").await.unwrap();
         fs::write(&target_copy1, b"old copy").await.unwrap();
 
-        move_path_with_conflict_strategy(
+        move_path_with_options(
             &source,
             &target,
-            CancellationToken::new(),
-            None,
-            TransferConflictStrategy::KeepBoth,
+            FileTransferOptions::running(CancellationToken::new())
+                .with_conflict_strategy(TransferConflictStrategy::KeepBoth),
         )
         .await
         .unwrap();

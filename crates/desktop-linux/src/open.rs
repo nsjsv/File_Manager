@@ -462,7 +462,7 @@ readlink "/proc/$$/fd/2" >&3
     #[test]
     fn terminal_open_command_uses_selected_launcher() {
         let launcher = terminal_launcher_for(TerminalEmulator::Ghostty).unwrap();
-        let mut command = terminal_open_command(launcher, Path::new("/tmp/example"));
+        let command = terminal_open_command(launcher, Path::new("/tmp/example"));
         let command = command.as_std();
         let arguments = command.get_args().map(OsString::from).collect::<Vec<_>>();
 
@@ -481,7 +481,7 @@ readlink "/proc/$$/fd/2" >&3
     fn terminal_directory_command_sets_working_directory() {
         let launcher = terminal_launcher_for(TerminalEmulator::Kitty).unwrap();
         let directory = Path::new("/tmp/example");
-        let mut command = terminal_directory_command(launcher, directory);
+        let command = terminal_directory_command(launcher, directory);
         let command = command.as_std();
 
         assert_eq!(command.get_program(), OsStr::new("kitty"));

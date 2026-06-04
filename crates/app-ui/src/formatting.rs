@@ -55,7 +55,7 @@ pub(crate) fn format_middle_ellipsized_text(content: &str, max_chars: usize) -> 
     }
 
     let visible_chars = max_chars - MARKER.len();
-    let start_chars = (visible_chars + 1) / 2;
+    let start_chars = visible_chars.div_ceil(2);
     let end_chars = visible_chars / 2;
     let start: String = content.chars().take(start_chars).collect();
     let end: String = content
@@ -78,7 +78,7 @@ fn format_ascii_middle_ellipsized_text(content: &str, max_chars: usize) -> Strin
     }
 
     let visible_chars = max_chars - MARKER.len();
-    let start_chars = (visible_chars + 1) / 2;
+    let start_chars = visible_chars.div_ceil(2);
     let end_chars = visible_chars / 2;
     let mut text = String::with_capacity(max_chars);
     text.push_str(&content[..start_chars]);

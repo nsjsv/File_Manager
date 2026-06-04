@@ -17,9 +17,9 @@ use crate::config::COLUMN_FIXED_COUNT_OPTIONS;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
-    trash_location_path, ColumnViewMode, ContextMenuState, Message, SidebarLocation,
-    TransferConflictChoice, TransferConflictItem, TransferConflictMetadata, TransferConflictState,
-    TRASH_LOCATION_LABEL,
+    trash_location_path, ColumnViewMode, ContextMenuState, DestructiveActionConfirmation, Message,
+    SidebarLocation, TransferConflictChoice, TransferConflictItem, TransferConflictMetadata,
+    TransferConflictState, TRASH_LOCATION_LABEL,
 };
 use crate::sidebar::SIDEBAR_WIDTH;
 use crate::typography::readable_text;
@@ -29,6 +29,7 @@ use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 const COLUMN_SETTINGS_FLOAT_WIDTH: f32 = 260.0;
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
 const ERROR_NOTIFICATION_MAX_CHARS: usize = 96;
+const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
 const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
 const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
 const SIDEBAR_LABEL_MAX_CHARS: usize = 22;
@@ -46,6 +47,62 @@ pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
         .padding([10, 12])
         .width(Length::Fixed(ERROR_NOTIFICATION_FLOAT_WIDTH))
         .style(error_notification_style)
+        .into()
+}
+
+pub(super) fn destructive_action_confirmation_panel(
+    confirmation: &DestructiveActionConfirmation,
+) -> Element<'_, Message> {
+    let (title, body, confirm_label) = match confirmation {
+        DestructiveActionConfirmation::DeleteTrashEntries { entries } => {
+            let item_count = entries.len();
+            let item_label = if item_count == 1 {
+                "1 item".to_owned()
+            } else {
+                format!("{item_count} items")
+            };
+            (
+                "Delete Permanently?",
+                format!("Delete {item_label} from Trash permanently? This cannot be undone."),
+                "Delete Permanently",
+            )
+        }
+        DestructiveActionConfirmation::EmptyTrash => (
+            "Empty Trash?",
+            "Delete all items in Trash permanently? This cannot be undone.".to_owned(),
+            "Empty Trash",
+        ),
+    };
+
+    let title_row = row![
+        themed_icon(IconSymbol::TriangleAlert, IconTone::Warning, MENU_ICON_SIZE),
+        readable_text(title).size(16).width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_items(Alignment::Center);
+
+    let actions = row![
+        Space::with_width(Length::Fill),
+        button(readable_text("Cancel").size(12))
+            .on_press(Message::DestructiveActionCanceled)
+            .padding([6, 10])
+            .style(context_menu_button_style()),
+        button(readable_text(confirm_label).size(12))
+            .on_press(Message::DestructiveActionConfirmed)
+            .padding([6, 10])
+            .style(context_menu_button_style()),
+    ]
+    .spacing(6)
+    .align_items(Alignment::Center);
+
+    let content = column![title_row, readable_text(body).size(13), actions]
+        .spacing(12)
+        .width(Length::Fill);
+
+    container(content)
+        .padding(14)
+        .width(Length::Fixed(DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH))
+        .style(context_menu_style)
         .into()
 }
 
@@ -272,6 +329,7 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
             .on_exit(Message::SidebarHoverCleared(location.path.clone()))
             .on_middle_press(Message::OpenDirectoryInNewTab(location.path.clone()))
             .on_press(Message::NavigateTo(location.path.clone()))
+            .on_release(Message::DragSelectionFinished)
             .interaction(iced::mouse::Interaction::Pointer);
 
         sidebar = sidebar.push(item);
@@ -308,6 +366,7 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         .on_exit(Message::SidebarHoverCleared(trash_hover_path))
         .on_press(Message::TrashOpened)
         .on_middle_press(Message::OpenTrashInNewTab)
+        .on_release(Message::DragSelectionFinished)
         .interaction(iced::mouse::Interaction::Pointer);
     sidebar = sidebar.push(trash_item);
 

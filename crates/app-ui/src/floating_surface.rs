@@ -14,11 +14,27 @@ where
     Element::new(FloatingSurface {
         content: content.into(),
         floating,
+        background_input_policy: BackgroundInputPolicy::Interactive,
         outside_click_dismissal: None,
     })
 }
 
-pub(crate) fn dismissable_floating_surface<'a, Message>(
+pub(crate) fn modal_floating_surface<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+    floating: Vec<FloatingContent<'a, Message>>,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    Element::new(FloatingSurface {
+        content: content.into(),
+        floating,
+        background_input_policy: BackgroundInputPolicy::Blocked,
+        outside_click_dismissal: None,
+    })
+}
+
+pub(crate) fn dismissable_blocking_floating_surface<'a, Message>(
     content: impl Into<Element<'a, Message>>,
     floating: Vec<FloatingContent<'a, Message>>,
     dismiss_message: Message,
@@ -29,6 +45,7 @@ where
     Element::new(FloatingSurface {
         content: content.into(),
         floating,
+        background_input_policy: BackgroundInputPolicy::Blocked,
         outside_click_dismissal: Some(OutsideClickDismissal {
             message: dismiss_message,
             clicked_event_flow: DismissedClickFlow::Capture,
@@ -47,6 +64,7 @@ where
     Element::new(FloatingSurface {
         content: content.into(),
         floating,
+        background_input_policy: BackgroundInputPolicy::Interactive,
         outside_click_dismissal: Some(OutsideClickDismissal {
             message: dismiss_message,
             clicked_event_flow: DismissedClickFlow::Continue,
@@ -64,6 +82,12 @@ struct OutsideClickDismissal<Message> {
 enum DismissedClickFlow {
     Capture,
     Continue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundInputPolicy {
+    Interactive,
+    Blocked,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +120,7 @@ where
 {
     content: Element<'a, Message, Theme, Renderer>,
     floating: Vec<FloatingContent<'a, Message, Theme, Renderer>>,
+    background_input_policy: BackgroundInputPolicy,
     outside_click_dismissal: Option<OutsideClickDismissal<Message>>,
 }
 
@@ -183,6 +208,10 @@ where
             }
         }
 
+        if self.background_input_policy == BackgroundInputPolicy::Blocked {
+            return iced::event::Status::Captured;
+        }
+
         self.content.as_widget_mut().on_event(
             &mut tree.children[0],
             event,
@@ -206,7 +235,7 @@ where
         self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
-            cursor,
+            self.background_cursor(cursor),
             viewport,
             renderer,
         )
@@ -228,7 +257,7 @@ where
             theme,
             style,
             layout,
-            cursor,
+            self.background_cursor(cursor),
             viewport,
         );
     }
@@ -306,6 +335,13 @@ where
         }
 
         checked_any_floating
+    }
+
+    fn background_cursor(&self, cursor: mouse::Cursor) -> mouse::Cursor {
+        match self.background_input_policy {
+            BackgroundInputPolicy::Interactive => cursor,
+            BackgroundInputPolicy::Blocked => mouse::Cursor::Unavailable,
+        }
     }
 }
 

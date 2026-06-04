@@ -350,9 +350,7 @@ impl FileOperationQueue {
         id: u64,
         update: FileOperationProgressUpdate,
     ) -> Option<String> {
-        let Some(position) = self.tasks.iter().position(|task| task.id == id) else {
-            return None;
-        };
+        let position = self.tasks.iter().position(|task| task.id == id)?;
         self.tasks[position].progress.update(update);
         None
     }
@@ -394,9 +392,7 @@ impl FileOperationQueue {
     }
 
     pub(crate) fn toggle_pause(&mut self, id: u64) -> Option<String> {
-        let Some(position) = self.tasks.iter().position(|task| task.id == id) else {
-            return None;
-        };
+        let position = self.tasks.iter().position(|task| task.id == id)?;
         let task = &mut self.tasks[position];
         match task.status {
             FileOperationStatus::Running => {
@@ -414,9 +410,7 @@ impl FileOperationQueue {
     }
 
     pub(crate) fn cancel(&mut self, id: u64) -> Option<String> {
-        let Some(position) = self.tasks.iter().position(|task| task.id == id) else {
-            return None;
-        };
+        let position = self.tasks.iter().position(|task| task.id == id)?;
 
         let mut storage_error = match self.tasks[position].status {
             FileOperationStatus::Pending => {
@@ -645,7 +639,7 @@ fn trash_entries_detail(entries: &[TrashRestoreEntry]) -> String {
 
 fn path_label(path: &Path) -> String {
     path.file_name()
-        .unwrap_or_else(|| path.as_os_str())
+        .unwrap_or(path.as_os_str())
         .to_string_lossy()
         .into_owned()
 }

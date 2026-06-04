@@ -76,70 +76,75 @@ impl FileOperationControls {
     }
 }
 
+#[derive(Clone)]
+pub struct FileTransferOptions {
+    pub(super) controls: FileOperationControls,
+    pub(super) progress: Option<ProgressSender>,
+    pub(super) conflict_strategy: TransferConflictStrategy,
+}
+
+impl FileTransferOptions {
+    pub fn new(controls: FileOperationControls) -> Self {
+        Self {
+            controls,
+            progress: None,
+            conflict_strategy: TransferConflictStrategy::Fail,
+        }
+    }
+
+    pub fn running(cancel: CancellationToken) -> Self {
+        Self::new(FileOperationControls::running(cancel))
+    }
+
+    pub fn with_progress_sender(mut self, progress: ProgressSender) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    pub fn with_optional_progress(mut self, progress: Option<ProgressSender>) -> Self {
+        self.progress = progress;
+        self
+    }
+
+    pub fn with_conflict_strategy(mut self, conflict_strategy: TransferConflictStrategy) -> Self {
+        self.conflict_strategy = conflict_strategy;
+        self
+    }
+}
+
 pub async fn copy_path(
     from: impl AsRef<Path>,
     to: impl AsRef<Path>,
     cancel: CancellationToken,
     progress: Option<ProgressSender>,
 ) -> Result<(), FileError> {
-    copy_path_with_controls(from, to, FileOperationControls::running(cancel), progress).await
-}
-
-pub async fn copy_path_with_conflict_strategy(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    cancel: CancellationToken,
-    progress: Option<ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
-) -> Result<(), FileError> {
-    copy_path_with_controls_and_strategy(
+    copy_path_with_options(
         from,
         to,
-        FileOperationControls::running(cancel),
-        progress,
-        conflict_strategy,
+        FileTransferOptions::running(cancel).with_optional_progress(progress),
     )
     .await
+    .map(|_| ())
 }
 
-pub async fn copy_path_with_controls(
+pub async fn copy_path_with_options(
     from: impl AsRef<Path>,
     to: impl AsRef<Path>,
-    controls: FileOperationControls,
-    progress: Option<ProgressSender>,
-) -> Result<(), FileError> {
-    copy_path_with_controls_and_strategy(
-        from,
-        to,
-        controls,
-        progress,
-        TransferConflictStrategy::Fail,
-    )
-    .await
+    transfer_options: FileTransferOptions,
+) -> Result<Option<PathBuf>, FileError> {
+    copy_path_with_transfer_options(from, to, transfer_options).await
 }
 
-pub async fn copy_path_with_controls_and_strategy(
+async fn copy_path_with_transfer_options(
     from: impl AsRef<Path>,
     to: impl AsRef<Path>,
-    controls: FileOperationControls,
-    progress: Option<ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
-) -> Result<(), FileError> {
-    copy_path_with_controls_and_strategy_target(from, to, controls, progress, conflict_strategy)
-        .await
-        .map(|_| ())
-}
-
-pub async fn copy_path_with_controls_and_strategy_target(
-    from: impl AsRef<Path>,
-    to: impl AsRef<Path>,
-    controls: FileOperationControls,
-    progress: Option<ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
+    transfer_options: FileTransferOptions,
 ) -> Result<Option<PathBuf>, FileError> {
     let from = from.as_ref().to_path_buf();
     let to = to.as_ref().to_path_buf();
-    let mut controls = controls;
+    let mut controls = transfer_options.controls;
+    let progress = transfer_options.progress;
+    let conflict_strategy = transfer_options.conflict_strategy;
     controls.wait_until_running().await?;
 
     let metadata = fs::metadata(&from)
@@ -367,10 +372,8 @@ async fn copy_directory(
             )
             .await
             {
-                if matches!(&error, FileError::Cancelled) {
-                    if created_root {
-                        let _ = fs::remove_dir_all(to).await;
-                    }
+                if matches!(&error, FileError::Cancelled) && created_root {
+                    let _ = fs::remove_dir_all(to).await;
                 }
                 return Err(error);
             }

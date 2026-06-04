@@ -2,30 +2,24 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use desktop_linux::{
-    ClipboardImage, DesktopClipboardContent, FileClipboardOperation, FileClipboardSelection,
-};
-use file_core::{
-    is_supported_audio_path, is_supported_video_path, DirectoryEntry, FileKind,
-    TransferConflictStrategy,
-};
+use file_core::{is_supported_audio_path, is_supported_video_path, DirectoryEntry, FileKind};
 use iced::Command;
 
 use super::paths::{self, PasteTargetMode};
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
-    check_transfer_conflicts_command, check_transfer_rename_target_command,
-    create_clipboard_file_command, image_preview_dimensions_command,
-    load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
-    read_desktop_clipboard_command, start_audio_preview_command, write_file_clipboard_command,
+    image_preview_dimensions_command, load_expanded_directory_command, open_file_command,
+    open_terminal_command, preview_command, start_audio_preview_command,
 };
 use crate::model::{
-    AudioPreviewPlayback, ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus,
-    FileDragPhase, FileDragState, LastClick, Message, NavigationMode, PendingOperation,
-    PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictChoice,
-    TransferConflictItem, TransferConflictMode, TransferConflictState,
+    trash_location_path, AudioPreviewPlayback, ContextMenuState, ExpandedDirectory,
+    ExpandedDirectoryStatus, FileDragPhase, FileDragState, LastClick, Message, NavigationMode,
+    PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictMode,
 };
-use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
+use crate::operation_queue::QueuedTransfer;
+
+mod clipboard;
+mod conflict;
 
 const FILE_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 
@@ -141,6 +135,27 @@ impl FileBrowser {
         if self.cursor_paste_directory.as_ref() == Some(&directory) {
             self.cursor_paste_directory = None;
         }
+        Command::none()
+    }
+
+    pub(super) fn handle_sidebar_hovered(&mut self, path: PathBuf) -> Command<Message> {
+        self.hovered_sidebar = Some(path.clone());
+        self.cursor_paste_directory = None;
+        if self.file_drag.is_some() {
+            if path == trash_location_path() {
+                self.clear_file_drag_target();
+            } else {
+                self.set_file_drag_target(path);
+            }
+        }
+        Command::none()
+    }
+
+    pub(super) fn handle_sidebar_hover_cleared(&mut self, path: PathBuf) -> Command<Message> {
+        if self.hovered_sidebar.as_ref() == Some(&path) {
+            self.hovered_sidebar = None;
+        }
+        self.clear_file_drag_target_if_matching(&path);
         Command::none()
     }
 
@@ -284,6 +299,20 @@ impl FileBrowser {
         }
     }
 
+    fn clear_file_drag_target(&mut self) {
+        if let Some(file_drag) = &mut self.file_drag {
+            file_drag.target_directory = None;
+        }
+    }
+
+    fn clear_file_drag_target_if_matching(&mut self, directory: &Path) {
+        if let Some(file_drag) = &mut self.file_drag {
+            if file_drag.target_directory.as_deref() == Some(directory) {
+                file_drag.target_directory = None;
+            }
+        }
+    }
+
     fn move_dragged_files(
         &mut self,
         sources: Vec<PathBuf>,
@@ -349,431 +378,6 @@ impl FileBrowser {
         }
 
         self.open_preview()
-    }
-
-    pub(super) fn copy_selected(&mut self) -> Command<Message> {
-        self.context_menu = None;
-        if self.is_trash_view {
-            return Command::none();
-        }
-        let paths = self.selected_paths_for_operation();
-        if paths.is_empty() {
-            return Command::none();
-        }
-        self.pending_operation = Some(PendingOperation::Copy(paths.clone()));
-        write_file_clipboard_command(FileClipboardSelection::new(
-            FileClipboardOperation::Copy,
-            paths,
-        ))
-    }
-
-    pub(super) fn move_selected(&mut self) -> Command<Message> {
-        self.context_menu = None;
-        if self.is_trash_view {
-            return Command::none();
-        }
-        let paths = self.selected_paths_for_operation();
-        if paths.is_empty() {
-            return Command::none();
-        }
-        self.pending_operation = Some(PendingOperation::Move(paths.clone()));
-        write_file_clipboard_command(FileClipboardSelection::new(
-            FileClipboardOperation::Move,
-            paths,
-        ))
-    }
-
-    pub(super) fn trash_selected(&mut self) -> Command<Message> {
-        self.context_menu = None;
-        if self.is_trash_view {
-            return self.delete_selected_trash_entries();
-        }
-        let paths = self.selected_paths_for_operation();
-        if paths.is_empty() {
-            Command::none()
-        } else {
-            self.enqueue_file_operation(QueuedFileOperation::Trash { paths })
-        }
-    }
-
-    pub(super) fn restore_selected(&mut self) -> Command<Message> {
-        self.context_menu = None;
-        if !self.is_trash_view {
-            return Command::none();
-        }
-
-        let entries = self.selected_trash_entries_for_operation();
-        if entries.is_empty() {
-            Command::none()
-        } else {
-            self.enqueue_file_operation(QueuedFileOperation::Restore { entries })
-        }
-    }
-
-    fn delete_selected_trash_entries(&mut self) -> Command<Message> {
-        let entries = self.selected_trash_entries_for_operation();
-        if entries.is_empty() {
-            Command::none()
-        } else {
-            self.enqueue_file_operation(QueuedFileOperation::DeleteTrashEntries { entries })
-        }
-    }
-
-    pub(super) fn empty_trash_requested(&mut self) -> Command<Message> {
-        self.context_menu = None;
-        if !self.is_trash_view || self.trash_entries.is_empty() {
-            return Command::none();
-        }
-        self.enqueue_file_operation(QueuedFileOperation::EmptyTrash)
-    }
-
-    pub(super) fn create_directory_in(&mut self, directory: PathBuf) -> Command<Message> {
-        self.context_menu = None;
-        if self.is_trash_view {
-            return Command::none();
-        }
-        self.clear_preview();
-        self.renaming = None;
-        self.drag_selection_anchor = None;
-        self.file_drag = None;
-        self.enqueue_file_operation(QueuedFileOperation::CreateDirectory { parent: directory })
-    }
-
-    pub(super) fn create_empty_file_in(&mut self, directory: PathBuf) -> Command<Message> {
-        self.context_menu = None;
-        if self.is_trash_view {
-            return Command::none();
-        }
-        self.clear_preview();
-        self.renaming = None;
-        self.drag_selection_anchor = None;
-        self.file_drag = None;
-        self.enqueue_file_operation(QueuedFileOperation::CreateEmptyFile { parent: directory })
-    }
-
-    pub(super) fn paste_pending(&mut self) -> Command<Message> {
-        if self.is_trash_view {
-            self.context_menu = None;
-            return Command::none();
-        }
-        let paste_directory = self.paste_target_directory();
-        self.context_menu = None;
-        read_desktop_clipboard_command(paste_directory, self.pending_operation.clone())
-    }
-
-    pub(super) fn accept_file_clipboard_write(
-        &mut self,
-        result: Result<(), String>,
-    ) -> Command<Message> {
-        match result {
-            Ok(()) => self.error = None,
-            Err(error) => self.error = Some(error),
-        }
-        Command::none()
-    }
-
-    pub(super) fn accept_desktop_clipboard_paste(
-        &mut self,
-        paste_directory: PathBuf,
-        fallback_operation: Option<PendingOperation>,
-        content: Result<Option<DesktopClipboardContent>, String>,
-    ) -> Command<Message> {
-        match content {
-            Ok(Some(content)) => self.paste_desktop_clipboard_content(paste_directory, content),
-            Ok(None) => self.paste_optional_operation(paste_directory, fallback_operation),
-            Err(error) => {
-                if fallback_operation.is_some() {
-                    self.paste_optional_operation(paste_directory, fallback_operation)
-                } else {
-                    self.error = Some(error);
-                    Command::none()
-                }
-            }
-        }
-    }
-
-    pub(super) fn accept_clipboard_file_created(
-        &mut self,
-        result: Result<PathBuf, String>,
-    ) -> Command<Message> {
-        match result {
-            Ok(_) => self.reload_current(),
-            Err(error) => {
-                self.error = Some(error);
-                Command::none()
-            }
-        }
-    }
-
-    fn paste_desktop_clipboard_content(
-        &mut self,
-        paste_directory: PathBuf,
-        content: DesktopClipboardContent,
-    ) -> Command<Message> {
-        match content {
-            DesktopClipboardContent::Files(selection) => {
-                self.paste_file_clipboard_selection(paste_directory, selection)
-            }
-            DesktopClipboardContent::Text(text) => {
-                self.create_clipboard_text_file(paste_directory, text)
-            }
-            DesktopClipboardContent::Image(image) => {
-                self.create_clipboard_image_file(paste_directory, image)
-            }
-        }
-    }
-
-    fn paste_file_clipboard_selection(
-        &mut self,
-        paste_directory: PathBuf,
-        selection: FileClipboardSelection,
-    ) -> Command<Message> {
-        let operation = match selection.operation {
-            FileClipboardOperation::Copy => PendingOperation::Copy(selection.paths),
-            FileClipboardOperation::Move => PendingOperation::Move(selection.paths),
-        };
-        self.paste_operation(paste_directory, operation)
-    }
-
-    fn create_clipboard_text_file(
-        &mut self,
-        paste_directory: PathBuf,
-        text: String,
-    ) -> Command<Message> {
-        self.context_menu = None;
-        let target = paste_directory.join("Pasted Text.txt");
-        create_clipboard_file_command(target, text.into_bytes())
-    }
-
-    fn create_clipboard_image_file(
-        &mut self,
-        paste_directory: PathBuf,
-        image: ClipboardImage,
-    ) -> Command<Message> {
-        self.context_menu = None;
-        let target = paste_directory.join(format!("Screenshot.{}", image.extension));
-        create_clipboard_file_command(target, image.bytes)
-    }
-
-    fn paste_optional_operation(
-        &mut self,
-        paste_directory: PathBuf,
-        operation: Option<PendingOperation>,
-    ) -> Command<Message> {
-        let Some(operation) = operation else {
-            return Command::none();
-        };
-        self.paste_operation(paste_directory, operation)
-    }
-
-    fn paste_operation(
-        &mut self,
-        paste_directory: PathBuf,
-        operation: PendingOperation,
-    ) -> Command<Message> {
-        let (mode, transfers) = match operation {
-            PendingOperation::Copy(sources) => {
-                let transfers =
-                    paths::transfer_targets(&paste_directory, &sources, PasteTargetMode::Copy)
-                        .into_iter()
-                        .map(|(source, target)| QueuedTransfer::new(source, target))
-                        .collect::<Vec<_>>();
-                (TransferConflictMode::Copy, transfers)
-            }
-            PendingOperation::Move(sources) => {
-                let transfers =
-                    paths::transfer_targets(&paste_directory, &sources, PasteTargetMode::Move)
-                        .into_iter()
-                        .filter(|(source, target)| source != target)
-                        .map(|(source, target)| QueuedTransfer::new(source, target))
-                        .collect::<Vec<_>>();
-                self.pending_operation = None;
-                (TransferConflictMode::Move, transfers)
-            }
-        };
-
-        if transfers.is_empty() {
-            return Command::none();
-        }
-
-        self.enqueue_or_confirm_transfers(mode, transfers)
-    }
-
-    fn paste_target_directory(&self) -> PathBuf {
-        self.context_menu
-            .as_ref()
-            .map(|menu| menu.paste_directory.clone())
-            .or_else(|| self.cursor_paste_directory.clone())
-            .unwrap_or_else(|| self.current_dir.clone())
-    }
-
-    pub(super) fn enqueue_or_confirm_transfers(
-        &mut self,
-        mode: TransferConflictMode,
-        transfers: Vec<QueuedTransfer>,
-    ) -> Command<Message> {
-        check_transfer_conflicts_command(mode, transfers)
-    }
-
-    pub(super) fn accept_transfer_conflicts_checked(
-        &mut self,
-        mode: TransferConflictMode,
-        transfers: Vec<QueuedTransfer>,
-        conflicts: Vec<TransferConflictItem>,
-    ) -> Command<Message> {
-        if conflicts.is_empty() {
-            return self.enqueue_transfer_operation(mode, transfers);
-        }
-
-        let rename_input = conflict_default_name(&conflicts[0]);
-        self.error = None;
-        self.context_menu = None;
-        self.operation_queue.close_panel();
-        self.transfer_conflict = Some(TransferConflictState {
-            mode,
-            transfers,
-            conflicts,
-            current_index: 0,
-            apply_to_all: false,
-            rename_input,
-        });
-        Command::none()
-    }
-
-    fn enqueue_transfer_operation(
-        &mut self,
-        mode: TransferConflictMode,
-        transfers: Vec<QueuedTransfer>,
-    ) -> Command<Message> {
-        match mode {
-            TransferConflictMode::Copy => {
-                self.enqueue_file_operation(QueuedFileOperation::Copy { transfers })
-            }
-            TransferConflictMode::Move => {
-                self.enqueue_file_operation(QueuedFileOperation::Move { transfers })
-            }
-        }
-    }
-
-    pub(super) fn resolve_transfer_conflict_choice(
-        &mut self,
-        choice: TransferConflictChoice,
-    ) -> Command<Message> {
-        let Some(mut state) = self.transfer_conflict.take() else {
-            return Command::none();
-        };
-
-        let apply_to_all = state.apply_to_all;
-        loop {
-            let Some(conflict) = state.current_conflict() else {
-                break;
-            };
-            if choice == TransferConflictChoice::Merge && !conflict.can_merge() {
-                if !apply_to_all {
-                    self.error = Some("Only two folders can be merged".to_owned());
-                }
-                break;
-            }
-
-            apply_conflict_choice(&mut state, choice);
-            state.current_index += 1;
-            if !apply_to_all {
-                break;
-            }
-        }
-
-        self.finish_or_continue_transfer_conflicts(state)
-    }
-
-    pub(super) fn toggle_transfer_conflict_apply_to_all(&mut self) {
-        if let Some(state) = &mut self.transfer_conflict {
-            state.apply_to_all = !state.apply_to_all;
-        }
-    }
-
-    pub(super) fn update_transfer_conflict_rename(&mut self, value: String) {
-        if let Some(state) = &mut self.transfer_conflict {
-            state.rename_input = value;
-        }
-    }
-
-    pub(super) fn confirm_transfer_conflict_rename(&mut self) -> Command<Message> {
-        let Some(state) = self.transfer_conflict.take() else {
-            return Command::none();
-        };
-
-        let Some(conflict) = state.current_conflict() else {
-            return self.finish_or_continue_transfer_conflicts(state);
-        };
-        let Some(parent) = conflict.target.parent().map(Path::to_path_buf) else {
-            self.error = Some("Destination path has no parent directory".to_owned());
-            self.transfer_conflict = Some(state);
-            return Command::none();
-        };
-
-        let name = state.rename_input.trim();
-        if !is_valid_transfer_rename(name) {
-            self.error = Some("Enter a name without path separators".to_owned());
-            self.transfer_conflict = Some(state);
-            return Command::none();
-        }
-
-        let renamed_target = parent.join(name);
-        let transfer_position = conflict_transfer_position(&state, conflict);
-        let reserved_targets = reserved_targets_except(&state.transfers, transfer_position);
-        if reserved_targets.contains(&renamed_target) {
-            self.error = Some("That name already exists. Choose another name".to_owned());
-            self.transfer_conflict = Some(state);
-            return Command::none();
-        }
-
-        check_transfer_rename_target_command(state, transfer_position, renamed_target)
-    }
-
-    pub(super) fn accept_transfer_conflict_rename_target(
-        &mut self,
-        mut state: TransferConflictState,
-        transfer_position: Option<usize>,
-        renamed_target: PathBuf,
-        available: Result<bool, String>,
-    ) -> Command<Message> {
-        match available {
-            Ok(true) => {}
-            Ok(false) => {
-                self.error = Some("That name already exists. Choose another name".to_owned());
-                self.transfer_conflict = Some(state);
-                return Command::none();
-            }
-            Err(error) => {
-                self.error = Some(error);
-                self.transfer_conflict = Some(state);
-                return Command::none();
-            }
-        }
-
-        if let Some(position) = transfer_position {
-            state.transfers[position].target = renamed_target;
-            state.transfers[position].conflict_strategy = TransferConflictStrategy::Fail;
-        }
-        state.current_index += 1;
-        self.error = None;
-        self.finish_or_continue_transfer_conflicts(state)
-    }
-
-    fn finish_or_continue_transfer_conflicts(
-        &mut self,
-        mut state: TransferConflictState,
-    ) -> Command<Message> {
-        if state.current_index >= state.conflicts.len() {
-            self.transfer_conflict = None;
-            return self.enqueue_transfer_operation(state.mode, state.transfers);
-        }
-
-        if let Some(conflict) = state.current_conflict() {
-            state.rename_input = conflict_default_name(conflict);
-        }
-        self.transfer_conflict = Some(state);
-        Command::none()
     }
 
     fn activate_path(&mut self, path: PathBuf) -> Command<Message> {
@@ -1035,57 +639,6 @@ impl FileBrowser {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
     }
-}
-
-fn apply_conflict_choice(state: &mut TransferConflictState, choice: TransferConflictChoice) {
-    let Some(conflict) = state.current_conflict().cloned() else {
-        return;
-    };
-    let Some(position) = conflict_transfer_position(state, &conflict) else {
-        return;
-    };
-
-    let strategy = match choice {
-        TransferConflictChoice::Replace => TransferConflictStrategy::Replace,
-        TransferConflictChoice::Skip => TransferConflictStrategy::Skip,
-        TransferConflictChoice::KeepBoth => TransferConflictStrategy::KeepBoth,
-        TransferConflictChoice::Merge => TransferConflictStrategy::Merge,
-    };
-    state.transfers[position].conflict_strategy = strategy;
-}
-
-fn conflict_transfer_position(
-    state: &TransferConflictState,
-    conflict: &TransferConflictItem,
-) -> Option<usize> {
-    state.transfers.iter().position(|transfer| {
-        transfer.source == conflict.source && transfer.target == conflict.target
-    })
-}
-
-fn reserved_targets_except(
-    transfers: &[QueuedTransfer],
-    excluded_position: Option<usize>,
-) -> HashSet<PathBuf> {
-    transfers
-        .iter()
-        .enumerate()
-        .filter(|(position, _)| Some(*position) != excluded_position)
-        .map(|(_, transfer)| transfer.target.clone())
-        .collect()
-}
-
-fn conflict_default_name(conflict: &TransferConflictItem) -> String {
-    conflict
-        .source
-        .file_name()
-        .or_else(|| conflict.target.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "item".to_owned())
-}
-
-fn is_valid_transfer_rename(name: &str) -> bool {
-    !name.is_empty() && !name.contains('/') && !name.contains('\\')
 }
 
 #[cfg(test)]

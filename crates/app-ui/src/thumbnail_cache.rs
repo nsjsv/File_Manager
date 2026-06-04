@@ -123,10 +123,7 @@ impl ThumbnailCache {
         priority: ThumbnailPriority,
     ) {
         let key = request.key();
-        if self.ready.contains_key(&key) || self.inflight.contains_key(&key) {
-            return;
-        }
-        if self.failure_is_active(&key) {
+        if !self.thumbnail_can_be_queued(&key) {
             return;
         }
 
@@ -154,21 +151,14 @@ impl ThumbnailCache {
         let mut works = Vec::new();
         let available = MAX_IN_FLIGHT.saturating_sub(self.inflight.len());
         for _ in 0..available {
-            let Some(key) = self.pop_highest_priority_key() else {
+            let Some(work) = self.take_highest_priority_work() else {
                 break;
             };
-            let Some(work) = self.queued.remove(&key) else {
-                continue;
-            };
-            self.inflight.insert(key, work.purpose);
             works.push(work);
         }
         if self.preview_extra_slot_is_available() {
-            if let Some(key) = self.pop_highest_priority_preview_key() {
-                if let Some(work) = self.queued.remove(&key) {
-                    self.inflight.insert(key, work.purpose);
-                    works.push(work);
-                }
+            if let Some(work) = self.take_highest_priority_preview_work() {
+                works.push(work);
             }
         }
         works
@@ -229,12 +219,32 @@ impl ThumbnailCache {
         false
     }
 
-    fn pop_highest_priority_key(&mut self) -> Option<ThumbnailKey> {
-        self.pop_highest_priority_key_matching(|_| true)
+    fn thumbnail_can_be_queued(&mut self, key: &ThumbnailKey) -> bool {
+        !self.ready.contains_key(key)
+            && !self.inflight.contains_key(key)
+            && !self.failure_is_active(key)
     }
 
-    fn pop_highest_priority_preview_key(&mut self) -> Option<ThumbnailKey> {
-        self.pop_highest_priority_key_matching(|work| work.purpose == ThumbnailPurpose::Preview)
+    fn take_highest_priority_work(&mut self) -> Option<ThumbnailWork> {
+        self.take_highest_priority_work_matching(|_| true)
+    }
+
+    fn take_highest_priority_preview_work(&mut self) -> Option<ThumbnailWork> {
+        self.take_highest_priority_work_matching(|work| work.purpose == ThumbnailPurpose::Preview)
+    }
+
+    fn take_highest_priority_work_matching(
+        &mut self,
+        accepts_work: impl FnMut(&ThumbnailWork) -> bool,
+    ) -> Option<ThumbnailWork> {
+        let key = self.pop_highest_priority_key_matching(accepts_work)?;
+        self.start_thumbnail_work(key)
+    }
+
+    fn start_thumbnail_work(&mut self, key: ThumbnailKey) -> Option<ThumbnailWork> {
+        let work = self.queued.remove(&key)?;
+        self.inflight.insert(key, work.purpose);
+        Some(work)
     }
 
     fn pop_highest_priority_key_matching(

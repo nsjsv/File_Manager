@@ -476,7 +476,7 @@ fn active_child_for_column(
     None
 }
 
-fn selected_entry<'a>(browser: &'a FileBrowser) -> Option<&'a DirectoryEntry> {
+fn selected_entry(browser: &FileBrowser) -> Option<&DirectoryEntry> {
     let selected = browser.selected.as_deref()?;
     find_entry(&browser.entries, &browser.expanded_directories, selected)
 }

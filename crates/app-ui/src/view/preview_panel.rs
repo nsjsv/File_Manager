@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use iced::widget::{
@@ -227,7 +228,7 @@ fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message>
                 entry.toggle_rotation_progress * PREVIEW_TREE_TOGGLE_ROTATION_DEGREES,
                 PREVIEW_TREE_TOGGLE_WIDTH,
             )
-                .style(icon_tone_style(IconTone::Normal)),
+            .style(icon_tone_style(IconTone::Normal)),
         )
         .width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
         .height(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
@@ -375,12 +376,12 @@ fn image_preview_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) 
 }
 
 fn audio_preview_panel(
-    path: &std::path::PathBuf,
+    path: &Path,
     duration: Option<Duration>,
     len: u64,
     playback: Option<&AudioPreviewPlayback>,
 ) -> Column<'static, Message> {
-    let playback = playback.filter(|playback| playback.path.as_path() == path.as_path());
+    let playback = playback.filter(|playback| playback.path.as_path() == path);
     let title = column![
         readable_text("Audio preview").size(17),
         readable_text(audio_preview_summary(duration, len)).size(12),
@@ -525,7 +526,7 @@ fn audio_position_text(position: Duration, duration: Option<Duration>) -> String
 }
 
 fn video_preview_panel(
-    path: &std::path::PathBuf,
+    path: &Path,
     frame: Option<&image::Handle>,
     width: u32,
     height: u32,
@@ -533,7 +534,7 @@ fn video_preview_panel(
     playback: Option<&VideoPreviewPlayback>,
     size: PreviewSize,
 ) -> Element<'static, Message> {
-    let playback = playback.filter(|playback| playback.path.as_path() == path.as_path());
+    let playback = playback.filter(|playback| playback.path.as_path() == path);
     let (frame_width, frame_height) = video_frame_size(size, width, height);
     let frame_content: Element<'static, Message> = if let Some(frame) = frame {
         image::Image::new(frame.clone())

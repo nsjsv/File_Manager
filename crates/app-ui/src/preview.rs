@@ -586,7 +586,7 @@ fn archive_kind_rank(kind: FileKind) -> u8 {
 }
 
 fn archive_path_segments(path: &str) -> Vec<&str> {
-    path.split(|character| character == '/' || character == '\\')
+    path.split(['/', '\\'])
         .filter(|segment| !segment.is_empty() && *segment != ".")
         .collect()
 }

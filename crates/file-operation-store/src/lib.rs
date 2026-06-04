@@ -98,9 +98,9 @@ impl StoredPath {
     pub fn from_path(path: &Path) -> Self {
         #[cfg(unix)]
         {
-            return Self::UnixBytes {
+            Self::UnixBytes {
                 bytes: path.as_os_str().as_bytes().to_vec(),
-            };
+            }
         }
 
         #[cfg(windows)]

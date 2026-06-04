@@ -26,8 +26,8 @@ use crate::appearance::{
     selected_sidebar_item_style, warning_icon_svg_style,
 };
 use crate::floating_surface::{
-    dismissable_floating_surface, floating_surface, pass_through_dismissable_floating_surface,
-    FloatingContent, FloatingPlacement,
+    dismissable_blocking_floating_surface, floating_surface, modal_floating_surface,
+    pass_through_dismissable_floating_surface, FloatingContent, FloatingPlacement,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
@@ -42,8 +42,8 @@ use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
 use floating_panels::{
-    column_settings_panel, context_menu_panel, error_notification_panel, sidebar_view,
-    transfer_conflict_panel,
+    column_settings_panel, context_menu_panel, destructive_action_confirmation_panel,
+    error_notification_panel, sidebar_view, transfer_conflict_panel,
 };
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
@@ -60,9 +60,26 @@ const DRAG_PREVIEW_OFFSET_X: f32 = 14.0;
 const DRAG_PREVIEW_OFFSET_Y: f32 = 14.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BrowserFloatingDismissal {
-    Capture,
-    PassThrough,
+enum BrowserFloatingInput {
+    Plain,
+    Modal,
+    DismissibleBlocking,
+    DismissiblePassThrough,
+}
+
+impl BrowserFloatingInput {
+    fn with_additional_panel(self, next: Self) -> Self {
+        match (self, next) {
+            (Self::Modal, _) | (_, Self::Modal) => Self::Modal,
+            (Self::DismissibleBlocking, _) | (_, Self::DismissibleBlocking) => {
+                Self::DismissibleBlocking
+            }
+            (Self::DismissiblePassThrough, _) | (_, Self::DismissiblePassThrough) => {
+                Self::DismissiblePassThrough
+            }
+            (Self::Plain, Self::Plain) => Self::Plain,
+        }
+    }
 }
 
 pub(crate) fn rename_input_id() -> text_input::Id {
@@ -118,8 +135,15 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     .height(Length::Fill);
 
     let mut floating = Vec::new();
-    let mut floating_dismissal = None;
-    if let Some(conflict) = &browser.transfer_conflict {
+    let mut floating_input = BrowserFloatingInput::Plain;
+    if let Some(confirmation) = &browser.destructive_action_confirmation {
+        floating_input = BrowserFloatingInput::Modal;
+        floating.push(FloatingContent {
+            element: destructive_action_confirmation_panel(confirmation),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(conflict) = &browser.transfer_conflict {
+        floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: transfer_conflict_panel(conflict),
             placement: FloatingPlacement::Center,
@@ -132,13 +156,13 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
         });
     } else if let Some(context_menu) = &browser.context_menu {
-        floating_dismissal = Some(BrowserFloatingDismissal::Capture);
+        floating_input = BrowserFloatingInput::DismissibleBlocking;
         floating.push(FloatingContent {
             element: context_menu_panel(context_menu, browser.is_trash_view),
             placement: FloatingPlacement::At(context_menu.position),
         });
     } else if browser.is_column_view_settings_open {
-        floating_dismissal = Some(BrowserFloatingDismissal::Capture);
+        floating_input = BrowserFloatingInput::DismissibleBlocking;
         floating.push(FloatingContent {
             element: column_settings_panel(browser),
             placement: FloatingPlacement::Center,
@@ -157,13 +181,10 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
 
     if browser.operation_queue.is_panel_open() {
         let queue_dismissal = match browser.operation_queue_panel_mode {
-            OperationQueuePanelMode::PassivePreview => BrowserFloatingDismissal::PassThrough,
-            OperationQueuePanelMode::InteractiveList => BrowserFloatingDismissal::Capture,
+            OperationQueuePanelMode::PassivePreview => BrowserFloatingInput::DismissiblePassThrough,
+            OperationQueuePanelMode::InteractiveList => BrowserFloatingInput::DismissibleBlocking,
         };
-        floating_dismissal = Some(match floating_dismissal {
-            Some(BrowserFloatingDismissal::Capture) => BrowserFloatingDismissal::Capture,
-            _ => queue_dismissal,
-        });
+        floating_input = floating_input.with_additional_panel(queue_dismissal);
         floating.push(FloatingContent {
             element: operation_queue_panel(&browser.operation_queue, browser.scrollbar_visibility),
             placement: FloatingPlacement::BottomLeft {
@@ -184,14 +205,15 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    match floating_dismissal {
-        Some(BrowserFloatingDismissal::Capture) => {
-            dismissable_floating_surface(content, floating, Message::DismissFloating)
+    match floating_input {
+        BrowserFloatingInput::Plain => floating_surface(content, floating),
+        BrowserFloatingInput::Modal => modal_floating_surface(content, floating),
+        BrowserFloatingInput::DismissibleBlocking => {
+            dismissable_blocking_floating_surface(content, floating, Message::DismissFloating)
         }
-        Some(BrowserFloatingDismissal::PassThrough) => {
+        BrowserFloatingInput::DismissiblePassThrough => {
             pass_through_dismissable_floating_surface(content, floating, Message::DismissFloating)
         }
-        None => floating_surface(content, floating),
     }
 }
 
@@ -230,7 +252,7 @@ fn drag_preview_item(browser: &FileBrowser, path: &Path) -> (IconSymbol, IconTon
         return drag_preview_entry_item(entry);
     }
 
-    let name = path.file_name().unwrap_or_else(|| path.as_os_str());
+    let name = path.file_name().unwrap_or(path.as_os_str());
     (
         file_entry_icon_symbol(FileKind::Other, name),
         IconTone::Normal,
@@ -386,7 +408,7 @@ fn path_suggestions_panel(browser: &FileBrowser) -> Element<'_, Message> {
         .into()
 }
 
-fn path_suggestion_row(path: &std::path::PathBuf, is_selected: bool) -> Element<'_, Message> {
+fn path_suggestion_row(path: &Path, is_selected: bool) -> Element<'_, Message> {
     let label = path.to_string_lossy();
     let label = format_middle_ellipsized_text(label.as_ref(), PATH_SUGGESTION_MAX_CHARS);
     let item = container(readable_text(label).size(13).width(Length::Fill))
@@ -399,7 +421,7 @@ fn path_suggestion_row(path: &std::path::PathBuf, is_selected: bool) -> Element<
     };
 
     mouse_area(item)
-        .on_press(Message::PathSuggestionSelected(path.clone()))
+        .on_press(Message::PathSuggestionSelected(path.to_path_buf()))
         .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }

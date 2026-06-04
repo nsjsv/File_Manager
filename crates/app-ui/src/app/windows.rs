@@ -387,6 +387,11 @@ impl FileBrowser {
     }
 
     pub(super) fn dismiss_floating(&mut self) -> Command<Message> {
+        if self.destructive_action_confirmation.is_some() {
+            self.destructive_action_confirmation = None;
+            return Command::none();
+        }
+
         if self.transfer_conflict.is_some() {
             self.transfer_conflict = None;
             return Command::none();

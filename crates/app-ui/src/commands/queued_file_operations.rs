@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use file_core::{
-    copy_path_with_controls_and_strategy_target, create_directory, create_empty_file,
-    delete_trash_entry, empty_trash, move_path_with_controls_and_strategy_target, rename_path,
-    restore_trash_entry, trash_path_with_restore_entry, CopyProgress, FileOperationControls,
-    TransferConflictStrategy, TrashRestoreEntry,
+    copy_path_with_options, create_directory, create_empty_file, delete_trash_entry, empty_trash,
+    move_path_with_options, rename_path, restore_trash_entry, trash_path_with_restore_entry,
+    CopyProgress, FileOperationControls, FileTransferOptions, TransferConflictStrategy,
+    TrashRestoreEntry,
 };
 use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::SinkExt;
@@ -358,26 +358,15 @@ async fn run_queued_transfer(
     let source = transfer.source.clone();
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
     let transfer = async move {
+        let transfer_options = FileTransferOptions::new(controls)
+            .with_progress_sender(progress_sender)
+            .with_conflict_strategy(transfer.conflict_strategy);
         match mode {
             QueuedTransferMode::Copy => {
-                copy_path_with_controls_and_strategy_target(
-                    transfer.source,
-                    transfer.target,
-                    controls,
-                    Some(progress_sender),
-                    transfer.conflict_strategy,
-                )
-                .await
+                copy_path_with_options(transfer.source, transfer.target, transfer_options).await
             }
             QueuedTransferMode::Move => {
-                move_path_with_controls_and_strategy_target(
-                    transfer.source,
-                    transfer.target,
-                    controls,
-                    Some(progress_sender),
-                    transfer.conflict_strategy,
-                )
-                .await
+                move_path_with_options(transfer.source, transfer.target, transfer_options).await
             }
         }
     };

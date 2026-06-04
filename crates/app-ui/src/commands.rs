@@ -377,8 +377,10 @@ async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
 async fn load_initial_state() -> InitialLoad {
     startup_trace::mark_once("initial_load_started");
     let (home, user_config, state_database_path) = initial_paths().await;
-    let mut options = ScanOptions::default();
-    options.include_hidden = user_config.show_hidden_files;
+    let options = ScanOptions {
+        include_hidden: user_config.show_hidden_files,
+        ..ScanOptions::default()
+    };
     let scan = load_directory(home.clone(), options);
     let sidebar_locations = load_sidebar_locations(home.clone());
     let operation_store = load_operation_store(state_database_path);

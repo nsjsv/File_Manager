@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 use desktop_linux::{DesktopClipboardContent, TerminalEmulator};
 use file_core::{
     DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexOutcome, FileSearchMatch,
-    FileSearchOutcome, TrashEntry, TrashScan,
+    FileSearchOutcome, TrashEntry, TrashRestoreEntry, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
 use iced::keyboard;
@@ -72,6 +72,8 @@ pub(crate) enum Message {
     KeyboardModifiersChanged(keyboard::Modifiers),
     DragSelectionFinished,
     DismissFloating,
+    DestructiveActionConfirmed,
+    DestructiveActionCanceled,
     AuxiliaryWindowCloseRequested(window::Id),
     AuxiliaryWindowResized(window::Id, u32, u32),
     WindowFocused(window::Id),
@@ -167,6 +169,12 @@ pub(crate) enum Message {
 pub(crate) enum PendingOperation {
     Copy(Vec<PathBuf>),
     Move(Vec<PathBuf>),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DestructiveActionConfirmation {
+    DeleteTrashEntries { entries: Vec<TrashRestoreEntry> },
+    EmptyTrash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

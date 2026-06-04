@@ -141,8 +141,10 @@ pub async fn scan_trash(options: ScanOptions) -> Result<TrashScan, FileError> {
 pub async fn restore_entries_for_original_path(
     original_path: &Path,
 ) -> Result<Vec<TrashRestoreEntry>, FileError> {
-    let mut options = ScanOptions::default();
-    options.include_hidden = true;
+    let options = ScanOptions {
+        include_hidden: true,
+        ..ScanOptions::default()
+    };
     let scan = scan_trash(options).await?;
     Ok(scan
         .entries

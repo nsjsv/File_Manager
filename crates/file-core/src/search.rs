@@ -55,17 +55,9 @@ pub struct FileSearchOutcome {
     pub skipped: Vec<ScanWarning>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileSearchIndexOptions {
     pub include_hidden: bool,
-}
-
-impl Default for FileSearchIndexOptions {
-    fn default() -> Self {
-        Self {
-            include_hidden: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,7 +332,7 @@ fn tantivy_boosts_for_index(
         .reader()
         .map_err(|error| search_index_error(root, error))?;
     let searcher = reader.searcher();
-    let query_parser = QueryParser::for_index(&index, vec![fields.name, fields.path]);
+    let query_parser = QueryParser::for_index(index, vec![fields.name, fields.path]);
     let (tantivy_query, _) = query_parser.parse_query_lenient(query);
     let top_docs = searcher
         .search(
@@ -767,7 +759,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
 

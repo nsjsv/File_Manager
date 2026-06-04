@@ -14,13 +14,10 @@ pub use media::{
     supported_media_kind_for_path, SupportedMediaKind,
 };
 pub use ops::{
-    copy_path, copy_path_with_conflict_strategy, copy_path_with_controls,
-    copy_path_with_controls_and_strategy, copy_path_with_controls_and_strategy_target,
-    create_directory, create_empty_file, create_file_with_contents, move_path,
-    move_path_with_conflict_strategy, move_path_with_controls,
-    move_path_with_controls_and_strategy, move_path_with_controls_and_strategy_target, rename_path,
-    trash_path, trash_path_with_restore_entry, CopyProgress, FileOperationControls,
-    FileOperationRunState, ProgressSender, TransferConflictStrategy,
+    copy_path, copy_path_with_options, create_directory, create_empty_file,
+    create_file_with_contents, move_path, move_path_with_options, rename_path, trash_path,
+    trash_path_with_restore_entry, CopyProgress, FileOperationControls, FileOperationRunState,
+    FileTransferOptions, ProgressSender, TransferConflictStrategy,
 };
 pub use scan::{scan_directory, DirectoryScan, FileError, ScanOptions, ScanWarning};
 pub use search::{

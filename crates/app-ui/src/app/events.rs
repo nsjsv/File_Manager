@@ -93,7 +93,7 @@ fn pointer_pressed_message(event: &Event, status: event::Status) -> Option<Messa
     match button {
         mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle => {
             Some(Message::WindowPointerPressed {
-                button: button.clone(),
+                button: *button,
                 status,
             })
         }

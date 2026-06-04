@@ -97,12 +97,9 @@ impl FileBrowser {
         request: SearchRequest,
         search: Result<FileSearchOutcome, String>,
     ) -> Command<Message> {
-        let Some(state) = &mut self.search else {
+        let Some(state) = self.active_search_mut_for_request(&request) else {
             return Command::none();
         };
-        if state.request() != request {
-            return Command::none();
-        }
 
         state.is_loading = false;
         match search {
@@ -132,13 +129,11 @@ impl FileBrowser {
         match outcome {
             Ok(outcome) => {
                 self.search_index.errors.remove(&root);
-                if self.search.as_ref().map(|search| &search.root) == Some(&root) {
-                    if let Some(search) = &mut self.search {
-                        search.is_indexing = false;
-                        search.index_error = None;
-                        if search.matches.is_empty() {
-                            search.skipped_count = outcome.skipped.len();
-                        }
+                if let Some(search) = self.active_search_mut_for_root(&root) {
+                    search.is_indexing = false;
+                    search.index_error = None;
+                    if search.matches.is_empty() {
+                        search.skipped_count = outcome.skipped.len();
                     }
                     return self.load_search_matches();
                 }
@@ -148,12 +143,10 @@ impl FileBrowser {
                 self.search_index
                     .errors
                     .insert(root.clone(), message.clone());
-                if self.search.as_ref().map(|search| &search.root) == Some(&root) {
-                    if let Some(search) = &mut self.search {
-                        search.is_loading = false;
-                        search.is_indexing = false;
-                        search.index_error = Some(message);
-                    }
+                if let Some(search) = self.active_search_mut_for_root(&root) {
+                    search.is_loading = false;
+                    search.is_indexing = false;
+                    search.index_error = Some(message);
                 }
             }
         }
@@ -252,46 +245,28 @@ impl FileBrowser {
     }
 
     fn load_search_matches(&mut self) -> Command<Message> {
-        let Some(request) = self.search.as_ref().map(SearchState::request) else {
+        let Some(request) = self.active_search_request() else {
             return Command::none();
         };
         if request.query.trim().is_empty() {
-            let Some(search) = &mut self.search else {
-                return Command::none();
-            };
-            search.is_loading = false;
-            search.matches.clear();
-            search.selected_match = None;
-            search.skipped_count = 0;
-            search.error = None;
+            self.clear_active_search_results();
             return Command::none();
         }
 
         let root = request.root.clone();
         let index_dir = self.search_index_dir_for_root(&root);
-        let is_indexing = self.search_index.indexing_roots.contains(&root);
-        let index_error = self.search_index.errors.get(&root).cloned();
-        if let Some(search) = &mut self.search {
-            search.is_indexing = is_indexing;
-            search.index_error = index_error;
-        }
+        self.sync_active_search_index_status_for_root(&root);
 
         if !file_search_index_exists(&index_dir) {
             let index_command = self.ensure_search_index(root);
-            if let Some(search) = &mut self.search {
-                search.is_loading = true;
-                search.error = None;
-            }
+            self.mark_active_search_loading();
             return Command::batch([
                 index_command,
                 search_tree_command(request, self.options.clone()),
             ]);
         }
 
-        if let Some(search) = &mut self.search {
-            search.is_loading = true;
-            search.error = None;
-        }
+        self.mark_active_search_loading();
         search_command(request, self.options.clone(), index_dir)
     }
 
@@ -327,9 +302,49 @@ impl FileBrowser {
         let Some(root) = self.search.as_ref().map(|search| search.root.clone()) else {
             return;
         };
-        let is_indexing = self.search_index.indexing_roots.contains(&root);
-        let index_error = self.search_index.errors.get(&root).cloned();
+        self.sync_active_search_index_status_for_root(&root);
+    }
+
+    fn active_search_request(&self) -> Option<SearchRequest> {
+        self.search.as_ref().map(SearchState::request)
+    }
+
+    fn active_search_mut_for_request(
+        &mut self,
+        request: &SearchRequest,
+    ) -> Option<&mut SearchState> {
+        self.search
+            .as_mut()
+            .filter(|search| search.request() == *request)
+    }
+
+    fn active_search_mut_for_root(&mut self, root: &Path) -> Option<&mut SearchState> {
+        self.search
+            .as_mut()
+            .filter(|search| search.root.as_path() == root)
+    }
+
+    fn clear_active_search_results(&mut self) {
         if let Some(search) = &mut self.search {
+            search.is_loading = false;
+            search.matches.clear();
+            search.selected_match = None;
+            search.skipped_count = 0;
+            search.error = None;
+        }
+    }
+
+    fn mark_active_search_loading(&mut self) {
+        if let Some(search) = &mut self.search {
+            search.is_loading = true;
+            search.error = None;
+        }
+    }
+
+    fn sync_active_search_index_status_for_root(&mut self, root: &Path) {
+        let is_indexing = self.search_index.indexing_roots.contains(root);
+        let index_error = self.search_index.errors.get(root).cloned();
+        if let Some(search) = self.active_search_mut_for_root(root) {
             search.is_indexing = is_indexing;
             search.index_error = index_error;
         }
