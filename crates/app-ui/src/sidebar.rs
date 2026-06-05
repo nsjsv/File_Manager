@@ -1,7 +1,8 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::model::SidebarLocation;
+use crate::model::{SidebarLocation, SidebarLocationKind};
 
 pub(crate) const SIDEBAR_WIDTH: f32 = 180.0;
 
@@ -9,31 +10,79 @@ pub(crate) fn home_sidebar_location(home: &Path) -> SidebarLocation {
     SidebarLocation {
         label: "Home".to_owned(),
         path: home.to_path_buf(),
+        kind: SidebarLocationKind::Home,
     }
 }
 
 pub(crate) fn sidebar_locations(home: &Path) -> Vec<SidebarLocation> {
     let mut locations = vec![home_sidebar_location(home)];
 
-    for label in [
-        "Desktop",
-        "Documents",
-        "Downloads",
-        "Pictures",
-        "Music",
-        "Videos",
-    ] {
-        let path = home.join(label);
+    for (label, kind, path) in default_user_directory_locations(home) {
         if path.is_dir() {
-            push_sidebar_location(&mut locations, label, path);
+            push_sidebar_location(&mut locations, label, path, kind);
         }
     }
 
     for location in gtk_bookmark_locations(home) {
-        push_sidebar_location(&mut locations, &location.label, location.path);
+        push_sidebar_location(
+            &mut locations,
+            &location.label,
+            location.path,
+            SidebarLocationKind::Bookmark,
+        );
     }
 
     locations
+}
+
+pub(crate) fn save_gtk_bookmark_locations(
+    home: &Path,
+    locations: &[SidebarLocation],
+) -> io::Result<()> {
+    let content = gtk_bookmarks_content(locations);
+    for version in ["gtk-3.0", "gtk-4.0"] {
+        let directory = home.join(".config").join(version);
+        fs::create_dir_all(&directory)?;
+        fs::write(directory.join("bookmarks"), &content)?;
+    }
+    Ok(())
+}
+
+fn default_user_directory_locations(
+    home: &Path,
+) -> [(&'static str, SidebarLocationKind, PathBuf); 6] {
+    [
+        (
+            "Desktop",
+            SidebarLocationKind::Desktop,
+            dirs::desktop_dir().unwrap_or_else(|| home.join("Desktop")),
+        ),
+        (
+            "Documents",
+            SidebarLocationKind::Documents,
+            dirs::document_dir().unwrap_or_else(|| home.join("Documents")),
+        ),
+        (
+            "Downloads",
+            SidebarLocationKind::Downloads,
+            dirs::download_dir().unwrap_or_else(|| home.join("Downloads")),
+        ),
+        (
+            "Pictures",
+            SidebarLocationKind::Pictures,
+            dirs::picture_dir().unwrap_or_else(|| home.join("Pictures")),
+        ),
+        (
+            "Music",
+            SidebarLocationKind::Music,
+            dirs::audio_dir().unwrap_or_else(|| home.join("Music")),
+        ),
+        (
+            "Videos",
+            SidebarLocationKind::Videos,
+            dirs::video_dir().unwrap_or_else(|| home.join("Videos")),
+        ),
+    ]
 }
 
 fn gtk_bookmark_locations(home: &Path) -> Vec<SidebarLocation> {
@@ -51,7 +100,12 @@ fn gtk_bookmark_locations(home: &Path) -> Vec<SidebarLocation> {
             .filter(|line| !line.is_empty())
         {
             if let Some(location) = parse_gtk_bookmark(line) {
-                push_sidebar_location(&mut locations, &location.label, location.path);
+                push_sidebar_location(
+                    &mut locations,
+                    &location.label,
+                    location.path,
+                    SidebarLocationKind::Bookmark,
+                );
             }
         }
     }
@@ -78,7 +132,49 @@ fn parse_gtk_bookmark(line: &str) -> Option<SidebarLocation> {
         })
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
 
-    Some(SidebarLocation { label, path })
+    Some(SidebarLocation {
+        label,
+        path,
+        kind: SidebarLocationKind::Bookmark,
+    })
+}
+
+fn gtk_bookmarks_content(locations: &[SidebarLocation]) -> String {
+    let mut content = locations
+        .iter()
+        .map(gtk_bookmark_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    content
+}
+
+fn gtk_bookmark_line(location: &SidebarLocation) -> String {
+    let uri = format!(
+        "file://{}",
+        percent_encode_path(&location.path.to_string_lossy())
+    );
+    let label = location.label.replace(['\n', '\r'], " ");
+    if label.trim().is_empty() {
+        uri
+    } else {
+        format!("{uri} {label}")
+    }
+}
+
+fn percent_encode_path(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                output.push(*byte as char)
+            }
+            _ => output.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    output
 }
 
 fn percent_decode(value: &str) -> String {
@@ -113,11 +209,54 @@ fn hex_value(value: u8) -> Option<u8> {
     }
 }
 
-fn push_sidebar_location(locations: &mut Vec<SidebarLocation>, label: &str, path: PathBuf) {
+fn push_sidebar_location(
+    locations: &mut Vec<SidebarLocation>,
+    label: &str,
+    path: PathBuf,
+    kind: SidebarLocationKind,
+) {
     if !locations.iter().any(|location| location.path == path) {
         locations.push(SidebarLocation {
             label: label.to_owned(),
             path,
+            kind,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_gtk_bookmark_label_and_encoded_path() {
+        let bookmark = parse_gtk_bookmark("file:///home/user/My%20Folder Project Folder").unwrap();
+
+        assert_eq!(bookmark.path, PathBuf::from("/home/user/My Folder"));
+        assert_eq!(bookmark.label, "Project Folder");
+        assert_eq!(bookmark.kind, SidebarLocationKind::Bookmark);
+    }
+
+    #[test]
+    fn writes_gtk_bookmarks_to_both_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let bookmarks = vec![SidebarLocation {
+            label: "Project Folder".to_owned(),
+            path: PathBuf::from("/home/user/My Folder"),
+            kind: SidebarLocationKind::Bookmark,
+        }];
+
+        save_gtk_bookmark_locations(home, &bookmarks).unwrap();
+
+        let expected = "file:///home/user/My%20Folder Project Folder\n";
+        assert_eq!(
+            fs::read_to_string(home.join(".config/gtk-3.0/bookmarks")).unwrap(),
+            expected
+        );
+        assert_eq!(
+            fs::read_to_string(home.join(".config/gtk-4.0/bookmarks")).unwrap(),
+            expected
+        );
     }
 }

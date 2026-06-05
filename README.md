@@ -48,6 +48,16 @@ File Manager 是一个面向 Linux 桌面的文件管理器。
 - 视频预览和视频缩略图建议安装 `ffmpeg` 和 `ffprobe`，视频缩略图也可以使用 `ffmpegthumbnailer`
 - `.7z` 和 `.rar` 压缩包预览需要安装 `7z`、`7zz` 或 `7za`
 
+## 安装
+
+Arch Linux 用户可以从 AUR 安装预编译包：
+
+```bash
+yay -S file-manager-bin
+# 或
+paru -S file-manager-bin
+```
+
 ## 编译运行
 
 需要先安装 Rust 工具链。
@@ -90,6 +100,28 @@ Exec=file-manager
 Categories=System;FileManager;
 Terminal=false
 ```
+
+## 维护者发布
+
+发布新版本时：
+
+1. 更新 Cargo 工作区版本，确保 `app-ui` 包版本等于准备发布的 `X.Y.Z`。
+2. 推送形如 `vX.Y.Z` 的 tag，例如 `git tag vX.Y.Z && git push origin vX.Y.Z`。
+3. 在 GitHub 仓库配置 AUR 发布所需 Secrets：
+   - `AUR_SSH_PRIVATE_KEY`：可推送 `file-manager-bin` AUR 仓库的 SSH 私钥。
+   - `AUR_KNOWN_HOSTS`：AUR SSH 主机的 known_hosts 记录。
+   - `AUR_COMMIT_NAME`、`AUR_COMMIT_EMAIL`：可选，缺省使用 `github-actions[bot]`。
+4. release workflow 会先构建并发布 GitHub Release tarball，然后仅在 tag push 事件中渲染 `PKGBUILD`、生成 `.SRCINFO` 并推送到 AUR。
+
+`AUR_SSH_PRIVATE_KEY` 对应的公钥需要添加到 AUR 账户，并且该私钥应能在 CI 中非交互使用。`AUR_KNOWN_HOSTS` 可以用下面的命令生成，写入前请按 AUR 官方信息核对 fingerprint：
+
+```bash
+ssh-keyscan aur.archlinux.org
+```
+
+发 tag 前请确认 release workflow、`packaging/aur/file-manager-bin/PKGBUILD.in` 和 `packaging/linux/file-manager.desktop` 都已经提交到 tag 指向的 commit。
+
+手动触发 release workflow 只发布 GitHub Release，不会更新 AUR。
 
 ## 平台说明
 

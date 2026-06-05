@@ -6,22 +6,20 @@ use file_core::{is_supported_audio_path, is_supported_video_path, DirectoryEntry
 use iced::Command;
 
 use super::paths::{self, PasteTargetMode};
-use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
+use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
 use crate::commands::{
     image_preview_dimensions_command, load_expanded_directory_command, open_file_command,
     open_terminal_command, preview_command, start_audio_preview_command,
 };
 use crate::model::{
     trash_location_path, AudioPreviewPlayback, ContextMenuState, ExpandedDirectory,
-    ExpandedDirectoryStatus, FileDragPhase, FileDragState, LastClick, Message, NavigationMode,
-    PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictMode,
+    ExpandedDirectoryStatus, FileDragPhase, FileDragState, FileDragTarget, LastClick, Message,
+    NavigationMode, PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 
 mod clipboard;
 mod conflict;
-
-const FILE_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 
 impl FileBrowser {
     pub(crate) fn is_path_selected(&self, path: &Path) -> bool {
@@ -252,7 +250,7 @@ impl FileBrowser {
         let delta_x = position.x - origin.x;
         let delta_y = position.y - origin.y;
         if delta_x * delta_x + delta_y * delta_y
-            >= FILE_DRAG_ACTIVATION_DISTANCE * FILE_DRAG_ACTIVATION_DISTANCE
+            >= POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE
         {
             file_drag.phase = FileDragPhase::Dragging;
         }
@@ -261,6 +259,7 @@ impl FileBrowser {
     pub(super) fn finish_drag_selection(&mut self) -> Command<Message> {
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
+        self.sidebar_bookmark_drop_slot = None;
         let Some(file_drag) = self.file_drag.take() else {
             return Command::none();
         };
@@ -269,14 +268,22 @@ impl FileBrowser {
             return Command::none();
         }
 
-        let Some(target_directory) = file_drag.target_directory else {
+        let Some(target) = file_drag.target else {
             return Command::none();
         };
 
-        self.move_dragged_files(file_drag.sources, target_directory)
+        match target {
+            FileDragTarget::Directory(target_directory) => {
+                self.move_dragged_files(file_drag.sources, target_directory)
+            }
+            FileDragTarget::SidebarBookmarkSlot(slot) => {
+                self.add_dragged_sidebar_bookmark(slot, file_drag.sources)
+            }
+        }
     }
 
     fn start_file_drag(&mut self, column_directories_snapshot: Vec<PathBuf>) {
+        self.sidebar_bookmark_drop_slot = None;
         if self.is_trash_view {
             self.file_drag = None;
             return;
@@ -285,7 +292,7 @@ impl FileBrowser {
         let sources = self.selected_paths_for_operation();
         self.file_drag = (!sources.is_empty()).then_some(FileDragState {
             sources,
-            target_directory: None,
+            target: None,
             phase: FileDragPhase::WaitingForMovement {
                 origin: self.cursor_position,
             },
@@ -295,20 +302,21 @@ impl FileBrowser {
 
     fn set_file_drag_target(&mut self, directory: PathBuf) {
         if let Some(file_drag) = &mut self.file_drag {
-            file_drag.target_directory = Some(directory);
+            file_drag.target = Some(FileDragTarget::Directory(directory));
         }
     }
 
     fn clear_file_drag_target(&mut self) {
         if let Some(file_drag) = &mut self.file_drag {
-            file_drag.target_directory = None;
+            file_drag.target = None;
         }
     }
 
     fn clear_file_drag_target_if_matching(&mut self, directory: &Path) {
         if let Some(file_drag) = &mut self.file_drag {
-            if file_drag.target_directory.as_deref() == Some(directory) {
-                file_drag.target_directory = None;
+            if matches!(file_drag.target.as_ref(), Some(FileDragTarget::Directory(target)) if target == directory)
+            {
+                file_drag.target = None;
             }
         }
     }
@@ -484,7 +492,7 @@ impl FileBrowser {
         ])
     }
 
-    fn entry_kind(&self, path: &Path) -> Option<FileKind> {
+    pub(super) fn entry_kind(&self, path: &Path) -> Option<FileKind> {
         self.entry_kind_recursive(path)
     }
 
@@ -648,7 +656,7 @@ mod tests {
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
     use iced::multi_window::Application;
 
-    use crate::app::FileBrowser;
+    use crate::{app::FileBrowser, config};
 
     fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
         DirectoryEntry::new(
@@ -667,7 +675,7 @@ mod tests {
 
     #[test]
     fn right_clicking_directory_selects_menu_target_without_focusing_it() {
-        let (mut browser, _) = <FileBrowser as Application>::new(());
+        let (mut browser, _) = <FileBrowser as Application>::new(config::default_user_config());
         let current_dir = PathBuf::from("/workspace");
         let directory = current_dir.join("project");
         browser.current_dir = current_dir.clone();

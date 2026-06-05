@@ -196,6 +196,78 @@ async fn move_conflict_keep_both_moves_to_alternate_path() {
 }
 
 #[tokio::test]
+async fn transfer_conflict_check_ignores_missing_target() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.txt");
+    let target = dir.path().join("target.txt");
+    fs::write(&source, b"source").unwrap();
+
+    let conflicts =
+        check_transfer_conflicts(vec![TransferConflictCheck::new(source, target)]).await;
+
+    assert!(conflicts.is_empty());
+}
+
+#[tokio::test]
+async fn transfer_conflict_check_detects_file_conflict() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.txt");
+    let target = dir.path().join("target.txt");
+    fs::write(&source, b"new bytes").unwrap();
+    fs::write(&target, b"old").unwrap();
+
+    let conflicts = check_transfer_conflicts(vec![TransferConflictCheck::new(
+        source.clone(),
+        target.clone(),
+    )])
+    .await;
+
+    assert_eq!(conflicts.len(), 1);
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.source, source);
+    assert_eq!(conflict.target, target);
+    assert!(!conflict.can_merge());
+    assert!(!conflict.source_metadata.is_directory);
+    assert!(!conflict.target_metadata.is_directory);
+    assert_eq!(conflict.source_metadata.len, 9);
+    assert_eq!(conflict.target_metadata.len, 3);
+}
+
+#[tokio::test]
+async fn transfer_conflict_check_marks_directories_mergeable() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&target).unwrap();
+
+    let conflicts =
+        check_transfer_conflicts(vec![TransferConflictCheck::new(source, target)]).await;
+
+    assert_eq!(conflicts.len(), 1);
+    assert!(conflicts[0].can_merge());
+    assert!(conflicts[0].source_metadata.is_directory);
+    assert!(conflicts[0].target_metadata.is_directory);
+}
+
+#[tokio::test]
+async fn transfer_target_availability_and_candidate_use_copy_suffix() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("target.txt");
+    let copy1 = dir.path().join("target.txt.copy1");
+    let copy2 = dir.path().join("target.txt.copy2");
+    fs::write(&target, b"old").unwrap();
+    fs::write(&copy1, b"old copy").unwrap();
+
+    assert!(!is_transfer_target_available(&target).await.unwrap());
+    assert!(is_transfer_target_available(&copy2).await.unwrap());
+    assert_eq!(
+        available_transfer_target_path(&target).await.unwrap(),
+        copy2
+    );
+}
+
+#[tokio::test]
 async fn move_conflict_merge_directory_moves_missing_children() {
     let dir = tempdir().unwrap();
     let source = dir.path().join("source");

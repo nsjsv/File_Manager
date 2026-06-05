@@ -5,10 +5,12 @@ mod file_operations;
 mod navigation;
 mod paths;
 mod preview_state;
+mod rendering_settings;
 mod runtime;
 mod scrollbar;
 mod search;
 mod selection;
+mod sidebar_bookmarks;
 mod startup;
 mod tabs;
 mod text_input_shortcuts;
@@ -34,15 +36,19 @@ use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command, system_theme_command,
 };
 use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
-use crate::app::windows::{default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_WIDTH};
+use crate::app::windows::{
+    default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
+    MAIN_WINDOW_INITIAL_WIDTH,
+};
 use crate::commands::{file_operation_subscription, initial_load_command};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState,
     DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message, NavigationMode,
     OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
-    ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee, SidebarLocation,
-    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TextPreviewDocument,
+    TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -52,14 +58,26 @@ use crate::video_preview::video_preview_subscription;
 use crate::view::{rename_input_id, view_browser, view_preview_window, view_search_window};
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
+const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
 
 pub(crate) fn run() -> iced::Result {
+    let user_config = config::load_user_config();
+    let iced_backend = user_config
+        .rendering_backend_preference
+        .iced_backend_candidates();
+    std::env::set_var("ICED_BACKEND", iced_backend);
+    if let Some(power_preference) = user_config
+        .rendering_backend_preference
+        .wgpu_power_preference()
+    {
+        std::env::set_var("WGPU_POWER_PREF", power_preference);
+    }
     FileBrowser::run(Settings {
         window: main_window_settings(),
-        ..Settings::default()
+        ..Settings::with_flags(user_config)
     })
 }
 
@@ -87,6 +105,8 @@ pub(crate) struct FileBrowser {
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
+    pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
+    pub(crate) sidebar_bookmark_drag: Option<SidebarBookmarkDragState>,
     pub(crate) renaming: Option<PathBuf>,
     pending_created_entry_rename: Option<PathBuf>,
     pub(crate) pending_operation: Option<PendingOperation>,
@@ -102,9 +122,12 @@ pub(crate) struct FileBrowser {
     pub(crate) file_drag: Option<FileDragState>,
     pub(crate) options: ScanOptions,
     user_config: config::UserConfig,
+    pub(crate) rendering_backend_preference: config::RenderingBackendPreference,
+    pub(crate) renderer_restart_notice_visible: bool,
     pub(crate) path_input: String,
     pub(crate) path_suggestions: Vec<PathBuf>,
     pub(crate) path_suggestion_selection: Option<usize>,
+    path_suggestion_generation: u64,
     pub(crate) column_view_mode: ColumnViewMode,
     pub(crate) column_fixed_count: usize,
     pub(crate) unbounded_column_width: f32,
@@ -116,6 +139,7 @@ pub(crate) struct FileBrowser {
     pub(crate) error: Option<String>,
     pub(crate) cursor_position: Point,
     pub(crate) main_window_width: f32,
+    pub(crate) main_window_height: f32,
     is_cursor_over_column_browser: bool,
     keyboard_modifiers: keyboard::Modifiers,
     selection_anchor: Option<PathBuf>,
@@ -139,15 +163,14 @@ pub(crate) struct FileBrowser {
 
 impl Application for FileBrowser {
     type Executor = executor::Default;
-    type Flags = ();
+    type Flags = config::UserConfig;
     type Message = Message;
     type Theme = Theme;
 
-    fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
+    fn new(user_config: Self::Flags) -> (Self, Command<Self::Message>) {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
-        let user_config = config::default_user_config();
         let browser = Self {
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
@@ -172,6 +195,8 @@ impl Application for FileBrowser {
             column_viewports: HashMap::new(),
             context_menu: None,
             sidebar_locations: Vec::new(),
+            sidebar_bookmark_drop_slot: None,
+            sidebar_bookmark_drag: None,
             renaming: None,
             pending_created_entry_rename: None,
             pending_operation: None,
@@ -199,9 +224,12 @@ impl Application for FileBrowser {
             file_drag: None,
             options: options.clone(),
             user_config: user_config.clone(),
+            rendering_backend_preference: user_config.rendering_backend_preference,
+            renderer_restart_notice_visible: false,
             path_input: String::new(),
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
+            path_suggestion_generation: 0,
             column_view_mode: user_config.column_view_mode,
             column_fixed_count: user_config.column_fixed_count,
             unbounded_column_width: user_config.unbounded_column_width,
@@ -213,6 +241,7 @@ impl Application for FileBrowser {
             error: None,
             cursor_position: Point::new(0.0, 0.0),
             main_window_width: MAIN_WINDOW_INITIAL_WIDTH,
+            main_window_height: MAIN_WINDOW_INITIAL_HEIGHT,
             is_cursor_over_column_browser: false,
             keyboard_modifiers: keyboard::Modifiers::default(),
             selection_anchor: None,
@@ -236,7 +265,7 @@ impl Application for FileBrowser {
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,
-            Command::batch([initial_load_command(), system_theme_command()]),
+            Command::batch([initial_load_command(user_config), system_theme_command()]),
         )
     }
 
@@ -332,6 +361,9 @@ impl Application for FileBrowser {
             }
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
+            }
+            Message::PreviewDirectoryChildrenLoaded(parent_path, children_outcome) => {
+                self.accept_preview_directory_children(parent_path, children_outcome)
             }
             Message::TextPreviewAction(action) => self.handle_text_preview_action(action),
             Message::MarkdownPreviewModeSelected(mode) => {
@@ -429,6 +461,7 @@ impl Application for FileBrowser {
             Message::EntryReleased => {
                 self.finish_tab_drag();
                 Command::batch([
+                    self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
                 ])
@@ -459,9 +492,23 @@ impl Application for FileBrowser {
             }
             Message::SidebarHovered(path) => self.handle_sidebar_hovered(path),
             Message::SidebarHoverCleared(path) => self.handle_sidebar_hover_cleared(path),
+            Message::SidebarPointerMoved(position) => {
+                self.update_sidebar_bookmark_drop_slot(position)
+            }
+            Message::SidebarPointerExited => self.clear_sidebar_bookmark_drop_slot(),
+            Message::SidebarBookmarkDropSlotHovered(slot) => {
+                self.handle_sidebar_bookmark_drop_slot_hovered(slot)
+            }
+            Message::SidebarBookmarkDropSlotCleared(slot) => {
+                self.handle_sidebar_bookmark_drop_slot_cleared(slot)
+            }
+            Message::SidebarBookmarkPressed(path) => self.start_sidebar_bookmark_drag(path),
+            Message::SidebarBookmarkEntered(path) => self.handle_sidebar_bookmark_entered(path),
+            Message::SidebarBookmarkReleased => self.finish_sidebar_bookmark_drag(),
             Message::CursorMoved(position) => {
                 self.cursor_position = position;
                 self.update_file_drag(position);
+                self.update_sidebar_bookmark_drag(position);
                 self.update_column_resize_drag(position);
                 self.update_selection_marquee(position);
                 Command::none()
@@ -482,6 +529,7 @@ impl Application for FileBrowser {
             Message::DragSelectionFinished => {
                 self.finish_tab_drag();
                 Command::batch([
+                    self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
                 ])
@@ -509,25 +557,14 @@ impl Application for FileBrowser {
                 self.navigate_to(path, NavigationMode::RecordHistory)
             }
             Message::PathSuggestionMoved(direction) => {
-                if self.search.is_some() {
-                    return self.move_search_selection(direction);
-                }
-                self.move_path_suggestion_selection(direction);
-                Command::none()
+                self.move_search_or_path_suggestion_selection(direction)
             }
             Message::PathSuggestionCompleted(direction) => {
-                if self.search.is_some() {
-                    self.toggle_search_scope()
-                } else {
-                    self.complete_path_suggestion(direction)
-                }
+                self.complete_search_scope_or_path_suggestion(direction)
             }
-            Message::PathSuggestionsLoaded(query, suggestions) => {
-                if query == self.path_input {
-                    self.path_suggestions = suggestions;
-                    self.normalize_path_suggestion_selection();
-                }
-                Command::none()
+            Message::PathInputStabilized(request) => self.load_stable_path_suggestions(request),
+            Message::PathSuggestionsLoaded(request, suggestions) => {
+                self.accept_path_suggestions(request, suggestions)
             }
             Message::SystemThemeDetected(theme) => {
                 self.theme = theme;
@@ -538,9 +575,15 @@ impl Application for FileBrowser {
                 self.error = Some(format!("Failed to save user configuration: {error}"));
                 Command::none()
             }
+            Message::SidebarBookmarksSaved(Ok(())) => Command::none(),
+            Message::SidebarBookmarksSaved(Err(error)) => {
+                self.error = Some(format!("Failed to save sidebar bookmarks: {error}"));
+                Command::none()
+            }
             Message::SearchOpened if self.is_trash_view => Command::none(),
             Message::SearchOpened => self.open_search(),
             Message::SearchInputChanged(query) => self.update_search_query(query),
+            Message::SearchInputStabilized(request) => self.load_stable_search_matches(request),
             Message::SearchFocusRequested => {
                 if self.search.is_some() {
                     search::focus_search_input_command()
@@ -593,6 +636,10 @@ impl Application for FileBrowser {
                 self.is_column_view_settings_open = false;
                 self.persist_user_config_command()
             }
+            Message::RenderingBackendPreferenceSelected(preference) => {
+                self.select_rendering_backend_preference(preference)
+            }
+            Message::RendererRestartNoticeDismissed => self.dismiss_renderer_restart_notice(),
             Message::CapturedWheelScrolled(delta) => Command::batch([
                 self.show_scrollbars_temporarily(),
                 self.handle_column_browser_wheel_scrolled(delta),
@@ -627,7 +674,11 @@ impl Application for FileBrowser {
             }
             Message::TabDragFinished => {
                 self.finish_tab_drag();
-                Command::none()
+                Command::batch([
+                    self.finish_sidebar_bookmark_drag(),
+                    self.finish_column_resize_drag_command(),
+                    self.finish_drag_selection(),
+                ])
             }
             Message::NavigateTo(path) => Command::batch([
                 self.commit_rename_if_active(),

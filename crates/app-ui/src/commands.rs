@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -10,9 +9,11 @@ use desktop_linux::{
     write_file_clipboard, FileClipboardSelection, TerminalEmulator,
 };
 use file_core::{
-    build_file_search_index, create_file_with_contents, scan_directory, scan_trash,
-    search_file_index, search_file_tree, DirectoryScan, FileKind, FileSearchIndexOptions,
-    FileSearchOptions, ScanOptions, TrashScan,
+    available_transfer_target_path, build_file_search_index,
+    check_transfer_conflicts as check_core_transfer_conflicts, create_file_with_contents,
+    is_transfer_target_available, scan_directory, scan_trash, search_file_index, search_file_tree,
+    DirectoryScan, FileKind, FileSearchIndexOptions, FileSearchOptions, ScanOptions,
+    TransferConflictCheck, TransferConflictItem, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
 use iced::Command;
@@ -20,12 +21,12 @@ use iced::Command;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
-    InitialLoad, Message, PendingOperation, SearchRequest, SidebarLocation, TransferConflictItem,
-    TransferConflictMetadata, TransferConflictMode, TransferConflictState,
+    InitialLoad, Message, PathSuggestionRequest, PendingOperation, SearchRequest, SidebarLocation,
+    TransferConflictMode, TransferConflictState,
 };
 use crate::operation_queue::QueuedTransfer;
-use crate::preview::load_preview;
-use crate::sidebar::{home_sidebar_location, sidebar_locations};
+use crate::preview::{load_directory_preview_children, load_preview};
+use crate::sidebar::{home_sidebar_location, save_gtk_bookmark_locations, sidebar_locations};
 use crate::startup_trace;
 use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
 use crate::video_preview::{inspect_video_preview_metadata, load_video_preview_frame};
@@ -36,12 +37,22 @@ pub(crate) use queued_file_operations::file_operation_subscription;
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
 
-pub(crate) fn initial_load_command() -> Command<Message> {
-    Command::perform(load_initial_state(), Message::InitialLoadFinished)
+pub(crate) fn initial_load_command(user_config: config::UserConfig) -> Command<Message> {
+    Command::perform(
+        load_initial_state(user_config),
+        Message::InitialLoadFinished,
+    )
 }
 
 pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Command<Message> {
     Command::perform(persist_user_config(user_config), Message::UserConfigSaved)
+}
+
+pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) -> Command<Message> {
+    Command::perform(
+        persist_sidebar_bookmarks(bookmarks),
+        Message::SidebarBookmarksSaved,
+    )
 }
 
 pub(crate) fn load_directory_command(path: PathBuf, options: ScanOptions) -> Command<Message> {
@@ -62,11 +73,11 @@ pub(crate) fn load_expanded_directory_command(
     })
 }
 
-pub(crate) fn path_suggestions_command(input: String, current_dir: PathBuf) -> Command<Message> {
-    let query = input.clone();
+pub(crate) fn path_suggestions_command(request: PathSuggestionRequest) -> Command<Message> {
+    let issued_request = request.clone();
     Command::perform(
-        load_path_suggestions(input, current_dir),
-        move |suggestions| Message::PathSuggestionsLoaded(query.clone(), suggestions),
+        load_path_suggestions(request.input, request.current_dir),
+        move |suggestions| Message::PathSuggestionsLoaded(issued_request.clone(), suggestions),
     )
 }
 
@@ -113,6 +124,19 @@ pub(crate) fn preview_command(
     Command::perform(load_preview(path, kind, options), move |preview_outcome| {
         Message::PreviewLoaded(preview_path.clone(), preview_outcome)
     })
+}
+
+pub(crate) fn preview_directory_children_command(
+    path: PathBuf,
+    options: ScanOptions,
+) -> Command<Message> {
+    let parent_path = path.clone();
+    Command::perform(
+        load_directory_preview_children(path, options),
+        move |children_outcome| {
+            Message::PreviewDirectoryChildrenLoaded(parent_path.clone(), children_outcome)
+        },
+    )
 }
 
 pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Command<Message> {
@@ -275,7 +299,11 @@ pub(crate) fn check_transfer_rename_target_command(
     let issued_state = state.clone();
     let issued_target = target.clone();
     Command::perform(
-        async move { path_is_available(&target).await },
+        async move {
+            is_transfer_target_available(target)
+                .await
+                .map_err(|error| error.to_string())
+        },
         move |available| Message::TransferConflictRenameTargetChecked {
             state: issued_state.clone(),
             transfer_position,
@@ -289,76 +317,20 @@ async fn create_clipboard_file_at_available_path(
     path: PathBuf,
     contents: Vec<u8>,
 ) -> Result<PathBuf, String> {
-    let target = available_alternate_path(&path).await?;
+    let target = available_transfer_target_path(path)
+        .await
+        .map_err(|error| error.to_string())?;
     create_file_with_contents(target, contents)
         .await
         .map_err(|error| error.to_string())
 }
 
 async fn check_transfer_conflicts(transfers: Vec<QueuedTransfer>) -> Vec<TransferConflictItem> {
-    let mut conflicts = Vec::new();
-    for transfer in transfers {
-        if let Some(conflict) = transfer_conflict(transfer).await {
-            conflicts.push(conflict);
-        }
-    }
-    conflicts
-}
-
-async fn transfer_conflict(transfer: QueuedTransfer) -> Option<TransferConflictItem> {
-    let source_metadata = metadata_if_exists(&transfer.source).await.ok().flatten()?;
-    let target_metadata = metadata_if_exists(&transfer.target).await.ok().flatten()?;
-    Some(TransferConflictItem {
-        source: transfer.source,
-        target: transfer.target,
-        source_metadata: transfer_conflict_metadata(source_metadata),
-        target_metadata: transfer_conflict_metadata(target_metadata),
-    })
-}
-
-fn transfer_conflict_metadata(metadata: std::fs::Metadata) -> TransferConflictMetadata {
-    TransferConflictMetadata {
-        is_directory: metadata.is_dir(),
-        len: metadata.len(),
-        modified: metadata.modified().ok(),
-    }
-}
-
-async fn path_is_available(path: &Path) -> Result<bool, String> {
-    metadata_if_exists(path)
-        .await
-        .map(|metadata| metadata.is_none())
-}
-
-async fn available_alternate_path(path: &Path) -> Result<PathBuf, String> {
-    if path_is_available(path).await? {
-        return Ok(path.to_path_buf());
-    }
-
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
-    let name = path
-        .file_name()
-        .map(OsString::from)
-        .unwrap_or_else(|| OsString::from("item"));
-
-    for index in 1..1000 {
-        let mut next = name.clone();
-        next.push(format!(".copy{index}"));
-        let candidate = parent.join(next);
-        if path_is_available(&candidate).await? {
-            return Ok(candidate);
-        }
-    }
-
-    Ok(path.to_path_buf())
-}
-
-async fn metadata_if_exists(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("could not read metadata for {path:?}: {error}")),
-    }
+    let conflict_checks = transfers
+        .into_iter()
+        .map(|transfer| TransferConflictCheck::new(transfer.source, transfer.target))
+        .collect();
+    check_core_transfer_conflicts(conflict_checks).await
 }
 
 async fn load_directory(path: PathBuf, options: ScanOptions) -> Result<DirectoryScan, String> {
@@ -374,9 +346,9 @@ async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
     scan_trash(options).await.map_err(|error| error.to_string())
 }
 
-async fn load_initial_state() -> InitialLoad {
+async fn load_initial_state(user_config: config::UserConfig) -> InitialLoad {
     startup_trace::mark_once("initial_load_started");
-    let (home, user_config, state_database_path) = initial_paths().await;
+    let (home, user_config, state_database_path) = initial_paths(user_config).await;
     let options = ScanOptions {
         include_hidden: user_config.show_hidden_files,
         ..ScanOptions::default()
@@ -396,17 +368,17 @@ async fn load_initial_state() -> InitialLoad {
     }
 }
 
-async fn initial_paths() -> (PathBuf, config::UserConfig, PathBuf) {
-    tokio::task::spawn_blocking(|| {
+async fn initial_paths(user_config: config::UserConfig) -> (PathBuf, config::UserConfig, PathBuf) {
+    let fallback_config = user_config.clone();
+    tokio::task::spawn_blocking(move || {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        let user_config = config::load_user_config();
         (home, user_config, config::default_state_database_path())
     })
     .await
     .unwrap_or_else(|_| {
         (
             PathBuf::from("/"),
-            config::default_user_config(),
+            fallback_config,
             config::default_state_database_path(),
         )
     })
@@ -417,6 +389,18 @@ async fn persist_user_config(user_config: config::UserConfig) -> Result<(), Stri
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
+}
+
+async fn persist_sidebar_bookmarks(bookmarks: Vec<SidebarLocation>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let home = dirs::home_dir().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "home directory is unavailable")
+        })?;
+        save_gtk_bookmark_locations(&home, &bookmarks)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 async fn load_operation_store(path: PathBuf) -> Result<TaskQueueStore, String> {
@@ -434,12 +418,32 @@ async fn load_thumbnail_batch(
     cache_dir: PathBuf,
     works: Vec<ThumbnailWork>,
 ) -> Vec<ThumbnailLoadOutcome> {
-    let mut outcomes = Vec::with_capacity(works.len());
+    let mut handles = Vec::with_capacity(works.len());
     for work in works {
-        let result = thumbnails::load_or_generate_thumbnail(&cache_dir, work.request.clone())
-            .await
-            .map_err(|error| error.to_string());
-        outcomes.push(ThumbnailLoadOutcome { work, result });
+        let task_cache_dir = cache_dir.clone();
+        let fallback_work = work.clone();
+        let handle = tokio::spawn(async move {
+            let outcome =
+                thumbnails::load_or_generate_thumbnail(task_cache_dir, work.request.clone())
+                    .await
+                    .map_err(|error| error.to_string());
+            ThumbnailLoadOutcome {
+                work,
+                result: outcome,
+            }
+        });
+        handles.push((fallback_work, handle));
+    }
+
+    let mut outcomes = Vec::with_capacity(handles.len());
+    for (fallback_work, handle) in handles {
+        match handle.await {
+            Ok(outcome) => outcomes.push(outcome),
+            Err(error) => outcomes.push(ThumbnailLoadOutcome {
+                work: fallback_work,
+                result: Err(format!("thumbnail task failed: {error}")),
+            }),
+        }
     }
     outcomes
 }

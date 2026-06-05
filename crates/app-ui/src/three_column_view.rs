@@ -15,8 +15,8 @@ use crate::appearance::{
     column_resize_divider_style, dragged_row_style, hovered_row_style, icon_svg_style,
     muted_icon_svg_style, selected_icon_svg_style, selected_row_style, warning_icon_svg_style,
 };
-use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
+use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{ColumnViewMode, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
 use crate::sidebar::SIDEBAR_WIDTH;
 use crate::thumbnail_cache::{LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE};
@@ -27,10 +27,6 @@ const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 6.0;
 const ROW_ICON_SIZE: f32 = 18.0;
 const CHEVRON_ICON_SIZE: f32 = 15.0;
 const COMPRESSED_UNBOUNDED_COLUMN_WIDTH: f32 = 124.0;
-const COLUMN_TITLE_MAX_CHARS: usize = 28;
-const COMPRESSED_COLUMN_TITLE_MAX_CHARS: usize = 12;
-const ENTRY_NAME_MAX_CHARS: usize = 30;
-const COMPRESSED_ENTRY_NAME_MAX_CHARS: usize = 12;
 const MIN_FIXED_COLUMN_WIDTH: f32 = 180.0;
 
 pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message> {
@@ -187,12 +183,13 @@ fn column_title(
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| directory.to_string_lossy().into_owned())
     };
-    let title = format_middle_ellipsized_text(&title, presentation.title_max_chars());
-
-    container(readable_text(title).size(presentation.title_text_size()))
-        .padding(presentation.title_padding())
-        .width(Length::Fill)
-        .into()
+    container(measured_middle_ellipsized_text(
+        title,
+        presentation.title_text_size(),
+    ))
+    .padding(presentation.title_padding())
+    .width(Length::Fill)
+    .into()
 }
 
 fn column_message(
@@ -231,13 +228,10 @@ fn column_entry_row<'a>(
             .width(Length::Fill)
             .into()
     } else {
-        let name = entry.name().to_string_lossy();
-        let name =
-            format_middle_ellipsized_text(name.as_ref(), presentation.entry_name_max_chars());
-        readable_text(name)
-            .size(presentation.entry_text_size())
-            .width(Length::Fill)
-            .into()
+        measured_middle_ellipsized_text(
+            entry.name().to_string_lossy().into_owned(),
+            presentation.entry_text_size(),
+        )
     };
 
     let trailing: Element<'static, Message> =
@@ -418,13 +412,6 @@ impl ColumnPresentation {
         }
     }
 
-    fn title_max_chars(self) -> usize {
-        match self {
-            ColumnPresentation::Compressed => COMPRESSED_COLUMN_TITLE_MAX_CHARS,
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => COLUMN_TITLE_MAX_CHARS,
-        }
-    }
-
     fn entry_padding(self) -> [u16; 2] {
         match self {
             ColumnPresentation::Compressed => [5, 5],
@@ -443,13 +430,6 @@ impl ColumnPresentation {
         match self {
             ColumnPresentation::Compressed => 12,
             ColumnPresentation::Focused | ColumnPresentation::Balanced => 16,
-        }
-    }
-
-    fn entry_name_max_chars(self) -> usize {
-        match self {
-            ColumnPresentation::Compressed => COMPRESSED_ENTRY_NAME_MAX_CHARS,
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => ENTRY_NAME_MAX_CHARS,
         }
     }
 }

@@ -5,9 +5,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
+use crate::transfer_conflict::{
+    available_transfer_target_path_candidate, transfer_target_metadata_if_exists,
+};
 use crate::FileError;
 
-use super::{already_exists_error, metadata_if_exists, unique_available_path};
+use super::already_exists_error;
 
 const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 
@@ -393,7 +396,7 @@ async fn prepare_copy_target(
         return Ok(None);
     }
 
-    let Some(target_metadata) = metadata_if_exists(to)
+    let Some(target_metadata) = transfer_target_metadata_if_exists(to)
         .await
         .map_err(|source| FileError::Copy {
             from: from.to_path_buf(),
@@ -415,16 +418,14 @@ async fn prepare_copy_target(
             Ok(Some(to.to_path_buf()))
         }
         TransferConflictStrategy::Skip => Ok(None),
-        TransferConflictStrategy::KeepBoth => {
-            unique_available_path(to)
-                .await
-                .map(Some)
-                .map_err(|source| FileError::Copy {
-                    from: from.to_path_buf(),
-                    to: to.to_path_buf(),
-                    source,
-                })
-        }
+        TransferConflictStrategy::KeepBoth => available_transfer_target_path_candidate(to)
+            .await
+            .map(Some)
+            .map_err(|source| FileError::Copy {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            }),
         TransferConflictStrategy::Merge => {
             if source_metadata.is_dir() && target_metadata.is_dir() {
                 Ok(Some(to.to_path_buf()))
@@ -440,7 +441,7 @@ async fn ensure_copy_directory_target(
     to: &Path,
     _conflict_strategy: TransferConflictStrategy,
 ) -> Result<bool, FileError> {
-    if metadata_if_exists(to)
+    if transfer_target_metadata_if_exists(to)
         .await
         .map_err(|source| FileError::Copy {
             from: from.to_path_buf(),

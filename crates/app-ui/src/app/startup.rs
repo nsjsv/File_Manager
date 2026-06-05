@@ -17,6 +17,7 @@ impl FileBrowser {
         self.column_fixed_count = user_config.column_fixed_count;
         self.unbounded_column_width = user_config.unbounded_column_width;
         self.terminal_emulator = user_config.terminal_emulator;
+        self.rendering_backend_preference = user_config.rendering_backend_preference;
         self.options.include_hidden = user_config.show_hidden_files;
         self.user_config = user_config;
         let mut operation_store_error = match initial_load.operation_store {

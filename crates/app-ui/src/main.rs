@@ -7,6 +7,7 @@ mod config;
 mod floating_surface;
 mod formatting;
 mod icons;
+mod measured_middle_ellipsized_text;
 mod model;
 mod operation_history;
 mod operation_queue;

@@ -36,7 +36,7 @@ const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
 const MIN_SEARCH_WIDTH: f32 = 520.0;
 const MIN_SEARCH_HEIGHT: f32 = 360.0;
 pub(super) const MAIN_WINDOW_INITIAL_WIDTH: f32 = 1180.0;
-const MAIN_WINDOW_INITIAL_HEIGHT: f32 = 680.0;
+pub(super) const MAIN_WINDOW_INITIAL_HEIGHT: f32 = 680.0;
 const MAIN_WINDOW_APP_ID: &str = "file-manager";
 const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
 const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
@@ -401,6 +401,10 @@ impl FileBrowser {
         self.context_menu = None;
         self.is_column_view_settings_open = false;
         self.operation_queue.close_panel();
+        self.file_drag = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
+        self.selection_marquee = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         let command = self.commit_rename_if_active();
@@ -456,6 +460,7 @@ impl FileBrowser {
     ) -> Command<Message> {
         if window == window::Id::MAIN {
             self.main_window_width = (width as f32).max(1.0);
+            self.main_window_height = (height as f32).max(1.0);
             return Command::none();
         }
 

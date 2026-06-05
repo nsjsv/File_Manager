@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use desktop_linux::{DesktopClipboardContent, TerminalEmulator};
 use file_core::{
@@ -13,10 +13,12 @@ use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Theme};
 
 use crate::audio_preview::AudioPreviewRuntime;
-use crate::config::UserConfig;
+use crate::config::{RenderingBackendPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
+
+pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
@@ -26,6 +28,7 @@ pub(crate) enum Message {
     OpenFileFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
     TextPreviewAction(text_editor::Action),
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
@@ -66,6 +69,13 @@ pub(crate) enum Message {
     BlankAreaRightClicked(PathBuf),
     SidebarHovered(PathBuf),
     SidebarHoverCleared(PathBuf),
+    SidebarPointerMoved(Point),
+    SidebarPointerExited,
+    SidebarBookmarkDropSlotHovered(SidebarBookmarkDropSlot),
+    SidebarBookmarkDropSlotCleared(SidebarBookmarkDropSlot),
+    SidebarBookmarkPressed(PathBuf),
+    SidebarBookmarkEntered(PathBuf),
+    SidebarBookmarkReleased,
     CursorMoved(Point),
     ColumnBrowserCursorEntered,
     ColumnBrowserCursorExited,
@@ -90,11 +100,14 @@ pub(crate) enum Message {
     PathSuggestionSelected(PathBuf),
     PathSuggestionMoved(PathSuggestionDirection),
     PathSuggestionCompleted(PathSuggestionDirection),
-    PathSuggestionsLoaded(String, Vec<PathBuf>),
+    PathInputStabilized(PathSuggestionRequest),
+    PathSuggestionsLoaded(PathSuggestionRequest, Vec<PathBuf>),
     SystemThemeDetected(Theme),
     UserConfigSaved(Result<(), String>),
+    SidebarBookmarksSaved(Result<(), String>),
     SearchOpened,
     SearchInputChanged(String),
+    SearchInputStabilized(SearchRequest),
     SearchFocusRequested,
     SearchMatchesLoaded(SearchRequest, Result<FileSearchOutcome, String>),
     SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
@@ -107,6 +120,8 @@ pub(crate) enum Message {
     ColumnViewModeSelected(ColumnViewMode),
     ColumnFixedCountSelected(usize),
     TerminalEmulatorSelected(TerminalEmulator),
+    RenderingBackendPreferenceSelected(RenderingBackendPreference),
+    RendererRestartNoticeDismissed,
     CapturedWheelScrolled(mouse::ScrollDelta),
     ScrollbarAutoHideElapsed(u64),
     ScrollbarAnimationTick,
@@ -226,27 +241,6 @@ pub(crate) enum TransferConflictChoice {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct TransferConflictMetadata {
-    pub(crate) is_directory: bool,
-    pub(crate) len: u64,
-    pub(crate) modified: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TransferConflictItem {
-    pub(crate) source: PathBuf,
-    pub(crate) target: PathBuf,
-    pub(crate) source_metadata: TransferConflictMetadata,
-    pub(crate) target_metadata: TransferConflictMetadata,
-}
-
-impl TransferConflictItem {
-    pub(crate) fn can_merge(&self) -> bool {
-        self.source_metadata.is_directory && self.target_metadata.is_directory
-    }
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct TransferConflictState {
     pub(crate) mode: TransferConflictMode,
     pub(crate) transfers: Vec<QueuedTransfer>,
@@ -289,12 +283,37 @@ pub(crate) struct BrowserTab {
 #[derive(Debug, Clone)]
 pub(crate) struct FileDragState {
     pub(crate) sources: Vec<PathBuf>,
-    pub(crate) target_directory: Option<PathBuf>,
+    pub(crate) target: Option<FileDragTarget>,
     pub(crate) phase: FileDragPhase,
     pub(crate) column_directories_snapshot: Vec<PathBuf>,
 }
 
 impl FileDragState {
+    pub(crate) fn is_dragging(&self) -> bool {
+        matches!(self.phase, FileDragPhase::Dragging)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FileDragTarget {
+    Directory(PathBuf),
+    SidebarBookmarkSlot(SidebarBookmarkDropSlot),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarBookmarkDropSlot {
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SidebarBookmarkDragState {
+    pub(crate) path: PathBuf,
+    pub(crate) phase: FileDragPhase,
+    pub(crate) order_changed: bool,
+}
+
+impl SidebarBookmarkDragState {
     pub(crate) fn is_dragging(&self) -> bool {
         matches!(self.phase, FileDragPhase::Dragging)
     }
@@ -550,14 +569,48 @@ pub(crate) struct PreviewTreeEntry {
     pub(crate) kind: FileKind,
     pub(crate) depth: usize,
     pub(crate) parent: Option<usize>,
+    pub(crate) filesystem_path: Option<PathBuf>,
+    pub(crate) directory_children: Option<PreviewTreeDirectoryChildren>,
     pub(crate) is_expanded: bool,
     pub(crate) toggle_rotation_progress: f32,
 }
 
 impl PreviewTreeEntry {
+    pub(crate) fn from_directory_entry(
+        id: usize,
+        entry: DirectoryEntry,
+        depth: usize,
+        parent: Option<usize>,
+    ) -> Self {
+        let kind = entry.kind;
+        Self {
+            id,
+            name: entry.name().to_string_lossy().into_owned(),
+            kind,
+            depth,
+            parent,
+            filesystem_path: Some(entry.path),
+            directory_children: preview_tree_directory_children(kind),
+            is_expanded: false,
+            toggle_rotation_progress: 0.0,
+        }
+    }
+
     pub(crate) fn is_directory(&self) -> bool {
         self.kind == FileKind::Directory
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PreviewTreeDirectoryChildren {
+    Pending,
+    Loading,
+    Loaded,
+    Error(String),
+}
+
+fn preview_tree_directory_children(kind: FileKind) -> Option<PreviewTreeDirectoryChildren> {
+    (kind == FileKind::Directory).then_some(PreviewTreeDirectoryChildren::Pending)
 }
 
 #[derive(Debug, Clone)]
@@ -595,6 +648,19 @@ impl SelectionMarquee {
 pub(crate) struct SidebarLocation {
     pub(crate) label: String,
     pub(crate) path: PathBuf,
+    pub(crate) kind: SidebarLocationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarLocationKind {
+    Home,
+    Desktop,
+    Documents,
+    Downloads,
+    Pictures,
+    Music,
+    Videos,
+    Bookmark,
 }
 
 pub(crate) const TRASH_LOCATION_LABEL: &str = "Trash";
@@ -615,6 +681,13 @@ pub(crate) enum PathSuggestionDirection {
     Previous,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PathSuggestionRequest {
+    pub(crate) input: String,
+    pub(crate) current_dir: PathBuf,
+    pub(crate) generation: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchScope {
     CurrentDirectory,
@@ -626,6 +699,7 @@ pub(crate) struct SearchRequest {
     pub(crate) scope: SearchScope,
     pub(crate) root: PathBuf,
     pub(crate) query: String,
+    pub(crate) generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -633,6 +707,7 @@ pub(crate) struct SearchState {
     pub(crate) scope: SearchScope,
     pub(crate) root: PathBuf,
     pub(crate) query: String,
+    pub(crate) request_generation: u64,
     pub(crate) matches: Vec<FileSearchMatch>,
     pub(crate) selected_match: Option<usize>,
     pub(crate) is_loading: bool,
@@ -648,6 +723,7 @@ impl SearchState {
             scope: self.scope,
             root: self.root.clone(),
             query: self.query.clone(),
+            generation: self.request_generation,
         }
     }
 }

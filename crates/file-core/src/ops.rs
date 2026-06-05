@@ -6,6 +6,9 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::transfer_conflict::{
+    available_transfer_target_path_candidate, transfer_target_metadata_if_exists,
+};
 use crate::FileError;
 
 mod copy;
@@ -120,39 +123,8 @@ pub async fn trash_path_with_restore_entry(
     Ok(after.into_iter().find(|entry| !before.contains(entry)))
 }
 
-async fn metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
-    match fs::metadata(path).await {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 fn already_exists_error() -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, "target already exists")
-}
-
-async fn unique_available_path(path: &Path) -> io::Result<PathBuf> {
-    if metadata_if_exists(path).await?.is_none() {
-        return Ok(path.to_path_buf());
-    }
-
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
-    let name = path
-        .file_name()
-        .map(std::ffi::OsString::from)
-        .unwrap_or_else(|| std::ffi::OsString::from("item"));
-
-    for index in 1..1000 {
-        let mut next = name.clone();
-        next.push(format!(".copy{index}"));
-        let candidate = parent.join(next);
-        if metadata_if_exists(&candidate).await?.is_none() {
-            return Ok(candidate);
-        }
-    }
-
-    Ok(path.to_path_buf())
 }
 
 pub async fn move_path(
@@ -199,7 +171,7 @@ pub async fn move_path_with_options(
         0
     };
 
-    let target_metadata = metadata_if_exists(&to)
+    let target_metadata = transfer_target_metadata_if_exists(&to)
         .await
         .map_err(|source| FileError::Move {
             from: from.clone(),
@@ -259,16 +231,14 @@ async fn prepare_move_target(
             Ok(Some(to.to_path_buf()))
         }
         TransferConflictStrategy::Skip | TransferConflictStrategy::Merge => Ok(None),
-        TransferConflictStrategy::KeepBoth => {
-            unique_available_path(to)
-                .await
-                .map(Some)
-                .map_err(|source| FileError::Move {
-                    from: from.to_path_buf(),
-                    to: to.to_path_buf(),
-                    source,
-                })
-        }
+        TransferConflictStrategy::KeepBoth => available_transfer_target_path_candidate(to)
+            .await
+            .map(Some)
+            .map_err(|source| FileError::Move {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            }),
     }
 }
 
@@ -343,14 +313,13 @@ async fn move_directory_merge(
                     path: source_child.clone(),
                     source,
                 })?;
-            let target_metadata =
-                metadata_if_exists(&target_child)
-                    .await
-                    .map_err(|source| FileError::Move {
-                        from: source_child.clone(),
-                        to: target_child.clone(),
-                        source,
-                    })?;
+            let target_metadata = transfer_target_metadata_if_exists(&target_child)
+                .await
+                .map_err(|source| FileError::Move {
+                    from: source_child.clone(),
+                    to: target_child.clone(),
+                    source,
+                })?;
 
             if let Some(target_metadata) = target_metadata {
                 if file_type.is_dir() && target_metadata.is_dir() {
@@ -455,7 +424,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(metadata_if_exists(&source).await.unwrap().is_none());
+        assert!(fs::metadata(&source).await.is_err());
         assert_eq!(fs::read(&target).await.unwrap(), b"old");
         assert_eq!(fs::read(&target_copy1).await.unwrap(), b"old copy");
         assert_eq!(fs::read(&target_copy2).await.unwrap(), b"new");

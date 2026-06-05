@@ -330,6 +330,23 @@ pub(crate) fn hovered_sidebar_item_style(theme: &Theme) -> container::Appearance
     }
 }
 
+pub(crate) fn sidebar_bookmark_drop_slot_style(theme: &Theme) -> container::Appearance {
+    let accent = if is_dark_theme(theme) {
+        Color::from_rgb8(125, 179, 255)
+    } else {
+        Color::from_rgb8(74, 137, 220)
+    };
+    container::Appearance {
+        background: Some(Background::Color(Color { a: 0.10, ..accent })),
+        border: Border {
+            color: accent,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Appearance::default()
+    }
+}
+
 pub(crate) fn context_menu_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {

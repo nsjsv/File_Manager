@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use file_core::{DirectoryEntry, DirectoryScan, FileKind, TrashScan};
 use iced::widget::text_input;
@@ -12,10 +13,12 @@ use crate::commands::{
 };
 use crate::model::{
     trash_location_path, ExpandedDirectory, ExpandedDirectoryStatus, Message, NavigationMode,
-    PathSuggestionDirection, TRASH_LOCATION_LABEL,
+    PathSuggestionDirection, PathSuggestionRequest, TRASH_LOCATION_LABEL,
 };
 use crate::startup_trace;
 use crate::view::path_input_id;
+
+const PATH_SUGGESTION_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(120);
 
 impl FileBrowser {
     pub(super) fn accept_directory_scan(&mut self, scan: DirectoryScan) -> Command<Message> {
@@ -186,10 +189,58 @@ impl FileBrowser {
     }
 
     pub(super) fn update_path_input(&mut self, value: String) -> Command<Message> {
-        self.path_input = value.clone();
+        self.path_input = value;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
-        path_suggestions_command(value, self.current_dir.clone())
+        let request = self.next_path_suggestion_request();
+        if request.input.trim().is_empty() {
+            return Command::none();
+        }
+        path_suggestion_input_stabilization_command(request)
+    }
+
+    pub(super) fn load_stable_path_suggestions(
+        &mut self,
+        request: PathSuggestionRequest,
+    ) -> Command<Message> {
+        if !self.active_path_suggestion_request_matches(&request) {
+            return Command::none();
+        }
+        path_suggestions_command(request)
+    }
+
+    pub(super) fn accept_path_suggestions(
+        &mut self,
+        request: PathSuggestionRequest,
+        suggestions: Vec<PathBuf>,
+    ) -> Command<Message> {
+        if self.active_path_suggestion_request_matches(&request) {
+            self.path_suggestions = suggestions;
+            self.normalize_path_suggestion_selection();
+        }
+        Command::none()
+    }
+
+    pub(super) fn move_search_or_path_suggestion_selection(
+        &mut self,
+        direction: PathSuggestionDirection,
+    ) -> Command<Message> {
+        if self.search.is_some() {
+            return self.move_search_selection(direction);
+        }
+        self.move_path_suggestion_selection(direction);
+        Command::none()
+    }
+
+    pub(super) fn complete_search_scope_or_path_suggestion(
+        &mut self,
+        direction: PathSuggestionDirection,
+    ) -> Command<Message> {
+        if self.search.is_some() {
+            self.toggle_search_scope()
+        } else {
+            self.complete_path_suggestion(direction)
+        }
     }
 
     pub(super) fn submit_path_input(&mut self) -> Command<Message> {
@@ -287,8 +338,9 @@ impl FileBrowser {
         };
 
         self.path_input = completed_path_text(&path);
+        let request = self.next_path_suggestion_request();
         Command::batch([
-            path_suggestions_command(self.path_input.clone(), self.current_dir.clone()),
+            path_suggestions_command(request),
             text_input::move_cursor_to_end(path_input_id()),
         ])
     }
@@ -354,6 +406,24 @@ impl FileBrowser {
         }
     }
 
+    fn next_path_suggestion_request(&mut self) -> PathSuggestionRequest {
+        self.path_suggestion_generation = self.path_suggestion_generation.wrapping_add(1);
+        PathSuggestionRequest {
+            input: self.path_input.clone(),
+            current_dir: self.current_dir.clone(),
+            generation: self.path_suggestion_generation,
+        }
+    }
+
+    fn active_path_suggestion_request_matches(&self, request: &PathSuggestionRequest) -> bool {
+        path_suggestion_request_matches_state(
+            request,
+            &self.path_input,
+            &self.current_dir,
+            self.path_suggestion_generation,
+        )
+    }
+
     fn clear_selection_context(&mut self) {
         self.selected = None;
         self.selected_paths.clear();
@@ -361,6 +431,8 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.column_resize_drag = None;
         self.file_drag = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
         self.hovered_entry = None;
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
@@ -376,6 +448,8 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.column_resize_drag = None;
         self.file_drag = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
         self.hovered_entry = None;
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
@@ -405,5 +479,137 @@ impl FileBrowser {
             .into_iter()
             .map(|path| load_expanded_directory_command(path, self.options.clone()))
             .collect()
+    }
+}
+
+fn path_suggestion_input_stabilization_command(request: PathSuggestionRequest) -> Command<Message> {
+    Command::perform(
+        async move {
+            tokio::time::sleep(PATH_SUGGESTION_INPUT_STABILIZATION_DELAY).await;
+            request
+        },
+        Message::PathInputStabilized,
+    )
+}
+
+fn path_suggestion_request_matches_state(
+    request: &PathSuggestionRequest,
+    input: &str,
+    current_dir: &Path,
+    generation: u64,
+) -> bool {
+    request.input == input
+        && request.current_dir.as_path() == current_dir
+        && request.generation == generation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_suggestion_request_generation_rejects_repeated_stale_input() {
+        let current_dir = PathBuf::from("/tmp");
+        let request = PathSuggestionRequest {
+            input: "docs".to_owned(),
+            current_dir: current_dir.clone(),
+            generation: 4,
+        };
+
+        assert!(!path_suggestion_request_matches_state(
+            &request,
+            "docs",
+            &current_dir,
+            5
+        ));
+        assert!(path_suggestion_request_matches_state(
+            &request,
+            "docs",
+            &current_dir,
+            4
+        ));
+    }
+
+    #[test]
+    fn stale_path_input_stabilization_keeps_current_suggestions() {
+        let current_suggestion = PathBuf::from("/tmp/current");
+        let mut browser = browser_with_path_suggestion_state(
+            "docs",
+            2,
+            vec![current_suggestion.clone()],
+            Some(0),
+        );
+        let stale_request = path_suggestion_request("docs", &browser.current_dir, 1);
+
+        assert!(!browser.active_path_suggestion_request_matches(&stale_request));
+        let _command = browser.load_stable_path_suggestions(stale_request);
+
+        assert_eq!(browser.path_suggestions, vec![current_suggestion]);
+        assert_eq!(browser.path_suggestion_selection, Some(0));
+        assert_eq!(browser.path_suggestion_generation, 2);
+    }
+
+    #[test]
+    fn stale_path_suggestions_loaded_keeps_current_suggestions() {
+        let current_suggestion = PathBuf::from("/tmp/current");
+        let mut browser = browser_with_path_suggestion_state(
+            "docs",
+            2,
+            vec![current_suggestion.clone()],
+            Some(0),
+        );
+        let stale_request = path_suggestion_request("docs", &browser.current_dir, 1);
+
+        let _command =
+            browser.accept_path_suggestions(stale_request, vec![PathBuf::from("/tmp/stale")]);
+
+        assert_eq!(browser.path_suggestions, vec![current_suggestion]);
+        assert_eq!(browser.path_suggestion_selection, Some(0));
+    }
+
+    #[test]
+    fn empty_path_input_clears_suggestions_and_advances_generation() {
+        let mut browser = browser_with_path_suggestion_state(
+            "docs",
+            9,
+            vec![PathBuf::from("/tmp/current")],
+            Some(0),
+        );
+
+        let _command = browser.update_path_input("  ".to_owned());
+
+        assert_eq!(browser.path_input, "  ");
+        assert!(browser.path_suggestions.is_empty());
+        assert_eq!(browser.path_suggestion_selection, None);
+        assert_eq!(browser.path_suggestion_generation, 10);
+    }
+
+    fn browser_with_path_suggestion_state(
+        input: &str,
+        generation: u64,
+        suggestions: Vec<PathBuf>,
+        selection: Option<usize>,
+    ) -> FileBrowser {
+        let (mut browser, _) = <FileBrowser as iced::multi_window::Application>::new(
+            crate::config::default_user_config(),
+        );
+        browser.current_dir = PathBuf::from("/tmp");
+        browser.path_input = input.to_owned();
+        browser.path_suggestion_generation = generation;
+        browser.path_suggestions = suggestions;
+        browser.path_suggestion_selection = selection;
+        browser
+    }
+
+    fn path_suggestion_request(
+        input: &str,
+        current_dir: &Path,
+        generation: u64,
+    ) -> PathSuggestionRequest {
+        PathSuggestionRequest {
+            input: input.to_owned(),
+            current_dir: current_dir.to_path_buf(),
+            generation,
+        }
     }
 }

@@ -4,6 +4,7 @@ pub mod ops;
 pub mod scan;
 pub mod search;
 pub mod sort;
+pub mod transfer_conflict;
 pub mod trash_bin;
 pub mod watch;
 
@@ -27,6 +28,10 @@ pub use search::{
 };
 pub use sort::{
     apply_entry_options, compare_entries, filter_hidden, sort_entries, SortDirection, SortField,
+};
+pub use transfer_conflict::{
+    available_transfer_target_path, check_transfer_conflicts, is_transfer_target_available,
+    TransferConflictCheck, TransferConflictItem, TransferConflictMetadata,
 };
 pub use trash_bin::{
     delete_trash_entry, empty_trash, restore_trash_entry, scan_trash, TrashEntry,

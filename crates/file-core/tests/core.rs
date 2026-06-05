@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use file_core::{
-    build_file_search_index, copy_path, copy_path_with_options, create_directory,
-    create_empty_file, create_file_with_contents, filter_hidden, move_path, move_path_with_options,
-    rename_path, scan_directory, search_file_index, search_file_tree, sort_entries,
-    watch_directory, DirectoryEntry, EntryMetadata, FileError, FileKind, FileOperationControls,
+    available_transfer_target_path, build_file_search_index, check_transfer_conflicts, copy_path,
+    copy_path_with_options, create_directory, create_empty_file, create_file_with_contents,
+    filter_hidden, is_transfer_target_available, move_path, move_path_with_options, rename_path,
+    scan_directory, search_file_index, search_file_tree, sort_entries, watch_directory,
+    DirectoryEntry, EntryMetadata, FileError, FileKind, FileOperationControls,
     FileOperationRunState, FileSearchIndexOptions, FileSearchOptions, FileTransferOptions,
-    ScanOptions, SortDirection, SortField, TransferConflictStrategy,
+    ScanOptions, SortDirection, SortField, TransferConflictCheck, TransferConflictStrategy,
 };
 use tempfile::tempdir;
 

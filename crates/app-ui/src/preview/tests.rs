@@ -3,7 +3,7 @@ use std::io::Write;
 use tempfile::tempdir;
 use zip::write::SimpleFileOptions;
 
-use crate::model::TextPreviewFormat;
+use crate::model::{PreviewTreeDirectoryChildren, TextPreviewFormat};
 
 use super::*;
 
@@ -30,7 +30,7 @@ async fn load_preview_reads_zip_archive_tree() {
 }
 
 #[tokio::test]
-async fn load_preview_reads_directory_tree_collapsed_after_root_layer() {
+async fn load_preview_reads_directory_top_layer_only() {
     let temp_dir = tempdir().expect("temp dir");
     let nested_dir = temp_dir.path().join("src");
     std::fs::create_dir(&nested_dir).expect("create nested dir");
@@ -49,11 +49,38 @@ async fn load_preview_reads_directory_tree_collapsed_after_root_layer() {
         panic!("expected directory preview");
     };
 
+    assert_eq!(entries.len(), 2);
     assert_preview_tree_entry(&entries[0], "src", FileKind::Directory, 0, None);
-    assert_preview_tree_entry(&entries[1], "main.rs", FileKind::File, 1, Some(0));
-    assert_preview_tree_entry(&entries[2], "README.md", FileKind::File, 0, None);
+    assert_preview_tree_entry(&entries[1], "README.md", FileKind::File, 0, None);
+    assert_eq!(
+        entries[0].filesystem_path.as_deref(),
+        Some(nested_dir.as_path())
+    );
+    assert_eq!(
+        entries[0].directory_children.as_ref(),
+        Some(&PreviewTreeDirectoryChildren::Pending)
+    );
     assert!(!entries[0].is_expanded);
     assert_eq!(entries[0].toggle_rotation_progress, 0.0);
+}
+
+#[tokio::test]
+async fn load_directory_preview_children_reads_expanded_layer() {
+    let temp_dir = tempdir().expect("temp dir");
+    let nested_dir = temp_dir.path().join("src");
+    std::fs::create_dir(&nested_dir).expect("create nested dir");
+    std::fs::create_dir(nested_dir.join("deeper")).expect("create deeper dir");
+    std::fs::write(nested_dir.join("main.rs"), "fn main() {}\n").expect("write nested file");
+
+    let children = load_directory_preview_children(nested_dir, ScanOptions::default())
+        .await
+        .expect("directory preview children");
+    let child_names = children
+        .iter()
+        .map(|entry| entry.name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(child_names, vec!["deeper".to_owned(), "main.rs".to_owned()]);
 }
 
 #[tokio::test]

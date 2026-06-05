@@ -15,8 +15,8 @@ use crate::formatting::{format_duration, format_file_size, format_middle_ellipsi
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, MarkdownPreviewMode, Message, PreviewContent,
-    PreviewSize, PreviewState, PreviewTreeEntry, ScrollbarVisibility, TextPreviewDocument,
-    TextPreviewFormat, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarVisibility,
+    TextPreviewDocument, TextPreviewFormat, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
 };
 use crate::typography::readable_text;
 
@@ -190,9 +190,24 @@ fn preview_tree_listing(
 
     for entry in visible_preview_tree_entries(entries) {
         listing = listing.push(preview_tree_entry_row(entry));
+        if let Some(message) = preview_tree_directory_status_message(entry) {
+            listing = listing.push(preview_tree_status_row(entry, message));
+        }
     }
 
     listing
+}
+
+fn preview_tree_directory_status_message(entry: &PreviewTreeEntry) -> Option<String> {
+    if !entry.is_expanded {
+        return None;
+    }
+
+    match entry.directory_children.as_ref()? {
+        PreviewTreeDirectoryChildren::Loading => Some("Loading...".to_owned()),
+        PreviewTreeDirectoryChildren::Error(error) => Some(format!("Could not load: {error}")),
+        PreviewTreeDirectoryChildren::Pending | PreviewTreeDirectoryChildren::Loaded => None,
+    }
 }
 
 fn visible_preview_tree_entries(entries: &[PreviewTreeEntry]) -> Vec<&PreviewTreeEntry> {
@@ -260,6 +275,26 @@ fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message>
     } else {
         row_container.into()
     }
+}
+
+fn preview_tree_status_row(entry: &PreviewTreeEntry, message: String) -> Element<'static, Message> {
+    let message = format_middle_ellipsized_text(&message, PREVIEW_ENTRY_NAME_MAX_CHARS);
+    let indent = Space::with_width(Length::Fixed(
+        (entry.depth + 1) as f32 * PREVIEW_TREE_INDENT_WIDTH,
+    ));
+    let row_content = row![
+        indent,
+        Space::with_width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH)),
+        Space::with_width(Length::Fixed(PREVIEW_ICON_SIZE)),
+        readable_text(message).size(13).width(Length::Fill),
+    ]
+    .spacing(6)
+    .align_items(Alignment::Center);
+
+    container(row_content)
+        .padding([3, 6])
+        .width(Length::Fill)
+        .into()
 }
 
 fn text_preview_panel<'a>(

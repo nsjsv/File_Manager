@@ -18,6 +18,7 @@ use crate::view::{
 
 const SEARCH_FOCUS_RETRY_DELAYS: [Duration; 2] =
     [Duration::from_millis(16), Duration::from_millis(75)];
+const SEARCH_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(150);
 
 impl FileBrowser {
     pub(super) fn open_search(&mut self) -> Command<Message> {
@@ -29,11 +30,14 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         let rename_command = self.commit_rename_if_active();
         self.file_drag = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
         self.search = Some(SearchState {
             scope: SearchScope::CurrentDirectory,
             root,
             query: String::new(),
+            request_generation: 0,
             matches: Vec::new(),
             selected_match: None,
             is_loading: false,
@@ -57,11 +61,29 @@ impl FileBrowser {
             return Command::none();
         };
 
+        search.request_generation = search.request_generation.wrapping_add(1);
         search.query = query;
         search.matches.clear();
         search.selected_match = None;
         search.skipped_count = 0;
         search.error = None;
+        let request = search.request();
+        if request.query.trim().is_empty() {
+            search.is_loading = false;
+            return Command::none();
+        }
+
+        search.is_loading = true;
+        search_input_stabilization_command(request)
+    }
+
+    pub(super) fn load_stable_search_matches(
+        &mut self,
+        request: SearchRequest,
+    ) -> Command<Message> {
+        if !self.active_search_matches_request(&request) {
+            return Command::none();
+        }
         self.load_search_matches()
     }
 
@@ -315,7 +337,14 @@ impl FileBrowser {
     ) -> Option<&mut SearchState> {
         self.search
             .as_mut()
-            .filter(|search| search.request() == *request)
+            .filter(|search| search_request_matches_active_state(search, request))
+    }
+
+    fn active_search_matches_request(&self, request: &SearchRequest) -> bool {
+        matches!(
+            self.search.as_ref(),
+            Some(search) if search_request_matches_active_state(search, request)
+        )
     }
 
     fn active_search_mut_for_root(&mut self, root: &Path) -> Option<&mut SearchState> {
@@ -377,6 +406,20 @@ fn scroll_selected_search_match(search: &SearchState) -> Command<Message> {
         search_results_id(),
         scrollable::AbsoluteOffset { x: 0.0, y },
     )
+}
+
+fn search_input_stabilization_command(request: SearchRequest) -> Command<Message> {
+    Command::perform(
+        async move {
+            tokio::time::sleep(SEARCH_INPUT_STABILIZATION_DELAY).await;
+            request
+        },
+        Message::SearchInputStabilized,
+    )
+}
+
+fn search_request_matches_active_state(search: &SearchState, request: &SearchRequest) -> bool {
+    search.request() == *request
 }
 
 pub(super) fn focus_search_input_command() -> Command<Message> {
@@ -446,5 +489,129 @@ mod tests {
             (search_results_content_height(match_count) - SEARCH_RESULTS_HEIGHT).max(0.0);
 
         assert_eq!(offset, max_offset);
+    }
+
+    #[test]
+    fn search_request_generation_rejects_repeated_stale_query() {
+        let search = search_state_for_request_generation(2);
+        let stale_request = request_with_search_generation(&search, 1);
+
+        assert!(!search_request_matches_active_state(
+            &search,
+            &stale_request
+        ));
+        assert!(search_request_matches_active_state(
+            &search,
+            &search.request()
+        ));
+    }
+
+    #[test]
+    fn stale_search_input_stabilization_keeps_search_idle() {
+        let search = search_state_for_request_generation(2);
+        let stale_request = request_with_search_generation(&search, 1);
+        let mut browser = browser_with_search_state(search);
+
+        let _command = browser.load_stable_search_matches(stale_request);
+
+        let search = browser.search.as_ref().expect("search state remains open");
+        assert!(!search.is_loading);
+        assert!(search.matches.is_empty());
+    }
+
+    #[test]
+    fn stale_search_matches_loaded_keeps_current_matches() {
+        let mut search = search_state_for_request_generation(2);
+        search.is_loading = true;
+        search.matches = vec![search_match_at_path("/tmp/current")];
+        search.selected_match = Some(0);
+        search.skipped_count = 3;
+        let stale_request = request_with_search_generation(&search, 1);
+        let mut browser = browser_with_search_state(search);
+        let stale_outcome = FileSearchOutcome {
+            root: PathBuf::from("/tmp"),
+            matches: vec![search_match_at_path("/tmp/stale")],
+            skipped: Vec::new(),
+        };
+
+        let _command = browser.accept_search_matches(stale_request, Ok(stale_outcome));
+
+        let search = browser.search.as_ref().expect("search state remains open");
+        assert_eq!(search.matches.len(), 1);
+        assert_eq!(search.matches[0].path, PathBuf::from("/tmp/current"));
+        assert_eq!(search.selected_match, Some(0));
+        assert_eq!(search.skipped_count, 3);
+        assert!(search.is_loading);
+    }
+
+    #[test]
+    fn empty_search_query_clears_results_and_advances_generation() {
+        let mut search = search_state_for_request_generation(7);
+        search.is_loading = true;
+        search.matches = vec![search_match_at_path("/tmp/current")];
+        search.selected_match = Some(0);
+        search.skipped_count = 2;
+        search.error = Some("previous search failed".to_owned());
+        let mut browser = browser_with_search_state(search);
+
+        let _command = browser.update_search_query("  ".to_owned());
+
+        let search = browser.search.as_ref().expect("search state remains open");
+        assert_eq!(search.request_generation, 8);
+        assert_eq!(search.query, "  ");
+        assert!(search.matches.is_empty());
+        assert_eq!(search.selected_match, None);
+        assert_eq!(search.skipped_count, 0);
+        assert_eq!(search.error, None);
+        assert!(!search.is_loading);
+    }
+
+    fn search_state_for_request_generation(request_generation: u64) -> SearchState {
+        SearchState {
+            scope: SearchScope::CurrentDirectory,
+            root: PathBuf::from("/tmp"),
+            query: "needle".to_owned(),
+            request_generation,
+            matches: Vec::new(),
+            selected_match: None,
+            is_loading: false,
+            is_indexing: false,
+            skipped_count: 0,
+            error: None,
+            index_error: None,
+        }
+    }
+
+    fn browser_with_search_state(search: SearchState) -> FileBrowser {
+        let (mut browser, _) = <FileBrowser as iced::multi_window::Application>::new(
+            crate::config::default_user_config(),
+        );
+        browser.search_index.base_dir = PathBuf::from("/tmp/file-manager-search-test-index");
+        browser.search = Some(search);
+        browser
+    }
+
+    fn request_with_search_generation(search: &SearchState, generation: u64) -> SearchRequest {
+        SearchRequest {
+            scope: search.scope,
+            root: search.root.clone(),
+            query: search.query.clone(),
+            generation,
+        }
+    }
+
+    fn search_match_at_path(path: &str) -> file_core::FileSearchMatch {
+        let path = PathBuf::from(path);
+        let name = path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("match"))
+            .to_os_string();
+        file_core::FileSearchMatch {
+            relative_path: PathBuf::from(&name),
+            path,
+            name,
+            kind: FileKind::File,
+            rank_score: 1,
+        }
     }
 }

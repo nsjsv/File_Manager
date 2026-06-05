@@ -9,6 +9,9 @@ use tokio::fs;
 
 use crate::ops::TransferConflictStrategy;
 use crate::scan::{entry_from_path, is_hidden_name, FileError, ScanOptions, ScanWarning};
+use crate::transfer_conflict::{
+    available_transfer_target_path_candidate, transfer_target_metadata_if_exists,
+};
 use crate::{compare_entries, DirectoryEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,7 +225,7 @@ async fn prepare_restore_target(
 ) -> Result<Option<PathBuf>, FileError> {
     let target = &entry.original_path;
     let Some(target_metadata) =
-        metadata_if_exists(target)
+        transfer_target_metadata_if_exists(target)
             .await
             .map_err(|source| FileError::Move {
                 from: entry.trash_path.clone(),
@@ -244,7 +247,14 @@ async fn prepare_restore_target(
             Ok(Some(target.clone()))
         }
         TransferConflictStrategy::Skip => Ok(None),
-        TransferConflictStrategy::KeepBoth => Ok(Some(unique_available_path(target))),
+        TransferConflictStrategy::KeepBoth => available_transfer_target_path_candidate(target)
+            .await
+            .map(Some)
+            .map_err(|source| FileError::Move {
+                from: entry.trash_path.clone(),
+                to: target.clone(),
+                source,
+            }),
         TransferConflictStrategy::Merge => {
             let source_metadata =
                 fs::metadata(&entry.trash_path)
@@ -280,14 +290,6 @@ async fn remove_restore_target(
     })
 }
 
-async fn metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
-    match fs::metadata(path).await {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 async fn symlink_metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
     match fs::symlink_metadata(path).await {
         Ok(metadata) => Ok(Some(metadata)),
@@ -298,29 +300,6 @@ async fn symlink_metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::M
 
 fn already_exists_error() -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, "target already exists")
-}
-
-fn unique_available_path(path: &Path) -> PathBuf {
-    if !path.exists() {
-        return path.to_path_buf();
-    }
-
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
-    let name = path
-        .file_name()
-        .map(OsString::from)
-        .unwrap_or_else(|| OsString::from("item"));
-
-    for index in 1..1000 {
-        let mut next = name.clone();
-        next.push(format!(".copy{index}"));
-        let candidate = parent.join(next);
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-
-    path.to_path_buf()
 }
 
 async fn remove_info_file(info_path: &Path) -> Result<(), FileError> {

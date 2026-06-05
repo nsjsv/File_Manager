@@ -17,14 +17,54 @@ const COLUMN_VIEW_MODE_KEY: &str = "column_view_mode";
 const COLUMN_FIXED_COUNT_KEY: &str = "column_fixed_count";
 const UNBOUNDED_COLUMN_WIDTH_KEY: &str = "unbounded_column_width";
 const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
+const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 
 pub(crate) const DEFAULT_COLUMN_VIEW_MODE: ColumnViewMode = ColumnViewMode::Unbounded;
 pub(crate) const DEFAULT_COLUMN_FIXED_COUNT: usize = 3;
 pub(crate) const DEFAULT_UNBOUNDED_COLUMN_WIDTH: f32 = 260.0;
 pub(crate) const DEFAULT_TERMINAL_EMULATOR: TerminalEmulator = TerminalEmulator::Automatic;
+pub(crate) const DEFAULT_RENDERING_BACKEND_PREFERENCE: RenderingBackendPreference =
+    RenderingBackendPreference::Software;
 pub(crate) const MIN_UNBOUNDED_COLUMN_WIDTH: f32 = 180.0;
 pub(crate) const MAX_UNBOUNDED_COLUMN_WIDTH: f32 = 520.0;
 pub(crate) const COLUMN_FIXED_COUNT_OPTIONS: [usize; 4] = [2, 3, 4, 5];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenderingBackendPreference {
+    Software,
+    Gpu,
+}
+
+impl RenderingBackendPreference {
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "software" => Some(Self::Software),
+            "gpu" => Some(Self::Gpu),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Software => "software",
+            Self::Gpu => "gpu",
+        }
+    }
+
+    pub(crate) fn iced_backend_candidates(self) -> &'static str {
+        match self {
+            Self::Software => "tiny-skia",
+            Self::Gpu => "wgpu,tiny-skia",
+        }
+    }
+
+    pub(crate) fn wgpu_power_preference(self) -> Option<&'static str> {
+        match self {
+            Self::Software => None,
+            Self::Gpu => Some("high"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
@@ -35,6 +75,7 @@ pub(crate) struct UserConfig {
     pub(crate) column_fixed_count: usize,
     pub(crate) unbounded_column_width: f32,
     pub(crate) terminal_emulator: TerminalEmulator,
+    pub(crate) rendering_backend_preference: RenderingBackendPreference,
 }
 
 pub(crate) fn load_user_config() -> UserConfig {
@@ -90,6 +131,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         column_fixed_count: DEFAULT_COLUMN_FIXED_COUNT,
         unbounded_column_width: DEFAULT_UNBOUNDED_COLUMN_WIDTH,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
+        rendering_backend_preference: DEFAULT_RENDERING_BACKEND_PREFERENCE,
     }
 }
 
@@ -154,6 +196,11 @@ fn parse_user_config(content: &str, default: UserConfig) -> UserConfig {
                     config.terminal_emulator = terminal_emulator;
                 }
             }
+            RENDERING_BACKEND_KEY => {
+                if let Some(preference) = RenderingBackendPreference::from_config_value(value) {
+                    config.rendering_backend_preference = preference;
+                }
+            }
             _ => {}
         }
     }
@@ -188,7 +235,7 @@ fn write_user_config(path: &Path, config: &UserConfig) -> io::Result<()> {
     fs::write(
         path,
         format!(
-            "# File Manager user configuration\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n",
+            "# File Manager user configuration\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n{}={}\n",
             SEARCH_INDEX_DIR_KEY,
             config.search_index_dir.to_string_lossy(),
             THUMBNAIL_CACHE_DIR_KEY,
@@ -202,7 +249,9 @@ fn write_user_config(path: &Path, config: &UserConfig) -> io::Result<()> {
             UNBOUNDED_COLUMN_WIDTH_KEY,
             config.unbounded_column_width,
             TERMINAL_EMULATOR_KEY,
-            config.terminal_emulator.config_value()
+            config.terminal_emulator.config_value(),
+            RENDERING_BACKEND_KEY,
+            config.rendering_backend_preference.config_value()
         ),
     )
 }
@@ -234,7 +283,7 @@ mod tests {
     #[test]
     fn parses_column_view_preferences() {
         let parsed = parse_user_config(
-            "show_hidden_files=true\ncolumn_view_mode=fixed\ncolumn_fixed_count=5\nunbounded_column_width=320.5\nterminal_emulator=ghostty\n",
+            "show_hidden_files=true\ncolumn_view_mode=fixed\ncolumn_fixed_count=5\nunbounded_column_width=320.5\nterminal_emulator=ghostty\nrendering_backend=gpu\n",
             default_user_config(),
         );
 
@@ -243,13 +292,17 @@ mod tests {
         assert_eq!(parsed.column_fixed_count, 5);
         assert_eq!(parsed.unbounded_column_width, 320.5);
         assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
+        assert_eq!(
+            parsed.rendering_backend_preference,
+            RenderingBackendPreference::Gpu
+        );
     }
 
     #[test]
     fn invalid_column_view_preferences_fall_back_to_defaults() {
         let default = default_user_config();
         let parsed = parse_user_config(
-            "show_hidden_files=maybe\ncolumn_view_mode=wide\ncolumn_fixed_count=8\nunbounded_column_width=nan\nterminal_emulator=missing\n",
+            "show_hidden_files=maybe\ncolumn_view_mode=wide\ncolumn_fixed_count=8\nunbounded_column_width=nan\nterminal_emulator=missing\nrendering_backend=metal\n",
             default.clone(),
         );
 
@@ -261,5 +314,46 @@ mod tests {
             DEFAULT_UNBOUNDED_COLUMN_WIDTH
         );
         assert_eq!(parsed.terminal_emulator, DEFAULT_TERMINAL_EMULATOR);
+        assert_eq!(
+            parsed.rendering_backend_preference,
+            DEFAULT_RENDERING_BACKEND_PREFERENCE
+        );
+    }
+
+    #[test]
+    fn writes_rendering_backend_preference() {
+        let temp_dir = tempfile::tempdir().expect("create temp config dir");
+        let path = temp_dir.path().join("config.txt");
+        let mut config = default_user_config();
+        config.rendering_backend_preference = RenderingBackendPreference::Gpu;
+
+        write_user_config(&path, &config).expect("write user config");
+
+        let content = fs::read_to_string(path).expect("read user config");
+        assert!(content.contains("rendering_backend=gpu\n"));
+    }
+
+    #[test]
+    fn maps_rendering_backend_preferences_to_iced_candidates() {
+        assert_eq!(
+            RenderingBackendPreference::Software.iced_backend_candidates(),
+            "tiny-skia"
+        );
+        assert_eq!(
+            RenderingBackendPreference::Gpu.iced_backend_candidates(),
+            "wgpu,tiny-skia"
+        );
+    }
+
+    #[test]
+    fn maps_gpu_rendering_to_high_power_wgpu_preference() {
+        assert_eq!(
+            RenderingBackendPreference::Software.wgpu_power_preference(),
+            None
+        );
+        assert_eq!(
+            RenderingBackendPreference::Gpu.wgpu_power_preference(),
+            Some("high")
+        );
     }
 }

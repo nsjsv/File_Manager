@@ -1,7 +1,9 @@
 mod floating_panels;
 mod markdown_preview;
 mod preview_panel;
+mod rendering_settings;
 mod search_panel;
+mod toggle_switch;
 
 pub(crate) use preview_panel::view_preview_window;
 pub(crate) use search_panel::{
@@ -45,6 +47,7 @@ use floating_panels::{
     column_settings_panel, context_menu_panel, destructive_action_confirmation_panel,
     error_notification_panel, sidebar_view, transfer_conflict_panel,
 };
+use rendering_settings::renderer_restart_notice_panel;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const TAB_ICON_SIZE: f32 = 14.0;
@@ -54,6 +57,7 @@ const TAB_LABEL_MAX_CHARS: usize = 24;
 const PATH_SUGGESTION_MAX_CHARS: usize = 72;
 const ERROR_NOTIFICATION_FLOAT_X: f32 = SIDEBAR_WIDTH + 18.0;
 const ERROR_NOTIFICATION_FLOAT_Y: f32 = 18.0;
+const RENDERER_RESTART_NOTICE_ERROR_OFFSET_Y: f32 = 58.0;
 const DRAG_PREVIEW_ICON_SIZE: f32 = 18.0;
 const DRAG_PREVIEW_LABEL_MAX_CHARS: usize = 34;
 const DRAG_PREVIEW_OFFSET_X: f32 = 14.0;
@@ -175,6 +179,21 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             placement: FloatingPlacement::At(iced::Point::new(
                 ERROR_NOTIFICATION_FLOAT_X,
                 ERROR_NOTIFICATION_FLOAT_Y,
+            )),
+        });
+    }
+
+    if browser.renderer_restart_notice_visible {
+        let notice_y = if browser.error.is_some() {
+            ERROR_NOTIFICATION_FLOAT_Y + RENDERER_RESTART_NOTICE_ERROR_OFFSET_Y
+        } else {
+            ERROR_NOTIFICATION_FLOAT_Y
+        };
+        floating.push(FloatingContent {
+            element: renderer_restart_notice_panel(),
+            placement: FloatingPlacement::At(iced::Point::new(
+                ERROR_NOTIFICATION_FLOAT_X,
+                notice_y,
             )),
         });
     }

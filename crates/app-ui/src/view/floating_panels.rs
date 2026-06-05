@@ -10,20 +10,22 @@ use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
     context_menu_style, error_notification_style, hovered_sidebar_item_style,
-    navigation_icon_button_style, selected_sidebar_item_style, sidebar_style, switch_thumb_style,
-    switch_track_off_style, switch_track_on_style,
+    navigation_icon_button_style, selected_sidebar_item_style, sidebar_bookmark_drop_slot_style,
+    sidebar_style,
 };
 use crate::config::COLUMN_FIXED_COUNT_OPTIONS;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
     trash_location_path, ColumnViewMode, ContextMenuState, DestructiveActionConfirmation, Message,
-    SidebarLocation, TransferConflictChoice, TransferConflictItem, TransferConflictMetadata,
-    TransferConflictState, TRASH_LOCATION_LABEL,
+    SidebarBookmarkDropSlot, SidebarLocation, SidebarLocationKind, TransferConflictChoice,
+    TransferConflictItem, TransferConflictMetadata, TransferConflictState, TRASH_LOCATION_LABEL,
 };
 use crate::sidebar::SIDEBAR_WIDTH;
 use crate::typography::readable_text;
 
+use super::rendering_settings::gpu_rendering_button;
+use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const COLUMN_SETTINGS_FLOAT_WIDTH: f32 = 260.0;
@@ -33,6 +35,8 @@ const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
 const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
 const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
 const SIDEBAR_LABEL_MAX_CHARS: usize = 22;
+const SIDEBAR_ITEM_VERTICAL_PADDING: f32 = 12.0;
+const SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT: f32 = MENU_ICON_SIZE + SIDEBAR_ITEM_VERTICAL_PADDING;
 
 pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
     let message = format_middle_ellipsized_text(error, ERROR_NOTIFICATION_MAX_CHARS);
@@ -306,6 +310,14 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     .align_items(Alignment::Center);
 
     let mut sidebar = column![sidebar_header].spacing(6).padding(12);
+    let can_drop_bookmark = browser.can_drop_sidebar_bookmark();
+    if can_drop_bookmark && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Top)
+    {
+        sidebar = sidebar.push(sidebar_bookmark_drop_slot(
+            browser,
+            SidebarBookmarkDropSlot::Top,
+        ));
+    }
 
     for location in &browser.sidebar_locations {
         let presentation = sidebar_presentation(browser, location);
@@ -315,9 +327,13 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
             IconTone::Normal
         };
 
-        let item_container = container(sidebar_label(IconSymbol::Folder, &location.label, tone))
-            .padding([6, 8])
-            .width(Length::Fill);
+        let item_container = container(sidebar_label(
+            sidebar_icon_symbol(location),
+            &location.label,
+            tone,
+        ))
+        .padding([6, 8])
+        .width(Length::Fill);
         let item_container = match presentation {
             SidebarPresentation::Selected => item_container.style(selected_sidebar_item_style),
             SidebarPresentation::Hovered => item_container.style(hovered_sidebar_item_style),
@@ -325,14 +341,35 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         };
 
         let item = mouse_area(item_container)
-            .on_enter(Message::SidebarHovered(location.path.clone()))
+            .on_enter(if location.kind == SidebarLocationKind::Bookmark {
+                Message::SidebarBookmarkEntered(location.path.clone())
+            } else {
+                Message::SidebarHovered(location.path.clone())
+            })
             .on_exit(Message::SidebarHoverCleared(location.path.clone()))
             .on_middle_press(Message::OpenDirectoryInNewTab(location.path.clone()))
-            .on_press(Message::NavigateTo(location.path.clone()))
-            .on_release(Message::DragSelectionFinished)
+            .on_press(if location.kind == SidebarLocationKind::Bookmark {
+                Message::SidebarBookmarkPressed(location.path.clone())
+            } else {
+                Message::NavigateTo(location.path.clone())
+            })
+            .on_release(if location.kind == SidebarLocationKind::Bookmark {
+                Message::SidebarBookmarkReleased
+            } else {
+                Message::DragSelectionFinished
+            })
             .interaction(iced::mouse::Interaction::Pointer);
 
         sidebar = sidebar.push(item);
+    }
+
+    if can_drop_bookmark
+        && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Bottom)
+    {
+        sidebar = sidebar.push(sidebar_bookmark_drop_slot(
+            browser,
+            SidebarBookmarkDropSlot::Bottom,
+        ));
     }
 
     let trash_path = trash_location_path();
@@ -370,7 +407,7 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         .interaction(iced::mouse::Interaction::Pointer);
     sidebar = sidebar.push(trash_item);
 
-    container(
+    let sidebar_panel = container(
         scrollable(sidebar)
             .direction(auto_hide_vertical_scrollbar_direction(
                 browser.scrollbar_visibility,
@@ -381,8 +418,52 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     )
     .width(Length::Fixed(SIDEBAR_WIDTH))
     .height(Length::Fill)
-    .style(sidebar_style)
-    .into()
+    .style(sidebar_style);
+
+    if can_drop_bookmark {
+        mouse_area(sidebar_panel)
+            .on_move(Message::SidebarPointerMoved)
+            .on_exit(Message::SidebarPointerExited)
+            .into()
+    } else {
+        sidebar_panel.into()
+    }
+}
+
+fn sidebar_bookmark_drop_slot(
+    browser: &FileBrowser,
+    slot: SidebarBookmarkDropSlot,
+) -> Element<'_, Message> {
+    let is_active = browser.sidebar_bookmark_drop_slot == Some(slot);
+    let content = container(Space::with_height(Length::Fixed(
+        SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT,
+    )))
+    .height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT))
+    .width(Length::Fill);
+    let content = if is_active {
+        content.style(sidebar_bookmark_drop_slot_style)
+    } else {
+        content
+    };
+
+    mouse_area(content)
+        .on_enter(Message::SidebarBookmarkDropSlotHovered(slot))
+        .on_exit(Message::SidebarBookmarkDropSlotCleared(slot))
+        .on_release(Message::DragSelectionFinished)
+        .into()
+}
+
+fn sidebar_icon_symbol(location: &SidebarLocation) -> IconSymbol {
+    match location.kind {
+        SidebarLocationKind::Home => IconSymbol::House,
+        SidebarLocationKind::Desktop => IconSymbol::Monitor,
+        SidebarLocationKind::Documents => IconSymbol::FileText,
+        SidebarLocationKind::Downloads => IconSymbol::Download,
+        SidebarLocationKind::Pictures => IconSymbol::FileImage,
+        SidebarLocationKind::Music => IconSymbol::Music,
+        SidebarLocationKind::Videos => IconSymbol::Video,
+        SidebarLocationKind::Bookmark => IconSymbol::Bookmark,
+    }
 }
 
 pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Message> {
@@ -397,6 +478,8 @@ pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Messag
             readable_text("Settings").size(16),
             readable_text("Files").size(13),
             hidden_files_visibility_button(browser),
+            readable_text("Rendering").size(13),
+            gpu_rendering_button(browser.rendering_backend_preference),
             readable_text("Column View").size(13),
             row![
                 column_view_mode_button(
@@ -448,37 +531,6 @@ fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Mess
         .on_press(Message::ShowHiddenFilesToggled)
         .width(Length::Fill)
         .style(context_menu_button_style())
-}
-
-fn switch_control(is_on: bool) -> Element<'static, Message> {
-    let content = if is_on {
-        Row::new()
-            .push(Space::with_width(Length::Fill))
-            .push(switch_thumb())
-    } else {
-        Row::new()
-            .push(switch_thumb())
-            .push(Space::with_width(Length::Fill))
-    };
-
-    container(content)
-        .padding(3)
-        .width(Length::Fixed(38.0))
-        .height(Length::Fixed(22.0))
-        .style(if is_on {
-            switch_track_on_style
-        } else {
-            switch_track_off_style
-        })
-        .into()
-}
-
-fn switch_thumb() -> Element<'static, Message> {
-    container(Space::with_width(Length::Fixed(1.0)))
-        .width(Length::Fixed(14.0))
-        .height(Length::Fixed(14.0))
-        .style(switch_thumb_style)
-        .into()
 }
 
 fn column_view_mode_button(

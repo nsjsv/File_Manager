@@ -11,11 +11,10 @@ use file_core::{
 use tokio::io::AsyncReadExt;
 
 use crate::audio_preview::inspect_audio_preview_metadata;
-use crate::model::{PreviewContent, PreviewTreeEntry};
+use crate::model::{PreviewContent, PreviewTreeDirectoryChildren, PreviewTreeEntry};
 use crate::text_preview::render_text_preview;
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 256 * 1024;
-pub(crate) const PREVIEW_DIRECTORY_LIMIT: usize = 500;
 pub(crate) const PREVIEW_ARCHIVE_ENTRY_LIMIT: usize = 500;
 
 const SUPPORTED_ARCHIVE_FORMAT_MESSAGE: &str =
@@ -54,79 +53,24 @@ async fn load_directory_preview(
     path: PathBuf,
     options: ScanOptions,
 ) -> Result<PreviewContent, String> {
-    let mut entries = Vec::new();
-    load_directory_preview_tree(path, options, &mut entries).await?;
+    let directory_entries = load_directory_preview_children(path, options).await?;
+    let entries = directory_entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| PreviewTreeEntry::from_directory_entry(index, entry, 0, None))
+        .collect();
 
     Ok(PreviewContent::Directory { entries })
 }
 
-async fn load_directory_preview_tree(
+pub(crate) async fn load_directory_preview_children(
     path: PathBuf,
     options: ScanOptions,
-    entries: &mut Vec<PreviewTreeEntry>,
-) -> Result<bool, String> {
-    let mut pending_steps = vec![DirectoryPreviewStep::ScanDirectory {
-        path,
-        parent: None,
-        depth: 0,
-        is_root: true,
-    }];
-
-    while let Some(step) = pending_steps.pop() {
-        if entries.len() >= PREVIEW_DIRECTORY_LIMIT {
-            return Ok(true);
-        }
-
-        match step {
-            DirectoryPreviewStep::ScanDirectory {
-                path,
-                parent,
-                depth,
-                is_root,
-            } => {
-                let scan = match scan_directory(path, options.clone()).await {
-                    Ok(scan) => scan,
-                    Err(error) if is_root => return Err(error.to_string()),
-                    Err(_) => continue,
-                };
-                for entry in scan.entries.into_iter().rev() {
-                    pending_steps.push(DirectoryPreviewStep::Entry {
-                        entry,
-                        parent,
-                        depth,
-                    });
-                }
-            }
-            DirectoryPreviewStep::Entry {
-                entry,
-                parent,
-                depth,
-            } => {
-                let entry_id = entries.len();
-                let is_directory = entry.kind == FileKind::Directory;
-                let entry_path = entry.path.clone();
-                entries.push(PreviewTreeEntry {
-                    id: entry_id,
-                    name: entry.name().to_string_lossy().into_owned(),
-                    kind: entry.kind,
-                    depth,
-                    parent,
-                    is_expanded: false,
-                    toggle_rotation_progress: 0.0,
-                });
-                if is_directory {
-                    pending_steps.push(DirectoryPreviewStep::ScanDirectory {
-                        path: entry_path,
-                        parent: Some(entry_id),
-                        depth: depth + 1,
-                        is_root: false,
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(false)
+) -> Result<Vec<DirectoryEntry>, String> {
+    scan_directory(path, options)
+        .await
+        .map(|scan| scan.entries)
+        .map_err(|error| error.to_string())
 }
 
 async fn load_archive_preview(
@@ -410,20 +354,6 @@ struct ArchivePreview {
     entries: Vec<PreviewTreeEntry>,
 }
 
-enum DirectoryPreviewStep {
-    ScanDirectory {
-        path: PathBuf,
-        parent: Option<usize>,
-        depth: usize,
-        is_root: bool,
-    },
-    Entry {
-        entry: DirectoryEntry,
-        parent: Option<usize>,
-        depth: usize,
-    },
-}
-
 struct ArchiveMember {
     path: String,
     kind: FileKind,
@@ -533,6 +463,8 @@ impl ArchiveTreeBuilder {
             kind: node.kind,
             depth,
             parent,
+            filesystem_path: None,
+            directory_children: preview_archive_directory_children(node.kind),
             is_expanded: true,
             toggle_rotation_progress: if node.kind == FileKind::Directory {
                 1.0
@@ -562,6 +494,10 @@ impl ArchiveTreeBuilder {
         indices.sort_by(|left, right| archive_node_order(&self.nodes[*left], &self.nodes[*right]));
         indices
     }
+}
+
+fn preview_archive_directory_children(kind: FileKind) -> Option<PreviewTreeDirectoryChildren> {
+    (kind == FileKind::Directory).then_some(PreviewTreeDirectoryChildren::Loaded)
 }
 
 struct ArchiveTreeNode {

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, for example v0.0.1"
+        description: "Release version, for example v0.0.2"
         required: true
-        default: "v0.0.1"
+        default: "v0.0.2"
 
 permissions:
   contents: write
@@ -40,6 +40,7 @@ jobs:
             fontconfig \
             git \
             libxkbcommon \
+            openssh \
             pkgconf \
             rust \
             wayland
@@ -57,7 +58,7 @@ jobs:
           fi
 
           if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release version must look like v0.0.1"
+            echo "::error::Release version must look like v0.0.2"
             exit 1
           fi
 
@@ -88,6 +89,7 @@ jobs:
         run: cargo build --release --locked -p "${CARGO_PACKAGE}"
 
       - name: Package release archive
+        id: package
         run: |
           package_dir="${{ steps.metadata.outputs.package_dir }}"
           asset_name="${{ steps.metadata.outputs.asset_name }}"
@@ -95,25 +97,82 @@ jobs:
 
           install -Dm755 "target/release/${CARGO_BINARY}" "${payload}/usr/bin/${APP_NAME}"
           install -Dm644 LICENSE "${payload}/usr/share/licenses/${APP_NAME}/LICENSE"
-
-          install -dm755 "${payload}/usr/share/applications"
-          cat > "${payload}/usr/share/applications/${APP_NAME}.desktop" <<'EOF'
-          [Desktop Entry]
-          Type=Application
-          Name=File Manager
-          Exec=file-manager
-          Categories=System;FileManager;
-          Terminal=false
-          EOF
+          install -Dm644 packaging/linux/file-manager.desktop "${payload}/usr/share/applications/${APP_NAME}.desktop"
 
           tar -C dist -czf "${asset_name}" "${package_dir}"
           sha256sum "${asset_name}" > SHA256SUMS
+          read -r tarball_sha256 _ < SHA256SUMS
+          echo "sha256_x86_64=${tarball_sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.metadata.outputs.version }}
-          name: File Manager ${{ steps.metadata.outputs.version }}
+          name: ${{ steps.metadata.outputs.version }}
           files: |
             ${{ steps.metadata.outputs.asset_name }}
             SHA256SUMS
+
+      - name: Publish AUR package
+        if: github.event_name == 'push'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
+          AUR_COMMIT_NAME: ${{ secrets.AUR_COMMIT_NAME }}
+          AUR_COMMIT_EMAIL: ${{ secrets.AUR_COMMIT_EMAIL }}
+          PKGVER: ${{ steps.metadata.outputs.semver }}
+          SHA256_X86_64: ${{ steps.package.outputs.sha256_x86_64 }}
+        run: |
+          if [[ -z "${AUR_SSH_PRIVATE_KEY}" ]]; then
+            echo "::error::AUR_SSH_PRIVATE_KEY secret is required to publish file-manager-bin"
+            exit 1
+          fi
+          if [[ -z "${AUR_KNOWN_HOSTS}" ]]; then
+            echo "::error::AUR_KNOWN_HOSTS secret is required to publish file-manager-bin"
+            exit 1
+          fi
+          if [[ -z "${SHA256_X86_64}" ]]; then
+            echo "::error::Release tarball SHA-256 is missing"
+            exit 1
+          fi
+
+          install -dm700 "${HOME}/.ssh"
+          ssh_key="${HOME}/.ssh/aur"
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > "${ssh_key}"
+          chmod 600 "${ssh_key}"
+          printf '%s\n' "${AUR_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 644 "${HOME}/.ssh/known_hosts"
+
+          export GIT_SSH_COMMAND="ssh -i ${ssh_key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${HOME}/.ssh/known_hosts"
+
+          aur_workdir="$(mktemp -d)"
+          chmod 755 "${aur_workdir}"
+          aur_repo="${aur_workdir}/file-manager-bin"
+          git clone "ssh://aur@aur.archlinux.org/file-manager-bin.git" "${aur_repo}"
+
+          sed \
+            -e "s|@PKGVER@|${PKGVER}|g" \
+            -e "s|@SHA256_X86_64@|${SHA256_X86_64}|g" \
+            packaging/aur/file-manager-bin/PKGBUILD.in > "${aur_repo}/PKGBUILD"
+
+          if grep -Eq '@PKGVER@|@SHA256_X86_64@' "${aur_repo}/PKGBUILD"; then
+            echo "::error::AUR PKGBUILD still contains template placeholders"
+            exit 1
+          fi
+
+          if ! id -u aurbuild >/dev/null 2>&1; then
+            useradd -m aurbuild
+          fi
+          srcinfo="$(runuser -u aurbuild -- bash -c 'cd "$1" && makepkg --printsrcinfo' bash "${aur_repo}")"
+          printf '%s\n' "${srcinfo}" > "${aur_repo}/.SRCINFO"
+
+          git -C "${aur_repo}" config user.name "${AUR_COMMIT_NAME:-github-actions[bot]}"
+          git -C "${aur_repo}" config user.email "${AUR_COMMIT_EMAIL:-github-actions[bot]@users.noreply.github.com}"
+          git -C "${aur_repo}" add PKGBUILD .SRCINFO
+
+          if git -C "${aur_repo}" diff --cached --quiet; then
+            echo "AUR package is already up to date."
+          else
+            git -C "${aur_repo}" commit -m "Update to ${PKGVER}"
+            git -C "${aur_repo}" push
+          fi
