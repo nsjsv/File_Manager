@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=File Manager
+Exec=file-manager
+Categories=System;FileManager;
+Terminal=false

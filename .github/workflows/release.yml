@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version, for example v0.0.2"
-        required: true
-        default: "v0.0.2"
 
 permissions:
   contents: write
@@ -51,11 +45,7 @@ jobs:
       - name: Resolve release metadata
         id: metadata
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="${{ inputs.version }}"
-          else
-            version="${GITHUB_REF_NAME}"
-          fi
+          version="${GITHUB_REF_NAME}"
 
           if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release version must look like v0.0.2"
@@ -163,7 +153,11 @@ jobs:
           if ! id -u aurbuild >/dev/null 2>&1; then
             useradd -m aurbuild
           fi
-          srcinfo="$(runuser -u aurbuild -- bash -c 'cd "$1" && makepkg --printsrcinfo' bash "${aur_repo}")"
+          srcinfo_dir="$(mktemp -d)"
+          chown aurbuild "${srcinfo_dir}"
+          install -Dm644 -o aurbuild "${aur_repo}/PKGBUILD" "${srcinfo_dir}/PKGBUILD"
+
+          srcinfo="$(runuser -u aurbuild -- bash -c 'cd "$1" && makepkg --printsrcinfo' bash "${srcinfo_dir}")"
           printf '%s\n' "${srcinfo}" > "${aur_repo}/.SRCINFO"
 
           git -C "${aur_repo}" config user.name "${AUR_COMMIT_NAME:-github-actions[bot]}"
