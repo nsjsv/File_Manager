@@ -22,7 +22,9 @@ pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
-    InitialLoadFinished(InitialLoad),
+    StartupEnvironmentLoaded(StartupEnvironment),
+    SidebarLocationsLoaded(Vec<SidebarLocation>),
+    OperationStoreLoaded(Result<TaskQueueStore, String>),
     Loaded(Result<DirectoryScan, String>),
     TrashLoaded(Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
@@ -56,6 +58,7 @@ pub(crate) enum Message {
     FileOperationCancelRequested(u64),
     PreviewTreeDirectoryToggled(usize),
     PreviewTreeAnimationTick,
+    ThumbnailRefreshRequested(PathBuf),
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
     ColumnEntryClicked(PathBuf),
     ColumnBlankClicked(PathBuf),
@@ -257,12 +260,10 @@ impl TransferConflictState {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct InitialLoad {
+pub(crate) struct StartupEnvironment {
     pub(crate) home: PathBuf,
-    pub(crate) scan: Result<DirectoryScan, String>,
-    pub(crate) sidebar_locations: Vec<SidebarLocation>,
     pub(crate) user_config: UserConfig,
-    pub(crate) operation_store: Result<TaskQueueStore, String>,
+    pub(crate) state_database_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]

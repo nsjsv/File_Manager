@@ -13,7 +13,6 @@ use crate::thumbnail_cache::{
 };
 
 const ESTIMATED_ROW_HEIGHT: f32 = 56.0;
-const INITIAL_PREFETCH_ROWS: usize = 96;
 const OVERSCAN_ROWS: usize = 28;
 const PREVIEW_THUMBNAIL_MIN_EDGE: u32 = 512;
 const PREVIEW_RESIZE_EXTRA_PIXELS: u32 = 128;
@@ -245,7 +244,7 @@ impl FileBrowser {
 
     fn thumbnail_range_for_directory(&self, directory: &Path, len: usize) -> (usize, usize) {
         let Some(viewport) = self.column_viewports.get(directory).copied() else {
-            return (0, len.min(INITIAL_PREFETCH_ROWS));
+            return (0, 0);
         };
         let first_visible = (viewport.offset_y / ESTIMATED_ROW_HEIGHT).floor().max(0.0) as usize;
         let visible_count = (viewport.height / ESTIMATED_ROW_HEIGHT).ceil().max(1.0) as usize;

@@ -45,6 +45,7 @@ const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
 pub(super) fn main_window_settings() -> window::Settings {
     let mut settings = window::Settings {
         size: Size::new(MAIN_WINDOW_INITIAL_WIDTH, MAIN_WINDOW_INITIAL_HEIGHT),
+        exit_on_close_request: false,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
@@ -436,7 +437,7 @@ impl FileBrowser {
         self.clear_preview();
         self.pending_preview_resize = None;
 
-        let mut commands = Vec::with_capacity(3);
+        let mut commands = Vec::with_capacity(4);
         if let Some(window) = self.search_window.take() {
             commands.push(window::close(window));
         }
@@ -444,6 +445,8 @@ impl FileBrowser {
             commands.push(window::close(window));
         }
         commands.push(window::close(self.main_window));
+        // Iced daemons keep running without windows unless update returns an exit task.
+        commands.push(iced::exit());
 
         Task::batch(commands)
     }

@@ -7,8 +7,8 @@ use iced::Task;
 use super::paths::{completed_path_text, path_text};
 use super::FileBrowser;
 use crate::commands::{
-    load_directory_command, load_expanded_directory_command, load_trash_command,
-    path_suggestions_command,
+    delayed_thumbnail_refresh_command, load_directory_command, load_expanded_directory_command,
+    load_trash_command, path_suggestions_command,
 };
 use crate::model::{
     trash_location_path, ExpandedDirectory, ExpandedDirectoryStatus, Message, NavigationMode,
@@ -36,7 +36,10 @@ impl FileBrowser {
         startup_trace::mark_once("initial_directory_ready");
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
-        Task::batch([command, self.schedule_thumbnail_refresh()])
+        Task::batch([
+            command,
+            delayed_thumbnail_refresh_command(self.current_dir.clone()),
+        ])
     }
 
     pub(super) fn accept_trash_scan(&mut self, scan: TrashScan) -> Task<Message> {
@@ -58,7 +61,7 @@ impl FileBrowser {
         self.is_loading = false;
         self.error = None;
         self.sync_active_tab_state();
-        self.schedule_thumbnail_refresh()
+        delayed_thumbnail_refresh_command(self.current_dir.clone())
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
@@ -255,13 +258,7 @@ impl FileBrowser {
             .and_then(|index| self.path_suggestions.get(index))
             .cloned();
 
-        let path = if let Some(path) = selected_suggestion {
-            path
-        } else if typed_path.exists() {
-            typed_path
-        } else {
-            self.path_suggestions.first().cloned().unwrap_or(typed_path)
-        };
+        let path = selected_suggestion.unwrap_or(typed_path);
 
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;

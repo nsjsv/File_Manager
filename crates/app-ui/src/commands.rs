@@ -21,8 +21,8 @@ use iced::Task;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
-    InitialLoad, Message, PathSuggestionRequest, PendingOperation, SearchRequest, SidebarLocation,
-    TransferConflictMode, TransferConflictState,
+    Message, PathSuggestionRequest, PendingOperation, SearchRequest, SidebarLocation,
+    StartupEnvironment, TransferConflictMode, TransferConflictState,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::preview::{load_directory_preview_children, load_preview};
@@ -36,11 +36,30 @@ pub(crate) use queued_file_operations::file_operation_subscription;
 
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
+const THUMBNAIL_REFRESH_DELAY: Duration = Duration::from_millis(400);
 
-pub(crate) fn initial_load_command(user_config: config::UserConfig) -> Task<Message> {
+pub(crate) fn startup_environment_command() -> Task<Message> {
     Task::perform(
-        load_initial_state(user_config),
-        Message::InitialLoadFinished,
+        load_startup_environment(),
+        Message::StartupEnvironmentLoaded,
+    )
+}
+
+pub(crate) fn sidebar_locations_command(home: PathBuf) -> Task<Message> {
+    Task::perform(
+        load_sidebar_locations(home),
+        Message::SidebarLocationsLoaded,
+    )
+}
+
+pub(crate) fn operation_store_command(path: PathBuf) -> Task<Message> {
+    Task::perform(load_operation_store(path), Message::OperationStoreLoaded)
+}
+
+pub(crate) fn delayed_thumbnail_refresh_command(directory: PathBuf) -> Task<Message> {
+    Task::perform(
+        delayed_thumbnail_refresh(directory),
+        Message::ThumbnailRefreshRequested,
     )
 }
 
@@ -343,42 +362,24 @@ async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
     scan_trash(options).await.map_err(|error| error.to_string())
 }
 
-async fn load_initial_state(user_config: config::UserConfig) -> InitialLoad {
-    startup_trace::mark_once("initial_load_started");
-    let (home, user_config, state_database_path) = initial_paths(user_config).await;
-    let options = ScanOptions {
-        include_hidden: user_config.show_hidden_files,
-        ..ScanOptions::default()
-    };
-    let scan = load_directory(home.clone(), options);
-    let sidebar_locations = load_sidebar_locations(home.clone());
-    let operation_store = load_operation_store(state_database_path);
-    let (scan, sidebar_locations, operation_store) =
-        tokio::join!(scan, sidebar_locations, operation_store);
-    startup_trace::mark_once("initial_load_finished");
-    InitialLoad {
-        home,
-        scan,
-        sidebar_locations,
-        user_config,
-        operation_store,
-    }
-}
-
-async fn initial_paths(user_config: config::UserConfig) -> (PathBuf, config::UserConfig, PathBuf) {
-    let fallback_config = user_config.clone();
-    tokio::task::spawn_blocking(move || {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        (home, user_config, config::default_state_database_path())
+async fn load_startup_environment() -> StartupEnvironment {
+    startup_trace::mark_once("startup_environment_started");
+    tokio::task::spawn_blocking(|| StartupEnvironment {
+        home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+        user_config: config::load_user_config(),
+        state_database_path: config::default_state_database_path(),
     })
     .await
-    .unwrap_or_else(|_| {
-        (
-            PathBuf::from("/"),
-            fallback_config,
-            config::default_state_database_path(),
-        )
+    .unwrap_or_else(|_| StartupEnvironment {
+        home: PathBuf::from("/"),
+        user_config: config::ui_thread_startup_config(),
+        state_database_path: PathBuf::new(),
     })
+}
+
+async fn delayed_thumbnail_refresh(directory: PathBuf) -> PathBuf {
+    tokio::time::sleep(THUMBNAIL_REFRESH_DELAY).await;
+    directory
 }
 
 async fn persist_user_config(user_config: config::UserConfig) -> Result<(), String> {
@@ -401,6 +402,10 @@ async fn persist_sidebar_bookmarks(bookmarks: Vec<SidebarLocation>) -> Result<()
 }
 
 async fn load_operation_store(path: PathBuf) -> Result<TaskQueueStore, String> {
+    if path.as_os_str().is_empty() {
+        return Err("state database path is unavailable".to_owned());
+    }
+
     let result = tokio::task::spawn_blocking(move || {
         let store = TaskQueueStore::new(path)?;
         store.clear_tasks()?;

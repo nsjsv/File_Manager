@@ -40,7 +40,7 @@ use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
     MAIN_WINDOW_INITIAL_WIDTH,
 };
-use crate::commands::{file_operation_subscription, initial_load_command};
+use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserTab, ContextMenuState, DestructiveActionConfirmation,
@@ -144,8 +144,9 @@ pub(crate) struct FileBrowser {
 }
 
 impl FileBrowser {
-    fn boot(user_config: config::UserConfig) -> (Self, Task<Message>) {
+    fn boot() -> (Self, Task<Message>) {
         let (main_window, open_main_window) = window::open(main_window_settings());
+        let user_config = config::ui_thread_startup_config();
         let (browser, initial_tasks) = Self::new_with_main_window(user_config, main_window);
 
         (
@@ -261,7 +262,7 @@ impl FileBrowser {
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,
-            Task::batch([initial_load_command(user_config), system_theme_command()]),
+            Task::batch([startup_environment_command(), system_theme_command()]),
         )
     }
 
@@ -326,7 +327,15 @@ impl FileBrowser {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::InitialLoadFinished(initial_load) => self.accept_initial_load(initial_load),
+            Message::StartupEnvironmentLoaded(startup_environment) => {
+                self.accept_startup_environment(startup_environment)
+            }
+            Message::SidebarLocationsLoaded(sidebar_locations) => {
+                self.accept_sidebar_locations(sidebar_locations)
+            }
+            Message::OperationStoreLoaded(operation_store) => {
+                self.accept_operation_store(operation_store)
+            }
             Message::Loaded(Ok(scan)) => self.accept_directory_scan(scan),
             Message::Loaded(Err(error)) => {
                 self.is_loading = false;
@@ -451,6 +460,9 @@ impl FileBrowser {
                 self.toggle_preview_tree_directory(entry_id)
             }
             Message::PreviewTreeAnimationTick => self.advance_preview_tree_animation(),
+            Message::ThumbnailRefreshRequested(directory) => {
+                self.accept_thumbnail_refresh_request(directory)
+            }
             Message::ThumbnailBatchLoaded(outcomes) => self.accept_thumbnail_batch(outcomes),
             Message::ColumnEntryClicked(path) => self.handle_column_entry_clicked(path),
             Message::ColumnBlankClicked(path) => self.handle_column_blank_clicked(path),

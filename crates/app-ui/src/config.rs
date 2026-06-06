@@ -77,10 +77,7 @@ pub(crate) fn load_user_config() -> UserConfig {
 
     match fs::read_to_string(&config_file) {
         Ok(content) => parse_user_config(&content, default),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let _ = write_user_config(&config_file, &default);
-            default
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => default,
         Err(_) => default,
     }
 }
@@ -117,6 +114,17 @@ pub(crate) fn default_user_config() -> UserConfig {
     UserConfig {
         search_index_dir: cache_base.join("search-index"),
         thumbnail_cache_dir: cache_base.join("thumbnails"),
+        show_hidden_files: false,
+        column_width_overrides: HashMap::new(),
+        terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
+        rendering_backend_preference: DEFAULT_RENDERING_BACKEND_PREFERENCE,
+    }
+}
+
+pub(crate) fn ui_thread_startup_config() -> UserConfig {
+    UserConfig {
+        search_index_dir: PathBuf::new(),
+        thumbnail_cache_dir: PathBuf::new(),
         show_hidden_files: false,
         column_width_overrides: HashMap::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,

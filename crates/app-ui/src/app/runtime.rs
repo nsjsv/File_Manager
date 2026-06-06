@@ -17,26 +17,17 @@ const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
 pub(crate) fn run() -> iced::Result {
-    let user_config = config::load_user_config();
-    let iced_backend = user_config
-        .rendering_backend_preference
-        .iced_backend_candidates();
+    let startup_rendering_backend = config::DEFAULT_RENDERING_BACKEND_PREFERENCE;
+    let iced_backend = startup_rendering_backend.iced_backend_candidates();
     std::env::set_var("ICED_BACKEND", iced_backend);
-    if let Some(power_preference) = user_config
-        .rendering_backend_preference
-        .wgpu_power_preference()
-    {
+    if let Some(power_preference) = startup_rendering_backend.wgpu_power_preference() {
         std::env::set_var("WGPU_POWER_PREF", power_preference);
     }
-    iced::daemon(
-        move || FileBrowser::boot(user_config.clone()),
-        FileBrowser::update,
-        FileBrowser::view,
-    )
-    .subscription(FileBrowser::subscription)
-    .theme(FileBrowser::theme)
-    .title(FileBrowser::title)
-    .run()
+    iced::daemon(FileBrowser::boot, FileBrowser::update, FileBrowser::view)
+        .subscription(FileBrowser::subscription)
+        .theme(FileBrowser::theme)
+        .title(FileBrowser::title)
+        .run()
 }
 
 pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {

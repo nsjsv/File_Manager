@@ -10,6 +10,7 @@ use crate::commands::{search_command, search_index_command, search_tree_command}
 use crate::config::search_index_dir_for_root;
 use crate::model::{
     Message, NavigationMode, PathSuggestionDirection, SearchRequest, SearchScope, SearchState,
+    SidebarLocationKind,
 };
 use crate::view::{
     search_input_id, search_results_id, SEARCH_RESULTS_HEIGHT, SEARCH_RESULTS_PADDING,
@@ -295,8 +296,16 @@ impl FileBrowser {
                 .cursor_search_directory
                 .clone()
                 .unwrap_or_else(|| self.current_dir.clone()),
-            SearchScope::HomeDirectory => dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            SearchScope::HomeDirectory => self.home_search_root(),
         }
+    }
+
+    fn home_search_root(&self) -> PathBuf {
+        self.sidebar_locations
+            .iter()
+            .find(|location| location.kind == SidebarLocationKind::Home)
+            .map(|location| location.path.clone())
+            .unwrap_or_else(|| self.current_dir.clone())
     }
 
     fn ensure_search_index(&mut self, root: PathBuf) -> Task<Message> {
