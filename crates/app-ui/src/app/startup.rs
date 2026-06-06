@@ -14,6 +14,7 @@ impl FileBrowser {
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
         self.column_width_overrides = user_config.column_width_overrides.clone();
+        self.refresh_column_width_reference_content_widths();
         self.terminal_emulator = user_config.terminal_emulator;
         self.rendering_backend_preference = user_config.rendering_backend_preference;
         self.options.include_hidden = user_config.show_hidden_files;

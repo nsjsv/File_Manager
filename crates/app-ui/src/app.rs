@@ -112,6 +112,7 @@ pub(crate) struct FileBrowser {
     pub(crate) path_suggestion_selection: Option<usize>,
     path_suggestion_generation: u64,
     pub(crate) column_width_overrides: HashMap<usize, f32>,
+    column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) is_column_view_settings_open: bool,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
@@ -165,7 +166,7 @@ impl FileBrowser {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
-        let browser = Self {
+        let mut browser = Self {
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
             entries: Vec::new(),
@@ -226,6 +227,7 @@ impl FileBrowser {
             path_suggestion_selection: None,
             path_suggestion_generation: 0,
             column_width_overrides: user_config.column_width_overrides.clone(),
+            column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             is_column_view_settings_open: false,
             expanded_directories: HashMap::new(),
@@ -255,6 +257,7 @@ impl FileBrowser {
             theme: Theme::Light,
             is_shutting_down: false,
         };
+        browser.refresh_column_width_reference_content_widths();
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,

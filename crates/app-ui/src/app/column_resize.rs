@@ -12,6 +12,7 @@ pub(super) struct ColumnResizeDrag {
     pub(super) column_index: usize,
     pub(super) cursor_start_x: f32,
     pub(super) width_start: f32,
+    pub(super) content_width_start: f32,
 }
 
 impl FileBrowser {
@@ -24,6 +25,7 @@ impl FileBrowser {
             column_index,
             cursor_start_x: self.cursor_position.x,
             width_start: self.column_width(column_index),
+            content_width_start: self.column_browser_content_width(),
         });
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
@@ -38,10 +40,12 @@ impl FileBrowser {
             return;
         };
 
-        self.column_width_overrides.insert(
-            drag.column_index,
-            config::normalize_column_width(drag.width_start + position.x - drag.cursor_start_x),
-        );
+        let resized_width =
+            config::normalize_column_width(drag.width_start + position.x - drag.cursor_start_x);
+        self.column_width_overrides
+            .insert(drag.column_index, resized_width);
+        self.column_width_reference_content_widths
+            .insert(drag.column_index, drag.content_width_start);
     }
 
     pub(super) fn finish_column_resize_drag(&mut self) -> bool {
@@ -53,20 +57,47 @@ impl FileBrowser {
     }
 
     pub(crate) fn column_width(&self, column_index: usize) -> f32 {
-        self.column_width_overrides
-            .get(&column_index)
-            .copied()
-            .unwrap_or_else(|| self.default_column_width())
+        if let Some(width) = self.column_width_overrides.get(&column_index).copied() {
+            let reference_content_width = self
+                .column_width_reference_content_widths
+                .get(&column_index)
+                .copied()
+                .unwrap_or_else(|| self.column_browser_content_width());
+            return scale_column_width_to_content_width(
+                width,
+                reference_content_width,
+                self.column_browser_content_width(),
+            );
+        }
+
+        self.default_column_width()
     }
 
     fn default_column_width(&self) -> f32 {
-        let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
-        let content_width = (self.main_window_width - SIDEBAR_WIDTH - divider_width).max(1.0);
-        let width = content_width / DEFAULT_VISIBLE_COLUMN_COUNT as f32;
+        let width = self.column_browser_content_width() / DEFAULT_VISIBLE_COLUMN_COUNT as f32;
         if width.is_finite() {
             width.max(config::MIN_COLUMN_WIDTH)
         } else {
             config::MIN_COLUMN_WIDTH
+        }
+    }
+
+    fn column_browser_content_width(&self) -> f32 {
+        column_browser_content_width_for_window(self.main_window_width)
+    }
+
+    pub(super) fn refresh_column_width_reference_content_widths(&mut self) {
+        let content_width = self.column_browser_content_width();
+        let column_indices = self
+            .column_width_overrides
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        self.column_width_reference_content_widths.clear();
+        for column_index in column_indices {
+            self.column_width_reference_content_widths
+                .insert(column_index, content_width);
         }
     }
 
@@ -88,5 +119,54 @@ impl FileBrowser {
         let persist_command = self.persist_user_config_command();
         let reload_command = self.reload_current();
         Task::batch([persist_command, reload_command])
+    }
+}
+
+fn column_browser_content_width_for_window(main_window_width: f32) -> f32 {
+    let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
+    (main_window_width - SIDEBAR_WIDTH - divider_width).max(1.0)
+}
+
+fn scale_column_width_to_content_width(
+    width: f32,
+    reference_content_width: f32,
+    current_content_width: f32,
+) -> f32 {
+    let scaled_width = width * current_content_width.max(1.0) / reference_content_width.max(1.0);
+    config::normalize_column_width(scaled_width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FLOAT_TOLERANCE: f32 = 0.01;
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= FLOAT_TOLERANCE,
+            "expected {actual} to be within {FLOAT_TOLERANCE} of {expected}"
+        );
+    }
+
+    #[test]
+    fn override_width_grows_with_content_width() {
+        let width = scale_column_width_to_content_width(240.0, 720.0, 960.0);
+
+        assert_close(width, 320.0);
+    }
+
+    #[test]
+    fn override_width_shrinks_with_content_width() {
+        let width = scale_column_width_to_content_width(360.0, 720.0, 540.0);
+
+        assert_close(width, 270.0);
+    }
+
+    #[test]
+    fn override_width_still_respects_minimum_width() {
+        let width = scale_column_width_to_content_width(120.0, 720.0, 120.0);
+
+        assert_close(width, config::MIN_COLUMN_WIDTH);
     }
 }
