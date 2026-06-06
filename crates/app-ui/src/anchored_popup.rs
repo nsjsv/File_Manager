@@ -54,40 +54,40 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut widget::Tree,
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
         self.anchor
-            .as_widget()
+            .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
     }
 
     fn operate(
-        &self,
+        &mut self,
         tree: &mut widget::Tree,
         layout: Layout<'_>,
         renderer: &Renderer,
-        operation: &mut dyn widget::Operation<Message>,
+        operation: &mut dyn widget::Operation,
     ) {
         self.anchor
-            .as_widget()
+            .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut widget::Tree,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> iced::event::Status {
-        self.anchor.as_widget_mut().on_event(
+    ) {
+        self.anchor.as_widget_mut().update(
             &mut tree.children[0],
             event,
             layout,
@@ -140,19 +140,22 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &Renderer,
+        viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let mut overlays = Vec::new();
         let mut children = tree.children.iter_mut();
 
         if let Some(anchor_tree) = children.next() {
-            if let Some(anchor_overlay) =
-                self.anchor
-                    .as_widget_mut()
-                    .overlay(anchor_tree, layout, renderer, translation)
-            {
+            if let Some(anchor_overlay) = self.anchor.as_widget_mut().overlay(
+                anchor_tree,
+                layout,
+                renderer,
+                viewport,
+                translation,
+            ) {
                 overlays.push(anchor_overlay);
             }
         }
@@ -196,7 +199,10 @@ where
         let max_height = if show_below { space_below } else { space_above };
         let limits = layout::Limits::new(Size::ZERO, Size::new(target_width, max_height))
             .width(target_width);
-        let node = self.popup.as_widget().layout(self.state, renderer, &limits);
+        let node = self
+            .popup
+            .as_widget_mut()
+            .layout(self.state, renderer, &limits);
         let size = node.size();
         let x = self
             .anchor_bounds
@@ -214,18 +220,18 @@ where
         node.move_to(Point::new(x, y))
     }
 
-    fn on_event(
+    fn update(
         &mut self,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
-    ) -> iced::event::Status {
+    ) {
         let bounds = layout.bounds();
 
-        self.popup.as_widget_mut().on_event(
+        self.popup.as_widget_mut().update(
             self.state, event, layout, cursor, renderer, clipboard, shell, &bounds,
         )
     }
@@ -234,12 +240,12 @@ where
         &self,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
-        viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        let bounds = layout.bounds();
         self.popup
             .as_widget()
-            .mouse_interaction(self.state, layout, cursor, viewport, renderer)
+            .mouse_interaction(self.state, layout, cursor, &bounds, renderer)
     }
 
     fn draw(
@@ -254,9 +260,5 @@ where
         self.popup
             .as_widget()
             .draw(self.state, renderer, theme, style, layout, cursor, &bounds);
-    }
-
-    fn is_over(&self, layout: Layout<'_>, _renderer: &Renderer, cursor_position: Point) -> bool {
-        layout.bounds().contains(cursor_position)
     }
 }

@@ -55,7 +55,7 @@ pub(crate) fn operation_queue_panel(
         readable_text(format!("{} tasks", queue.task_count())).size(12),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let mut tasks = column![].spacing(8);
     if queue.tasks().is_empty() {
@@ -94,7 +94,7 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
         readable_text(task.status.label()).size(12),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let progress = progress_bar(
         0.0..=1.0,
@@ -106,7 +106,7 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
             }
         }),
     )
-    .height(Length::Fixed(4.0));
+    .girth(Length::Fixed(4.0));
 
     let mut body = column![title, readable_text(detail).size(12), progress]
         .spacing(6)
@@ -146,7 +146,7 @@ fn operation_task_controls(task: &FileOperationTask) -> Element<'_, Message> {
         _ => "Pause",
     };
 
-    let mut controls = row![].spacing(6).align_items(Alignment::Center);
+    let mut controls = row![].spacing(6).align_y(Alignment::Center);
     if matches!(
         task.status,
         FileOperationStatus::Running | FileOperationStatus::Paused

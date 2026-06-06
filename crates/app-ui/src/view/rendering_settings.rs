@@ -21,7 +21,7 @@ pub(super) fn gpu_rendering_button(
         switch_control(matches!(preference, RenderingBackendPreference::Gpu)),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     button(container(label).padding([5, 8]).width(Length::Fill))
         .on_press(Message::RenderingBackendPreferenceSelected(
@@ -39,17 +39,17 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
             .width(Length::Fill),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let actions = row![
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         button(readable_text("OK").size(12))
             .on_press(Message::RendererRestartNoticeDismissed)
             .padding([6, 10])
             .style(context_menu_button_style()),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     container(
         column![

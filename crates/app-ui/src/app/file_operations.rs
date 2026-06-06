@@ -1,5 +1,4 @@
-use iced::widget::text_input;
-use iced::Command;
+use iced::Task;
 
 use super::{operation_queue_auto_hide_command, FileBrowser};
 use crate::model::{Message, OperationQueuePanelMode};
@@ -12,7 +11,7 @@ impl FileBrowser {
         &mut self,
         task_id: u64,
         result: Result<FileOperationOutcome, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let completed_successfully = result.is_ok();
         let is_history_replay = self.operation_history.is_replaying(task_id);
         let created_path = (completed_successfully && !is_history_replay)
@@ -44,19 +43,19 @@ impl FileBrowser {
         if finished {
             self.reload_current()
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    pub(super) fn commit_rename(&mut self) -> Command<Message> {
+    pub(super) fn commit_rename(&mut self) -> Task<Message> {
         let Some(path) = self.renaming.clone().or_else(|| self.selected.clone()) else {
-            return Command::none();
+            return Task::none();
         };
 
         let name = self.rename_input.trim();
         if name.is_empty() {
             self.renaming = None;
-            return Command::none();
+            return Task::none();
         }
 
         let old_name = path
@@ -65,7 +64,7 @@ impl FileBrowser {
             .unwrap_or_default();
         if old_name == name {
             self.renaming = None;
-            return Command::none();
+            return Task::none();
         }
 
         self.renaming = None;
@@ -76,53 +75,53 @@ impl FileBrowser {
         })
     }
 
-    pub(super) fn commit_rename_if_active(&mut self) -> Command<Message> {
+    pub(super) fn commit_rename_if_active(&mut self) -> Task<Message> {
         if self.renaming.is_some() {
             self.commit_rename()
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    pub(super) fn focus_created_entry_for_rename(&mut self) -> Command<Message> {
+    pub(super) fn focus_created_entry_for_rename(&mut self) -> Task<Message> {
         let Some(path) = self.pending_created_entry_rename.clone() else {
-            return Command::none();
+            return Task::none();
         };
         if self.entry_for_path(&path).is_none() {
-            return Command::none();
+            return Task::none();
         }
 
         self.pending_created_entry_rename = None;
         self.select_path(path.clone());
         self.renaming = Some(path);
         let input_id = rename_input_id();
-        Command::batch([
-            text_input::focus(input_id.clone()),
-            text_input::select_all(input_id),
+        Task::batch([
+            iced::widget::operation::focus(input_id.clone()),
+            iced::widget::operation::select_all(input_id),
         ])
     }
 
     pub(super) fn enqueue_file_operation(
         &mut self,
         operation: QueuedFileOperation,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.enqueue_file_operation_with_history(operation, None)
     }
 
-    pub(super) fn undo_file_operation(&mut self) -> Command<Message> {
+    pub(super) fn undo_file_operation(&mut self) -> Task<Message> {
         self.context_menu = None;
         let Some((operation, pending_history)) = self.operation_history.take_undo_operation()
         else {
-            return Command::none();
+            return Task::none();
         };
         self.enqueue_file_operation_with_history(operation, Some(pending_history))
     }
 
-    pub(super) fn redo_file_operation(&mut self) -> Command<Message> {
+    pub(super) fn redo_file_operation(&mut self) -> Task<Message> {
         self.context_menu = None;
         let Some((operation, pending_history)) = self.operation_history.take_redo_operation()
         else {
-            return Command::none();
+            return Task::none();
         };
         self.enqueue_file_operation_with_history(operation, Some(pending_history))
     }
@@ -131,7 +130,7 @@ impl FileBrowser {
         &mut self,
         operation: QueuedFileOperation,
         pending_history: Option<PendingHistoryOperation>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.error = None;
         if let Some(error) = self.operation_queue.enqueue(operation) {
             self.error = Some(error);
@@ -145,7 +144,7 @@ impl FileBrowser {
         self.show_operation_queue_temporarily()
     }
 
-    fn show_operation_queue_temporarily(&mut self) -> Command<Message> {
+    fn show_operation_queue_temporarily(&mut self) -> Task<Message> {
         self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
         self.operation_queue.open_panel();
         self.operation_queue_auto_hide_generation =

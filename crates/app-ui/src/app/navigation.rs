@@ -2,8 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use file_core::{DirectoryEntry, DirectoryScan, FileKind, TrashScan};
-use iced::widget::text_input;
-use iced::Command;
+use iced::Task;
 
 use super::paths::{completed_path_text, path_text};
 use super::FileBrowser;
@@ -21,9 +20,9 @@ use crate::view::path_input_id;
 const PATH_SUGGESTION_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(120);
 
 impl FileBrowser {
-    pub(super) fn accept_directory_scan(&mut self, scan: DirectoryScan) -> Command<Message> {
+    pub(super) fn accept_directory_scan(&mut self, scan: DirectoryScan) -> Task<Message> {
         if scan.path != self.current_dir {
-            return Command::none();
+            return Task::none();
         }
 
         self.current_dir = scan.path;
@@ -37,12 +36,12 @@ impl FileBrowser {
         startup_trace::mark_once("initial_directory_ready");
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
-        Command::batch([command, self.schedule_thumbnail_refresh()])
+        Task::batch([command, self.schedule_thumbnail_refresh()])
     }
 
-    pub(super) fn accept_trash_scan(&mut self, scan: TrashScan) -> Command<Message> {
+    pub(super) fn accept_trash_scan(&mut self, scan: TrashScan) -> Task<Message> {
         if !self.is_trash_view {
-            return Command::none();
+            return Task::none();
         }
 
         self.current_dir = trash_location_path();
@@ -62,7 +61,7 @@ impl FileBrowser {
         self.schedule_thumbnail_refresh()
     }
 
-    pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Command<Message> {
+    pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
         {
             self.back_stack.push(self.current_dir.clone());
@@ -84,7 +83,7 @@ impl FileBrowser {
         load_directory_command(path, self.options.clone())
     }
 
-    pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Command<Message> {
+    pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
         if mode == NavigationMode::RecordHistory && !self.is_trash_view {
             self.back_stack.push(self.current_dir.clone());
             self.forward_stack.clear();
@@ -105,7 +104,7 @@ impl FileBrowser {
         load_trash_command(self.options.clone())
     }
 
-    pub(super) fn reload_current(&mut self) -> Command<Message> {
+    pub(super) fn reload_current(&mut self) -> Task<Message> {
         if self.is_trash_view {
             self.path_input = TRASH_LOCATION_LABEL.to_owned();
             self.path_suggestions.clear();
@@ -129,12 +128,12 @@ impl FileBrowser {
             self.current_dir.clone(),
             self.options.clone(),
         ));
-        Command::batch(commands)
+        Task::batch(commands)
     }
 
-    pub(super) fn reload_observed_directory(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn reload_observed_directory(&mut self, path: PathBuf) -> Task<Message> {
         if self.is_trash_view {
-            return Command::none();
+            return Task::none();
         }
 
         if path == self.current_dir {
@@ -142,7 +141,7 @@ impl FileBrowser {
         }
 
         let Some(expanded) = self.expanded_directories.get_mut(&path) else {
-            return Command::none();
+            return Task::none();
         };
 
         expanded.status = ExpandedDirectoryStatus::Loading;
@@ -151,50 +150,50 @@ impl FileBrowser {
         load_expanded_directory_command(path, self.options.clone())
     }
 
-    pub(super) fn navigate_up(&mut self) -> Command<Message> {
+    pub(super) fn navigate_up(&mut self) -> Task<Message> {
         if self.is_trash_view {
-            return Command::none();
+            return Task::none();
         }
 
         if let Some(parent) = self.current_dir.parent() {
             self.navigate_to(parent.to_path_buf(), NavigationMode::RecordHistory)
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    pub(super) fn navigate_back(&mut self) -> Command<Message> {
+    pub(super) fn navigate_back(&mut self) -> Task<Message> {
         if self.is_trash_view {
             if let Some(path) = self.back_stack.pop() {
                 return self.navigate_to(path, NavigationMode::KeepHistory);
             }
-            return Command::none();
+            return Task::none();
         }
 
         if let Some(path) = self.back_stack.pop() {
             self.forward_stack.push(self.current_dir.clone());
             self.navigate_to(path, NavigationMode::KeepHistory)
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    pub(super) fn navigate_forward(&mut self) -> Command<Message> {
+    pub(super) fn navigate_forward(&mut self) -> Task<Message> {
         if let Some(path) = self.forward_stack.pop() {
             self.back_stack.push(self.current_dir.clone());
             self.navigate_to(path, NavigationMode::KeepHistory)
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    pub(super) fn update_path_input(&mut self, value: String) -> Command<Message> {
+    pub(super) fn update_path_input(&mut self, value: String) -> Task<Message> {
         self.path_input = value;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         let request = self.next_path_suggestion_request();
         if request.input.trim().is_empty() {
-            return Command::none();
+            return Task::none();
         }
         path_suggestion_input_stabilization_command(request)
     }
@@ -202,9 +201,9 @@ impl FileBrowser {
     pub(super) fn load_stable_path_suggestions(
         &mut self,
         request: PathSuggestionRequest,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if !self.active_path_suggestion_request_matches(&request) {
-            return Command::none();
+            return Task::none();
         }
         path_suggestions_command(request)
     }
@@ -213,29 +212,29 @@ impl FileBrowser {
         &mut self,
         request: PathSuggestionRequest,
         suggestions: Vec<PathBuf>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if self.active_path_suggestion_request_matches(&request) {
             self.path_suggestions = suggestions;
             self.normalize_path_suggestion_selection();
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn move_search_or_path_suggestion_selection(
         &mut self,
         direction: PathSuggestionDirection,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if self.search.is_some() {
             return self.move_search_selection(direction);
         }
         self.move_path_suggestion_selection(direction);
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn complete_search_scope_or_path_suggestion(
         &mut self,
         direction: PathSuggestionDirection,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if self.search.is_some() {
             self.toggle_search_scope()
         } else {
@@ -243,12 +242,12 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn submit_path_input(&mut self) -> Command<Message> {
+    pub(super) fn submit_path_input(&mut self) -> Task<Message> {
         let Some(typed_path) = self.path_from_input() else {
             self.path_input = path_text(&self.current_dir);
             self.path_suggestions.clear();
             self.path_suggestion_selection = None;
-            return Command::none();
+            return Task::none();
         };
 
         let selected_suggestion = self
@@ -266,9 +265,9 @@ impl FileBrowser {
 
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
-        Command::batch([
+        Task::batch([
             self.navigate_to(path, NavigationMode::RecordHistory),
-            text_input::move_cursor_to_end(path_input_id()),
+            iced::widget::operation::move_cursor_to_end(path_input_id()),
         ])
     }
 
@@ -318,9 +317,9 @@ impl FileBrowser {
     pub(super) fn complete_path_suggestion(
         &mut self,
         direction: PathSuggestionDirection,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if self.path_suggestions.is_empty() {
-            return Command::none();
+            return Task::none();
         }
 
         if self.path_suggestion_selection.is_none() {
@@ -334,14 +333,14 @@ impl FileBrowser {
             .and_then(|index| self.path_suggestions.get(index))
             .cloned()
         else {
-            return Command::none();
+            return Task::none();
         };
 
         self.path_input = completed_path_text(&path);
         let request = self.next_path_suggestion_request();
-        Command::batch([
+        Task::batch([
             path_suggestions_command(request),
-            text_input::move_cursor_to_end(path_input_id()),
+            iced::widget::operation::move_cursor_to_end(path_input_id()),
         ])
     }
 
@@ -349,7 +348,7 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         scan: Result<DirectoryScan, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let expanded = self
             .expanded_directories
             .entry(path)
@@ -374,7 +373,7 @@ impl FileBrowser {
 
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
-        Command::batch([command, self.schedule_thumbnail_refresh()])
+        Task::batch([command, self.schedule_thumbnail_refresh()])
     }
 
     pub(crate) fn entry_for_path(&self, path: &Path) -> Option<&DirectoryEntry> {
@@ -461,7 +460,7 @@ impl FileBrowser {
         self.selection_marquee = None;
     }
 
-    fn refresh_expanded_directory_commands(&mut self) -> Vec<Command<Message>> {
+    fn refresh_expanded_directory_commands(&mut self) -> Vec<Task<Message>> {
         let paths = self
             .expanded_directories
             .keys()
@@ -482,8 +481,8 @@ impl FileBrowser {
     }
 }
 
-fn path_suggestion_input_stabilization_command(request: PathSuggestionRequest) -> Command<Message> {
-    Command::perform(
+fn path_suggestion_input_stabilization_command(request: PathSuggestionRequest) -> Task<Message> {
+    Task::perform(
         async move {
             tokio::time::sleep(PATH_SUGGESTION_INPUT_STABILIZATION_DELAY).await;
             request
@@ -590,9 +589,7 @@ mod tests {
         suggestions: Vec<PathBuf>,
         selection: Option<usize>,
     ) -> FileBrowser {
-        let (mut browser, _) = <FileBrowser as iced::multi_window::Application>::new(
-            crate::config::default_user_config(),
-        );
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
         browser.current_dir = PathBuf::from("/tmp");
         browser.path_input = input.to_owned();
         browser.path_suggestion_generation = generation;

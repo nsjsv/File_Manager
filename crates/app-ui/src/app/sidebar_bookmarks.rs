@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
 use file_core::FileKind;
-use iced::{Command, Point};
+use iced::{Point, Task};
 
 use super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
 use crate::commands::save_sidebar_bookmarks_command;
 use crate::model::{
-    FileDragPhase, FileDragTarget, Message, NavigationMode, SidebarBookmarkDragState,
-    SidebarBookmarkDropSlot, SidebarLocation, SidebarLocationKind,
+    ContextMenuState, FileDragPhase, FileDragTarget, Message, NavigationMode,
+    SidebarBookmarkContextMenuState, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarLocation, SidebarLocationKind,
 };
 
 const SIDEBAR_HEADER_HEIGHT: f32 = 24.0;
@@ -25,10 +26,7 @@ impl FileBrowser {
             && self.entry_kind(&file_drag.sources[0]) == Some(FileKind::Directory)
     }
 
-    pub(super) fn update_sidebar_bookmark_drop_slot(
-        &mut self,
-        position: Point,
-    ) -> Command<Message> {
+    pub(super) fn update_sidebar_bookmark_drop_slot(&mut self, position: Point) -> Task<Message> {
         if !self.can_drop_sidebar_bookmark() {
             return self.clear_sidebar_bookmark_drop_slot();
         }
@@ -42,51 +40,51 @@ impl FileBrowser {
             self.clear_sidebar_bookmark_drop_target();
         }
         self.sidebar_bookmark_drop_slot = Some(slot);
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn clear_sidebar_bookmark_drop_slot(&mut self) -> Command<Message> {
+    pub(super) fn clear_sidebar_bookmark_drop_slot(&mut self) -> Task<Message> {
         self.sidebar_bookmark_drop_slot = None;
         self.clear_sidebar_bookmark_drop_target();
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn handle_sidebar_bookmark_drop_slot_hovered(
         &mut self,
         slot: SidebarBookmarkDropSlot,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.sidebar_bookmark_drop_slot = Some(slot);
         if self.can_drop_sidebar_bookmark() {
             if let Some(file_drag) = &mut self.file_drag {
                 file_drag.target = Some(FileDragTarget::SidebarBookmarkSlot(slot));
             }
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn handle_sidebar_bookmark_drop_slot_cleared(
         &mut self,
         slot: SidebarBookmarkDropSlot,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if let Some(file_drag) = &mut self.file_drag {
             if file_drag.target == Some(FileDragTarget::SidebarBookmarkSlot(slot)) {
                 file_drag.target = None;
             }
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn add_dragged_sidebar_bookmark(
         &mut self,
         slot: SidebarBookmarkDropSlot,
         sources: Vec<PathBuf>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.sidebar_bookmark_drop_slot = None;
         let Some(source) = sources.first().filter(|_| sources.len() == 1).cloned() else {
-            return Command::none();
+            return Task::none();
         };
         if self.entry_kind(&source) != Some(FileKind::Directory) || self.bookmark_exists(&source) {
-            return Command::none();
+            return Task::none();
         }
 
         let mut bookmarks = self.sidebar_bookmark_locations();
@@ -103,7 +101,7 @@ impl FileBrowser {
         self.save_sidebar_bookmarks()
     }
 
-    pub(super) fn start_sidebar_bookmark_drag(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn start_sidebar_bookmark_drag(&mut self, path: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         if !self.bookmark_exists(&path) {
             return rename_command;
@@ -123,6 +121,50 @@ impl FileBrowser {
         rename_command
     }
 
+    pub(super) fn handle_sidebar_bookmark_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
+        let rename_command = self.commit_rename_if_active();
+        if !self.bookmark_exists(&path) {
+            return rename_command;
+        }
+
+        self.clear_preview();
+        self.is_column_view_settings_open = false;
+        self.operation_queue.close_panel();
+        self.file_drag = None;
+        self.selection_marquee = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
+        self.path_suggestions.clear();
+        self.path_suggestion_selection = None;
+        self.context_menu = Some(ContextMenuState::SidebarBookmark(
+            SidebarBookmarkContextMenuState {
+                path,
+                position: self.cursor_position,
+            },
+        ));
+        rename_command
+    }
+
+    pub(super) fn delete_sidebar_bookmark(&mut self, path: PathBuf) -> Task<Message> {
+        self.context_menu = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
+        if self.hovered_sidebar.as_ref() == Some(&path) {
+            self.hovered_sidebar = None;
+        }
+        if !self.bookmark_exists(&path) {
+            return Task::none();
+        }
+
+        let bookmarks = self
+            .sidebar_bookmark_locations()
+            .into_iter()
+            .filter(|location| location.path != path)
+            .collect::<Vec<_>>();
+        self.replace_sidebar_bookmarks(bookmarks);
+        self.save_sidebar_bookmarks()
+    }
+
     pub(super) fn update_sidebar_bookmark_drag(&mut self, position: Point) {
         let Some(drag) = &mut self.sidebar_bookmark_drag else {
             return;
@@ -139,7 +181,7 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn handle_sidebar_bookmark_entered(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_sidebar_bookmark_entered(&mut self, path: PathBuf) -> Task<Message> {
         if self
             .sidebar_bookmark_drag
             .as_ref()
@@ -147,24 +189,24 @@ impl FileBrowser {
         {
             self.hovered_sidebar = Some(path.clone());
             self.reorder_sidebar_bookmark(path);
-            Command::none()
+            Task::none()
         } else {
             self.handle_sidebar_hovered(path)
         }
     }
 
-    pub(super) fn finish_sidebar_bookmark_drag(&mut self) -> Command<Message> {
+    pub(super) fn finish_sidebar_bookmark_drag(&mut self) -> Task<Message> {
         let Some(drag) = self.sidebar_bookmark_drag.take() else {
-            return Command::none();
+            return Task::none();
         };
         self.sidebar_bookmark_drop_slot = None;
         if drag.is_dragging() {
             if drag.order_changed {
                 return self.save_sidebar_bookmarks();
             }
-            return Command::none();
+            return Task::none();
         }
-        Command::batch([
+        Task::batch([
             self.commit_rename_if_active(),
             self.navigate_to(drag.path, NavigationMode::RecordHistory),
         ])
@@ -221,7 +263,7 @@ impl FileBrowser {
         self.sidebar_locations = locations;
     }
 
-    fn save_sidebar_bookmarks(&self) -> Command<Message> {
+    fn save_sidebar_bookmarks(&self) -> Task<Message> {
         save_sidebar_bookmarks_command(self.sidebar_bookmark_locations())
     }
 

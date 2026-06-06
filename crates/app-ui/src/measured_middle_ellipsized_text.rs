@@ -9,7 +9,7 @@ const TEXT_MEASUREMENT_HEIGHT: f32 = 10_000.0;
 // Finder 的多栏列表按最终像素宽度截断；这里必须等布局拿到 renderer 后再决定是否省略。
 pub(crate) fn measured_middle_ellipsized_text<'a, Message>(
     content: impl Into<String>,
-    size: u16,
+    size: u32,
 ) -> Element<'a, Message>
 where
     Message: 'a,
@@ -86,7 +86,7 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut widget::Tree,
         renderer: &Renderer,
         limits: &layout::Limits,
@@ -111,15 +111,16 @@ where
             );
 
             text_state.displayed_content = displayed_content;
-            text_state.paragraph.update(text::Text {
+            text_state.paragraph = Renderer::Paragraph::with_text(text::Text {
                 content: text_state.displayed_content.as_str(),
                 bounds: display_bounds,
                 size: self.size,
                 line_height,
                 font,
-                horizontal_alignment: alignment::Horizontal::Left,
-                vertical_alignment: alignment::Vertical::Top,
+                align_x: text::Alignment::Left,
+                align_y: alignment::Vertical::Top,
                 shaping,
+                wrapping: text::Wrapping::None,
             });
 
             text_state.paragraph.min_bounds()
@@ -216,9 +217,10 @@ where
         size,
         line_height,
         font,
-        horizontal_alignment: alignment::Horizontal::Left,
-        vertical_alignment: alignment::Vertical::Top,
+        align_x: text::Alignment::Left,
+        align_y: alignment::Vertical::Top,
         shaping,
+        wrapping: text::Wrapping::None,
     });
 
     paragraph.min_width()

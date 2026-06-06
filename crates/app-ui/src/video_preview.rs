@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -35,7 +35,7 @@ fn inspect_video_preview_metadata_blocking(path: &Path) -> Result<VideoPreviewMe
 }
 
 fn ffprobe_video_duration(path: &Path) -> Option<Duration> {
-    let output = std::process::Command::new("ffprobe")
+    let output = Command::new("ffprobe")
         .arg("-v")
         .arg("error")
         .arg("-show_entries")
@@ -65,20 +65,39 @@ pub(crate) fn video_preview_subscription(
     generation: u64,
     start_position: Duration,
 ) -> Subscription<Message> {
-    iced::subscription::channel(
-        ("video-preview", path.clone(), generation),
-        2,
-        move |mut output| async move {
-            let outcome =
-                stream_video_preview(path.clone(), generation, start_position, &mut output).await;
-            let message = match outcome {
-                Ok(()) => Message::VideoPreviewFinished(path.clone(), generation),
-                Err(error) => Message::VideoPreviewFailed(path.clone(), generation, error),
-            };
-            let _ = output.send(message).await;
-            iced::futures::future::pending().await
+    Subscription::run_with(
+        VideoPreviewStream {
+            path,
+            generation,
+            start_position,
         },
+        video_preview_stream,
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct VideoPreviewStream {
+    path: PathBuf,
+    generation: u64,
+    start_position: Duration,
+}
+
+fn video_preview_stream(
+    stream: &VideoPreviewStream,
+) -> impl iced::futures::Stream<Item = Message> + 'static {
+    let path = stream.path.clone();
+    let generation = stream.generation;
+    let start_position = stream.start_position;
+    iced::stream::channel(2, async move |mut output| {
+        let outcome =
+            stream_video_preview(path.clone(), generation, start_position, &mut output).await;
+        let message = match outcome {
+            Ok(()) => Message::VideoPreviewFinished(path.clone(), generation),
+            Err(error) => Message::VideoPreviewFailed(path.clone(), generation, error),
+        };
+        let _ = output.send(message).await;
+        iced::futures::future::pending().await
+    })
 }
 
 pub(crate) async fn load_video_preview_frame(
@@ -91,7 +110,7 @@ pub(crate) async fn load_video_preview_frame(
         path,
         generation,
         position,
-        handle: image::Handle::from_pixels(frame.width, frame.height, frame.pixels),
+        handle: image::Handle::from_rgba(frame.width, frame.height, frame.pixels),
         width: frame.width,
         height: frame.height,
     })
@@ -197,7 +216,7 @@ async fn stream_video_preview(
                 path: path.clone(),
                 generation,
                 position,
-                handle: image::Handle::from_pixels(frame.width, frame.height, frame.pixels),
+                handle: image::Handle::from_rgba(frame.width, frame.height, frame.pixels),
                 width: frame.width,
                 height: frame.height,
             }))

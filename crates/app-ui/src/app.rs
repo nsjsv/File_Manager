@@ -17,6 +17,8 @@ mod text_input_shortcuts;
 mod thumbnailing;
 mod windows;
 
+pub(crate) use runtime::run;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,10 +27,8 @@ use desktop_linux::TerminalEmulator;
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
-use iced::multi_window::Application;
-use iced::widget::text_input;
 use iced::window;
-use iced::{executor, time, Command, Element, Point, Settings, Subscription, Theme};
+use iced::{time, Element, Point, Subscription, Task, Theme};
 
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
@@ -43,12 +43,12 @@ use crate::app::windows::{
 use crate::commands::{file_operation_subscription, initial_load_command};
 use crate::config;
 use crate::model::{
-    AudioPreviewPlayback, BrowserTab, ColumnViewMode, ContextMenuState,
-    DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message, NavigationMode,
-    OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
-    ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TextPreviewDocument,
-    TransferConflictState, VideoPreviewPlayback,
+    AudioPreviewPlayback, BrowserTab, ContextMenuState, DestructiveActionConfirmation,
+    ExpandedDirectory, FileDragState, Message, NavigationMode, OperationQueuePanelMode,
+    PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarVisibility,
+    SearchIndexRuntime, SearchState, SelectionMarquee, SidebarBookmarkDragState,
+    SidebarBookmarkDropSlot, SidebarLocation, TextPreviewDocument, TransferConflictState,
+    VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -62,24 +62,6 @@ const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
-
-pub(crate) fn run() -> iced::Result {
-    let user_config = config::load_user_config();
-    let iced_backend = user_config
-        .rendering_backend_preference
-        .iced_backend_candidates();
-    std::env::set_var("ICED_BACKEND", iced_backend);
-    if let Some(power_preference) = user_config
-        .rendering_backend_preference
-        .wgpu_power_preference()
-    {
-        std::env::set_var("WGPU_POWER_PREF", power_preference);
-    }
-    FileBrowser::run(Settings {
-        window: main_window_settings(),
-        ..Settings::with_flags(user_config)
-    })
-}
 
 pub(crate) struct FileBrowser {
     pub(crate) current_dir: PathBuf,
@@ -99,6 +81,7 @@ pub(crate) struct FileBrowser {
     pub(crate) preview_size: PreviewSize,
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
+    main_window: window::Id,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
     pub(crate) thumbnail_cache: ThumbnailCache,
@@ -128,9 +111,7 @@ pub(crate) struct FileBrowser {
     pub(crate) path_suggestions: Vec<PathBuf>,
     pub(crate) path_suggestion_selection: Option<usize>,
     path_suggestion_generation: u64,
-    pub(crate) column_view_mode: ColumnViewMode,
-    pub(crate) column_fixed_count: usize,
-    pub(crate) unbounded_column_width: f32,
+    pub(crate) column_width_overrides: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) is_column_view_settings_open: bool,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
@@ -161,13 +142,26 @@ pub(crate) struct FileBrowser {
     is_shutting_down: bool,
 }
 
-impl Application for FileBrowser {
-    type Executor = executor::Default;
-    type Flags = config::UserConfig;
-    type Message = Message;
-    type Theme = Theme;
+impl FileBrowser {
+    fn boot(user_config: config::UserConfig) -> (Self, Task<Message>) {
+        let (main_window, open_main_window) = window::open(main_window_settings());
+        let (browser, initial_tasks) = Self::new_with_main_window(user_config, main_window);
 
-    fn new(user_config: Self::Flags) -> (Self, Command<Self::Message>) {
+        (
+            browser,
+            Task::batch([open_main_window.discard(), initial_tasks]),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(user_config: config::UserConfig) -> (Self, Task<Message>) {
+        Self::new_with_main_window(user_config, window::Id::unique())
+    }
+
+    fn new_with_main_window(
+        user_config: config::UserConfig,
+        main_window: window::Id,
+    ) -> (Self, Task<Message>) {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
@@ -189,8 +183,9 @@ impl Application for FileBrowser {
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
+            main_window,
             preview_window: None,
-            focused_window: window::Id::MAIN,
+            focused_window: main_window,
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
             column_viewports: HashMap::new(),
             context_menu: None,
@@ -230,9 +225,7 @@ impl Application for FileBrowser {
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
             path_suggestion_generation: 0,
-            column_view_mode: user_config.column_view_mode,
-            column_fixed_count: user_config.column_fixed_count,
-            unbounded_column_width: user_config.unbounded_column_width,
+            column_width_overrides: user_config.column_width_overrides.clone(),
             terminal_emulator: user_config.terminal_emulator,
             is_column_view_settings_open: false,
             expanded_directories: HashMap::new(),
@@ -265,7 +258,7 @@ impl Application for FileBrowser {
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,
-            Command::batch([initial_load_command(user_config), system_theme_command()]),
+            Task::batch([initial_load_command(user_config), system_theme_command()]),
         )
     }
 
@@ -273,7 +266,7 @@ impl Application for FileBrowser {
         self.window_title(window)
     }
 
-    fn subscription(&self) -> Subscription<Self::Message> {
+    fn subscription(&self) -> Subscription<Message> {
         if self.is_shutting_down {
             return Subscription::none();
         }
@@ -324,40 +317,40 @@ impl Application for FileBrowser {
         Subscription::batch(subscriptions)
     }
 
-    fn theme(&self, _window: window::Id) -> Self::Theme {
+    fn theme(&self, _window: window::Id) -> Theme {
         self.theme.clone()
     }
 
-    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::InitialLoadFinished(initial_load) => self.accept_initial_load(initial_load),
             Message::Loaded(Ok(scan)) => self.accept_directory_scan(scan),
             Message::Loaded(Err(error)) => {
                 self.is_loading = false;
                 self.error = Some(error);
-                Command::none()
+                Task::none()
             }
             Message::TrashLoaded(Ok(scan)) => self.accept_trash_scan(scan),
             Message::TrashLoaded(Err(error)) => {
                 self.is_loading = false;
                 self.error = Some(error);
-                Command::none()
+                Task::none()
             }
             Message::OpenFileFinished(Ok(())) => {
                 self.error = None;
-                Command::none()
+                Task::none()
             }
             Message::OpenFileFinished(Err(error)) => {
                 self.error = Some(error);
-                Command::none()
+                Task::none()
             }
             Message::OpenTerminalFinished(Ok(())) => {
                 self.error = None;
-                Command::none()
+                Task::none()
             }
             Message::OpenTerminalFinished(Err(error)) => {
                 self.error = Some(error);
-                Command::none()
+                Task::none()
             }
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
@@ -370,7 +363,7 @@ impl Application for FileBrowser {
                 if let Some(document) = self.text_preview_document.as_mut() {
                     document.select_markdown_preview_mode(mode);
                 }
-                Command::none()
+                Task::none()
             }
             Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
                 self.accept_image_preview_dimensions(path, dimensions_outcome)
@@ -411,7 +404,7 @@ impl Application for FileBrowser {
                 if let Some(error) = self.operation_queue.update_progress(task_id, progress) {
                     self.error = Some(error);
                 }
-                Command::none()
+                Task::none()
             }
             Message::FileOperationFinished(task_id, result) => {
                 self.accept_file_operation_finished(task_id, result)
@@ -430,26 +423,26 @@ impl Application for FileBrowser {
                 }
                 self.operation_queue_auto_hide_generation =
                     self.operation_queue_auto_hide_generation.wrapping_add(1);
-                Command::none()
+                Task::none()
             }
             Message::FileOperationAutoHideElapsed(generation) => {
                 if generation == self.operation_queue_auto_hide_generation {
                     self.operation_queue.close_panel();
                     self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
                 }
-                Command::none()
+                Task::none()
             }
             Message::FileOperationPauseToggled(task_id) => {
                 if let Some(error) = self.operation_queue.toggle_pause(task_id) {
                     self.error = Some(error);
                 }
-                Command::none()
+                Task::none()
             }
             Message::FileOperationCancelRequested(task_id) => {
                 if let Some(error) = self.operation_queue.cancel(task_id) {
                     self.error = Some(error);
                 }
-                Command::none()
+                Task::none()
             }
             Message::PreviewTreeDirectoryToggled(entry_id) => {
                 self.toggle_preview_tree_directory(entry_id)
@@ -460,7 +453,7 @@ impl Application for FileBrowser {
             Message::ColumnBlankClicked(path) => self.handle_column_blank_clicked(path),
             Message::EntryReleased => {
                 self.finish_tab_drag();
-                Command::batch([
+                Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
@@ -503,19 +496,23 @@ impl Application for FileBrowser {
                 self.handle_sidebar_bookmark_drop_slot_cleared(slot)
             }
             Message::SidebarBookmarkPressed(path) => self.start_sidebar_bookmark_drag(path),
+            Message::SidebarBookmarkRightClicked(path) => {
+                self.handle_sidebar_bookmark_right_clicked(path)
+            }
             Message::SidebarBookmarkEntered(path) => self.handle_sidebar_bookmark_entered(path),
             Message::SidebarBookmarkReleased => self.finish_sidebar_bookmark_drag(),
+            Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
             Message::CursorMoved(position) => {
                 self.cursor_position = position;
                 self.update_file_drag(position);
                 self.update_sidebar_bookmark_drag(position);
                 self.update_column_resize_drag(position);
                 self.update_selection_marquee(position);
-                Command::none()
+                Task::none()
             }
             Message::ColumnBrowserCursorEntered => {
                 self.is_cursor_over_column_browser = true;
-                Command::none()
+                Task::none()
             }
             Message::ColumnBrowserCursorExited => {
                 self.is_cursor_over_column_browser = false;
@@ -524,11 +521,11 @@ impl Application for FileBrowser {
             }
             Message::KeyboardModifiersChanged(modifiers) => {
                 self.keyboard_modifiers = modifiers;
-                Command::none()
+                Task::none()
             }
             Message::DragSelectionFinished => {
                 self.finish_tab_drag();
-                Command::batch([
+                Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
@@ -568,19 +565,19 @@ impl Application for FileBrowser {
             }
             Message::SystemThemeDetected(theme) => {
                 self.theme = theme;
-                Command::none()
+                Task::none()
             }
-            Message::UserConfigSaved(Ok(())) => Command::none(),
+            Message::UserConfigSaved(Ok(())) => Task::none(),
             Message::UserConfigSaved(Err(error)) => {
                 self.error = Some(format!("Failed to save user configuration: {error}"));
-                Command::none()
+                Task::none()
             }
-            Message::SidebarBookmarksSaved(Ok(())) => Command::none(),
+            Message::SidebarBookmarksSaved(Ok(())) => Task::none(),
             Message::SidebarBookmarksSaved(Err(error)) => {
                 self.error = Some(format!("Failed to save sidebar bookmarks: {error}"));
-                Command::none()
+                Task::none()
             }
-            Message::SearchOpened if self.is_trash_view => Command::none(),
+            Message::SearchOpened if self.is_trash_view => Task::none(),
             Message::SearchOpened => self.open_search(),
             Message::SearchInputChanged(query) => self.update_search_query(query),
             Message::SearchInputStabilized(request) => self.load_stable_search_matches(request),
@@ -588,7 +585,7 @@ impl Application for FileBrowser {
                 if self.search.is_some() {
                     search::focus_search_input_command()
                 } else {
-                    Command::none()
+                    Task::none()
                 }
             }
             Message::SearchMatchesLoaded(request, search) => {
@@ -604,32 +601,9 @@ impl Application for FileBrowser {
             Message::ColumnSettingsToggled => {
                 self.is_column_view_settings_open = !self.is_column_view_settings_open;
                 self.context_menu = None;
-                Command::none()
+                Task::none()
             }
             Message::ShowHiddenFilesToggled => self.toggle_show_hidden_files(),
-            Message::ColumnViewModeSelected(mode) => {
-                self.column_view_mode = mode;
-                self.user_config.column_view_mode = mode;
-                self.finish_column_resize_drag();
-                self.is_column_view_settings_open = false;
-                Command::batch([
-                    self.persist_user_config_command(),
-                    self.focus_latest_column(),
-                ])
-            }
-            Message::ColumnFixedCountSelected(count) => {
-                self.column_view_mode = ColumnViewMode::Fixed;
-                self.user_config.column_view_mode = ColumnViewMode::Fixed;
-                self.finish_column_resize_drag();
-                let count = config::normalize_column_fixed_count(count);
-                self.column_fixed_count = count;
-                self.user_config.column_fixed_count = count;
-                self.is_column_view_settings_open = false;
-                Command::batch([
-                    self.persist_user_config_command(),
-                    self.focus_latest_column(),
-                ])
-            }
             Message::TerminalEmulatorSelected(terminal_emulator) => {
                 self.terminal_emulator = terminal_emulator;
                 self.user_config.terminal_emulator = terminal_emulator;
@@ -640,7 +614,7 @@ impl Application for FileBrowser {
                 self.select_rendering_backend_preference(preference)
             }
             Message::RendererRestartNoticeDismissed => self.dismiss_renderer_restart_notice(),
-            Message::CapturedWheelScrolled(delta) => Command::batch([
+            Message::CapturedWheelScrolled(delta) => Task::batch([
                 self.show_scrollbars_temporarily(),
                 self.handle_column_browser_wheel_scrolled(delta),
             ]),
@@ -648,70 +622,72 @@ impl Application for FileBrowser {
                 if generation == self.scrollbar_auto_hide_generation {
                     self.start_scrollbar_hide();
                 }
-                Command::none()
+                Task::none()
             }
             Message::ScrollbarAnimationTick => self.advance_scrollbar_animation(),
             Message::ColumnScrolled(directory, offset_y, height) => {
                 self.handle_column_scrolled(directory, offset_y, height)
             }
-            Message::ColumnResizeStarted => self.start_column_resize_drag(),
-            Message::OpenDirectoryInNewTab(path) => Command::batch([
+            Message::ColumnResizeStarted(column_index) => {
+                self.start_column_resize_drag(column_index)
+            }
+            Message::OpenDirectoryInNewTab(path) => Task::batch([
                 self.commit_rename_if_active(),
                 self.open_directory_in_new_tab(path),
             ]),
             Message::OpenTrashInNewTab => {
-                Command::batch([self.commit_rename_if_active(), self.open_trash_in_new_tab()])
+                Task::batch([self.commit_rename_if_active(), self.open_trash_in_new_tab()])
             }
             Message::TabPressed(tab_id) => {
                 let rename_command = self.commit_rename_if_active();
                 self.start_tab_drag(tab_id);
-                Command::batch([rename_command, self.select_tab(tab_id)])
+                Task::batch([rename_command, self.select_tab(tab_id)])
             }
             Message::TabCloseRequested(tab_id) => self.close_tab(tab_id),
             Message::TabDragEntered(tab_id) => {
                 self.reorder_dragged_tab(tab_id);
-                Command::none()
+                Task::none()
             }
             Message::TabDragFinished => {
                 self.finish_tab_drag();
-                Command::batch([
+                Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
                 ])
             }
-            Message::NavigateTo(path) => Command::batch([
+            Message::NavigateTo(path) => Task::batch([
                 self.commit_rename_if_active(),
                 self.navigate_to(path, NavigationMode::RecordHistory),
             ]),
-            Message::TrashOpened => Command::batch([
+            Message::TrashOpened => Task::batch([
                 self.commit_rename_if_active(),
                 self.open_trash_view(NavigationMode::RecordHistory),
             ]),
-            Message::Up => Command::batch([self.commit_rename_if_active(), self.navigate_up()]),
-            Message::Back => Command::batch([self.commit_rename_if_active(), self.navigate_back()]),
+            Message::Up => Task::batch([self.commit_rename_if_active(), self.navigate_up()]),
+            Message::Back => Task::batch([self.commit_rename_if_active(), self.navigate_back()]),
             Message::Forward => {
-                Command::batch([self.commit_rename_if_active(), self.navigate_forward()])
+                Task::batch([self.commit_rename_if_active(), self.navigate_forward()])
             }
             Message::RenameInputFocusChecked(is_focused) => {
                 if is_focused {
-                    Command::none()
+                    Task::none()
                 } else {
                     self.commit_rename_if_active()
                 }
             }
             Message::RenameInputChanged(value) => {
                 self.rename_input = value;
-                Command::none()
+                Task::none()
             }
             Message::BeginRename(path) => {
                 self.context_menu = None;
                 self.select_path(path.clone());
                 self.renaming = Some(path);
                 let input_id = rename_input_id();
-                Command::batch([
-                    text_input::focus(input_id.clone()),
-                    text_input::select_all(input_id),
+                Task::batch([
+                    iced::widget::operation::focus(input_id.clone()),
+                    iced::widget::operation::select_all(input_id),
                 ])
             }
             Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
@@ -746,11 +722,11 @@ impl Application for FileBrowser {
             }
             Message::TransferConflictApplyToAllToggled => {
                 self.toggle_transfer_conflict_apply_to_all();
-                Command::none()
+                Task::none()
             }
             Message::TransferConflictRenameInputChanged(value) => {
                 self.update_transfer_conflict_rename(value);
-                Command::none()
+                Task::none()
             }
             Message::TransferConflictRenameConfirmed => self.confirm_transfer_conflict_rename(),
             Message::TransferConflictRenameTargetChecked {
@@ -766,13 +742,13 @@ impl Application for FileBrowser {
             ),
             Message::TransferConflictCancelRequested => {
                 self.transfer_conflict = None;
-                Command::none()
+                Task::none()
             }
             Message::SelectAll => self.select_all_visible(),
         }
     }
 
-    fn view(&self, window: window::Id) -> Element<'_, Self::Message> {
+    fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.search_window == Some(window) {
             view_search_window(self.search.as_ref(), self.scrollbar_visibility)
         } else if self.preview_window == Some(window) {

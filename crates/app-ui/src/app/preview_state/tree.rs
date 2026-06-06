@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use file_core::{DirectoryEntry, ScanOptions};
-use iced::Command;
+use iced::Task;
 
 use crate::app::FileBrowser;
 use crate::commands::preview_directory_children_command;
@@ -16,7 +16,7 @@ impl FileBrowser {
     pub(in crate::app) fn toggle_preview_tree_directory(
         &mut self,
         entry_id: usize,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let options = self.options.clone();
         match &mut self.preview {
             Some(PreviewState::Ready(PreviewContent::Directory { entries, .. })) => {
@@ -25,7 +25,7 @@ impl FileBrowser {
             Some(PreviewState::Ready(PreviewContent::Archive { entries, .. })) => {
                 toggle_loaded_preview_tree_entry(entries, entry_id)
             }
-            _ => Command::none(),
+            _ => Task::none(),
         }
     }
 
@@ -33,9 +33,9 @@ impl FileBrowser {
         &mut self,
         parent_path: PathBuf,
         children_outcome: Result<Vec<DirectoryEntry>, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(entries) = directory_preview_entries_mut(self.preview.as_mut()) else {
-            return Command::none();
+            return Task::none();
         };
         match children_outcome {
             Ok(children) => {
@@ -43,7 +43,7 @@ impl FileBrowser {
             }
             Err(error) => accept_preview_directory_children_error(entries, &parent_path, error),
         }
-        Command::none()
+        Task::none()
     }
 
     pub(in crate::app) fn preview_tree_animation_is_active(&self) -> bool {
@@ -53,9 +53,9 @@ impl FileBrowser {
         entries.iter().any(preview_tree_rotation_is_active)
     }
 
-    pub(in crate::app) fn advance_preview_tree_animation(&mut self) -> Command<Message> {
+    pub(in crate::app) fn advance_preview_tree_animation(&mut self) -> Task<Message> {
         let Some(entries) = preview_tree_entries_mut(self.preview.as_mut()) else {
-            return Command::none();
+            return Task::none();
         };
 
         for entry in entries.iter_mut().filter(|entry| entry.is_directory()) {
@@ -71,7 +71,7 @@ impl FileBrowser {
             }
         }
 
-        Command::none()
+        Task::none()
     }
 }
 
@@ -79,21 +79,21 @@ fn toggle_directory_preview_tree_entry(
     entries: &mut [PreviewTreeEntry],
     entry_id: usize,
     options: ScanOptions,
-) -> Command<Message> {
+) -> Task<Message> {
     let Some(entry) = entries.get_mut(entry_id) else {
-        return Command::none();
+        return Task::none();
     };
     if !entry.is_directory() {
-        return Command::none();
+        return Task::none();
     }
 
     entry.is_expanded = !entry.is_expanded;
     if !entry.is_expanded || !directory_children_can_load(entry) {
-        return Command::none();
+        return Task::none();
     }
 
     let Some(path) = entry.filesystem_path.clone() else {
-        return Command::none();
+        return Task::none();
     };
     entry.directory_children = Some(PreviewTreeDirectoryChildren::Loading);
     preview_directory_children_command(path, options)
@@ -102,15 +102,15 @@ fn toggle_directory_preview_tree_entry(
 fn toggle_loaded_preview_tree_entry(
     entries: &mut [PreviewTreeEntry],
     entry_id: usize,
-) -> Command<Message> {
+) -> Task<Message> {
     let Some(entry) = entries.get_mut(entry_id) else {
-        return Command::none();
+        return Task::none();
     };
     if entry.is_directory() {
         entry.is_expanded = !entry.is_expanded;
     }
 
-    Command::none()
+    Task::none()
 }
 
 fn directory_children_can_load(entry: &PreviewTreeEntry) -> bool {

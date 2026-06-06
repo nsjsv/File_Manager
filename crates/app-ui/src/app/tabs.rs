@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use iced::Command;
+use iced::Task;
 
 use super::FileBrowser;
 use crate::model::{trash_location_path, BrowserTab, Message, NavigationMode};
@@ -28,7 +28,7 @@ impl FileBrowser {
         tab.forward_stack = self.forward_stack.clone();
     }
 
-    pub(super) fn open_directory_in_new_tab(&mut self, directory: PathBuf) -> Command<Message> {
+    pub(super) fn open_directory_in_new_tab(&mut self, directory: PathBuf) -> Task<Message> {
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
@@ -56,7 +56,7 @@ impl FileBrowser {
         self.navigate_to(directory, NavigationMode::KeepHistory)
     }
 
-    pub(super) fn open_trash_in_new_tab(&mut self) -> Command<Message> {
+    pub(super) fn open_trash_in_new_tab(&mut self) -> Task<Message> {
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
@@ -84,14 +84,14 @@ impl FileBrowser {
         self.open_trash_view(NavigationMode::KeepHistory)
     }
 
-    pub(super) fn select_tab(&mut self, tab_id: usize) -> Command<Message> {
+    pub(super) fn select_tab(&mut self, tab_id: usize) -> Task<Message> {
         if tab_id == self.active_tab_id {
             self.sync_active_tab_state();
-            return Command::none();
+            return Task::none();
         }
 
         let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id).cloned() else {
-            return Command::none();
+            return Task::none();
         };
 
         self.sync_active_tab_state();
@@ -109,13 +109,13 @@ impl FileBrowser {
         self.reload_current()
     }
 
-    pub(super) fn close_tab(&mut self, tab_id: usize) -> Command<Message> {
+    pub(super) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
         if self.tabs.len() == 1 {
-            return Command::none();
+            return Task::none();
         }
 
         let Some(closing_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
-            return Command::none();
+            return Task::none();
         };
         let was_active = tab_id == self.active_tab_id;
         self.tabs.remove(closing_index);
@@ -125,7 +125,7 @@ impl FileBrowser {
         }
 
         if !was_active {
-            return Command::none();
+            return Task::none();
         }
 
         let adjacent_index = closing_index.min(self.tabs.len() - 1);

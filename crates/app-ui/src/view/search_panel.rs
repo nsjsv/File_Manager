@@ -22,12 +22,12 @@ const SEARCH_ROOT_MAX_CHARS: usize = 64;
 const SEARCH_NAME_MAX_CHARS: usize = 42;
 const SEARCH_PATH_MAX_CHARS: usize = 68;
 
-pub(crate) fn search_input_id() -> text_input::Id {
-    text_input::Id::new("search-input")
+pub(crate) fn search_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("search-input")
 }
 
-pub(crate) fn search_results_id() -> scrollable::Id {
-    scrollable::Id::new("search-results")
+pub(crate) fn search_results_id() -> iced::widget::Id {
+    iced::widget::Id::new("search-results")
 }
 
 pub(crate) fn view_search_window(
@@ -50,7 +50,7 @@ fn search_panel(
         readable_text(format!("{} · {root}", search_scope_label(search.scope))).size(12),
     ]
     .spacing(10)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let input = text_input("Search files", &search.query)
         .id(search_input_id())
@@ -159,7 +159,7 @@ fn search_match_row(search_match: &FileSearchMatch, is_selected: bool) -> Elemen
         labels.width(Length::Fill),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
     let item = container(row_content)
         .padding([6, 8])
         .height(Length::Fixed(SEARCH_RESULT_ROW_HEIGHT))

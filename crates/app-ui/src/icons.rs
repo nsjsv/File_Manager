@@ -44,7 +44,7 @@ pub(crate) fn preview_entry_icon_symbol(kind: FileKind, name: &str) -> IconSymbo
     file_kind_icon_symbol(kind, Path::new(name).extension().and_then(OsStr::to_str))
 }
 
-pub(crate) fn rotated_chevron_right_view(rotation_degrees: f32, size: f32) -> Svg<Theme> {
+pub(crate) fn rotated_chevron_right_view(rotation_degrees: f32, size: f32) -> Svg<'static, Theme> {
     Svg::new(svg::Handle::from_memory(rotated_chevron_right_bytes(
         rotation_degrees,
     )))
@@ -131,7 +131,7 @@ fn is_text_extension(extension: &str) -> bool {
 }
 
 impl IconSymbol {
-    pub(crate) fn view(self, size: f32) -> Svg<Theme> {
+    pub(crate) fn view(self, size: f32) -> Svg<'static, Theme> {
         Svg::new(svg::Handle::from_memory(self.bytes()))
             .width(Length::Fixed(size))
             .height(Length::Fixed(size))

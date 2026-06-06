@@ -1,4 +1,4 @@
-use iced::Command;
+use iced::Task;
 
 use super::FileBrowser;
 use crate::config::RenderingBackendPreference;
@@ -8,9 +8,9 @@ impl FileBrowser {
     pub(super) fn select_rendering_backend_preference(
         &mut self,
         preference: RenderingBackendPreference,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if self.rendering_backend_preference == preference {
-            return Command::none();
+            return Task::none();
         }
 
         self.rendering_backend_preference = preference;
@@ -20,8 +20,8 @@ impl FileBrowser {
         self.persist_user_config_command()
     }
 
-    pub(super) fn dismiss_renderer_restart_notice(&mut self) -> Command<Message> {
+    pub(super) fn dismiss_renderer_restart_notice(&mut self) -> Task<Message> {
         self.renderer_restart_notice_visible = false;
-        Command::none()
+        Task::none()
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use file_core::TransferConflictStrategy;
-use iced::Command;
+use iced::Task;
 
 use crate::app::FileBrowser;
 use crate::commands::{check_transfer_conflicts_command, check_transfer_rename_target_command};
@@ -17,7 +17,7 @@ impl FileBrowser {
         &mut self,
         mode: TransferConflictMode,
         transfers: Vec<QueuedTransfer>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         check_transfer_conflicts_command(mode, transfers)
     }
 
@@ -26,7 +26,7 @@ impl FileBrowser {
         mode: TransferConflictMode,
         transfers: Vec<QueuedTransfer>,
         conflicts: Vec<TransferConflictItem>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if conflicts.is_empty() {
             return self.enqueue_transfer_operation(mode, transfers);
         }
@@ -43,14 +43,14 @@ impl FileBrowser {
             apply_to_all: false,
             rename_input,
         });
-        Command::none()
+        Task::none()
     }
 
     fn enqueue_transfer_operation(
         &mut self,
         mode: TransferConflictMode,
         transfers: Vec<QueuedTransfer>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         match mode {
             TransferConflictMode::Copy => {
                 self.enqueue_file_operation(QueuedFileOperation::Copy { transfers })
@@ -64,9 +64,9 @@ impl FileBrowser {
     pub(in crate::app) fn resolve_transfer_conflict_choice(
         &mut self,
         choice: TransferConflictChoice,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(mut state) = self.transfer_conflict.take() else {
-            return Command::none();
+            return Task::none();
         };
 
         let apply_to_all = state.apply_to_all;
@@ -103,9 +103,9 @@ impl FileBrowser {
         }
     }
 
-    pub(in crate::app) fn confirm_transfer_conflict_rename(&mut self) -> Command<Message> {
+    pub(in crate::app) fn confirm_transfer_conflict_rename(&mut self) -> Task<Message> {
         let Some(state) = self.transfer_conflict.take() else {
-            return Command::none();
+            return Task::none();
         };
 
         let Some(conflict) = state.current_conflict() else {
@@ -114,14 +114,14 @@ impl FileBrowser {
         let Some(parent) = conflict.target.parent().map(Path::to_path_buf) else {
             self.error = Some("Destination path has no parent directory".to_owned());
             self.transfer_conflict = Some(state);
-            return Command::none();
+            return Task::none();
         };
 
         let name = state.rename_input.trim();
         if !is_valid_transfer_rename(name) {
             self.error = Some("Enter a name without path separators".to_owned());
             self.transfer_conflict = Some(state);
-            return Command::none();
+            return Task::none();
         }
 
         let renamed_target = parent.join(name);
@@ -130,7 +130,7 @@ impl FileBrowser {
         if reserved_targets.contains(&renamed_target) {
             self.error = Some("That name already exists. Choose another name".to_owned());
             self.transfer_conflict = Some(state);
-            return Command::none();
+            return Task::none();
         }
 
         check_transfer_rename_target_command(state, transfer_position, renamed_target)
@@ -142,18 +142,18 @@ impl FileBrowser {
         transfer_position: Option<usize>,
         renamed_target: PathBuf,
         available: Result<bool, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         match available {
             Ok(true) => {}
             Ok(false) => {
                 self.error = Some("That name already exists. Choose another name".to_owned());
                 self.transfer_conflict = Some(state);
-                return Command::none();
+                return Task::none();
             }
             Err(error) => {
                 self.error = Some(error);
                 self.transfer_conflict = Some(state);
-                return Command::none();
+                return Task::none();
             }
         }
 
@@ -169,7 +169,7 @@ impl FileBrowser {
     fn finish_or_continue_transfer_conflicts(
         &mut self,
         mut state: TransferConflictState,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if state.current_index >= state.conflicts.len() {
             self.transfer_conflict = None;
             return self.enqueue_transfer_operation(state.mode, state.transfers);
@@ -179,7 +179,7 @@ impl FileBrowser {
             state.rename_input = conflict_default_name(conflict);
         }
         self.transfer_conflict = Some(state);
-        Command::none()
+        Task::none()
     }
 }
 fn apply_conflict_choice(state: &mut TransferConflictState, choice: TransferConflictChoice) {

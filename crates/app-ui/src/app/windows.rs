@@ -1,7 +1,6 @@
 use iced::advanced::widget as advanced_widget;
 use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
-use iced::widget::text_input;
-use iced::{event, mouse, window, Command, Rectangle, Size};
+use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
 use crate::model::{Message, PreviewSize, PreviewWindowProfile};
@@ -105,7 +104,7 @@ struct RenameInputFocusCheck {
 }
 
 impl RenameInputFocusCheck {
-    fn new(target: text_input::Id) -> Self {
+    fn new(target: iced::widget::Id) -> Self {
         Self {
             target: target.into(),
             is_focused: false,
@@ -114,16 +113,16 @@ impl RenameInputFocusCheck {
 }
 
 impl Operation<Message> for RenameInputFocusCheck {
-    fn container(
-        &mut self,
-        _id: Option<&advanced_widget::Id>,
-        _bounds: Rectangle,
-        operate_on_children: &mut dyn FnMut(&mut dyn Operation<Message>),
-    ) {
-        operate_on_children(self);
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Message>)) {
+        operate(self);
     }
 
-    fn focusable(&mut self, state: &mut dyn Focusable, id: Option<&advanced_widget::Id>) {
+    fn focusable(
+        &mut self,
+        id: Option<&advanced_widget::Id>,
+        _bounds: Rectangle,
+        state: &mut dyn Focusable,
+    ) {
         if id == Some(&self.target) {
             self.is_focused = state.is_focused();
         }
@@ -134,8 +133,8 @@ impl Operation<Message> for RenameInputFocusCheck {
     }
 }
 
-fn rename_input_focus_check_command() -> Command<Message> {
-    Command::widget(RenameInputFocusCheck::new(rename_input_id()))
+fn rename_input_focus_check_command() -> Task<Message> {
+    advanced_widget::operate(RenameInputFocusCheck::new(rename_input_id()))
 }
 
 fn clamp_preview_size(profile: PreviewWindowProfile, size: PreviewSize) -> PreviewSize {
@@ -210,56 +209,53 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn ensure_search_window(&mut self) -> Command<Message> {
+    pub(super) fn ensure_search_window(&mut self) -> Task<Message> {
         if let Some(window) = self.search_window {
             self.focused_window = window;
             return window::gain_focus(window);
         }
 
-        let (window, command) = window::spawn(search_window_settings());
+        let (window, command) = window::open(search_window_settings());
         self.search_window = Some(window);
         self.focused_window = window;
-        command
+        command.discard()
     }
 
-    pub(super) fn close_search_window(&mut self) -> Command<Message> {
+    pub(super) fn close_search_window(&mut self) -> Task<Message> {
         self.search = None;
         let Some(window) = self.search_window.take() else {
-            return Command::none();
+            return Task::none();
         };
         if self.focused_window == window {
-            self.focused_window = window::Id::MAIN;
+            self.focused_window = self.main_window;
         }
         window::close(window)
     }
 
-    pub(super) fn ensure_preview_window(
-        &mut self,
-        profile: PreviewWindowProfile,
-    ) -> Command<Message> {
+    pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
         self.preview_window_profile = profile;
         self.preview_size = default_preview_size(profile);
         let size = clamp_preview_size(profile, self.preview_size);
         self.pending_preview_resize = Some(size);
         if let Some(window) = self.preview_window {
             self.focused_window = window;
-            return Command::batch([
+            return Task::batch([
                 window::resize(window, Size::new(size.width, size.height)),
                 window::gain_focus(window),
             ]);
         }
 
-        let (window, command) = window::spawn(preview_window_settings(profile, self.preview_size));
+        let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
-        command
+        command.discard()
     }
 
-    pub(super) fn handle_captured_preview_shortcut(&mut self) -> Command<Message> {
+    pub(super) fn handle_captured_preview_shortcut(&mut self) -> Task<Message> {
         if self.preview_window == Some(self.focused_window) {
             self.close_preview_window()
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
@@ -267,7 +263,7 @@ impl FileBrowser {
         &mut self,
         width: u32,
         height: u32,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if width == 0 || height == 0 {
             return self.open_image_preview_error_window();
         }
@@ -277,7 +273,7 @@ impl FileBrowser {
         )
     }
 
-    pub(super) fn open_image_preview_error_window(&mut self) -> Command<Message> {
+    pub(super) fn open_image_preview_error_window(&mut self) -> Task<Message> {
         self.recreate_preview_window(
             PreviewWindowProfile::Image,
             default_preview_size(PreviewWindowProfile::Image),
@@ -288,33 +284,33 @@ impl FileBrowser {
         &mut self,
         profile: PreviewWindowProfile,
         size: PreviewSize,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.preview_window_profile = profile;
         self.preview_size = clamp_preview_size(profile, size);
         self.pending_preview_resize = Some(self.preview_size);
 
         let close_command = if let Some(window) = self.preview_window.take() {
             if self.focused_window == window {
-                self.focused_window = window::Id::MAIN;
+                self.focused_window = self.main_window;
             }
             window::close(window)
         } else {
-            Command::none()
+            Task::none()
         };
 
-        let (window, command) = window::spawn(preview_window_settings(profile, self.preview_size));
+        let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
-        Command::batch([close_command, command])
+        Task::batch([close_command, command.discard()])
     }
 
     pub(super) fn fit_preview_window_to_video_frame(
         &mut self,
         width: u32,
         height: u32,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if width == 0 || height == 0 {
-            return Command::none();
+            return Task::none();
         }
 
         self.recreate_preview_window(
@@ -323,32 +319,32 @@ impl FileBrowser {
         )
     }
 
-    pub(super) fn close_preview_window(&mut self) -> Command<Message> {
+    pub(super) fn close_preview_window(&mut self) -> Task<Message> {
         self.clear_preview();
         self.pending_preview_resize = None;
         let Some(window) = self.preview_window.take() else {
-            return Command::none();
+            return Task::none();
         };
         if self.focused_window == window {
-            self.focused_window = window::Id::MAIN;
+            self.focused_window = self.main_window;
         }
         window::close(window)
     }
 
-    pub(super) fn handle_window_focused(&mut self, window: window::Id) -> Command<Message> {
+    pub(super) fn handle_window_focused(&mut self, window: window::Id) -> Task<Message> {
         self.focused_window = window;
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn handle_window_unfocused(&mut self, window: window::Id) -> Command<Message> {
+    pub(super) fn handle_window_unfocused(&mut self, window: window::Id) -> Task<Message> {
         if self.preview_window == Some(window) {
             self.close_preview_window()
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    pub(super) fn handle_focused_window_escape_pressed(&mut self) -> Command<Message> {
+    pub(super) fn handle_focused_window_escape_pressed(&mut self) -> Task<Message> {
         if self.search_window == Some(self.focused_window) {
             return self.close_search_window();
         }
@@ -362,9 +358,9 @@ impl FileBrowser {
         &mut self,
         button: mouse::Button,
         status: event::Status,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if self.preview_window == Some(self.focused_window) {
-            return Command::none();
+            return Task::none();
         }
 
         let pointer_command = match (button, status) {
@@ -372,29 +368,29 @@ impl FileBrowser {
                 if self.renaming.is_some() {
                     rename_input_focus_check_command()
                 } else {
-                    Command::none()
+                    Task::none()
                 }
             }
             (mouse::Button::Left, event::Status::Ignored) => self.dismiss_floating(),
-            _ => Command::none(),
+            _ => Task::none(),
         };
 
         if self.preview_window.is_some() {
-            Command::batch([self.close_preview_window(), pointer_command])
+            Task::batch([self.close_preview_window(), pointer_command])
         } else {
             pointer_command
         }
     }
 
-    pub(super) fn dismiss_floating(&mut self) -> Command<Message> {
+    pub(super) fn dismiss_floating(&mut self) -> Task<Message> {
         if self.destructive_action_confirmation.is_some() {
             self.destructive_action_confirmation = None;
-            return Command::none();
+            return Task::none();
         }
 
         if self.transfer_conflict.is_some() {
             self.transfer_conflict = None;
-            return Command::none();
+            return Task::none();
         }
 
         let had_path_suggestions = !self.path_suggestions.is_empty();
@@ -409,18 +405,18 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         let command = self.commit_rename_if_active();
         if had_path_suggestions {
-            Command::batch([command, text_input::focus(path_input_id())])
+            Task::batch([command, iced::widget::operation::focus(path_input_id())])
         } else {
             command
         }
     }
 
-    pub(super) fn close_auxiliary_window(&mut self, window_id: window::Id) -> Command<Message> {
+    pub(super) fn close_auxiliary_window(&mut self, window_id: window::Id) -> Task<Message> {
         if self.is_shutting_down {
-            return Command::none();
+            return Task::none();
         }
 
-        if window_id == window::Id::MAIN {
+        if window_id == self.main_window {
             return self.close_all_windows();
         }
 
@@ -429,11 +425,11 @@ impl FileBrowser {
         } else if self.preview_window == Some(window_id) {
             self.close_preview_window()
         } else {
-            Command::none()
+            Task::none()
         }
     }
 
-    fn close_all_windows(&mut self) -> Command<Message> {
+    fn close_all_windows(&mut self) -> Task<Message> {
         self.is_shutting_down = true;
         let _ = self.operation_queue.cancel_all();
         self.search = None;
@@ -447,31 +443,26 @@ impl FileBrowser {
         if let Some(window) = self.preview_window.take() {
             commands.push(window::close(window));
         }
-        commands.push(window::close(window::Id::MAIN));
+        commands.push(window::close(self.main_window));
 
-        Command::batch(commands)
+        Task::batch(commands)
     }
 
     pub(super) fn handle_auxiliary_window_resized(
         &mut self,
         window: window::Id,
-        width: u32,
-        height: u32,
-    ) -> Command<Message> {
-        if window == window::Id::MAIN {
-            self.main_window_width = (width as f32).max(1.0);
-            self.main_window_height = (height as f32).max(1.0);
-            return Command::none();
+        width: f32,
+        height: f32,
+    ) -> Task<Message> {
+        if window == self.main_window {
+            self.main_window_width = width.max(1.0);
+            self.main_window_height = height.max(1.0);
+            return Task::none();
         }
 
         if self.preview_window == Some(window) {
-            let resized_size = clamp_preview_size(
-                self.preview_window_profile,
-                PreviewSize {
-                    width: width as f32,
-                    height: height as f32,
-                },
-            );
+            let resized_size =
+                clamp_preview_size(self.preview_window_profile, PreviewSize { width, height });
             if let Some(pending_size) = self.pending_preview_resize {
                 if preview_size_matches(resized_size, pending_size) {
                     self.pending_preview_resize = None;
@@ -487,7 +478,7 @@ impl FileBrowser {
             }
             return self.refresh_preview_thumbnail_for_size();
         }
-        Command::none()
+        Task::none()
     }
 }
 

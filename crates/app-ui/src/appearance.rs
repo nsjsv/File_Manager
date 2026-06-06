@@ -1,5 +1,10 @@
-use iced::widget::{container, scrollable, svg, text_editor};
-use iced::{theme, Background, Border, Color, Theme};
+use iced::widget::{button, scrollable, svg, text_editor};
+use iced::{Background, Border, Color, Theme};
+
+mod container {
+    pub use iced::widget::container::*;
+    pub type Appearance = Style;
+}
 
 use crate::model::ScrollbarVisibility;
 
@@ -88,20 +93,22 @@ pub(crate) fn hovered_row_style(theme: &Theme) -> container::Appearance {
     }
 }
 
-pub(crate) fn navigation_icon_button_style() -> theme::Button {
-    theme::Button::custom(TransparentButtonStyle)
+pub(crate) fn navigation_icon_button_style() -> fn(&Theme, button::Status) -> button::Style {
+    transparent_button_style
 }
 
-pub(crate) fn context_menu_button_style() -> theme::Button {
-    theme::Button::custom(TransparentButtonStyle)
+pub(crate) fn context_menu_button_style() -> fn(&Theme, button::Status) -> button::Style {
+    transparent_button_style
 }
 
-pub(crate) fn text_preview_editor_style() -> theme::TextEditor {
-    theme::TextEditor::Custom(Box::new(TransparentTextPreviewEditorStyle))
+pub(crate) fn text_preview_editor_style() -> fn(&Theme, text_editor::Status) -> text_editor::Style {
+    transparent_text_preview_editor_style
 }
 
-pub(crate) fn auto_hide_scrollbar_style(visibility: ScrollbarVisibility) -> theme::Scrollable {
-    theme::Scrollable::custom(AutoHideScrollbarStyle { visibility })
+pub(crate) fn auto_hide_scrollbar_style(
+    visibility: ScrollbarVisibility,
+) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style + Clone {
+    move |theme, status| mac_scrollbar_style(theme, status, visibility)
 }
 
 pub(crate) fn auto_hide_vertical_scrollbar_direction(
@@ -121,14 +128,14 @@ pub(crate) fn auto_hide_horizontal_scrollbar_direction(
 fn auto_hide_scrollbar_properties(
     visibility: ScrollbarVisibility,
     width: f32,
-) -> scrollable::Properties {
+) -> scrollable::Scrollbar {
     let width = if visibility.opacity() <= f32::EPSILON {
         0.0
     } else {
         width
     };
 
-    scrollable::Properties::new()
+    scrollable::Scrollbar::new()
         .width(width)
         .scroller_width(width)
 }
@@ -422,24 +429,24 @@ pub(crate) fn switch_thumb_style(_theme: &Theme) -> container::Appearance {
     }
 }
 
-pub(crate) fn icon_svg_style() -> theme::Svg {
-    theme::Svg::custom_fn(icon_svg_appearance)
+pub(crate) fn icon_svg_style() -> fn(&Theme, svg::Status) -> svg::Style {
+    icon_svg_style_for_status
 }
 
-pub(crate) fn selected_icon_svg_style() -> theme::Svg {
-    theme::Svg::custom_fn(selected_icon_svg_appearance)
+pub(crate) fn selected_icon_svg_style() -> fn(&Theme, svg::Status) -> svg::Style {
+    selected_icon_svg_style_for_status
 }
 
-pub(crate) fn muted_icon_svg_style() -> theme::Svg {
-    theme::Svg::custom_fn(muted_icon_svg_appearance)
+pub(crate) fn muted_icon_svg_style() -> fn(&Theme, svg::Status) -> svg::Style {
+    muted_icon_svg_style_for_status
 }
 
-pub(crate) fn warning_icon_svg_style() -> theme::Svg {
-    theme::Svg::custom_fn(warning_icon_svg_appearance)
+pub(crate) fn warning_icon_svg_style() -> fn(&Theme, svg::Status) -> svg::Style {
+    warning_icon_svg_style_for_status
 }
 
-fn icon_svg_appearance(theme: &Theme) -> svg::Appearance {
-    svg::Appearance {
+fn icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
+    svg::Style {
         color: Some(if is_dark_theme(theme) {
             Color::from_rgb8(191, 203, 220)
         } else {
@@ -448,8 +455,8 @@ fn icon_svg_appearance(theme: &Theme) -> svg::Appearance {
     }
 }
 
-fn selected_icon_svg_appearance(theme: &Theme) -> svg::Appearance {
-    svg::Appearance {
+fn selected_icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
+    svg::Style {
         color: Some(if is_dark_theme(theme) {
             Color::from_rgb8(236, 244, 255)
         } else {
@@ -458,8 +465,8 @@ fn selected_icon_svg_appearance(theme: &Theme) -> svg::Appearance {
     }
 }
 
-fn muted_icon_svg_appearance(theme: &Theme) -> svg::Appearance {
-    svg::Appearance {
+fn muted_icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
+    svg::Style {
         color: Some(if is_dark_theme(theme) {
             Color::from_rgb8(137, 146, 159)
         } else {
@@ -468,92 +475,69 @@ fn muted_icon_svg_appearance(theme: &Theme) -> svg::Appearance {
     }
 }
 
-fn warning_icon_svg_appearance(_theme: &Theme) -> svg::Appearance {
-    svg::Appearance {
+fn warning_icon_svg_style_for_status(_theme: &Theme, _status: svg::Status) -> svg::Style {
+    svg::Style {
         color: Some(Color::from_rgb8(180, 83, 9)),
     }
 }
 
-struct TransparentButtonStyle;
-
-#[derive(Debug, Clone, Copy)]
-struct AutoHideScrollbarStyle {
-    visibility: ScrollbarVisibility,
-}
-
-struct TransparentTextPreviewEditorStyle;
-
-impl iced::widget::button::StyleSheet for TransparentButtonStyle {
-    type Style = Theme;
-
-    fn active(&self, style: &Self::Style) -> iced::widget::button::Appearance {
-        transparent_button_appearance(style)
-    }
-
-    fn hovered(&self, style: &Self::Style) -> iced::widget::button::Appearance {
-        transparent_button_appearance(style)
-    }
-
-    fn pressed(&self, style: &Self::Style) -> iced::widget::button::Appearance {
-        transparent_button_appearance(style)
-    }
-}
-
-fn transparent_button_appearance(theme: &Theme) -> iced::widget::button::Appearance {
-    iced::widget::button::Appearance {
+fn transparent_button_style(theme: &Theme, _status: button::Status) -> button::Style {
+    button::Style {
         text_color: base_text_color(theme),
-        ..iced::widget::button::Appearance::default()
+        ..button::Style::default()
     }
 }
 
-impl scrollable::StyleSheet for AutoHideScrollbarStyle {
-    type Style = Theme;
+fn mac_scrollbar_style(
+    theme: &Theme,
+    status: scrollable::Status,
+    visibility: ScrollbarVisibility,
+) -> scrollable::Style {
+    let mut opacity = visibility.opacity();
 
-    fn active(&self, theme: &Self::Style) -> scrollable::Appearance {
-        mac_scrollbar_appearance(theme, self.visibility.opacity())
-    }
-
-    fn hovered(
-        &self,
-        theme: &Self::Style,
-        is_mouse_over_scrollbar: bool,
-    ) -> scrollable::Appearance {
-        let mut opacity = self.visibility.opacity();
-        if opacity > 0.0 && is_mouse_over_scrollbar {
+    match status {
+        scrollable::Status::Hovered {
+            is_horizontal_scrollbar_hovered,
+            is_vertical_scrollbar_hovered,
+            ..
+        } if opacity > 0.0
+            && (is_horizontal_scrollbar_hovered || is_vertical_scrollbar_hovered) =>
+        {
             opacity = (opacity + 0.18).min(1.0);
         }
-        mac_scrollbar_appearance(theme, opacity)
+        scrollable::Status::Dragged {
+            is_horizontal_scrollbar_dragged,
+            is_vertical_scrollbar_dragged,
+            ..
+        } if opacity > 0.0
+            && (is_horizontal_scrollbar_dragged || is_vertical_scrollbar_dragged) =>
+        {
+            opacity = opacity.max(0.86);
+        }
+        _ => {}
     }
 
-    fn dragging(&self, theme: &Self::Style) -> scrollable::Appearance {
-        let opacity = self.visibility.opacity();
-        let opacity = if opacity > 0.0 {
-            opacity.max(0.86)
-        } else {
-            0.0
-        };
-        mac_scrollbar_appearance(theme, opacity)
-    }
-}
-
-fn default_scrollbar_active_appearance(theme: &Theme) -> scrollable::Appearance {
-    <Theme as scrollable::StyleSheet>::active(theme, &theme::Scrollable::Default)
-}
-
-fn mac_scrollbar_appearance(theme: &Theme, opacity: f32) -> scrollable::Appearance {
-    let mut appearance = default_scrollbar_active_appearance(theme);
-    appearance.scrollbar.background = None;
-    appearance.scrollbar.border = Border {
+    let mut style = scrollable::default(theme, status);
+    let scroller_background = mac_scrollbar_scroller_color(theme, opacity).into();
+    let rail_border = Border {
         radius: 999.0.into(),
         ..Border::default()
     };
-    appearance.scrollbar.scroller.color = mac_scrollbar_scroller_color(theme, opacity);
-    appearance.scrollbar.scroller.border = Border {
+    let scroller_border = Border {
         radius: 999.0.into(),
         ..Border::default()
     };
-    appearance.gap = None;
-    appearance
+
+    style.vertical_rail.background = None;
+    style.vertical_rail.border = rail_border;
+    style.vertical_rail.scroller.background = scroller_background;
+    style.vertical_rail.scroller.border = scroller_border;
+    style.horizontal_rail.background = None;
+    style.horizontal_rail.border = rail_border;
+    style.horizontal_rail.scroller.background = scroller_background;
+    style.horizontal_rail.scroller.border = scroller_border;
+    style.gap = None;
+    style
 }
 
 fn mac_scrollbar_scroller_color(theme: &Theme, opacity: f32) -> Color {
@@ -565,50 +549,25 @@ fn mac_scrollbar_scroller_color(theme: &Theme, opacity: f32) -> Color {
     }
 }
 
-impl text_editor::StyleSheet for TransparentTextPreviewEditorStyle {
-    type Style = Theme;
+fn transparent_text_preview_editor_style(
+    theme: &Theme,
+    status: text_editor::Status,
+) -> text_editor::Style {
+    let value = match status {
+        text_editor::Status::Disabled => muted_text_color(theme),
+        _ => base_text_color(theme),
+    };
 
-    fn active(&self, _theme: &Self::Style) -> text_editor::Appearance {
-        transparent_text_preview_editor_appearance()
-    }
-
-    fn focused(&self, _theme: &Self::Style) -> text_editor::Appearance {
-        transparent_text_preview_editor_appearance()
-    }
-
-    fn hovered(&self, _theme: &Self::Style) -> text_editor::Appearance {
-        transparent_text_preview_editor_appearance()
-    }
-
-    fn disabled(&self, _theme: &Self::Style) -> text_editor::Appearance {
-        transparent_text_preview_editor_appearance()
-    }
-
-    fn placeholder_color(&self, theme: &Self::Style) -> Color {
-        muted_text_color(theme)
-    }
-
-    fn value_color(&self, theme: &Self::Style) -> Color {
-        base_text_color(theme)
-    }
-
-    fn disabled_color(&self, theme: &Self::Style) -> Color {
-        muted_text_color(theme)
-    }
-
-    fn selection_color(&self, theme: &Self::Style) -> Color {
-        if is_dark_theme(theme) {
+    text_editor::Style {
+        background: Background::Color(Color::from_rgba8(0, 0, 0, 0.0)),
+        border: Border::default(),
+        placeholder: muted_text_color(theme),
+        value,
+        selection: if is_dark_theme(theme) {
             Color::from_rgba8(82, 126, 190, 0.55)
         } else {
             Color::from_rgba8(74, 137, 220, 0.25)
-        }
-    }
-}
-
-fn transparent_text_preview_editor_appearance() -> text_editor::Appearance {
-    text_editor::Appearance {
-        background: Background::Color(Color::from_rgba8(0, 0, 0, 0.0)),
-        border: Border::default(),
+        },
     }
 }
 

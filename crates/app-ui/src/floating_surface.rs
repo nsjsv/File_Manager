@@ -90,6 +90,13 @@ enum BackgroundInputPolicy {
     Blocked,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FloatingPointerTarget {
+    FloatingContent,
+    Background,
+    CursorUnavailable,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum FloatingPlacement {
     Center,
@@ -157,62 +164,76 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut widget::Tree,
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
         self.content
-            .as_widget()
+            .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
     }
 
     fn operate(
-        &self,
+        &mut self,
         tree: &mut widget::Tree,
         layout: Layout<'_>,
         renderer: &Renderer,
-        operation: &mut dyn widget::Operation<Message>,
+        operation: &mut dyn widget::Operation,
     ) {
         self.content
-            .as_widget()
+            .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
 
-        for (index, floating) in self.floating.iter().enumerate() {
+        for (index, floating) in self.floating.iter_mut().enumerate() {
             if let Some(floating_tree) = tree.children.get_mut(index + 1) {
-                floating
-                    .element
-                    .as_widget()
-                    .operate(floating_tree, layout, renderer, operation);
+                floating.element.as_widget_mut().operate(
+                    floating_tree,
+                    layout,
+                    renderer,
+                    operation,
+                );
             }
         }
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut widget::Tree,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> iced::event::Status {
-        if self.is_outside_dismiss_click(&event, &mut tree.children, layout, cursor, renderer) {
+    ) {
+        let floating_pointer_target =
+            self.floating_pointer_target(&mut tree.children, layout, cursor, renderer);
+
+        if self.outside_click_dismissal.is_some()
+            && is_left_mouse_press(event)
+            && floating_pointer_target == FloatingPointerTarget::Background
+        {
             if let Some(dismissal) = self.outside_click_dismissal.clone() {
                 shell.publish(dismissal.message);
                 if dismissal.clicked_event_flow == DismissedClickFlow::Capture {
-                    return iced::event::Status::Captured;
+                    shell.capture_event();
+                    return;
                 }
             }
         }
 
         if self.background_input_policy == BackgroundInputPolicy::Blocked {
-            return iced::event::Status::Captured;
+            if is_mouse_event(event)
+                && floating_pointer_target != FloatingPointerTarget::FloatingContent
+            {
+                shell.capture_event();
+            }
+            return;
         }
 
-        self.content.as_widget_mut().on_event(
+        self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
             layout,
@@ -265,19 +286,22 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &Renderer,
+        viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let mut overlays = Vec::new();
         let mut children = tree.children.iter_mut();
 
         if let Some(content_tree) = children.next() {
-            if let Some(content_overlay) =
-                self.content
-                    .as_widget_mut()
-                    .overlay(content_tree, layout, renderer, translation)
-            {
+            if let Some(content_overlay) = self.content.as_widget_mut().overlay(
+                content_tree,
+                layout,
+                renderer,
+                viewport,
+                translation,
+            ) {
                 overlays.push(content_overlay);
             }
         }
@@ -300,41 +324,39 @@ where
     Theme: 'a,
     Renderer: iced::advanced::Renderer + 'a,
 {
-    fn is_outside_dismiss_click(
-        &self,
-        event: &Event,
+    fn floating_pointer_target(
+        &mut self,
         children: &mut [widget::Tree],
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-    ) -> bool {
-        if self.outside_click_dismissal.is_none()
-            || !matches!(
-                event,
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-            )
-        {
-            return false;
-        }
+    ) -> FloatingPointerTarget {
         let Some(position) = cursor.position() else {
-            return false;
+            return FloatingPointerTarget::CursorUnavailable;
         };
 
         let surface_size = Size::new(layout.bounds().width, layout.bounds().height);
         let mut checked_any_floating = false;
-        for (floating, tree) in self.floating.iter().zip(children.iter_mut().skip(1)) {
+        for (floating, tree) in self.floating.iter_mut().zip(children.iter_mut().skip(1)) {
             checked_any_floating = true;
             let limits = layout::Limits::new(
                 Size::ZERO,
                 floating_max_size(floating.placement, surface_size),
             );
-            let node = floating.element.as_widget().layout(tree, renderer, &limits);
+            let node = floating
+                .element
+                .as_widget_mut()
+                .layout(tree, renderer, &limits);
             if floating_bounds(floating.placement, node.size(), surface_size).contains(position) {
-                return false;
+                return FloatingPointerTarget::FloatingContent;
             }
         }
 
-        checked_any_floating
+        if checked_any_floating {
+            FloatingPointerTarget::Background
+        } else {
+            FloatingPointerTarget::CursorUnavailable
+        }
     }
 
     fn background_cursor(&self, cursor: mouse::Cursor) -> mouse::Cursor {
@@ -343,6 +365,17 @@ where
             BackgroundInputPolicy::Blocked => mouse::Cursor::Unavailable,
         }
     }
+}
+
+fn is_left_mouse_press(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+    )
+}
+
+fn is_mouse_event(event: &Event) -> bool {
+    matches!(event, Event::Mouse(_))
 }
 
 struct FloatingOverlay<'a, 'b, Message, Theme, Renderer>
@@ -366,24 +399,24 @@ where
         let limits = layout::Limits::new(Size::ZERO, max_size);
         let node = self
             .floating
-            .as_widget()
+            .as_widget_mut()
             .layout(self.state, renderer, &limits);
         let size = node.size();
         node.move_to(floating_position(self.placement, size, bounds))
     }
 
-    fn on_event(
+    fn update(
         &mut self,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
-    ) -> iced::event::Status {
+    ) {
         let bounds = layout.bounds();
 
-        self.floating.as_widget_mut().on_event(
+        self.floating.as_widget_mut().update(
             self.state, event, layout, cursor, renderer, clipboard, shell, &bounds,
         )
     }
@@ -392,12 +425,12 @@ where
         &self,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
-        viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        let bounds = layout.bounds();
         self.floating
             .as_widget()
-            .mouse_interaction(self.state, layout, cursor, viewport, renderer)
+            .mouse_interaction(self.state, layout, cursor, &bounds, renderer)
     }
 
     fn draw(
@@ -408,19 +441,10 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
     ) {
-        self.floating.as_widget().draw(
-            self.state,
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            &Rectangle::with_size(Size::INFINITY),
-        );
-    }
-
-    fn is_over(&self, layout: Layout<'_>, _renderer: &Renderer, cursor_position: Point) -> bool {
-        layout.bounds().contains(cursor_position)
+        let bounds = layout.bounds();
+        self.floating
+            .as_widget()
+            .draw(self.state, renderer, theme, style, layout, cursor, &bounds);
     }
 }
 

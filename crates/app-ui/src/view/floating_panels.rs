@@ -13,13 +13,13 @@ use crate::appearance::{
     navigation_icon_button_style, selected_sidebar_item_style, sidebar_bookmark_drop_slot_style,
     sidebar_style,
 };
-use crate::config::COLUMN_FIXED_COUNT_OPTIONS;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
-    trash_location_path, ColumnViewMode, ContextMenuState, DestructiveActionConfirmation, Message,
-    SidebarBookmarkDropSlot, SidebarLocation, SidebarLocationKind, TransferConflictChoice,
-    TransferConflictItem, TransferConflictMetadata, TransferConflictState, TRASH_LOCATION_LABEL,
+    trash_location_path, ContextMenuState, DestructiveActionConfirmation, FileContextMenuState,
+    Message, SidebarBookmarkContextMenuState, SidebarBookmarkDropSlot, SidebarLocation,
+    SidebarLocationKind, TransferConflictChoice, TransferConflictItem, TransferConflictMetadata,
+    TransferConflictState, TRASH_LOCATION_LABEL,
 };
 use crate::sidebar::SIDEBAR_WIDTH;
 use crate::typography::readable_text;
@@ -45,7 +45,7 @@ pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
         readable_text(message).size(13).width(Length::Fill),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     container(content)
         .padding([10, 12])
@@ -83,10 +83,10 @@ pub(super) fn destructive_action_confirmation_panel(
         readable_text(title).size(16).width(Length::Fill),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let actions = row![
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
         button(readable_text("Cancel").size(12))
             .on_press(Message::DestructiveActionCanceled)
             .padding([6, 10])
@@ -97,7 +97,7 @@ pub(super) fn destructive_action_confirmation_panel(
             .style(context_menu_button_style()),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let content = column![title_row, readable_text(body).size(13), actions]
         .spacing(12)
@@ -131,7 +131,7 @@ pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<
         .size(12),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let apply_label = if state.apply_to_all {
         "On: apply this choice to later compatible conflicts"
@@ -145,7 +145,7 @@ pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<
         conflict_choice_button("Keep Both", TransferConflictChoice::KeepBoth),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
     if conflict.can_merge() {
         actions = actions.push(conflict_choice_button(
             "Merge Folders",
@@ -172,7 +172,7 @@ pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<
             .style(context_menu_button_style()),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let content = column![
         title,
@@ -291,7 +291,7 @@ fn conflict_choice_button(
 fn action_label(icon: IconSymbol, label: &'static str, size: f32) -> Row<'static, Message> {
     row![themed_icon(icon, IconTone::Normal, size), text(label)]
         .spacing(6)
-        .align_items(Alignment::Center)
+        .align_y(Alignment::Center)
 }
 
 pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
@@ -307,7 +307,7 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         .style(navigation_icon_button_style()),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let mut sidebar = column![sidebar_header].spacing(6).padding(12);
     let can_drop_bookmark = browser.can_drop_sidebar_bookmark();
@@ -359,6 +359,11 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
                 Message::DragSelectionFinished
             })
             .interaction(iced::mouse::Interaction::Pointer);
+        let item = if location.kind == SidebarLocationKind::Bookmark {
+            item.on_right_press(Message::SidebarBookmarkRightClicked(location.path.clone()))
+        } else {
+            item
+        };
 
         sidebar = sidebar.push(item);
     }
@@ -435,11 +440,9 @@ fn sidebar_bookmark_drop_slot(
     slot: SidebarBookmarkDropSlot,
 ) -> Element<'_, Message> {
     let is_active = browser.sidebar_bookmark_drop_slot == Some(slot);
-    let content = container(Space::with_height(Length::Fixed(
-        SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT,
-    )))
-    .height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT))
-    .width(Length::Fill);
+    let content = container(Space::new().height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT)))
+        .height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT))
+        .width(Length::Fill);
     let content = if is_active {
         content.style(sidebar_bookmark_drop_slot_style)
     } else {
@@ -467,12 +470,6 @@ fn sidebar_icon_symbol(location: &SidebarLocation) -> IconSymbol {
 }
 
 pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Message> {
-    let mut fixed_count_row = Row::new().spacing(6);
-    for count in COLUMN_FIXED_COUNT_OPTIONS {
-        fixed_count_row =
-            fixed_count_row.push(column_fixed_count_button(count, browser.column_fixed_count));
-    }
-
     container(
         column![
             readable_text("Settings").size(16),
@@ -480,18 +477,6 @@ pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Messag
             hidden_files_visibility_button(browser),
             readable_text("Rendering").size(13),
             gpu_rendering_button(browser.rendering_backend_preference),
-            readable_text("Column View").size(13),
-            row![
-                column_view_mode_button(
-                    "Unlimited",
-                    ColumnViewMode::Unbounded,
-                    browser.column_view_mode
-                ),
-                column_view_mode_button("Fixed", ColumnViewMode::Fixed, browser.column_view_mode),
-            ]
-            .spacing(6),
-            readable_text("Fixed Columns").size(13),
-            fixed_count_row,
             readable_text("Terminal").size(13),
             terminal_emulator_options(browser.terminal_emulator),
         ]
@@ -525,46 +510,10 @@ fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Mess
         switch_control(browser.options.include_hidden),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     button(container(label).padding([5, 8]).width(Length::Fill))
         .on_press(Message::ShowHiddenFilesToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn column_view_mode_button(
-    label: &'static str,
-    mode: ColumnViewMode,
-    selected_mode: ColumnViewMode,
-) -> Button<'static, Message> {
-    let label = container(readable_text(label).size(12))
-        .padding([5, 8])
-        .width(Length::Fill);
-    let label = if mode == selected_mode {
-        label.style(selected_sidebar_item_style)
-    } else {
-        label
-    };
-
-    button(label)
-        .on_press(Message::ColumnViewModeSelected(mode))
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn column_fixed_count_button(count: usize, selected_count: usize) -> Button<'static, Message> {
-    let label = container(readable_text(count.to_string()).size(12))
-        .padding([5, 8])
-        .width(Length::Fill);
-    let label = if count == selected_count {
-        label.style(selected_sidebar_item_style)
-    } else {
-        label
-    };
-
-    button(label)
-        .on_press(Message::ColumnFixedCountSelected(count))
         .width(Length::Fill)
         .style(context_menu_button_style())
 }
@@ -618,11 +567,21 @@ fn sidebar_label(icon: IconSymbol, label: &str, tone: IconTone) -> Row<'static, 
         readable_text(label).width(Length::Fill)
     ]
     .spacing(8)
-    .align_items(Alignment::Center)
+    .align_y(Alignment::Center)
 }
 
 pub(super) fn context_menu_panel(
     menu: &ContextMenuState,
+    is_trash_view: bool,
+) -> Element<'_, Message> {
+    match menu {
+        ContextMenuState::FileArea(menu) => file_context_menu_panel(menu, is_trash_view),
+        ContextMenuState::SidebarBookmark(menu) => sidebar_bookmark_context_menu_panel(menu),
+    }
+}
+
+fn file_context_menu_panel(
+    menu: &FileContextMenuState,
     is_trash_view: bool,
 ) -> Element<'_, Message> {
     if is_trash_view {
@@ -691,7 +650,25 @@ pub(super) fn context_menu_panel(
         .into()
 }
 
-fn trash_context_menu_panel(menu: &ContextMenuState) -> Element<'_, Message> {
+fn sidebar_bookmark_context_menu_panel(
+    menu: &SidebarBookmarkContextMenuState,
+) -> Element<'_, Message> {
+    let menu_content = iced::widget::Column::new()
+        .spacing(4)
+        .padding(8)
+        .push(menu_button(
+            IconSymbol::Trash,
+            "Delete Tag",
+            Message::SidebarBookmarkDeleteRequested(menu.path.clone()),
+        ));
+
+    container(menu_content)
+        .width(Length::Fixed(190.0))
+        .style(context_menu_style)
+        .into()
+}
+
+fn trash_context_menu_panel(menu: &FileContextMenuState) -> Element<'_, Message> {
     let mut menu_content = iced::widget::Column::new().spacing(4).padding(8);
     if menu.target.is_some() {
         menu_content = menu_content

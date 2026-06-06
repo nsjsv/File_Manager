@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use iced::Command;
+use iced::Task;
 
 use super::runtime::scrollbar_auto_hide_command;
 use super::FileBrowser;
@@ -29,7 +29,7 @@ impl FileBrowser {
         self.scrollbar_animation.is_some()
     }
 
-    pub(super) fn show_scrollbars_temporarily(&mut self) -> Command<Message> {
+    pub(super) fn show_scrollbars_temporarily(&mut self) -> Task<Message> {
         self.scrollbar_auto_hide_generation = self.scrollbar_auto_hide_generation.wrapping_add(1);
 
         let current_opacity = self.scrollbar_visibility.opacity();
@@ -65,9 +65,9 @@ impl FileBrowser {
         });
     }
 
-    pub(super) fn advance_scrollbar_animation(&mut self) -> Command<Message> {
+    pub(super) fn advance_scrollbar_animation(&mut self) -> Task<Message> {
         let Some(animation) = self.scrollbar_animation else {
-            return Command::none();
+            return Task::none();
         };
 
         match animation {
@@ -81,7 +81,7 @@ impl FileBrowser {
             } => self.advance_scrollbar_hide(started_at, initial_opacity),
         }
 
-        Command::none()
+        Task::none()
     }
 
     fn advance_scrollbar_reveal(&mut self, started_at: Instant, initial_opacity: f32) {

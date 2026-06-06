@@ -1,11 +1,11 @@
 use iced::advanced::widget as advanced_widget;
 use iced::advanced::widget::operation::{Focusable, Operation, Outcome, TextInput};
-use iced::{Command, Rectangle};
+use iced::{Rectangle, Task};
 
 use crate::model::Message;
 
-pub(super) fn select_focused_text_or_visible_files_command() -> Command<Message> {
-    Command::widget(FocusedTextInputSelectAll::default())
+pub(super) fn select_focused_text_or_visible_files_command() -> Task<Message> {
+    advanced_widget::operate(FocusedTextInputSelectAll::default())
 }
 
 #[derive(Default)]
@@ -15,22 +15,27 @@ struct FocusedTextInputSelectAll {
 }
 
 impl Operation<Message> for FocusedTextInputSelectAll {
-    fn container(
-        &mut self,
-        _id: Option<&advanced_widget::Id>,
-        _bounds: Rectangle,
-        operate_on_children: &mut dyn FnMut(&mut dyn Operation<Message>),
-    ) {
-        operate_on_children(self);
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Message>)) {
+        operate(self);
     }
 
-    fn focusable(&mut self, state: &mut dyn Focusable, id: Option<&advanced_widget::Id>) {
+    fn focusable(
+        &mut self,
+        id: Option<&advanced_widget::Id>,
+        _bounds: Rectangle,
+        state: &mut dyn Focusable,
+    ) {
         if state.is_focused() {
             self.focused_widget_id = id.cloned();
         }
     }
 
-    fn text_input(&mut self, state: &mut dyn TextInput, id: Option<&advanced_widget::Id>) {
+    fn text_input(
+        &mut self,
+        id: Option<&advanced_widget::Id>,
+        _bounds: Rectangle,
+        state: &mut dyn TextInput,
+    ) {
         if self.focused_widget_id.as_ref() == id {
             state.select_all();
             self.selected_focused_text = true;
@@ -49,7 +54,6 @@ impl Operation<Message> for FocusedTextInputSelectAll {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced::widget::text_input;
 
     #[derive(Default)]
     struct TextInputProbe {
@@ -57,6 +61,10 @@ mod tests {
     }
 
     impl TextInput for TextInputProbe {
+        fn text(&self) -> &str {
+            ""
+        }
+
         fn move_cursor_to_front(&mut self) {}
 
         fn move_cursor_to_end(&mut self) {}
@@ -66,6 +74,8 @@ mod tests {
         fn select_all(&mut self) {
             self.select_all_calls += 1;
         }
+
+        fn select_range(&mut self, _start: usize, _end: usize) {}
     }
 
     struct FocusProbe {
@@ -89,12 +99,12 @@ mod tests {
     #[test]
     fn focused_text_input_consumes_file_selection() {
         let mut operation = FocusedTextInputSelectAll::default();
-        let input_id: advanced_widget::Id = text_input::Id::new("focused-input").into();
+        let input_id: advanced_widget::Id = iced::widget::Id::new("focused-input").into();
         let mut focus_probe = FocusProbe { focused: true };
         let mut text_probe = TextInputProbe::default();
 
-        operation.focusable(&mut focus_probe, Some(&input_id));
-        operation.text_input(&mut text_probe, Some(&input_id));
+        operation.focusable(Some(&input_id), Rectangle::default(), &mut focus_probe);
+        operation.text_input(Some(&input_id), Rectangle::default(), &mut text_probe);
 
         assert_eq!(text_probe.select_all_calls, 1);
         assert!(matches!(operation.finish(), Outcome::None));
@@ -103,12 +113,12 @@ mod tests {
     #[test]
     fn missing_focused_text_input_falls_back_to_file_selection() {
         let mut operation = FocusedTextInputSelectAll::default();
-        let input_id: advanced_widget::Id = text_input::Id::new("unfocused-input").into();
+        let input_id: advanced_widget::Id = iced::widget::Id::new("unfocused-input").into();
         let mut focus_probe = FocusProbe { focused: false };
         let mut text_probe = TextInputProbe::default();
 
-        operation.focusable(&mut focus_probe, Some(&input_id));
-        operation.text_input(&mut text_probe, Some(&input_id));
+        operation.focusable(Some(&input_id), Rectangle::default(), &mut focus_probe);
+        operation.text_input(Some(&input_id), Rectangle::default(), &mut text_probe);
 
         assert_eq!(text_probe.select_all_calls, 0);
         assert!(matches!(

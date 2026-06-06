@@ -16,7 +16,7 @@ repository = ""
 
 [workspace.dependencies]
 dirs = "5.0"
-iced = { version = "0.12", default-features = false, features = ["tokio", "advanced", "svg", "image", "multi-window", "fira-sans", "wgpu"] }
+iced = { version = "0.14", default-features = false, features = ["tokio", "advanced", "advanced-shaping", "svg", "image", "x11", "wayland", "fira-sans", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 notify = "6.1"
 nucleo = "0.5.0"

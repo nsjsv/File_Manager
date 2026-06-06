@@ -1,7 +1,7 @@
 use iced::advanced::widget as advanced_widget;
 use iced::advanced::widget::operation::{Operation, Scrollable as ScrollableOperation};
 use iced::widget::scrollable;
-use iced::{mouse, Command, Rectangle, Vector};
+use iced::{mouse, Rectangle, Task, Vector};
 
 use super::{FileBrowser, COLUMN_BROWSER_WHEEL_LINE_PIXELS};
 use crate::model::Message;
@@ -13,7 +13,7 @@ struct ColumnBrowserScrollBy {
 }
 
 impl ColumnBrowserScrollBy {
-    fn new(target: scrollable::Id, delta_x: f32) -> Self {
+    fn new(target: iced::widget::Id, delta_x: f32) -> Self {
         Self {
             target: target.into(),
             delta_x,
@@ -22,34 +22,30 @@ impl ColumnBrowserScrollBy {
 }
 
 impl Operation<Message> for ColumnBrowserScrollBy {
-    fn container(
-        &mut self,
-        _id: Option<&advanced_widget::Id>,
-        _bounds: Rectangle,
-        operate_on_children: &mut dyn FnMut(&mut dyn Operation<Message>),
-    ) {
-        operate_on_children(self);
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Message>)) {
+        operate(self);
     }
 
     fn scrollable(
         &mut self,
-        state: &mut dyn ScrollableOperation,
         id: Option<&advanced_widget::Id>,
         _bounds: Rectangle,
+        _content_bounds: Rectangle,
         translation: Vector,
+        state: &mut dyn ScrollableOperation,
     ) {
         if id == Some(&self.target) {
             state.scroll_to(scrollable::AbsoluteOffset {
-                x: (translation.x - self.delta_x).max(0.0),
-                y: translation.y.max(0.0),
+                x: Some((translation.x - self.delta_x).max(0.0)),
+                y: Some(translation.y.max(0.0)),
             });
         }
     }
 }
 
 impl FileBrowser {
-    pub(super) fn focus_latest_column(&self) -> Command<Message> {
-        scrollable::snap_to(
+    pub(super) fn focus_latest_column(&self) -> Task<Message> {
+        iced::widget::operation::snap_to(
             column_browser_scroll_id(),
             scrollable::RelativeOffset { x: 1.0, y: 0.0 },
         )
@@ -58,16 +54,16 @@ impl FileBrowser {
     pub(super) fn handle_column_browser_wheel_scrolled(
         &self,
         delta: mouse::ScrollDelta,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if !self.is_cursor_over_column_browser {
-            return Command::none();
+            return Task::none();
         }
 
         let Some(delta_x) = self.column_browser_horizontal_wheel_delta(delta) else {
-            return Command::none();
+            return Task::none();
         };
 
-        Command::widget(ColumnBrowserScrollBy::new(
+        advanced_widget::operate(ColumnBrowserScrollBy::new(
             column_browser_scroll_id(),
             delta_x,
         ))

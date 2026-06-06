@@ -7,12 +7,12 @@ use crate::model::Message;
 pub(super) fn switch_control(is_on: bool) -> Element<'static, Message> {
     let content = if is_on {
         Row::new()
-            .push(Space::with_width(Length::Fill))
+            .push(Space::new().width(Length::Fill))
             .push(switch_thumb())
     } else {
         Row::new()
             .push(switch_thumb())
-            .push(Space::with_width(Length::Fill))
+            .push(Space::new().width(Length::Fill))
     };
 
     container(content)
@@ -28,7 +28,7 @@ pub(super) fn switch_control(is_on: bool) -> Element<'static, Message> {
 }
 
 fn switch_thumb() -> Element<'static, Message> {
-    container(Space::with_width(Length::Fixed(1.0)))
+    container(Space::new().width(Length::Fixed(1.0)))
         .width(Length::Fixed(14.0))
         .height(Length::Fixed(14.0))
         .style(switch_thumb_style)

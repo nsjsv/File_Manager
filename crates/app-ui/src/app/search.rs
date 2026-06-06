@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use file_core::{file_search_index_exists, FileKind, FileSearchIndexOutcome, FileSearchOutcome};
-use iced::widget::{scrollable, text_input};
-use iced::Command;
+use iced::widget::scrollable;
+use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::{search_command, search_index_command, search_tree_command};
@@ -21,7 +21,7 @@ const SEARCH_FOCUS_RETRY_DELAYS: [Duration; 2] =
 const SEARCH_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(150);
 
 impl FileBrowser {
-    pub(super) fn open_search(&mut self) -> Command<Message> {
+    pub(super) fn open_search(&mut self) -> Task<Message> {
         let root = self.search_root_for_scope(SearchScope::CurrentDirectory);
         let index_root = root.clone();
         self.context_menu = None;
@@ -47,7 +47,7 @@ impl FileBrowser {
             index_error: None,
         });
 
-        Command::batch([
+        Task::batch([
             rename_command,
             self.ensure_search_window(),
             self.ensure_search_index(index_root),
@@ -56,9 +56,9 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn update_search_query(&mut self, query: String) -> Command<Message> {
+    pub(super) fn update_search_query(&mut self, query: String) -> Task<Message> {
         let Some(search) = &mut self.search else {
-            return Command::none();
+            return Task::none();
         };
 
         search.request_generation = search.request_generation.wrapping_add(1);
@@ -70,33 +70,30 @@ impl FileBrowser {
         let request = search.request();
         if request.query.trim().is_empty() {
             search.is_loading = false;
-            return Command::none();
+            return Task::none();
         }
 
         search.is_loading = true;
         search_input_stabilization_command(request)
     }
 
-    pub(super) fn load_stable_search_matches(
-        &mut self,
-        request: SearchRequest,
-    ) -> Command<Message> {
+    pub(super) fn load_stable_search_matches(&mut self, request: SearchRequest) -> Task<Message> {
         if !self.active_search_matches_request(&request) {
-            return Command::none();
+            return Task::none();
         }
         self.load_search_matches()
     }
 
-    pub(super) fn toggle_search_scope(&mut self) -> Command<Message> {
+    pub(super) fn toggle_search_scope(&mut self) -> Task<Message> {
         let Some(next_scope) = self.search.as_ref().map(|search| match search.scope {
             SearchScope::CurrentDirectory => SearchScope::HomeDirectory,
             SearchScope::HomeDirectory => SearchScope::CurrentDirectory,
         }) else {
-            return Command::none();
+            return Task::none();
         };
         let root = self.search_root_for_scope(next_scope);
         let Some(search) = &mut self.search else {
-            return Command::none();
+            return Task::none();
         };
 
         search.scope = next_scope;
@@ -107,10 +104,10 @@ impl FileBrowser {
         search.error = None;
         search.index_error = None;
         search.is_indexing = false;
-        Command::batch([
+        Task::batch([
             self.ensure_search_index(root),
             self.load_search_matches(),
-            text_input::focus(search_input_id()),
+            iced::widget::operation::focus(search_input_id()),
         ])
     }
 
@@ -118,9 +115,9 @@ impl FileBrowser {
         &mut self,
         request: SearchRequest,
         search: Result<FileSearchOutcome, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(state) = self.active_search_mut_for_request(&request) else {
-            return Command::none();
+            return Task::none();
         };
 
         state.is_loading = false;
@@ -139,14 +136,14 @@ impl FileBrowser {
                 state.error = Some(error);
             }
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn accept_search_index(
         &mut self,
         root: PathBuf,
         outcome: Result<FileSearchIndexOutcome, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.search_index.indexing_roots.remove(&root);
         match outcome {
             Ok(outcome) => {
@@ -173,19 +170,19 @@ impl FileBrowser {
             }
         }
 
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn move_search_selection(
         &mut self,
         direction: PathSuggestionDirection,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(search) = &mut self.search else {
-            return Command::none();
+            return Task::none();
         };
         if search.matches.is_empty() {
             search.selected_match = None;
-            return Command::none();
+            return Task::none();
         }
 
         let last_index = search.matches.len() - 1;
@@ -216,19 +213,19 @@ impl FileBrowser {
         scroll_selected_search_match(search)
     }
 
-    pub(super) fn activate_selected_search_match(&mut self) -> Command<Message> {
+    pub(super) fn activate_selected_search_match(&mut self) -> Task<Message> {
         let Some(path) = self.search.as_ref().and_then(|search| {
             search
                 .selected_match
                 .and_then(|index| search.matches.get(index))
                 .map(|search_match| search_match.path.clone())
         }) else {
-            return Command::none();
+            return Task::none();
         };
         self.activate_search_match(path)
     }
 
-    pub(super) fn activate_search_match(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn activate_search_match(&mut self, path: PathBuf) -> Task<Message> {
         let Some(search_match) = self.search.as_ref().and_then(|search| {
             search
                 .matches
@@ -236,7 +233,7 @@ impl FileBrowser {
                 .find(|search_match| search_match.path == path)
                 .cloned()
         }) else {
-            return Command::none();
+            return Task::none();
         };
 
         let close_command = self.close_search_window();
@@ -252,7 +249,7 @@ impl FileBrowser {
             self.pending_search_reveal = Some(search_match.path);
             self.navigate_to(parent, NavigationMode::RecordHistory)
         };
-        Command::batch([close_command, activation_command])
+        Task::batch([close_command, activation_command])
     }
 
     pub(super) fn reveal_pending_search_match(&mut self) {
@@ -266,13 +263,13 @@ impl FileBrowser {
         self.pending_search_reveal = None;
     }
 
-    fn load_search_matches(&mut self) -> Command<Message> {
+    fn load_search_matches(&mut self) -> Task<Message> {
         let Some(request) = self.active_search_request() else {
-            return Command::none();
+            return Task::none();
         };
         if request.query.trim().is_empty() {
             self.clear_active_search_results();
-            return Command::none();
+            return Task::none();
         }
 
         let root = request.root.clone();
@@ -282,7 +279,7 @@ impl FileBrowser {
         if !file_search_index_exists(&index_dir) {
             let index_command = self.ensure_search_index(root);
             self.mark_active_search_loading();
-            return Command::batch([
+            return Task::batch([
                 index_command,
                 search_tree_command(request, self.options.clone()),
             ]);
@@ -302,16 +299,16 @@ impl FileBrowser {
         }
     }
 
-    fn ensure_search_index(&mut self, root: PathBuf) -> Command<Message> {
+    fn ensure_search_index(&mut self, root: PathBuf) -> Task<Message> {
         if self.search_index.indexing_roots.contains(&root) {
             self.sync_active_search_index_status();
-            return Command::none();
+            return Task::none();
         }
 
         let index_dir = self.search_index_dir_for_root(&root);
         if file_search_index_exists(&index_dir) {
             self.sync_active_search_index_status();
-            return Command::none();
+            return Task::none();
         }
 
         self.search_index.indexing_roots.insert(root.clone());
@@ -396,20 +393,20 @@ fn normalize_search_selection(search: &mut SearchState) {
         .or(Some(0));
 }
 
-fn scroll_selected_search_match(search: &SearchState) -> Command<Message> {
+fn scroll_selected_search_match(search: &SearchState) -> Task<Message> {
     let Some(index) = search.selected_match else {
-        return Command::none();
+        return Task::none();
     };
 
     let y = selected_search_match_offset(index, search.matches.len());
-    scrollable::scroll_to(
+    iced::widget::operation::scroll_to(
         search_results_id(),
         scrollable::AbsoluteOffset { x: 0.0, y },
     )
 }
 
-fn search_input_stabilization_command(request: SearchRequest) -> Command<Message> {
-    Command::perform(
+fn search_input_stabilization_command(request: SearchRequest) -> Task<Message> {
+    Task::perform(
         async move {
             tokio::time::sleep(SEARCH_INPUT_STABILIZATION_DELAY).await;
             request
@@ -422,13 +419,13 @@ fn search_request_matches_active_state(search: &SearchState, request: &SearchReq
     search.request() == *request
 }
 
-pub(super) fn focus_search_input_command() -> Command<Message> {
-    text_input::focus(search_input_id())
+pub(super) fn focus_search_input_command() -> Task<Message> {
+    iced::widget::operation::focus(search_input_id())
 }
 
-fn delayed_search_focus_commands() -> Command<Message> {
-    Command::batch(SEARCH_FOCUS_RETRY_DELAYS.map(|delay| {
-        Command::perform(
+fn delayed_search_focus_commands() -> Task<Message> {
+    Task::batch(SEARCH_FOCUS_RETRY_DELAYS.map(|delay| {
+        Task::perform(
             async move {
                 tokio::time::sleep(delay).await;
             },
@@ -583,9 +580,7 @@ mod tests {
     }
 
     fn browser_with_search_state(search: SearchState) -> FileBrowser {
-        let (mut browser, _) = <FileBrowser as iced::multi_window::Application>::new(
-            crate::config::default_user_config(),
-        );
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
         browser.search_index.base_dir = PathBuf::from("/tmp/file-manager-search-test-index");
         browser.search = Some(search);
         browser

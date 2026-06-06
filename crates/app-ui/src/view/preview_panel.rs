@@ -234,7 +234,7 @@ fn preview_tree_entry_visible(entry: &PreviewTreeEntry, entries: &[PreviewTreeEn
 
 fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message> {
     let name = format_middle_ellipsized_text(&entry.name, PREVIEW_ENTRY_NAME_MAX_CHARS);
-    let indent = Space::with_width(Length::Fixed(
+    let indent = Space::new().width(Length::Fixed(
         entry.depth as f32 * PREVIEW_TREE_INDENT_WIDTH,
     ));
     let toggle: Element<'static, Message> = if entry.is_directory() {
@@ -247,11 +247,13 @@ fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message>
         )
         .width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
         .height(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
-        .center_x()
-        .center_y()
+        .center_x(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
+        .center_y(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
         .into()
     } else {
-        Space::with_width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH)).into()
+        Space::new()
+            .width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH))
+            .into()
     };
     let row_content = row![
         indent,
@@ -264,7 +266,7 @@ fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message>
         readable_text(name).size(14).width(Length::Fill),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
     let row_container = container(row_content).padding([3, 6]).width(Length::Fill);
 
     if entry.is_directory() {
@@ -279,17 +281,17 @@ fn preview_tree_entry_row(entry: &PreviewTreeEntry) -> Element<'static, Message>
 
 fn preview_tree_status_row(entry: &PreviewTreeEntry, message: String) -> Element<'static, Message> {
     let message = format_middle_ellipsized_text(&message, PREVIEW_ENTRY_NAME_MAX_CHARS);
-    let indent = Space::with_width(Length::Fixed(
+    let indent = Space::new().width(Length::Fixed(
         (entry.depth + 1) as f32 * PREVIEW_TREE_INDENT_WIDTH,
     ));
     let row_content = row![
         indent,
-        Space::with_width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH)),
-        Space::with_width(Length::Fixed(PREVIEW_ICON_SIZE)),
+        Space::new().width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH)),
+        Space::new().width(Length::Fixed(PREVIEW_ICON_SIZE)),
         readable_text(message).size(13).width(Length::Fill),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     container(row_content)
         .padding([3, 6])
@@ -361,7 +363,7 @@ fn markdown_preview_mode_switch(mode: MarkdownPreviewMode) -> Element<'static, M
         markdown_preview_mode_button("Raw", MarkdownPreviewMode::Raw, mode),
     ]
     .spacing(6)
-    .align_items(Alignment::Center)
+    .align_y(Alignment::Center)
     .into()
 }
 
@@ -399,8 +401,8 @@ fn image_preview_panel(
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .center_x()
-    .center_y()
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
     .into()
 }
 
@@ -431,12 +433,12 @@ fn audio_preview_panel(
         audio_volume_control(playback),
     ]
     .spacing(12)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     column![container(controls)
         .width(Length::Fill)
         .height(Length::Fixed(AUDIO_PREVIEW_CONTROL_HEIGHT))
-        .center_y(),]
+        .center_y(Length::Fixed(AUDIO_PREVIEW_CONTROL_HEIGHT)),]
 }
 
 fn audio_primary_button(playback: Option<&AudioPreviewPlayback>) -> Button<'static, Message> {
@@ -483,13 +485,13 @@ fn audio_timeline_control(
         .width(Length::Fixed(AUDIO_PROGRESS_SLIDER_WIDTH)),
     ]
     .spacing(AUDIO_TIMELINE_CONTROL_GAP)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
     let label_offset = AUDIO_CONTROL_BUTTON_SIZE + AUDIO_TIMELINE_CONTROL_GAP;
 
     column![
         slider_row,
         row![
-            Space::with_width(Length::Fixed(label_offset)),
+            Space::new().width(Length::Fixed(label_offset)),
             readable_text(audio_position_text(position, duration)).size(12),
         ],
     ]
@@ -577,18 +579,18 @@ fn video_preview_panel(
             .height(Length::Fixed(frame_height))
             .into()
     } else {
-        container(Space::with_width(Length::Fixed(frame_width)))
+        container(Space::new().width(Length::Fixed(frame_width)))
             .width(Length::Fixed(frame_width))
             .height(Length::Fixed(frame_height))
-            .center_x()
-            .center_y()
+            .center_x(Length::Fixed(frame_width))
+            .center_y(Length::Fixed(frame_height))
             .into()
     };
     let frame_view: Element<'static, Message> = container(frame_content)
         .width(Length::Fill)
         .height(Length::Fixed(frame_height))
-        .center_x()
-        .center_y()
+        .center_x(Length::Fill)
+        .center_y(Length::Fixed(frame_height))
         .into();
     let controls = video_controls(playback, duration, frame_width);
 
@@ -598,16 +600,16 @@ fn video_preview_panel(
             container(controls)
                 .width(Length::Fill)
                 .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
-                .center_x()
-                .center_y(),
+                .center_x(Length::Fill)
+                .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
         ]
         .width(Length::Fill)
         .height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .center_x()
-    .center_y()
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
     .into()
 }
 
@@ -675,7 +677,7 @@ fn video_controls(
     ]
     .spacing(VIDEO_CONTROL_SLIDER_GAP)
     .width(Length::Fixed(width))
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     column![
         row![
@@ -683,7 +685,7 @@ fn video_controls(
             readable_text(audio_position_text(position, duration)).size(12),
         ]
         .spacing(AUDIO_TIMELINE_CONTROL_GAP)
-        .align_items(Alignment::Center),
+        .align_y(Alignment::Center),
         slider_row,
     ]
     .spacing(8)
@@ -701,7 +703,7 @@ fn video_volume_control(playback: Option<&VideoPreviewPlayback>) -> Element<'sta
         video_volume_slider(playback).width(Length::Fill),
     ]
     .spacing(VIDEO_VOLUME_ICON_GAP)
-    .align_items(Alignment::Center)
+    .align_y(Alignment::Center)
     .into()
 }
 

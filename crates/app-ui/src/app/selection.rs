@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use file_core::{is_supported_audio_path, is_supported_video_path, DirectoryEntry, FileKind};
-use iced::Command;
+use iced::Task;
 
 use super::paths::{self, PasteTargetMode};
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
@@ -13,8 +13,9 @@ use crate::commands::{
 };
 use crate::model::{
     trash_location_path, AudioPreviewPlayback, ContextMenuState, ExpandedDirectory,
-    ExpandedDirectoryStatus, FileDragPhase, FileDragState, FileDragTarget, LastClick, Message,
-    NavigationMode, PreviewState, PreviewWindowProfile, SelectionMarquee, TransferConflictMode,
+    ExpandedDirectoryStatus, FileContextMenuState, FileDragPhase, FileDragState, FileDragTarget,
+    LastClick, Message, NavigationMode, PreviewState, PreviewWindowProfile, SelectionMarquee,
+    TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 
@@ -33,7 +34,7 @@ impl FileBrowser {
         self.focus_path(path);
     }
 
-    pub(super) fn handle_column_entry_clicked(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_column_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
         self.is_column_view_settings_open = false;
         let column_directories_snapshot = crate::three_column_view::column_directories(self);
         let was_selected = self.is_path_selected(&path);
@@ -90,14 +91,14 @@ impl FileBrowser {
         } else {
             self.open_column_for_directory(path)
         };
-        Command::batch([
+        Task::batch([
             rename_command,
             action_command,
             self.schedule_thumbnail_refresh(),
         ])
     }
 
-    pub(super) fn handle_entry_hovered(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_entry_hovered(&mut self, path: PathBuf) -> Task<Message> {
         self.hovered_entry = Some(path.clone());
         let target_directory = self.cursor_paste_directory_for_entry(&path);
         self.cursor_paste_directory = Some(target_directory.clone());
@@ -109,34 +110,31 @@ impl FileBrowser {
         self.schedule_thumbnail_refresh()
     }
 
-    pub(super) fn handle_entry_hover_cleared(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_entry_hover_cleared(&mut self, path: PathBuf) -> Task<Message> {
         if self.hovered_entry.as_ref() == Some(&path) {
             self.hovered_entry = None;
             self.cursor_paste_directory = Some(self.entry_parent_directory(&path));
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn handle_drop_target_hovered(&mut self, directory: PathBuf) -> Command<Message> {
+    pub(super) fn handle_drop_target_hovered(&mut self, directory: PathBuf) -> Task<Message> {
         self.hovered_entry = None;
         self.cursor_paste_directory = Some(directory.clone());
         if self.file_drag.is_some() {
             self.set_file_drag_target(directory);
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn handle_drop_target_hover_cleared(
-        &mut self,
-        directory: PathBuf,
-    ) -> Command<Message> {
+    pub(super) fn handle_drop_target_hover_cleared(&mut self, directory: PathBuf) -> Task<Message> {
         if self.cursor_paste_directory.as_ref() == Some(&directory) {
             self.cursor_paste_directory = None;
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn handle_sidebar_hovered(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_sidebar_hovered(&mut self, path: PathBuf) -> Task<Message> {
         self.hovered_sidebar = Some(path.clone());
         self.cursor_paste_directory = None;
         if self.file_drag.is_some() {
@@ -146,23 +144,23 @@ impl FileBrowser {
                 self.set_file_drag_target(path);
             }
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn handle_sidebar_hover_cleared(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_sidebar_hover_cleared(&mut self, path: PathBuf) -> Task<Message> {
         if self.hovered_sidebar.as_ref() == Some(&path) {
             self.hovered_sidebar = None;
         }
         self.clear_file_drag_target_if_matching(&path);
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn clear_cursor_paste_target(&mut self) -> Command<Message> {
+    pub(super) fn clear_cursor_paste_target(&mut self) -> Task<Message> {
         self.cursor_paste_directory = None;
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Command<Message> {
+    pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.context_menu = None;
@@ -184,39 +182,36 @@ impl FileBrowser {
         rename_command
     }
 
-    pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Command<Message> {
+    pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.select_context_menu_target(path.clone());
         self.clear_preview();
         self.drag_selection_anchor = None;
         self.file_drag = None;
-        self.context_menu = Some(ContextMenuState {
+        self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
             target: Some(path.clone()),
             target_is_directory: self.entry_kind(&path) == Some(FileKind::Directory),
             paste_directory: self.entry_parent_directory(&path),
             position: self.cursor_position,
-        });
+        }));
         rename_command
     }
 
-    pub(super) fn handle_blank_area_right_clicked(
-        &mut self,
-        directory: PathBuf,
-    ) -> Command<Message> {
+    pub(super) fn handle_blank_area_right_clicked(&mut self, directory: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.context_menu = Some(ContextMenuState {
+        self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
             target: None,
             target_is_directory: false,
             paste_directory: directory,
             position: self.cursor_position,
-        });
+        }));
         rename_command
     }
 
-    pub(super) fn start_selection_marquee(&mut self) -> Command<Message> {
+    pub(super) fn start_selection_marquee(&mut self) -> Task<Message> {
         if self.renaming.is_some() {
             return self.commit_rename_if_active();
         }
@@ -230,7 +225,7 @@ impl FileBrowser {
             start: self.cursor_position,
             current: self.cursor_position,
         });
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn update_selection_marquee(&mut self, position: iced::Point) {
@@ -256,20 +251,20 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn finish_drag_selection(&mut self) -> Command<Message> {
+    pub(super) fn finish_drag_selection(&mut self) -> Task<Message> {
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.sidebar_bookmark_drop_slot = None;
         let Some(file_drag) = self.file_drag.take() else {
-            return Command::none();
+            return Task::none();
         };
 
         if !file_drag.is_dragging() {
-            return Command::none();
+            return Task::none();
         }
 
         let Some(target) = file_drag.target else {
-            return Command::none();
+            return Task::none();
         };
 
         match target {
@@ -325,7 +320,7 @@ impl FileBrowser {
         &mut self,
         sources: Vec<PathBuf>,
         target_directory: PathBuf,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let transfers = paths::transfer_targets(&target_directory, &sources, PasteTargetMode::Move)
             .into_iter()
             .filter(|(source, target)| source != target && !target.starts_with(source))
@@ -333,7 +328,7 @@ impl FileBrowser {
             .collect::<Vec<_>>();
 
         if transfers.is_empty() {
-            return Command::none();
+            return Task::none();
         }
 
         let open_drop_target = if sources
@@ -345,9 +340,9 @@ impl FileBrowser {
             self.select_path(target_directory.clone());
             self.open_column_for_directory(target_directory)
         } else {
-            Command::none()
+            Task::none()
         };
-        Command::batch([
+        Task::batch([
             open_drop_target,
             self.enqueue_or_confirm_transfers(TransferConflictMode::Move, transfers),
         ])
@@ -364,7 +359,7 @@ impl FileBrowser {
         self.select_range(anchor, path, self.keyboard_modifiers.control());
     }
 
-    pub(super) fn select_all_visible(&mut self) -> Command<Message> {
+    pub(super) fn select_all_visible(&mut self) -> Task<Message> {
         let paths = self.visible_entry_paths();
         self.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
         self.selection_anchor = paths.first().cloned();
@@ -376,10 +371,10 @@ impl FileBrowser {
         }
         self.clear_preview();
         self.context_menu = None;
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn request_preview(&mut self) -> Command<Message> {
+    pub(super) fn request_preview(&mut self) -> Task<Message> {
         if self.preview.is_some() {
             self.context_menu = None;
             return self.close_preview_window();
@@ -388,9 +383,9 @@ impl FileBrowser {
         self.open_preview()
     }
 
-    fn activate_path(&mut self, path: PathBuf) -> Command<Message> {
+    fn activate_path(&mut self, path: PathBuf) -> Task<Message> {
         if self.is_trash_view {
-            return Command::none();
+            return Task::none();
         }
 
         match self.entry_kind(&path) {
@@ -399,21 +394,21 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn open_terminal_here(&mut self, directory: PathBuf) -> Command<Message> {
+    pub(super) fn open_terminal_here(&mut self, directory: PathBuf) -> Task<Message> {
         self.context_menu = None;
         if self.is_trash_view {
-            return Command::none();
+            return Task::none();
         }
         open_terminal_command(directory, self.terminal_emulator)
     }
 
-    fn open_column_for_directory(&mut self, path: PathBuf) -> Command<Message> {
+    fn open_column_for_directory(&mut self, path: PathBuf) -> Task<Message> {
         if self.is_trash_view {
-            return Command::none();
+            return Task::none();
         }
 
         if self.entry_kind(&path) != Some(FileKind::Directory) {
-            return Command::none();
+            return Task::none();
         }
 
         if let Some(expanded) = self.expanded_directories.get_mut(&path) {
@@ -431,13 +426,13 @@ impl FileBrowser {
                 animation_progress: 1.0,
             },
         );
-        Command::batch([
+        Task::batch([
             load_expanded_directory_command(path, self.options.clone()),
             self.focus_latest_column(),
         ])
     }
 
-    fn open_preview(&mut self) -> Command<Message> {
+    fn open_preview(&mut self) -> Task<Message> {
         self.context_menu = None;
 
         let Some(path) = self.selected.clone() else {
@@ -457,13 +452,13 @@ impl FileBrowser {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.error = None;
-            return Command::batch([close_window_command, image_preview_dimensions_command(path)]);
+            return Task::batch([close_window_command, image_preview_dimensions_command(path)]);
         }
         if is_video_preview {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.error = None;
-            return Command::batch([
+            return Task::batch([
                 close_window_command,
                 preview_command(path, kind, self.options.clone()),
             ]);
@@ -480,13 +475,13 @@ impl FileBrowser {
         self.error = None;
         if is_audio_preview {
             self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
-            return Command::batch([
+            return Task::batch([
                 window_command,
                 preview_command(path.clone(), kind, self.options.clone()),
                 start_audio_preview_command(path),
             ]);
         }
-        Command::batch([
+        Task::batch([
             window_command,
             preview_command(path, kind, self.options.clone()),
         ])
@@ -653,10 +648,8 @@ impl FileBrowser {
 mod tests {
     use std::path::PathBuf;
 
+    use crate::{app::FileBrowser, config, model::ContextMenuState};
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
-    use iced::multi_window::Application;
-
-    use crate::{app::FileBrowser, config};
 
     fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
         DirectoryEntry::new(
@@ -675,7 +668,7 @@ mod tests {
 
     #[test]
     fn right_clicking_directory_selects_menu_target_without_focusing_it() {
-        let (mut browser, _) = <FileBrowser as Application>::new(config::default_user_config());
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let current_dir = PathBuf::from("/workspace");
         let directory = current_dir.join("project");
         browser.current_dir = current_dir.clone();
@@ -692,7 +685,11 @@ mod tests {
         assert!(browser.is_path_selected(&directory));
         assert!(!browser.expanded_directories.contains_key(&directory));
 
-        let context_menu = browser.context_menu.as_ref().expect("context menu opens");
+        let ContextMenuState::FileArea(context_menu) =
+            browser.context_menu.as_ref().expect("context menu opens")
+        else {
+            panic!("file context menu opens");
+        };
         assert_eq!(context_menu.target.as_ref(), Some(&directory));
         assert!(context_menu.target_is_directory);
     }

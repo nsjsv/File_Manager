@@ -1,4 +1,6 @@
+use std::any::TypeId;
 use std::ffi::OsString;
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -8,7 +10,9 @@ use file_core::{
     CopyProgress, FileOperationControls, FileTransferOptions, TransferConflictStrategy,
     TrashRestoreEntry,
 };
+use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
+use iced::futures::stream::BoxStream;
 use iced::futures::SinkExt;
 use iced::Subscription;
 
@@ -23,20 +27,40 @@ const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
 const COPY_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn file_operation_subscription(task: RunningFileOperation) -> Subscription<Message> {
-    let task_id = task.id;
-    iced::subscription::channel(
-        ("file-operation", task_id),
-        FILE_OPERATION_CHANNEL_SIZE,
-        move |mut output| async move {
-            let result =
-                run_queued_file_operation(task.operation, task.controls, task_id, &mut output)
+    subscription::from_recipe(FileOperationRecipe { task })
+}
+
+struct FileOperationRecipe {
+    task: RunningFileOperation,
+}
+
+impl Recipe for FileOperationRecipe {
+    type Output = Message;
+
+    fn hash(&self, state: &mut Hasher) {
+        TypeId::of::<Self>().hash(state);
+        self.task.id.hash(state);
+    }
+
+    fn stream(self: Box<Self>, _input: EventStream) -> BoxStream<'static, Self::Output> {
+        let RunningFileOperation {
+            id: task_id,
+            operation,
+            controls,
+        } = self.task;
+
+        Box::pin(iced::stream::channel(
+            FILE_OPERATION_CHANNEL_SIZE,
+            async move |mut output| {
+                let result =
+                    run_queued_file_operation(operation, controls, task_id, &mut output).await;
+                let _ = output
+                    .send(Message::FileOperationFinished(task_id, result))
                     .await;
-            let _ = output
-                .send(Message::FileOperationFinished(task_id, result))
-                .await;
-            iced::futures::future::pending().await
-        },
-    )
+                iced::futures::future::pending().await
+            },
+        ))
+    }
 }
 
 async fn run_queued_file_operation(

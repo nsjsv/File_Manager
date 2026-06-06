@@ -16,7 +16,7 @@ use file_core::{
     TransferConflictCheck, TransferConflictItem, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
-use iced::Command;
+use iced::Task;
 
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
@@ -37,45 +37,45 @@ pub(crate) use queued_file_operations::file_operation_subscription;
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
 
-pub(crate) fn initial_load_command(user_config: config::UserConfig) -> Command<Message> {
-    Command::perform(
+pub(crate) fn initial_load_command(user_config: config::UserConfig) -> Task<Message> {
+    Task::perform(
         load_initial_state(user_config),
         Message::InitialLoadFinished,
     )
 }
 
-pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Command<Message> {
-    Command::perform(persist_user_config(user_config), Message::UserConfigSaved)
+pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Task<Message> {
+    Task::perform(persist_user_config(user_config), Message::UserConfigSaved)
 }
 
-pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) -> Command<Message> {
-    Command::perform(
+pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) -> Task<Message> {
+    Task::perform(
         persist_sidebar_bookmarks(bookmarks),
         Message::SidebarBookmarksSaved,
     )
 }
 
-pub(crate) fn load_directory_command(path: PathBuf, options: ScanOptions) -> Command<Message> {
-    Command::perform(load_directory(path, options), Message::Loaded)
+pub(crate) fn load_directory_command(path: PathBuf, options: ScanOptions) -> Task<Message> {
+    Task::perform(load_directory(path, options), Message::Loaded)
 }
 
-pub(crate) fn load_trash_command(options: ScanOptions) -> Command<Message> {
-    Command::perform(load_trash(options), Message::TrashLoaded)
+pub(crate) fn load_trash_command(options: ScanOptions) -> Task<Message> {
+    Task::perform(load_trash(options), Message::TrashLoaded)
 }
 
 pub(crate) fn load_expanded_directory_command(
     path: PathBuf,
     options: ScanOptions,
-) -> Command<Message> {
+) -> Task<Message> {
     let expanded_path = path.clone();
-    Command::perform(load_directory(path, options), move |scan| {
+    Task::perform(load_directory(path, options), move |scan| {
         Message::ExpandedDirectoryLoaded(expanded_path.clone(), scan)
     })
 }
 
-pub(crate) fn path_suggestions_command(request: PathSuggestionRequest) -> Command<Message> {
+pub(crate) fn path_suggestions_command(request: PathSuggestionRequest) -> Task<Message> {
     let issued_request = request.clone();
-    Command::perform(
+    Task::perform(
         load_path_suggestions(request.input, request.current_dir),
         move |suggestions| Message::PathSuggestionsLoaded(issued_request.clone(), suggestions),
     )
@@ -85,20 +85,17 @@ pub(crate) fn search_command(
     request: SearchRequest,
     options: ScanOptions,
     index_dir: PathBuf,
-) -> Command<Message> {
+) -> Task<Message> {
     let issued_request = request.clone();
-    Command::perform(
+    Task::perform(
         load_search_matches(request, options, index_dir),
         move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
     )
 }
 
-pub(crate) fn search_tree_command(
-    request: SearchRequest,
-    options: ScanOptions,
-) -> Command<Message> {
+pub(crate) fn search_tree_command(request: SearchRequest, options: ScanOptions) -> Task<Message> {
     let issued_request = request.clone();
-    Command::perform(load_search_tree_matches(request, options), move |search| {
+    Task::perform(load_search_tree_matches(request, options), move |search| {
         Message::SearchMatchesLoaded(issued_request.clone(), search)
     })
 }
@@ -107,9 +104,9 @@ pub(crate) fn search_index_command(
     root: PathBuf,
     index_dir: PathBuf,
     options: ScanOptions,
-) -> Command<Message> {
+) -> Task<Message> {
     let issued_root = root.clone();
-    Command::perform(
+    Task::perform(
         build_search_index(root, index_dir, options),
         move |outcome| Message::SearchIndexBuilt(issued_root.clone(), outcome),
     )
@@ -119,9 +116,9 @@ pub(crate) fn preview_command(
     path: PathBuf,
     kind: FileKind,
     options: ScanOptions,
-) -> Command<Message> {
+) -> Task<Message> {
     let preview_path = path.clone();
-    Command::perform(load_preview(path, kind, options), move |preview_outcome| {
+    Task::perform(load_preview(path, kind, options), move |preview_outcome| {
         Message::PreviewLoaded(preview_path.clone(), preview_outcome)
     })
 }
@@ -129,9 +126,9 @@ pub(crate) fn preview_command(
 pub(crate) fn preview_directory_children_command(
     path: PathBuf,
     options: ScanOptions,
-) -> Command<Message> {
+) -> Task<Message> {
     let parent_path = path.clone();
-    Command::perform(
+    Task::perform(
         load_directory_preview_children(path, options),
         move |children_outcome| {
             Message::PreviewDirectoryChildrenLoaded(parent_path.clone(), children_outcome)
@@ -139,16 +136,16 @@ pub(crate) fn preview_directory_children_command(
     )
 }
 
-pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Command<Message> {
+pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     let image_path = path.clone();
-    Command::perform(load_image_dimensions(path), move |dimensions| {
+    Task::perform(load_image_dimensions(path), move |dimensions| {
         Message::ImagePreviewDimensionsLoaded(image_path.clone(), dimensions)
     })
 }
 
-pub(crate) fn start_audio_preview_command(path: PathBuf) -> Command<Message> {
+pub(crate) fn start_audio_preview_command(path: PathBuf) -> Task<Message> {
     let audio_path = path.clone();
-    Command::perform(start_audio_preview(path), move |playback_outcome| {
+    Task::perform(start_audio_preview(path), move |playback_outcome| {
         Message::AudioPreviewStarted(audio_path.clone(), playback_outcome)
     })
 }
@@ -157,9 +154,9 @@ pub(crate) fn start_video_preview_audio_command(
     path: PathBuf,
     generation: u64,
     position: Duration,
-) -> Command<Message> {
+) -> Task<Message> {
     let video_path = path.clone();
-    Command::perform(
+    Task::perform(
         start_audio_preview_at(path, position),
         move |audio_outcome| {
             Message::VideoPreviewAudioStarted(video_path.clone(), generation, audio_outcome)
@@ -167,9 +164,9 @@ pub(crate) fn start_video_preview_audio_command(
     )
 }
 
-pub(crate) fn video_preview_metadata_command(path: PathBuf) -> Command<Message> {
+pub(crate) fn video_preview_metadata_command(path: PathBuf) -> Task<Message> {
     let video_path = path.clone();
-    Command::perform(
+    Task::perform(
         async move {
             inspect_video_preview_metadata(path)
                 .await
@@ -185,9 +182,9 @@ pub(crate) fn video_preview_frame_command(
     path: PathBuf,
     generation: u64,
     position: Duration,
-) -> Command<Message> {
+) -> Task<Message> {
     let video_path = path.clone();
-    Command::perform(
+    Task::perform(
         load_video_preview_frame(path, generation, position),
         move |frame_outcome| match frame_outcome {
             Ok(frame) => Message::VideoPreviewFrameLoaded(frame),
@@ -204,8 +201,8 @@ pub(crate) fn video_preview_frame_command(
 pub(crate) fn thumbnail_batch_command(
     cache_dir: PathBuf,
     works: Vec<ThumbnailWork>,
-) -> Command<Message> {
-    Command::perform(
+) -> Task<Message> {
+    Task::perform(
         load_thumbnail_batch(cache_dir, works),
         Message::ThumbnailBatchLoaded,
     )
@@ -214,8 +211,8 @@ pub(crate) fn thumbnail_batch_command(
 pub(crate) fn open_file_command(
     path: PathBuf,
     terminal_emulator: TerminalEmulator,
-) -> Command<Message> {
-    Command::perform(
+) -> Task<Message> {
+    Task::perform(
         async move {
             open_path_with_terminal_emulator(path, terminal_emulator)
                 .await
@@ -228,8 +225,8 @@ pub(crate) fn open_file_command(
 pub(crate) fn open_terminal_command(
     directory: PathBuf,
     terminal_emulator: TerminalEmulator,
-) -> Command<Message> {
-    Command::perform(
+) -> Task<Message> {
+    Task::perform(
         async move {
             open_terminal_at_directory(directory, terminal_emulator)
                 .await
@@ -239,8 +236,8 @@ pub(crate) fn open_terminal_command(
     )
 }
 
-pub(crate) fn write_file_clipboard_command(selection: FileClipboardSelection) -> Command<Message> {
-    Command::perform(
+pub(crate) fn write_file_clipboard_command(selection: FileClipboardSelection) -> Task<Message> {
+    Task::perform(
         async move {
             write_file_clipboard(selection)
                 .await
@@ -253,10 +250,10 @@ pub(crate) fn write_file_clipboard_command(selection: FileClipboardSelection) ->
 pub(crate) fn read_desktop_clipboard_command(
     paste_directory: PathBuf,
     fallback_operation: Option<PendingOperation>,
-) -> Command<Message> {
+) -> Task<Message> {
     let issued_directory = paste_directory.clone();
     let issued_fallback = fallback_operation.clone();
-    Command::perform(
+    Task::perform(
         async move {
             read_desktop_clipboard()
                 .await
@@ -270,8 +267,8 @@ pub(crate) fn read_desktop_clipboard_command(
     )
 }
 
-pub(crate) fn create_clipboard_file_command(path: PathBuf, contents: Vec<u8>) -> Command<Message> {
-    Command::perform(
+pub(crate) fn create_clipboard_file_command(path: PathBuf, contents: Vec<u8>) -> Task<Message> {
+    Task::perform(
         create_clipboard_file_at_available_path(path, contents),
         Message::ClipboardFileCreated,
     )
@@ -280,9 +277,9 @@ pub(crate) fn create_clipboard_file_command(path: PathBuf, contents: Vec<u8>) ->
 pub(crate) fn check_transfer_conflicts_command(
     mode: TransferConflictMode,
     transfers: Vec<QueuedTransfer>,
-) -> Command<Message> {
+) -> Task<Message> {
     let issued_transfers = transfers.clone();
-    Command::perform(check_transfer_conflicts(transfers), move |conflicts| {
+    Task::perform(check_transfer_conflicts(transfers), move |conflicts| {
         Message::TransferConflictsChecked {
             mode,
             transfers: issued_transfers.clone(),
@@ -295,10 +292,10 @@ pub(crate) fn check_transfer_rename_target_command(
     state: TransferConflictState,
     transfer_position: Option<usize>,
     target: PathBuf,
-) -> Command<Message> {
+) -> Task<Message> {
     let issued_state = state.clone();
     let issued_target = target.clone();
-    Command::perform(
+    Task::perform(
         async move {
             is_transfer_target_available(target)
                 .await

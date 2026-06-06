@@ -86,16 +86,16 @@ impl BrowserFloatingInput {
     }
 }
 
-pub(crate) fn rename_input_id() -> text_input::Id {
-    text_input::Id::new("rename-input")
+pub(crate) fn rename_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("rename-input")
 }
 
-pub(crate) fn path_input_id() -> text_input::Id {
-    text_input::Id::new("path-input")
+pub(crate) fn path_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("path-input")
 }
 
-pub(crate) fn column_browser_scroll_id() -> scrollable::Id {
-    scrollable::Id::new("column-browser")
+pub(crate) fn column_browser_scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("column-browser")
 }
 
 pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static, Message> {
@@ -116,7 +116,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         path_input_panel(browser),
     ]
     .spacing(8)
-    .align_items(Alignment::Start);
+    .align_y(Alignment::Start);
 
     let header_content = column![tabs, navigation_bar]
         .spacing(14)
@@ -163,7 +163,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating_input = BrowserFloatingInput::DismissibleBlocking;
         floating.push(FloatingContent {
             element: context_menu_panel(context_menu, browser.is_trash_view),
-            placement: FloatingPlacement::At(context_menu.position),
+            placement: FloatingPlacement::At(context_menu.position()),
         });
     } else if browser.is_column_view_settings_open {
         floating_input = BrowserFloatingInput::DismissibleBlocking;
@@ -256,7 +256,7 @@ fn drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>> {
         readable_text(label).size(13),
     ]
     .spacing(8)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     Some(
         container(content)
@@ -302,7 +302,7 @@ fn navigation_icon_button(icon: IconSymbol, message: Message) -> Button<'static,
 }
 
 fn tab_bar(browser: &FileBrowser) -> Element<'_, Message> {
-    let mut tabs = Row::new().spacing(6).align_items(Alignment::Center);
+    let mut tabs = Row::new().spacing(6).align_y(Alignment::Center);
     for tab in &browser.tabs {
         tabs = tabs.push(tab_button(
             tab.id,
@@ -351,7 +351,7 @@ fn tab_button<'a>(
             .style(navigation_icon_button_style()),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
     let tab = container(label).padding([4, 8]);
     let tab = if is_active {
@@ -390,7 +390,7 @@ fn path_input_panel(browser: &FileBrowser) -> Element<'_, Message> {
                 readable_text(TRASH_LOCATION_LABEL).size(16),
             ]
             .spacing(8)
-            .align_items(Alignment::Center),
+            .align_y(Alignment::Center),
         )
         .padding([7, 10])
         .width(Length::Fill)
@@ -445,11 +445,13 @@ fn path_suggestion_row(path: &Path, is_selected: bool) -> Element<'_, Message> {
         .into()
 }
 
-pub(super) fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<Theme> {
+pub(super) fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<'static, Theme> {
     symbol.view(size).style(icon_tone_style(tone))
 }
 
-pub(super) fn icon_tone_style(tone: IconTone) -> iced::theme::Svg {
+pub(super) fn icon_tone_style(
+    tone: IconTone,
+) -> fn(&Theme, iced::widget::svg::Status) -> iced::widget::svg::Style {
     match tone {
         IconTone::Normal => icon_svg_style(),
         IconTone::Selected => selected_icon_svg_style(),

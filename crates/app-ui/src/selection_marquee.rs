@@ -9,10 +9,11 @@ pub(crate) fn selection_marquee_overlay(
     marquee: &SelectionMarquee,
 ) -> FloatingContent<'static, Message> {
     let top_left = marquee.top_left();
-    let element: Element<'static, Message> = container(Space::new(
-        Length::Fixed(marquee.width()),
-        Length::Fixed(marquee.height()),
-    ))
+    let element: Element<'static, Message> = container(
+        Space::new()
+            .width(Length::Fixed(marquee.width()))
+            .height(Length::Fixed(marquee.height())),
+    )
     .style(selection_marquee_style)
     .into();
 

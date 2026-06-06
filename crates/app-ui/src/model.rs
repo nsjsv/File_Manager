@@ -74,8 +74,10 @@ pub(crate) enum Message {
     SidebarBookmarkDropSlotHovered(SidebarBookmarkDropSlot),
     SidebarBookmarkDropSlotCleared(SidebarBookmarkDropSlot),
     SidebarBookmarkPressed(PathBuf),
+    SidebarBookmarkRightClicked(PathBuf),
     SidebarBookmarkEntered(PathBuf),
     SidebarBookmarkReleased,
+    SidebarBookmarkDeleteRequested(PathBuf),
     CursorMoved(Point),
     ColumnBrowserCursorEntered,
     ColumnBrowserCursorExited,
@@ -85,7 +87,7 @@ pub(crate) enum Message {
     DestructiveActionConfirmed,
     DestructiveActionCanceled,
     AuxiliaryWindowCloseRequested(window::Id),
-    AuxiliaryWindowResized(window::Id, u32, u32),
+    AuxiliaryWindowResized(window::Id, f32, f32),
     WindowFocused(window::Id),
     WindowUnfocused(window::Id),
     FocusedWindowEscapePressed,
@@ -117,8 +119,6 @@ pub(crate) enum Message {
     ObservedDirectoryChanged(PathBuf),
     ColumnSettingsToggled,
     ShowHiddenFilesToggled,
-    ColumnViewModeSelected(ColumnViewMode),
-    ColumnFixedCountSelected(usize),
     TerminalEmulatorSelected(TerminalEmulator),
     RenderingBackendPreferenceSelected(RenderingBackendPreference),
     RendererRestartNoticeDismissed,
@@ -126,7 +126,7 @@ pub(crate) enum Message {
     ScrollbarAutoHideElapsed(u64),
     ScrollbarAnimationTick,
     ColumnScrolled(PathBuf, f32, f32),
-    ColumnResizeStarted,
+    ColumnResizeStarted(usize),
     OpenDirectoryInNewTab(PathBuf),
     OpenTrashInNewTab,
     TabPressed(usize),
@@ -323,12 +323,6 @@ impl SidebarBookmarkDragState {
 pub(crate) enum FileDragPhase {
     WaitingForMovement { origin: Point },
     Dragging,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ColumnViewMode {
-    Unbounded,
-    Fixed,
 }
 
 #[derive(Debug, Clone)]
@@ -614,10 +608,38 @@ fn preview_tree_directory_children(kind: FileKind) -> Option<PreviewTreeDirector
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ContextMenuState {
+pub(crate) enum ContextMenuState {
+    FileArea(FileContextMenuState),
+    SidebarBookmark(SidebarBookmarkContextMenuState),
+}
+
+impl ContextMenuState {
+    pub(crate) fn position(&self) -> Point {
+        match self {
+            Self::FileArea(menu) => menu.position,
+            Self::SidebarBookmark(menu) => menu.position,
+        }
+    }
+
+    pub(crate) fn paste_directory(&self) -> Option<&PathBuf> {
+        match self {
+            Self::FileArea(menu) => Some(&menu.paste_directory),
+            Self::SidebarBookmark(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FileContextMenuState {
     pub(crate) target: Option<PathBuf>,
     pub(crate) target_is_directory: bool,
     pub(crate) paste_directory: PathBuf,
+    pub(crate) position: Point,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SidebarBookmarkContextMenuState {
+    pub(crate) path: PathBuf,
     pub(crate) position: Point,
 }
 

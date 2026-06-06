@@ -1,4 +1,4 @@
-use iced::Command;
+use iced::Task;
 
 use super::paths::path_text;
 use super::FileBrowser;
@@ -6,16 +6,14 @@ use crate::model::{InitialLoad, Message};
 use crate::startup_trace;
 
 impl FileBrowser {
-    pub(super) fn accept_initial_load(&mut self, initial_load: InitialLoad) -> Command<Message> {
+    pub(super) fn accept_initial_load(&mut self, initial_load: InitialLoad) -> Task<Message> {
         startup_trace::mark_once("initial_directory_loaded_message");
         self.sidebar_locations = initial_load.sidebar_locations;
         let user_config = initial_load.user_config;
         self.search_index.base_dir = user_config.search_index_dir.clone();
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
-        self.column_view_mode = user_config.column_view_mode;
-        self.column_fixed_count = user_config.column_fixed_count;
-        self.unbounded_column_width = user_config.unbounded_column_width;
+        self.column_width_overrides = user_config.column_width_overrides.clone();
         self.terminal_emulator = user_config.terminal_emulator;
         self.rendering_backend_preference = user_config.rendering_backend_preference;
         self.options.include_hidden = user_config.show_hidden_files;
@@ -53,7 +51,7 @@ impl FileBrowser {
                     Some(storage_error) => format!("{error}; {storage_error}"),
                     None => error,
                 });
-                Command::none()
+                Task::none()
             }
         };
 

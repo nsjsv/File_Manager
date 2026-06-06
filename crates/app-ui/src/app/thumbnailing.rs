@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use file_core::DirectoryEntry;
-use iced::Command;
+use iced::Task;
 use thumbnails::ThumbnailRequest;
 
 use super::FileBrowser;
@@ -19,7 +19,7 @@ const PREVIEW_THUMBNAIL_MIN_EDGE: u32 = 512;
 const PREVIEW_RESIZE_EXTRA_PIXELS: u32 = 128;
 
 impl FileBrowser {
-    pub(super) fn schedule_thumbnail_refresh(&mut self) -> Command<Message> {
+    pub(super) fn schedule_thumbnail_refresh(&mut self) -> Task<Message> {
         self.schedule_interaction_thumbnails();
         self.schedule_rendered_column_thumbnails();
         self.pump_thumbnail_queue()
@@ -30,7 +30,7 @@ impl FileBrowser {
         directory: PathBuf,
         offset_y: f32,
         height: f32,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.column_viewports.insert(
             directory.clone(),
             ColumnViewport {
@@ -45,17 +45,17 @@ impl FileBrowser {
     pub(super) fn request_preview_thumbnail_for_entry(
         &mut self,
         entry: DirectoryEntry,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let max_edge = self.preview_thumbnail_edge();
         let Some(request) = request_for_entry(&entry, max_edge) else {
-            return Command::none();
+            return Task::none();
         };
 
         if let Some(ready) = self.thumbnail_cache.ready_for_request(&request).cloned() {
             self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
                 entry.path, ready,
             )));
-            return Command::none();
+            return Task::none();
         }
 
         self.thumbnail_cache.enqueue_request(
@@ -66,22 +66,22 @@ impl FileBrowser {
         self.pump_thumbnail_queue()
     }
 
-    pub(super) fn refresh_preview_thumbnail_for_size(&mut self) -> Command<Message> {
+    pub(super) fn refresh_preview_thumbnail_for_size(&mut self) -> Task<Message> {
         let Some((path, max_edge)) = self.preview.as_ref().and_then(|preview| match preview {
             PreviewState::Ready(PreviewContent::Image { path, max_edge, .. }) => {
                 Some((path.clone(), *max_edge))
             }
             _ => None,
         }) else {
-            return Command::none();
+            return Task::none();
         };
         let desired_edge = self.preview_thumbnail_edge();
         if desired_edge <= max_edge + PREVIEW_RESIZE_EXTRA_PIXELS {
-            return Command::none();
+            return Task::none();
         }
 
         let Some(entry) = self.entry_for_path(&path).cloned() else {
-            return Command::none();
+            return Task::none();
         };
         self.preview = Some(PreviewState::Loading(path));
         self.request_preview_thumbnail_for_entry(entry)
@@ -91,9 +91,9 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         dimensions: Result<(u32, u32), String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         if !self.is_active_preview_loading(&path) {
-            return Command::none();
+            return Task::none();
         }
         let (width, height) = match dimensions {
             Ok((width, height)) if width > 0 && height > 0 => (width, height),
@@ -116,7 +116,7 @@ impl FileBrowser {
             return self.open_image_preview_error_window();
         };
 
-        Command::batch([
+        Task::batch([
             self.open_image_preview_window_for_dimensions(width, height),
             self.request_preview_thumbnail_for_entry(entry),
         ])
@@ -125,7 +125,7 @@ impl FileBrowser {
     pub(super) fn accept_thumbnail_batch(
         &mut self,
         outcomes: Vec<ThumbnailLoadOutcome>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let mut commands = Vec::new();
         for outcome in outcomes {
             let key = outcome.work.key();
@@ -162,13 +162,13 @@ impl FileBrowser {
 
         self.schedule_interaction_thumbnails();
         commands.push(self.pump_thumbnail_queue());
-        Command::batch(commands)
+        Task::batch(commands)
     }
 
-    pub(super) fn pump_thumbnail_queue(&mut self) -> Command<Message> {
+    pub(super) fn pump_thumbnail_queue(&mut self) -> Task<Message> {
         let works = self.thumbnail_cache.take_next_batch();
         if works.is_empty() {
-            return Command::none();
+            return Task::none();
         }
         thumbnail_batch_command(self.thumbnail_cache.cache_dir(), works)
     }

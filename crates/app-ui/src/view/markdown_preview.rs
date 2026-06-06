@@ -6,8 +6,8 @@ use crate::appearance::{auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_
 use crate::model::{Message, ScrollbarVisibility};
 use crate::typography::readable_text;
 
-const MARKDOWN_BODY_TEXT_SIZE: u16 = 14;
-const MARKDOWN_CODE_TEXT_SIZE: u16 = 13;
+const MARKDOWN_BODY_TEXT_SIZE: u32 = 14;
+const MARKDOWN_CODE_TEXT_SIZE: u32 = 13;
 const MARKDOWN_BLOCK_SPACING: f32 = 10.0;
 const MARKDOWN_LIST_INDENT: f32 = 20.0;
 const MARKDOWN_MARKER_WIDTH: f32 = 22.0;
@@ -80,7 +80,7 @@ fn markdown_list_item_view(
     content: String,
 ) -> Element<'static, Message> {
     row![
-        Space::with_width(Length::Fixed(depth as f32 * MARKDOWN_LIST_INDENT)),
+        Space::new().width(Length::Fixed(depth as f32 * MARKDOWN_LIST_INDENT)),
         readable_text(list_marker_label(marker, checked))
             .size(MARKDOWN_BODY_TEXT_SIZE)
             .width(Length::Fixed(MARKDOWN_MARKER_WIDTH)),
@@ -89,7 +89,7 @@ fn markdown_list_item_view(
             .width(Length::Fill),
     ]
     .spacing(6)
-    .align_items(Alignment::Start)
+    .align_y(Alignment::Start)
     .into()
 }
 
@@ -117,7 +117,7 @@ fn markdown_code_block_view(
 
 fn markdown_quote_view(depth: usize, content: String) -> Element<'static, Message> {
     row![
-        Space::with_width(Length::Fixed(
+        Space::new().width(Length::Fixed(
             depth.saturating_sub(1) as f32 * MARKDOWN_LIST_INDENT
         )),
         readable_text(">").size(MARKDOWN_BODY_TEXT_SIZE),
@@ -126,11 +126,11 @@ fn markdown_quote_view(depth: usize, content: String) -> Element<'static, Messag
             .width(Length::Fill),
     ]
     .spacing(8)
-    .align_items(Alignment::Start)
+    .align_y(Alignment::Start)
     .into()
 }
 
-fn markdown_heading_size(level: HeadingLevel) -> u16 {
+fn markdown_heading_size(level: HeadingLevel) -> u32 {
     match level {
         HeadingLevel::H1 => 28,
         HeadingLevel::H2 => 24,

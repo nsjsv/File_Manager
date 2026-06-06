@@ -6,7 +6,7 @@ use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{
     container, image, mouse_area, row, scrollable, text_input, Column, Row, Space, Svg,
 };
-use iced::{Alignment, Element, Length, Theme};
+use iced::{Alignment, Element, Length, Padding, Theme};
 
 use crate::app::FileBrowser;
 use crate::appearance::{
@@ -17,46 +17,43 @@ use crate::appearance::{
 };
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
-use crate::model::{ColumnViewMode, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
-use crate::sidebar::SIDEBAR_WIDTH;
+use crate::model::{ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
 use crate::thumbnail_cache::{LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE};
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id};
 
-const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 6.0;
+pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 3;
+pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 6.0;
 const ROW_ICON_SIZE: f32 = 18.0;
 const CHEVRON_ICON_SIZE: f32 = 15.0;
-const COMPRESSED_UNBOUNDED_COLUMN_WIDTH: f32 = 124.0;
-const MIN_FIXED_COLUMN_WIDTH: f32 = 180.0;
+const COLUMN_CONTENT_SPACING: u32 = 4;
+const COLUMN_PADDING: [u16; 2] = [10, 8];
+const COLUMN_TITLE_TEXT_SIZE: u32 = 13;
+const COLUMN_ENTRY_TEXT_SIZE: u32 = 16;
+const COLUMN_ENTRY_SPACING: u32 = 8;
+const COLUMN_ENTRY_PADDING: [u16; 2] = [6, 8];
 
 pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message> {
     let rendered_directories = column_directories(browser);
-    let fixed_count = browser.column_fixed_count.max(1);
-    let focused_index = rendered_directories.len().saturating_sub(1);
+    let visible_column_count = rendered_directories.len().max(DEFAULT_VISIBLE_COLUMN_COUNT);
     let mut columns = Row::new().spacing(0).height(Length::Fill);
 
-    for (index, directory) in rendered_directories.iter().enumerate() {
-        let active_child =
-            active_child_for_column(browser, directory, rendered_directories.get(index + 1));
-        let presentation = column_presentation(browser.column_view_mode, index, focused_index);
-        columns = columns.push(directory_column(
-            browser,
-            directory,
-            active_child.as_deref(),
-            presentation,
-        ));
-
-        if browser.column_view_mode == ColumnViewMode::Unbounded
-            && index + 1 < rendered_directories.len()
-        {
-            columns = columns.push(column_resize_divider());
+    for index in 0..visible_column_count {
+        if let Some(directory) = rendered_directories.get(index) {
+            let active_child =
+                active_child_for_column(browser, directory, rendered_directories.get(index + 1));
+            columns = columns.push(directory_column(
+                browser,
+                index,
+                directory,
+                active_child.as_deref(),
+            ));
+        } else {
+            columns = columns.push(empty_column(browser.column_width(index)));
         }
-    }
 
-    if browser.column_view_mode == ColumnViewMode::Fixed {
-        let placeholder_width = fixed_column_width(browser);
-        for _ in rendered_directories.len()..fixed_count {
-            columns = columns.push(empty_fixed_column(placeholder_width));
+        if index + 1 < visible_column_count {
+            columns = columns.push(column_resize_divider(index));
         }
     }
 
@@ -87,25 +84,24 @@ pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message>
 
 fn directory_column<'a>(
     browser: &'a FileBrowser,
+    column_index: usize,
     directory: &Path,
     active_child: Option<&Path>,
-    presentation: ColumnPresentation,
 ) -> Element<'a, Message> {
     let mut content = Column::new()
-        .spacing(presentation.content_spacing())
-        .padding(presentation.column_padding())
+        .spacing(COLUMN_CONTENT_SPACING)
+        .padding(COLUMN_PADDING)
         .width(Length::Fill);
 
-    content = content.push(column_title(browser, directory, presentation));
+    content = content.push(column_title(browser, directory));
     match column_content(browser, directory) {
         ColumnContent::Entries(entries) => {
             for entry in entries {
-                content =
-                    content.push(column_entry_row(browser, entry, active_child, presentation));
+                content = content.push(column_entry_row(browser, entry, active_child));
             }
         }
         ColumnContent::Loading => {
-            content = content.push(column_message("Loading...", presentation));
+            content = content.push(column_message("Loading..."));
         }
         ColumnContent::Empty => {
             let message = if browser.is_trash_view {
@@ -113,7 +109,7 @@ fn directory_column<'a>(
             } else {
                 "No items"
             };
-            content = content.push(column_message(message, presentation));
+            content = content.push(column_message(message));
         }
     }
 
@@ -133,7 +129,7 @@ fn directory_column<'a>(
         });
 
     let column = container(column_scroll)
-        .width(presentation.width(browser))
+        .width(Length::Fixed(browser.column_width(column_index)))
         .height(Length::Fill)
         .style(column_panel_style);
 
@@ -146,34 +142,28 @@ fn directory_column<'a>(
         .into()
 }
 
-fn empty_fixed_column(width: f32) -> Element<'static, Message> {
-    container(Space::with_height(Length::Fill))
+fn empty_column(width: f32) -> Element<'static, Message> {
+    container(Space::new().height(Length::Fill))
         .width(Length::Fixed(width))
         .height(Length::Fill)
         .style(column_panel_style)
         .into()
 }
 
-fn column_resize_divider() -> Element<'static, Message> {
-    let divider = container(Space::with_width(Length::Fixed(
-        COLUMN_RESIZE_DIVIDER_WIDTH,
-    )))
-    .width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH))
-    .height(Length::Fill)
-    .style(column_resize_divider_style);
+fn column_resize_divider(column_index: usize) -> Element<'static, Message> {
+    let divider = container(Space::new().width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH)))
+        .width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH))
+        .height(Length::Fill)
+        .style(column_resize_divider_style);
 
     mouse_area(divider)
-        .on_press(Message::ColumnResizeStarted)
+        .on_press(Message::ColumnResizeStarted(column_index))
         .on_release(Message::DragSelectionFinished)
         .interaction(iced::mouse::Interaction::ResizingHorizontally)
         .into()
 }
 
-fn column_title(
-    browser: &FileBrowser,
-    directory: &Path,
-    presentation: ColumnPresentation,
-) -> Element<'static, Message> {
+fn column_title(browser: &FileBrowser, directory: &Path) -> Element<'static, Message> {
     let title = if browser.is_trash_view && directory == browser.current_dir {
         TRASH_LOCATION_LABEL.to_owned()
     } else {
@@ -185,19 +175,16 @@ fn column_title(
     };
     container(measured_middle_ellipsized_text(
         title,
-        presentation.title_text_size(),
+        COLUMN_TITLE_TEXT_SIZE,
     ))
-    .padding(presentation.title_padding())
+    .padding(column_title_padding())
     .width(Length::Fill)
     .into()
 }
 
-fn column_message(
-    message: &'static str,
-    presentation: ColumnPresentation,
-) -> Element<'static, Message> {
-    container(readable_text(message).size(presentation.entry_text_size()))
-        .padding(presentation.entry_padding())
+fn column_message(message: &'static str) -> Element<'static, Message> {
+    container(readable_text(message).size(COLUMN_ENTRY_TEXT_SIZE))
+        .padding(COLUMN_ENTRY_PADDING)
         .width(Length::Fill)
         .into()
 }
@@ -206,7 +193,6 @@ fn column_entry_row<'a>(
     browser: &'a FileBrowser,
     entry: &DirectoryEntry,
     active_child: Option<&Path>,
-    presentation: ColumnPresentation,
 ) -> Element<'a, Message> {
     let is_selected =
         browser.is_path_selected(&entry.path) || active_child == Some(entry.path.as_path());
@@ -230,7 +216,7 @@ fn column_entry_row<'a>(
     } else {
         measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),
-            presentation.entry_text_size(),
+            COLUMN_ENTRY_TEXT_SIZE,
         )
     };
 
@@ -238,7 +224,7 @@ fn column_entry_row<'a>(
         if entry.kind == FileKind::Directory && !browser.is_trash_view {
             themed_icon(IconSymbol::ChevronRight, icon_tone, CHEVRON_ICON_SIZE).into()
         } else {
-            Space::with_width(Length::Fixed(CHEVRON_ICON_SIZE)).into()
+            Space::new().width(Length::Fixed(CHEVRON_ICON_SIZE)).into()
         };
 
     let row_content = row![
@@ -246,10 +232,10 @@ fn column_entry_row<'a>(
         name,
         trailing
     ]
-    .spacing(presentation.entry_spacing())
-    .align_items(Alignment::Center);
+    .spacing(COLUMN_ENTRY_SPACING)
+    .align_y(Alignment::Center);
     let row_container = container(row_content)
-        .padding(presentation.entry_padding())
+        .padding(COLUMN_ENTRY_PADDING)
         .width(Length::Fill);
     let row_container = if is_dragged {
         row_container.style(dragged_row_style)
@@ -356,88 +342,13 @@ pub(crate) fn column_directories(browser: &FileBrowser) -> Vec<PathBuf> {
     directories
 }
 
-fn column_presentation(
-    column_view_mode: ColumnViewMode,
-    index: usize,
-    focused_index: usize,
-) -> ColumnPresentation {
-    match column_view_mode {
-        ColumnViewMode::Unbounded if index == focused_index => ColumnPresentation::Focused,
-        ColumnViewMode::Unbounded => ColumnPresentation::Compressed,
-        ColumnViewMode::Fixed => ColumnPresentation::Balanced,
+fn column_title_padding() -> Padding {
+    Padding {
+        top: 0.0,
+        right: 7.0,
+        bottom: 6.0,
+        left: 7.0,
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ColumnPresentation {
-    Focused,
-    Compressed,
-    Balanced,
-}
-
-impl ColumnPresentation {
-    fn width(self, browser: &FileBrowser) -> Length {
-        match self {
-            ColumnPresentation::Focused => Length::Fixed(browser.unbounded_column_width),
-            ColumnPresentation::Compressed => Length::Fixed(COMPRESSED_UNBOUNDED_COLUMN_WIDTH),
-            ColumnPresentation::Balanced => Length::Fixed(fixed_column_width(browser)),
-        }
-    }
-
-    fn column_padding(self) -> [u16; 2] {
-        match self {
-            ColumnPresentation::Compressed => [8, 5],
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => [10, 8],
-        }
-    }
-
-    fn content_spacing(self) -> u16 {
-        match self {
-            ColumnPresentation::Compressed => 3,
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => 4,
-        }
-    }
-
-    fn title_padding(self) -> [u16; 4] {
-        match self {
-            ColumnPresentation::Compressed => [0, 5, 5, 5],
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => [0, 7, 6, 7],
-        }
-    }
-
-    fn title_text_size(self) -> u16 {
-        match self {
-            ColumnPresentation::Compressed => 12,
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => 13,
-        }
-    }
-
-    fn entry_padding(self) -> [u16; 2] {
-        match self {
-            ColumnPresentation::Compressed => [5, 5],
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => [6, 8],
-        }
-    }
-
-    fn entry_spacing(self) -> u16 {
-        match self {
-            ColumnPresentation::Compressed => 5,
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => 8,
-        }
-    }
-
-    fn entry_text_size(self) -> u16 {
-        match self {
-            ColumnPresentation::Compressed => 12,
-            ColumnPresentation::Focused | ColumnPresentation::Balanced => 16,
-        }
-    }
-}
-
-fn fixed_column_width(browser: &FileBrowser) -> f32 {
-    let fixed_count = browser.column_fixed_count.max(1) as f32;
-    let browser_width = (browser.main_window_width - SIDEBAR_WIDTH).max(MIN_FIXED_COLUMN_WIDTH);
-    (browser_width / fixed_count).max(MIN_FIXED_COLUMN_WIDTH)
 }
 
 fn active_child_for_column(
@@ -508,12 +419,12 @@ fn entry_thumbnail_or_icon<'a>(
     container(entry_icon(entry, tone))
         .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
         .height(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .center_x()
-        .center_y()
+        .center_x(Length::Fixed(LIST_THUMBNAIL_SIZE))
+        .center_y(Length::Fixed(LIST_THUMBNAIL_SIZE))
         .into()
 }
 
-fn entry_icon(entry: &DirectoryEntry, tone: IconTone) -> Svg<Theme> {
+fn entry_icon(entry: &DirectoryEntry, tone: IconTone) -> Svg<'static, Theme> {
     let symbol = if entry.kind == FileKind::Symlink && entry.is_broken_symlink {
         IconSymbol::TriangleAlert
     } else {
@@ -527,8 +438,8 @@ fn entry_icon(entry: &DirectoryEntry, tone: IconTone) -> Svg<Theme> {
     themed_icon(symbol, tone, ROW_ICON_SIZE)
 }
 
-fn column_scroll_id(directory: &Path) -> scrollable::Id {
-    scrollable::Id::new(format!("column-scroll-{}", path_hash(directory)))
+fn column_scroll_id(directory: &Path) -> iced::widget::Id {
+    iced::widget::Id::from(format!("column-scroll-{}", path_hash(directory)))
 }
 
 fn path_hash(path: &Path) -> String {
@@ -551,11 +462,13 @@ fn hash_bytes(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<Theme> {
+fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<'static, Theme> {
     symbol.view(size).style(icon_tone_style(tone))
 }
 
-fn icon_tone_style(tone: IconTone) -> iced::theme::Svg {
+fn icon_tone_style(
+    tone: IconTone,
+) -> fn(&Theme, iced::widget::svg::Status) -> iced::widget::svg::Style {
     match tone {
         IconTone::Normal => icon_svg_style(),
         IconTone::Selected => selected_icon_svg_style(),

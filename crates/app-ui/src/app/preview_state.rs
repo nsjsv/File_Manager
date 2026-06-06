@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use iced::widget::{image, text_editor};
-use iced::Command;
+use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::{
@@ -22,13 +22,13 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         preview_outcome: Result<PreviewContent, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let is_active_preview_request = matches!(
             &self.preview,
             Some(PreviewState::Loading(loading_path)) if loading_path == &path
         );
         if !is_active_preview_request {
-            return Command::none();
+            return Task::none();
         }
 
         match preview_outcome {
@@ -44,12 +44,12 @@ impl FileBrowser {
                         self.clear_video_preview();
                         self.text_preview_document =
                             Some(TextPreviewDocument::new(path.clone(), rendered, *format));
-                        Command::none()
+                        Task::none()
                     }
                     PreviewContent::Audio { .. } => {
                         self.text_preview_document = None;
                         self.clear_video_preview();
-                        Command::none()
+                        Task::none()
                     }
                     PreviewContent::Video { path, duration, .. } => {
                         self.text_preview_document = None;
@@ -60,7 +60,7 @@ impl FileBrowser {
                         self.text_preview_document = None;
                         self.clear_audio_preview();
                         self.clear_video_preview();
-                        Command::none()
+                        Task::none()
                     }
                 };
                 self.preview = Some(PreviewState::Ready(preview));
@@ -75,7 +75,7 @@ impl FileBrowser {
                 if self.preview_window.is_none() {
                     self.ensure_preview_window(PreviewWindowProfile::Video)
                 } else {
-                    Command::none()
+                    Task::none()
                 }
             }
         }
@@ -84,30 +84,30 @@ impl FileBrowser {
     pub(super) fn handle_text_preview_action(
         &mut self,
         action: text_editor::Action,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(document) = self.active_text_preview_document_mut() else {
-            return Command::none();
+            return Task::none();
         };
 
         document.perform(action);
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn accept_video_preview_frame(
         &mut self,
         video_frame: VideoPreviewFrame,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let frame_path = video_frame.path.clone();
         let frame_generation = video_frame.generation;
         let frame_position = video_frame.position;
         if !self.video_preview_matches(&video_frame.path, video_frame.generation) {
-            return Command::none();
+            return Task::none();
         }
 
         let Some((current_frame, width, height)) =
             self.active_video_preview_frame_mut(&video_frame.path)
         else {
-            return Command::none();
+            return Task::none();
         };
 
         let should_resize_window = *width != video_frame.width || *height != video_frame.height;
@@ -117,9 +117,9 @@ impl FileBrowser {
         let resize_command = if should_resize_window {
             self.fit_preview_window_to_video_frame(video_frame.width, video_frame.height)
         } else {
-            Command::none()
+            Task::none()
         };
-        Command::batch([
+        Task::batch([
             resize_command,
             self.finish_video_seek_frame_decode(frame_path, frame_generation, frame_position),
         ])
@@ -129,12 +129,12 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         metadata_outcome: Result<Option<Duration>, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Ok(metadata_duration) = metadata_outcome else {
-            return Command::none();
+            return Task::none();
         };
         let Some(duration) = self.active_video_preview_duration_mut(&path) else {
-            return Command::none();
+            return Task::none();
         };
 
         *duration = metadata_duration;
@@ -142,7 +142,7 @@ impl FileBrowser {
             playback.duration = metadata_duration;
             playback.position = clamp_video_preview_position(playback.position, metadata_duration);
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn accept_video_preview_error(
@@ -150,9 +150,9 @@ impl FileBrowser {
         path: PathBuf,
         generation: u64,
         error: String,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(playback) = self.active_video_preview_mut(&path, generation) else {
-            return Command::none();
+            return Task::none();
         };
         finish_video_preview_audio(playback);
         playback.status = VideoPreviewPlaybackStatus::Error;
@@ -167,7 +167,7 @@ impl FileBrowser {
                 return self.ensure_preview_window(PreviewWindowProfile::Video);
             }
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn accept_video_preview_seek_frame_error(
@@ -176,29 +176,29 @@ impl FileBrowser {
         generation: u64,
         position: Duration,
         error: String,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(playback) = self.active_video_preview_mut(&path, generation) else {
-            return Command::none();
+            return Task::none();
         };
 
         if playback.seek_frame_in_flight != Some(position) {
-            return Command::none();
+            return Task::none();
         }
         playback.seek_frame_in_flight = None;
         if let Some(next_position) = playback.pending_seek_frame.take() {
             return start_video_seek_frame_decode(playback, next_position);
         }
         playback.error = Some(error);
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn accept_video_preview_finished(
         &mut self,
         path: PathBuf,
         generation: u64,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(playback) = self.active_video_preview_mut(&path, generation) else {
-            return Command::none();
+            return Task::none();
         };
 
         refresh_video_preview_position(playback);
@@ -211,7 +211,7 @@ impl FileBrowser {
         if let Some(duration) = playback.duration {
             playback.position = duration;
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn active_video_preview_stream(&self) -> Option<(PathBuf, u64, Duration)> {
@@ -230,10 +230,10 @@ impl FileBrowser {
         ))
     }
 
-    pub(super) fn toggle_audio_preview_playback(&mut self) -> Command<Message> {
+    pub(super) fn toggle_audio_preview_playback(&mut self) -> Task<Message> {
         let Some(path) = active_audio_preview_path(self.preview.as_ref()).map(Path::to_path_buf)
         else {
-            return Command::none();
+            return Task::none();
         };
 
         if let Some(playback) = self
@@ -242,13 +242,13 @@ impl FileBrowser {
             .filter(|playback| playback.path == path)
         {
             match playback.status {
-                AudioPreviewPlaybackStatus::Loading => return Command::none(),
+                AudioPreviewPlaybackStatus::Loading => return Task::none(),
                 AudioPreviewPlaybackStatus::Playing => {
                     if let Some(runtime) = &playback.runtime {
                         playback.position = runtime.position();
                         runtime.pause();
                         playback.status = AudioPreviewPlaybackStatus::Paused;
-                        return Command::none();
+                        return Task::none();
                     }
                 }
                 AudioPreviewPlaybackStatus::Paused => {
@@ -256,7 +256,7 @@ impl FileBrowser {
                         runtime.play();
                         playback.status = AudioPreviewPlaybackStatus::Playing;
                         playback.error = None;
-                        return Command::none();
+                        return Task::none();
                     }
                 }
                 AudioPreviewPlaybackStatus::Stopped
@@ -272,9 +272,9 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         playback_outcome: Result<crate::audio_preview::AudioPreviewRuntime, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(playback) = self.loading_audio_preview_mut(&path) else {
-            return Command::none();
+            return Task::none();
         };
 
         match playback_outcome {
@@ -292,18 +292,15 @@ impl FileBrowser {
             }
         }
 
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn seek_audio_preview_playback(
-        &mut self,
-        position_seconds: f32,
-    ) -> Command<Message> {
+    pub(super) fn seek_audio_preview_playback(&mut self, position_seconds: f32) -> Task<Message> {
         let Some(playback) = self.audio_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         let Some(runtime) = playback.runtime.as_ref() else {
-            return Command::none();
+            return Task::none();
         };
 
         let position = Duration::from_secs_f32(position_seconds.max(0.0));
@@ -318,31 +315,31 @@ impl FileBrowser {
             }
         }
 
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn change_audio_preview_volume(&mut self, volume: f32) -> Command<Message> {
+    pub(super) fn change_audio_preview_volume(&mut self, volume: f32) -> Task<Message> {
         let Some(playback) = self.audio_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         let volume = volume.clamp(0.0, 1.0);
         playback.volume = volume;
         if let Some(runtime) = playback.runtime.as_ref() {
             runtime.set_volume(volume);
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn update_audio_preview_playback(&mut self) -> Command<Message> {
+    pub(super) fn update_audio_preview_playback(&mut self) -> Task<Message> {
         let Some(playback) = self.audio_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         if playback.status != AudioPreviewPlaybackStatus::Playing {
-            return Command::none();
+            return Task::none();
         }
         let Some(runtime) = playback.runtime.as_ref() else {
             playback.status = AudioPreviewPlaybackStatus::Stopped;
-            return Command::none();
+            return Task::none();
         };
 
         playback.position = runtime.position();
@@ -352,7 +349,7 @@ impl FileBrowser {
             playback.status = AudioPreviewPlaybackStatus::Finished;
         }
 
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn audio_preview_is_active(&self) -> bool {
@@ -361,15 +358,15 @@ impl FileBrowser {
         })
     }
 
-    pub(super) fn toggle_video_preview_playback(&mut self) -> Command<Message> {
+    pub(super) fn toggle_video_preview_playback(&mut self) -> Task<Message> {
         let Some(status) = self.video_preview.as_ref().map(|playback| playback.status) else {
-            return Command::none();
+            return Task::none();
         };
 
         match status {
             VideoPreviewPlaybackStatus::Playing => {
                 let Some(playback) = self.video_preview.as_mut() else {
-                    return Command::none();
+                    return Task::none();
                 };
                 refresh_video_preview_position(playback);
                 if let Some(runtime) = playback.audio_runtime.as_ref() {
@@ -380,14 +377,14 @@ impl FileBrowser {
                 playback.seek_frame_in_flight = None;
                 playback.pending_seek_frame = None;
                 playback.started_at = None;
-                Command::none()
+                Task::none()
             }
             VideoPreviewPlaybackStatus::Paused | VideoPreviewPlaybackStatus::Error => {
                 self.resume_video_preview_playback()
             }
             VideoPreviewPlaybackStatus::Finished => {
                 let Some(playback) = self.video_preview.as_mut() else {
-                    return Command::none();
+                    return Task::none();
                 };
                 playback.position = Duration::ZERO;
                 self.resume_video_preview_playback()
@@ -400,19 +397,19 @@ impl FileBrowser {
         path: PathBuf,
         generation: u64,
         audio_outcome: Result<crate::audio_preview::AudioPreviewRuntime, String>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(playback) = self.active_video_preview_mut(&path, generation) else {
             if let Ok(runtime) = audio_outcome {
                 runtime.stop();
             }
-            return Command::none();
+            return Task::none();
         };
 
         if playback.status != VideoPreviewPlaybackStatus::Playing {
             if let Ok(runtime) = audio_outcome {
                 runtime.stop();
             }
-            return Command::none();
+            return Task::none();
         }
 
         match audio_outcome {
@@ -426,15 +423,12 @@ impl FileBrowser {
                 playback.error = Some(format!("Audio unavailable: {error}"));
             }
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn seek_video_preview_playback(
-        &mut self,
-        position_seconds: f32,
-    ) -> Command<Message> {
+    pub(super) fn seek_video_preview_playback(&mut self, position_seconds: f32) -> Task<Message> {
         let Some(playback) = self.video_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         if playback.seek_completion.is_none() {
             playback.seek_completion = Some(match playback.status {
@@ -459,44 +453,44 @@ impl FileBrowser {
         playback.error = None;
         if playback.seek_frame_in_flight.is_some() {
             playback.pending_seek_frame = Some(playback.position);
-            Command::none()
+            Task::none()
         } else {
             let seek_position = playback.position;
             start_video_seek_frame_decode(playback, seek_position)
         }
     }
 
-    pub(super) fn commit_video_preview_seek(&mut self) -> Command<Message> {
+    pub(super) fn commit_video_preview_seek(&mut self) -> Task<Message> {
         let Some(playback) = self.video_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         let seek_completion = playback.seek_completion.take();
         match seek_completion {
             Some(VideoPreviewSeekCompletion::ResumePlayback) => {
                 self.resume_video_preview_playback()
             }
-            Some(VideoPreviewSeekCompletion::StayPaused) | None => Command::none(),
+            Some(VideoPreviewSeekCompletion::StayPaused) | None => Task::none(),
         }
     }
 
-    pub(super) fn change_video_preview_volume(&mut self, volume: f32) -> Command<Message> {
+    pub(super) fn change_video_preview_volume(&mut self, volume: f32) -> Task<Message> {
         let Some(playback) = self.video_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         let volume = volume.clamp(0.0, 1.0);
         playback.volume = volume;
         if let Some(runtime) = playback.audio_runtime.as_ref() {
             runtime.set_volume(volume);
         }
-        Command::none()
+        Task::none()
     }
 
-    pub(super) fn update_video_preview_playback(&mut self) -> Command<Message> {
+    pub(super) fn update_video_preview_playback(&mut self) -> Task<Message> {
         let Some(playback) = self.video_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         if playback.status != VideoPreviewPlaybackStatus::Playing {
-            return Command::none();
+            return Task::none();
         }
 
         refresh_video_preview_position(playback);
@@ -508,7 +502,7 @@ impl FileBrowser {
             playback.pending_seek_frame = None;
             playback.started_at = None;
         }
-        Command::none()
+        Task::none()
     }
 
     pub(super) fn video_preview_is_active(&self) -> bool {
@@ -525,7 +519,7 @@ impl FileBrowser {
         self.preview = None;
     }
 
-    fn start_audio_preview_playback(&mut self, path: PathBuf) -> Command<Message> {
+    fn start_audio_preview_playback(&mut self, path: PathBuf) -> Task<Message> {
         self.clear_audio_preview();
         self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
         start_audio_preview_command(path)
@@ -543,21 +537,21 @@ impl FileBrowser {
         &mut self,
         path: PathBuf,
         duration: Option<Duration>,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         self.clear_video_preview();
         let playback = VideoPreviewPlayback::playing(path.clone(), duration);
         let generation = playback.generation;
         self.video_preview = Some(playback);
-        Command::batch([
+        Task::batch([
             start_video_preview_audio_command(path.clone(), generation, Duration::ZERO),
             video_preview_frame_command(path.clone(), generation, Duration::ZERO),
             video_preview_metadata_command(path),
         ])
     }
 
-    fn resume_video_preview_playback(&mut self) -> Command<Message> {
+    fn resume_video_preview_playback(&mut self) -> Task<Message> {
         let Some(playback) = self.video_preview.as_mut() else {
-            return Command::none();
+            return Task::none();
         };
         let path = playback.path.clone();
         let position = playback.position;
@@ -589,7 +583,7 @@ impl FileBrowser {
         let frame_command = video_preview_frame_command(path.clone(), generation, position);
         if should_start_audio {
             finish_video_preview_audio(playback);
-            Command::batch([
+            Task::batch([
                 start_video_preview_audio_command(path, generation, position),
                 frame_command,
             ])
@@ -603,20 +597,20 @@ impl FileBrowser {
         path: PathBuf,
         generation: u64,
         position: Duration,
-    ) -> Command<Message> {
+    ) -> Task<Message> {
         let Some(playback) = self.active_video_preview_mut(&path, generation) else {
-            return Command::none();
+            return Task::none();
         };
 
         if playback.seek_frame_in_flight != Some(position) {
-            return Command::none();
+            return Task::none();
         }
         playback.seek_frame_in_flight = None;
         let Some(next_position) = playback.pending_seek_frame.take() else {
-            return Command::none();
+            return Task::none();
         };
         if next_position == position {
-            return Command::none();
+            return Task::none();
         }
         start_video_seek_frame_decode(playback, next_position)
     }
@@ -741,7 +735,7 @@ fn clamp_video_preview_position(position: Duration, duration: Option<Duration>) 
 fn start_video_seek_frame_decode(
     playback: &mut VideoPreviewPlayback,
     position: Duration,
-) -> Command<Message> {
+) -> Task<Message> {
     let position = clamp_video_preview_position(position, playback.duration);
     playback.seek_frame_in_flight = Some(position);
     video_preview_frame_command(playback.path.clone(), playback.generation, position)

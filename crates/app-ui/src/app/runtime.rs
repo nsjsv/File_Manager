@@ -3,9 +3,11 @@ use std::time::Duration;
 
 use file_core::watch_directory;
 use iced::futures::SinkExt;
-use iced::{Command, Subscription, Theme};
+use iced::{Subscription, Task, Theme};
 
 use super::events::system_theme;
+use super::FileBrowser;
+use crate::config;
 use crate::model::Message;
 use crate::startup_trace;
 
@@ -14,30 +16,54 @@ const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
 const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
-pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {
-    iced::subscription::channel(
-        ("directory-watch", path.clone()),
-        DIRECTORY_WATCH_CHANNEL_SIZE,
-        |mut output| async move {
-            if let Ok(mut watcher) = watch_directory(path, DIRECTORY_WATCH_DEBOUNCE) {
-                while let Some(change) = watcher.recv().await {
-                    if output
-                        .send(Message::ObservedDirectoryChanged(change.path))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-
-            iced::futures::future::pending().await
-        },
+pub(crate) fn run() -> iced::Result {
+    let user_config = config::load_user_config();
+    let iced_backend = user_config
+        .rendering_backend_preference
+        .iced_backend_candidates();
+    std::env::set_var("ICED_BACKEND", iced_backend);
+    if let Some(power_preference) = user_config
+        .rendering_backend_preference
+        .wgpu_power_preference()
+    {
+        std::env::set_var("WGPU_POWER_PREF", power_preference);
+    }
+    iced::daemon(
+        move || FileBrowser::boot(user_config.clone()),
+        FileBrowser::update,
+        FileBrowser::view,
     )
+    .subscription(FileBrowser::subscription)
+    .theme(FileBrowser::theme)
+    .title(FileBrowser::title)
+    .run()
 }
 
-pub(super) fn system_theme_command() -> Command<Message> {
-    Command::perform(
+pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {
+    Subscription::run_with(path, directory_watch_stream)
+}
+
+fn directory_watch_stream(path: &PathBuf) -> impl iced::futures::Stream<Item = Message> + 'static {
+    let path = path.clone();
+    iced::stream::channel(DIRECTORY_WATCH_CHANNEL_SIZE, async move |mut output| {
+        if let Ok(mut watcher) = watch_directory(path, DIRECTORY_WATCH_DEBOUNCE) {
+            while let Some(change) = watcher.recv().await {
+                if output
+                    .send(Message::ObservedDirectoryChanged(change.path))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+
+        iced::futures::future::pending().await
+    })
+}
+
+pub(super) fn system_theme_command() -> Task<Message> {
+    Task::perform(
         async {
             let theme = tokio::task::spawn_blocking(system_theme)
                 .await
@@ -49,8 +75,8 @@ pub(super) fn system_theme_command() -> Command<Message> {
     )
 }
 
-pub(super) fn operation_queue_auto_hide_command(generation: u64) -> Command<Message> {
-    Command::perform(
+pub(super) fn operation_queue_auto_hide_command(generation: u64) -> Task<Message> {
+    Task::perform(
         async move {
             tokio::time::sleep(OPERATION_QUEUE_AUTO_HIDE_DURATION).await;
             generation
@@ -59,8 +85,8 @@ pub(super) fn operation_queue_auto_hide_command(generation: u64) -> Command<Mess
     )
 }
 
-pub(super) fn scrollbar_auto_hide_command(generation: u64) -> Command<Message> {
-    Command::perform(
+pub(super) fn scrollbar_auto_hide_command(generation: u64) -> Task<Message> {
+    Task::perform(
         async move {
             tokio::time::sleep(SCROLLBAR_AUTO_HIDE_DURATION).await;
             generation
