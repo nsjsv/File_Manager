@@ -145,7 +145,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app-ui"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dark-light",
  "desktop-linux",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-linux"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "tempfile",
  "thiserror 1.0.69",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "file-core"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "ignore",
  "notify",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "file-operation-store"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "rusqlite",
  "serde",
@@ -5253,7 +5253,7 @@ dependencies = [
 
 [[package]]
 name = "thumbnails"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "file-core",
  "image",
