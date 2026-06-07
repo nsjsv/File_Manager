@@ -594,7 +594,7 @@ impl FileBrowser {
             }
             Message::SidebarBookmarksSaved(Ok(())) => Task::none(),
             Message::SidebarBookmarksSaved(Err(error)) => {
-                self.error = Some(format!("Failed to save sidebar bookmarks: {error}"));
+                self.error = Some(format!("Failed to save sidebar favorites: {error}"));
                 Task::none()
             }
             Message::SearchOpened if self.is_trash_view => Task::none(),

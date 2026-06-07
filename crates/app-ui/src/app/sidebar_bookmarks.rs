@@ -10,6 +10,7 @@ use crate::model::{
     SidebarBookmarkContextMenuState, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
     SidebarLocation, SidebarLocationKind,
 };
+use crate::sidebar::sidebar_favorite_configs;
 
 const SIDEBAR_HEADER_HEIGHT: f32 = 24.0;
 const SIDEBAR_LOCATION_ROW_HEIGHT: f32 = 28.0;
@@ -83,27 +84,29 @@ impl FileBrowser {
         let Some(source) = sources.first().filter(|_| sources.len() == 1).cloned() else {
             return Task::none();
         };
-        if self.entry_kind(&source) != Some(FileKind::Directory) || self.bookmark_exists(&source) {
+        if self.entry_kind(&source) != Some(FileKind::Directory)
+            || self.sidebar_favorite_exists(&source)
+        {
             return Task::none();
         }
 
-        let mut bookmarks = self.sidebar_bookmark_locations();
+        let mut favorites = self.sidebar_favorite_locations();
         let location = SidebarLocation {
             label: sidebar_bookmark_label(&source),
             path: source,
             kind: SidebarLocationKind::Bookmark,
         };
         match slot {
-            SidebarBookmarkDropSlot::Top => bookmarks.insert(0, location),
-            SidebarBookmarkDropSlot::Bottom => bookmarks.push(location),
+            SidebarBookmarkDropSlot::Top => favorites.insert(0, location),
+            SidebarBookmarkDropSlot::Bottom => favorites.push(location),
         }
-        self.replace_sidebar_bookmarks(bookmarks);
-        self.save_sidebar_bookmarks()
+        self.replace_sidebar_favorites(favorites);
+        self.save_sidebar_favorites()
     }
 
     pub(super) fn start_sidebar_bookmark_drag(&mut self, path: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
-        if !self.bookmark_exists(&path) {
+        if !self.sidebar_favorite_exists(&path) {
             return rename_command;
         }
         self.context_menu = None;
@@ -123,7 +126,7 @@ impl FileBrowser {
 
     pub(super) fn handle_sidebar_bookmark_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
-        if !self.bookmark_exists(&path) {
+        if !self.sidebar_favorite_exists(&path) {
             return rename_command;
         }
 
@@ -152,17 +155,17 @@ impl FileBrowser {
         if self.hovered_sidebar.as_ref() == Some(&path) {
             self.hovered_sidebar = None;
         }
-        if !self.bookmark_exists(&path) {
+        if !self.sidebar_favorite_exists(&path) {
             return Task::none();
         }
 
-        let bookmarks = self
-            .sidebar_bookmark_locations()
+        let favorites = self
+            .sidebar_favorite_locations()
             .into_iter()
             .filter(|location| location.path != path)
             .collect::<Vec<_>>();
-        self.replace_sidebar_bookmarks(bookmarks);
-        self.save_sidebar_bookmarks()
+        self.replace_sidebar_favorites(favorites);
+        self.save_sidebar_favorites()
     }
 
     pub(super) fn update_sidebar_bookmark_drag(&mut self, position: Point) {
@@ -202,7 +205,7 @@ impl FileBrowser {
         self.sidebar_bookmark_drop_slot = None;
         if drag.is_dragging() {
             if drag.order_changed {
-                return self.save_sidebar_bookmarks();
+                return self.save_sidebar_favorites();
             }
             return Task::none();
         }
@@ -223,48 +226,53 @@ impl FileBrowser {
         if dragged_path == entered_path {
             return;
         }
-        let mut bookmarks = self.sidebar_bookmark_locations();
-        let Some(dragged_index) = bookmarks
+        let mut favorites = self.sidebar_favorite_locations();
+        let Some(dragged_index) = favorites
             .iter()
             .position(|location| location.path == dragged_path)
         else {
             return;
         };
-        let Some(entered_index) = bookmarks
+        let Some(entered_index) = favorites
             .iter()
             .position(|location| location.path == entered_path)
         else {
             return;
         };
-        let dragged = bookmarks.remove(dragged_index);
-        bookmarks.insert(entered_index, dragged);
-        self.replace_sidebar_bookmarks(bookmarks);
+        let dragged = favorites.remove(dragged_index);
+        favorites.insert(entered_index, dragged);
+        self.replace_sidebar_favorites(favorites);
         if let Some(drag) = &mut self.sidebar_bookmark_drag {
             drag.order_changed = true;
         }
     }
 
-    fn sidebar_bookmark_locations(&self) -> Vec<SidebarLocation> {
+    fn sidebar_favorite_locations(&self) -> Vec<SidebarLocation> {
         self.sidebar_locations
             .iter()
-            .filter(|location| location.kind == SidebarLocationKind::Bookmark)
+            .filter(|location| location.kind.is_user_favorite())
             .cloned()
             .collect()
     }
 
-    fn replace_sidebar_bookmarks(&mut self, bookmarks: Vec<SidebarLocation>) {
+    fn replace_sidebar_favorites(&mut self, favorites: Vec<SidebarLocation>) {
         let mut locations = self
             .sidebar_locations
             .iter()
-            .filter(|location| location.kind != SidebarLocationKind::Bookmark)
+            .filter(|location| !location.kind.is_user_favorite())
             .cloned()
             .collect::<Vec<_>>();
-        locations.extend(bookmarks);
+        locations.extend(favorites);
         self.sidebar_locations = locations;
     }
 
-    fn save_sidebar_bookmarks(&self) -> Task<Message> {
-        save_sidebar_bookmarks_command(self.sidebar_bookmark_locations())
+    fn save_sidebar_favorites(&mut self) -> Task<Message> {
+        let favorites = self.sidebar_favorite_locations();
+        self.user_config.sidebar_favorites = Some(sidebar_favorite_configs(&favorites));
+        Task::batch([
+            save_sidebar_bookmarks_command(favorites),
+            self.persist_user_config_command(),
+        ])
     }
 
     fn clear_sidebar_bookmark_drop_target(&mut self) {
@@ -290,10 +298,10 @@ impl FileBrowser {
         content_height.min(self.main_window_height) / 2.0
     }
 
-    fn bookmark_exists(&self, path: &PathBuf) -> bool {
-        self.sidebar_locations.iter().any(|location| {
-            location.kind == SidebarLocationKind::Bookmark && location.path == *path
-        })
+    fn sidebar_favorite_exists(&self, path: &PathBuf) -> bool {
+        self.sidebar_locations
+            .iter()
+            .any(|location| location.kind.is_user_favorite() && location.path == *path)
     }
 }
 

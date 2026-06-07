@@ -45,9 +45,12 @@ pub(crate) fn startup_environment_command() -> Task<Message> {
     )
 }
 
-pub(crate) fn sidebar_locations_command(home: PathBuf) -> Task<Message> {
+pub(crate) fn sidebar_locations_command(
+    home: PathBuf,
+    configured_favorites: Option<Vec<config::SidebarFavoriteConfig>>,
+) -> Task<Message> {
     Task::perform(
-        load_sidebar_locations(home),
+        load_sidebar_locations(home, configured_favorites),
         Message::SidebarLocationsLoaded,
     )
 }
@@ -484,11 +487,16 @@ async fn load_image_dimensions(path: PathBuf) -> Result<(u32, u32), String> {
         .map_err(|error| error.to_string())
 }
 
-async fn load_sidebar_locations(home: PathBuf) -> Vec<SidebarLocation> {
+async fn load_sidebar_locations(
+    home: PathBuf,
+    configured_favorites: Option<Vec<config::SidebarFavoriteConfig>>,
+) -> Vec<SidebarLocation> {
     let fallback_home = home.clone();
-    let locations = tokio::task::spawn_blocking(move || sidebar_locations(&home))
-        .await
-        .unwrap_or_else(|_| vec![home_sidebar_location(&fallback_home)]);
+    let locations = tokio::task::spawn_blocking(move || {
+        sidebar_locations(&home, configured_favorites.as_deref())
+    })
+    .await
+    .unwrap_or_else(|_| vec![home_sidebar_location(&fallback_home)]);
     startup_trace::mark_once("sidebar_locations_loaded");
     locations
 }

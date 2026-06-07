@@ -20,6 +20,7 @@ impl FileBrowser {
         let state_database_path = startup_environment.state_database_path;
 
         self.apply_loaded_user_config(startup_environment.user_config);
+        let configured_favorites = self.user_config.sidebar_favorites.clone();
         self.current_dir = home.clone();
         self.is_trash_view = false;
         self.path_input = path_text(&self.current_dir);
@@ -32,7 +33,7 @@ impl FileBrowser {
 
         Task::batch([
             load_directory_command(home.clone(), self.options.clone()),
-            sidebar_locations_command(home),
+            sidebar_locations_command(home, configured_favorites),
             operation_store_command(state_database_path),
         ])
     }

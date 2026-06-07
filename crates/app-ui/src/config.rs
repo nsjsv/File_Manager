@@ -15,6 +15,9 @@ const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
 const COLUMN_WIDTH_OVERRIDES_KEY: &str = "column_width_overrides";
+const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
+const SIDEBAR_FAVORITE_LABEL_KEY: &str = "label";
+const SIDEBAR_FAVORITE_PATH_KEY: &str = "path";
 const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 
@@ -85,8 +88,15 @@ pub(crate) struct UserConfig {
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) show_hidden_files: bool,
     pub(crate) legacy_column_width_override: Option<f32>,
+    pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SidebarFavoriteConfig {
+    pub(crate) label: String,
+    pub(crate) path: PathBuf,
 }
 
 pub(crate) fn load_user_config() -> UserConfig {
@@ -132,6 +142,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         show_hidden_files: false,
         legacy_column_width_override: None,
+        sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
     }
@@ -143,6 +154,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         thumbnail_cache_dir: PathBuf::new(),
         show_hidden_files: false,
         legacy_column_width_override: None,
+        sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
     }
@@ -203,6 +215,9 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     {
         config.legacy_column_width_override = parse_toml_column_width_override(table);
     }
+    if let Some(favorites) = parse_toml_sidebar_favorites(&document) {
+        config.sidebar_favorites = Some(favorites);
+    }
     if let Some(value) = toml_string(&document, TERMINAL_EMULATOR_KEY) {
         if let Some(terminal_emulator) = TerminalEmulator::from_config_value(value) {
             config.terminal_emulator = terminal_emulator;
@@ -247,6 +262,7 @@ fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
             COLUMN_WIDTH_OVERRIDES_KEY => {
                 config.legacy_column_width_override = parse_legacy_column_width_override(value);
             }
+            SIDEBAR_FAVORITES_KEY => {}
             TERMINAL_EMULATOR_KEY => {
                 if let Some(terminal_emulator) = TerminalEmulator::from_config_value(value) {
                     config.terminal_emulator = terminal_emulator;
@@ -299,9 +315,64 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
         RENDERING_BACKEND_KEY.to_string(),
         toml::Value::String(config.rendering_gpu_preference.config_value().to_string()),
     );
+    if let Some(favorites) = &config.sidebar_favorites {
+        document.insert(
+            SIDEBAR_FAVORITES_KEY.to_string(),
+            toml::Value::Array(toml_sidebar_favorite_values(favorites)),
+        );
+    }
 
     let content = toml::to_string_pretty(&document)?;
     Ok(format!("# File Manager user configuration\n{content}"))
+}
+
+fn parse_toml_sidebar_favorites(document: &toml::Table) -> Option<Vec<SidebarFavoriteConfig>> {
+    let entries = document.get(SIDEBAR_FAVORITES_KEY)?.as_array()?;
+    let mut favorites = Vec::new();
+    for entry in entries {
+        let Some(table) = entry.as_table() else {
+            continue;
+        };
+        let Some(path) = toml_string(table, SIDEBAR_FAVORITE_PATH_KEY) else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        let label = toml_string(table, SIDEBAR_FAVORITE_LABEL_KEY)
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| sidebar_favorite_label_from_path(&path));
+        favorites.push(SidebarFavoriteConfig { label, path });
+    }
+    Some(favorites)
+}
+
+fn toml_sidebar_favorite_values(favorites: &[SidebarFavoriteConfig]) -> Vec<toml::Value> {
+    favorites
+        .iter()
+        .map(|favorite| {
+            let mut table = toml::Table::new();
+            table.insert(
+                SIDEBAR_FAVORITE_LABEL_KEY.to_string(),
+                toml::Value::String(favorite.label.clone()),
+            );
+            table.insert(
+                SIDEBAR_FAVORITE_PATH_KEY.to_string(),
+                toml::Value::String(favorite.path.to_string_lossy().into_owned()),
+            );
+            toml::Value::Table(table)
+        })
+        .collect()
+}
+
+fn sidebar_favorite_label_from_path(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 fn parse_toml_column_width_override(table: &toml::Table) -> Option<f32> {
@@ -481,6 +552,44 @@ rendering_backend = "metal"
             parsed.rendering_gpu_preference,
             RenderingGpuPreference::HighPerformanceGpu
         );
+    }
+
+    #[test]
+    fn parses_sidebar_favorites_from_toml() {
+        let parsed = parse_toml_user_config(
+            r#"
+sidebar_favorites = [
+  { label = "Downloads", path = "/home/user/Downloads" },
+  { path = "/srv/projects" },
+]
+"#,
+            default_user_config(),
+        );
+
+        let favorites = parsed.sidebar_favorites.expect("sidebar favorites");
+        assert_eq!(favorites.len(), 2);
+        assert_eq!(favorites[0].label, "Downloads");
+        assert_eq!(favorites[0].path, PathBuf::from("/home/user/Downloads"));
+        assert_eq!(favorites[1].label, "projects");
+        assert_eq!(favorites[1].path, PathBuf::from("/srv/projects"));
+    }
+
+    #[test]
+    fn writes_sidebar_favorites_to_toml() {
+        let temp_dir = tempfile::tempdir().expect("create temp config dir");
+        let path = temp_dir.path().join("config.toml");
+        let mut config = default_user_config();
+        config.sidebar_favorites = Some(vec![SidebarFavoriteConfig {
+            label: "Projects".to_owned(),
+            path: PathBuf::from("/srv/projects"),
+        }]);
+
+        write_user_config(&path, &config).expect("write user config");
+
+        let content = fs::read_to_string(path).expect("read user config");
+        assert!(content.contains("sidebar_favorites"));
+        let parsed = parse_toml_user_config(&content, default_user_config());
+        assert_eq!(parsed.sidebar_favorites, config.sidebar_favorites);
     }
 
     #[test]

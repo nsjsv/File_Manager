@@ -696,6 +696,12 @@ pub(crate) enum SidebarLocationKind {
     Bookmark,
 }
 
+impl SidebarLocationKind {
+    pub(crate) fn is_user_favorite(self) -> bool {
+        !matches!(self, Self::Home)
+    }
+}
+
 pub(crate) const TRASH_LOCATION_LABEL: &str = "Trash";
 
 pub(crate) fn trash_location_path() -> PathBuf {

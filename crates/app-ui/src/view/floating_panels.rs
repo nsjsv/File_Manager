@@ -310,73 +310,124 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     let mut sidebar = column![sidebar_header].spacing(6).padding(12);
+    for location in browser
+        .sidebar_locations
+        .iter()
+        .filter(|location| !location.kind.is_user_favorite())
+    {
+        sidebar = sidebar.push(sidebar_location_item(browser, location));
+    }
+    sidebar = sidebar.push(sidebar_trash_item(browser));
+
+    let favorite_locations = browser
+        .sidebar_locations
+        .iter()
+        .filter(|location| location.kind.is_user_favorite())
+        .collect::<Vec<_>>();
     let can_drop_bookmark = browser.can_drop_sidebar_bookmark();
-    if can_drop_bookmark && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Top)
-    {
-        sidebar = sidebar.push(sidebar_bookmark_drop_slot(
-            browser,
-            SidebarBookmarkDropSlot::Top,
-        ));
+    if can_drop_bookmark || !favorite_locations.is_empty() {
+        sidebar = sidebar.push(sidebar_section_label("Favorites"));
+
+        if can_drop_bookmark
+            && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Top)
+        {
+            sidebar = sidebar.push(sidebar_bookmark_drop_slot(
+                browser,
+                SidebarBookmarkDropSlot::Top,
+            ));
+        }
+
+        for location in favorite_locations {
+            sidebar = sidebar.push(sidebar_location_item(browser, location));
+        }
+
+        if can_drop_bookmark
+            && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Bottom)
+        {
+            sidebar = sidebar.push(sidebar_bookmark_drop_slot(
+                browser,
+                SidebarBookmarkDropSlot::Bottom,
+            ));
+        }
     }
 
-    for location in &browser.sidebar_locations {
-        let presentation = sidebar_presentation(browser, location);
-        let tone = if presentation.is_selected() {
-            IconTone::Selected
+    let sidebar_panel = container(
+        scrollable(sidebar)
+            .direction(auto_hide_vertical_scrollbar_direction(
+                browser.scrollbar_visibility,
+                6.0,
+            ))
+            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+            .height(Length::Fill),
+    )
+    .width(Length::Fixed(SIDEBAR_WIDTH))
+    .height(Length::Fill)
+    .style(sidebar_style);
+
+    if can_drop_bookmark {
+        mouse_area(sidebar_panel)
+            .on_move(Message::SidebarPointerMoved)
+            .on_exit(Message::SidebarPointerExited)
+            .into()
+    } else {
+        sidebar_panel.into()
+    }
+}
+
+fn sidebar_location_item<'a>(
+    browser: &'a FileBrowser,
+    location: &'a SidebarLocation,
+) -> Element<'a, Message> {
+    let presentation = sidebar_presentation(browser, location);
+    let tone = if presentation.is_selected() {
+        IconTone::Selected
+    } else {
+        IconTone::Normal
+    };
+
+    let item_container = container(sidebar_label(
+        sidebar_icon_symbol(location),
+        &location.label,
+        tone,
+    ))
+    .padding([6, 8])
+    .width(Length::Fill);
+    let item_container = match presentation {
+        SidebarPresentation::Selected => item_container.style(selected_sidebar_item_style),
+        SidebarPresentation::Hovered => item_container.style(hovered_sidebar_item_style),
+        SidebarPresentation::Normal => item_container,
+    };
+
+    let is_favorite = location.kind.is_user_favorite();
+    let item = mouse_area(item_container)
+        .on_enter(if is_favorite {
+            Message::SidebarBookmarkEntered(location.path.clone())
         } else {
-            IconTone::Normal
-        };
-
-        let item_container = container(sidebar_label(
-            sidebar_icon_symbol(location),
-            &location.label,
-            tone,
-        ))
-        .padding([6, 8])
-        .width(Length::Fill);
-        let item_container = match presentation {
-            SidebarPresentation::Selected => item_container.style(selected_sidebar_item_style),
-            SidebarPresentation::Hovered => item_container.style(hovered_sidebar_item_style),
-            SidebarPresentation::Normal => item_container,
-        };
-
-        let item = mouse_area(item_container)
-            .on_enter(if location.kind == SidebarLocationKind::Bookmark {
-                Message::SidebarBookmarkEntered(location.path.clone())
-            } else {
-                Message::SidebarHovered(location.path.clone())
-            })
-            .on_exit(Message::SidebarHoverCleared(location.path.clone()))
-            .on_middle_press(Message::OpenDirectoryInNewTab(location.path.clone()))
-            .on_press(if location.kind == SidebarLocationKind::Bookmark {
-                Message::SidebarBookmarkPressed(location.path.clone())
-            } else {
-                Message::NavigateTo(location.path.clone())
-            })
-            .on_release(if location.kind == SidebarLocationKind::Bookmark {
-                Message::SidebarBookmarkReleased
-            } else {
-                Message::DragSelectionFinished
-            })
-            .interaction(iced::mouse::Interaction::Pointer);
-        let item = if location.kind == SidebarLocationKind::Bookmark {
-            item.on_right_press(Message::SidebarBookmarkRightClicked(location.path.clone()))
+            Message::SidebarHovered(location.path.clone())
+        })
+        .on_exit(Message::SidebarHoverCleared(location.path.clone()))
+        .on_middle_press(Message::OpenDirectoryInNewTab(location.path.clone()))
+        .on_press(if is_favorite {
+            Message::SidebarBookmarkPressed(location.path.clone())
         } else {
-            item
-        };
+            Message::NavigateTo(location.path.clone())
+        })
+        .on_release(if is_favorite {
+            Message::SidebarBookmarkReleased
+        } else {
+            Message::DragSelectionFinished
+        })
+        .interaction(iced::mouse::Interaction::Pointer);
+    let item = if is_favorite {
+        item.on_right_press(Message::SidebarBookmarkRightClicked(location.path.clone()))
+    } else {
+        item
+    };
 
-        sidebar = sidebar.push(item);
-    }
+    item.into()
+}
 
-    if can_drop_bookmark
-        && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Bottom)
-    {
-        sidebar = sidebar.push(sidebar_bookmark_drop_slot(
-            browser,
-            SidebarBookmarkDropSlot::Bottom,
-        ));
-    }
-
+fn sidebar_trash_item(browser: &FileBrowser) -> Element<'_, Message> {
     let trash_path = trash_location_path();
     let trash_presentation = if browser.is_trash_view {
         SidebarPresentation::Selected
@@ -403,36 +454,21 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         SidebarPresentation::Normal => trash_container,
     };
     let trash_hover_path = trash_path.clone();
-    let trash_item = mouse_area(trash_container)
+    mouse_area(trash_container)
         .on_enter(Message::SidebarHovered(trash_hover_path.clone()))
         .on_exit(Message::SidebarHoverCleared(trash_hover_path))
         .on_press(Message::TrashOpened)
         .on_middle_press(Message::OpenTrashInNewTab)
         .on_release(Message::DragSelectionFinished)
-        .interaction(iced::mouse::Interaction::Pointer);
-    sidebar = sidebar.push(trash_item);
+        .interaction(iced::mouse::Interaction::Pointer)
+        .into()
+}
 
-    let sidebar_panel = container(
-        scrollable(sidebar)
-            .direction(auto_hide_vertical_scrollbar_direction(
-                browser.scrollbar_visibility,
-                6.0,
-            ))
-            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
-            .height(Length::Fill),
-    )
-    .width(Length::Fixed(SIDEBAR_WIDTH))
-    .height(Length::Fill)
-    .style(sidebar_style);
-
-    if can_drop_bookmark {
-        mouse_area(sidebar_panel)
-            .on_move(Message::SidebarPointerMoved)
-            .on_exit(Message::SidebarPointerExited)
-            .into()
-    } else {
-        sidebar_panel.into()
-    }
+fn sidebar_section_label(label: &'static str) -> Element<'static, Message> {
+    container(readable_text(label).size(12))
+        .padding([4, 8])
+        .width(Length::Fill)
+        .into()
 }
 
 fn sidebar_bookmark_drop_slot(
@@ -658,7 +694,7 @@ fn sidebar_bookmark_context_menu_panel(
         .padding(8)
         .push(menu_button(
             IconSymbol::Trash,
-            "Delete Tag",
+            "Remove from Favorites",
             Message::SidebarBookmarkDeleteRequested(menu.path.clone()),
         ));
 
