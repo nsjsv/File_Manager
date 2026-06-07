@@ -226,7 +226,7 @@ impl FileBrowser {
         Some((
             playback.path.clone(),
             playback.generation,
-            playback.position,
+            playback.stream_start_position,
         ))
     }
 
@@ -557,6 +557,7 @@ impl FileBrowser {
         let position = playback.position;
         playback.generation = playback.generation.saturating_add(1);
         playback.status = VideoPreviewPlaybackStatus::Playing;
+        playback.stream_start_position = position;
         playback.seek_completion = None;
         playback.seek_frame_in_flight = None;
         playback.pending_seek_frame = None;

@@ -266,6 +266,10 @@ impl FileOperationQueue {
         self.store = Some(store);
     }
 
+    pub(crate) fn task_queue_store(&self) -> Option<&TaskQueueStore> {
+        self.store.as_ref()
+    }
+
     pub(crate) fn tasks(&self) -> &[FileOperationTask] {
         &self.tasks
     }

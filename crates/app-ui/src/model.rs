@@ -13,7 +13,7 @@ use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Theme};
 
 use crate::audio_preview::AudioPreviewRuntime;
-use crate::config::{RenderingBackendPreference, UserConfig};
+use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
@@ -21,10 +21,16 @@ use crate::thumbnail_cache::ThumbnailLoadOutcome;
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
 #[derive(Debug, Clone)]
+pub(crate) struct LoadedOperationStore {
+    pub(crate) task_queue_store: TaskQueueStore,
+    pub(crate) column_width_override: Option<f32>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum Message {
     StartupEnvironmentLoaded(StartupEnvironment),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
-    OperationStoreLoaded(Result<TaskQueueStore, String>),
+    OperationStoreLoaded(Result<LoadedOperationStore, String>),
     Loaded(Result<DirectoryScan, String>),
     TrashLoaded(Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
@@ -109,6 +115,7 @@ pub(crate) enum Message {
     PathSuggestionsLoaded(PathSuggestionRequest, Vec<PathBuf>),
     SystemThemeDetected(Theme),
     UserConfigSaved(Result<(), String>),
+    ColumnWidthOverrideSaved(Result<(), String>),
     SidebarBookmarksSaved(Result<(), String>),
     SearchOpened,
     SearchInputChanged(String),
@@ -123,7 +130,7 @@ pub(crate) enum Message {
     ColumnSettingsToggled,
     ShowHiddenFilesToggled,
     TerminalEmulatorSelected(TerminalEmulator),
-    RenderingBackendPreferenceSelected(RenderingBackendPreference),
+    RenderingGpuPreferenceSelected(RenderingGpuPreference),
     RendererRestartNoticeDismissed,
     CapturedWheelScrolled(mouse::ScrollDelta),
     ScrollbarAutoHideElapsed(u64),
@@ -490,6 +497,8 @@ pub(crate) struct VideoPreviewPlayback {
     pub(crate) audio_runtime: Option<AudioPreviewRuntime>,
     pub(crate) status: VideoPreviewPlaybackStatus,
     pub(crate) position: Duration,
+    // Subscription 的身份必须固定；播放进度 tick 只更新 position，不能重建 ffmpeg 流。
+    pub(crate) stream_start_position: Duration,
     pub(crate) duration: Option<Duration>,
     pub(crate) volume: f32,
     pub(crate) generation: u64,
@@ -507,6 +516,7 @@ impl VideoPreviewPlayback {
             audio_runtime: None,
             status: VideoPreviewPlaybackStatus::Playing,
             position: Duration::ZERO,
+            stream_start_position: Duration::ZERO,
             duration,
             volume: 1.0,
             generation: 1,

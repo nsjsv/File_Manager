@@ -105,14 +105,14 @@ pub(crate) struct FileBrowser {
     pub(crate) file_drag: Option<FileDragState>,
     pub(crate) options: ScanOptions,
     user_config: config::UserConfig,
-    pub(crate) rendering_backend_preference: config::RenderingBackendPreference,
+    pub(crate) rendering_gpu_preference: config::RenderingGpuPreference,
     pub(crate) renderer_restart_notice_visible: bool,
     pub(crate) path_input: String,
     pub(crate) path_suggestions: Vec<PathBuf>,
     pub(crate) path_suggestion_selection: Option<usize>,
     path_suggestion_generation: u64,
-    pub(crate) column_width_overrides: HashMap<usize, f32>,
-    column_width_reference_content_widths: HashMap<usize, f32>,
+    pub(crate) column_width_override: Option<f32>,
+    column_width_reference_content_width: Option<f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) is_column_view_settings_open: bool,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
@@ -221,14 +221,14 @@ impl FileBrowser {
             file_drag: None,
             options: options.clone(),
             user_config: user_config.clone(),
-            rendering_backend_preference: user_config.rendering_backend_preference,
+            rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
             path_input: String::new(),
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
             path_suggestion_generation: 0,
-            column_width_overrides: user_config.column_width_overrides.clone(),
-            column_width_reference_content_widths: HashMap::new(),
+            column_width_override: user_config.legacy_column_width_override,
+            column_width_reference_content_width: None,
             terminal_emulator: user_config.terminal_emulator,
             is_column_view_settings_open: false,
             expanded_directories: HashMap::new(),
@@ -258,7 +258,7 @@ impl FileBrowser {
             theme: Theme::Light,
             is_shutting_down: false,
         };
-        browser.refresh_column_width_reference_content_widths();
+        browser.refresh_column_width_reference_content_width();
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,
@@ -587,6 +587,11 @@ impl FileBrowser {
                 self.error = Some(format!("Failed to save user configuration: {error}"));
                 Task::none()
             }
+            Message::ColumnWidthOverrideSaved(Ok(())) => Task::none(),
+            Message::ColumnWidthOverrideSaved(Err(error)) => {
+                self.error = Some(format!("Failed to save column width: {error}"));
+                Task::none()
+            }
             Message::SidebarBookmarksSaved(Ok(())) => Task::none(),
             Message::SidebarBookmarksSaved(Err(error)) => {
                 self.error = Some(format!("Failed to save sidebar bookmarks: {error}"));
@@ -625,8 +630,8 @@ impl FileBrowser {
                 self.is_column_view_settings_open = false;
                 self.persist_user_config_command()
             }
-            Message::RenderingBackendPreferenceSelected(preference) => {
-                self.select_rendering_backend_preference(preference)
+            Message::RenderingGpuPreferenceSelected(preference) => {
+                self.select_rendering_gpu_preference(preference)
             }
             Message::RendererRestartNoticeDismissed => self.dismiss_renderer_restart_notice(),
             Message::CapturedWheelScrolled(delta) => Task::batch([

@@ -24,7 +24,15 @@ CREATE TABLE IF NOT EXISTS task_queue (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ui_column_view_preferences (
+    preference_key TEXT PRIMARY KEY,
+    value_real REAL NOT NULL
+);
 "#;
+
+const COLUMN_WIDTH_PREFERENCE_KEY: &str = "column_width";
+const LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE: &str = "ui_column_width_overrides";
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -265,7 +273,9 @@ impl TaskQueueStore {
         {
             fs::create_dir_all(parent)?;
         }
-        self.connection()?.execute_batch(SCHEMA_SQL)?;
+        let connection = self.connection()?;
+        connection.execute_batch(SCHEMA_SQL)?;
+        migrate_legacy_column_width(&connection)?;
         Ok(())
     }
 
@@ -375,6 +385,37 @@ impl TaskQueueStore {
         Ok(())
     }
 
+    pub fn read_column_width(&self) -> StoreResult<Option<f64>> {
+        let connection = self.connection()?;
+        let width = connection
+            .query_row(
+                "SELECT value_real
+                 FROM ui_column_view_preferences
+                 WHERE preference_key = ?1",
+                params![COLUMN_WIDTH_PREFERENCE_KEY],
+                |row| row.get::<_, f64>(0),
+            )
+            .optional()?;
+        Ok(width.filter(|value| value.is_finite()))
+    }
+
+    pub fn replace_column_width(&self, width: Option<f64>) -> StoreResult<()> {
+        let connection = self.connection()?;
+        if let Some(width) = width.filter(|value| value.is_finite()) {
+            connection.execute(
+                "INSERT OR REPLACE INTO ui_column_view_preferences (preference_key, value_real)
+                 VALUES (?1, ?2)",
+                params![COLUMN_WIDTH_PREFERENCE_KEY, width],
+            )?;
+        } else {
+            connection.execute(
+                "DELETE FROM ui_column_view_preferences WHERE preference_key = ?1",
+                params![COLUMN_WIDTH_PREFERENCE_KEY],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn mark_unfinished_tasks_failed(&self, error: &str) -> StoreResult<()> {
         let connection = self.connection()?;
         connection.execute(
@@ -443,6 +484,59 @@ fn sqlite_id_to_u64(id: i64) -> StoreResult<u64> {
     u64::try_from(id).map_err(|_| StoreError::InvalidTaskId(id))
 }
 
+fn migrate_legacy_column_width(connection: &Connection) -> StoreResult<()> {
+    let existing_width = connection
+        .query_row(
+            "SELECT value_real
+             FROM ui_column_view_preferences
+             WHERE preference_key = ?1",
+            params![COLUMN_WIDTH_PREFERENCE_KEY],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()?;
+    if existing_width.is_some() {
+        return Ok(());
+    }
+
+    if let Some(width) = read_legacy_column_width(connection)? {
+        connection.execute(
+            "INSERT INTO ui_column_view_preferences (preference_key, value_real)
+             VALUES (?1, ?2)",
+            params![COLUMN_WIDTH_PREFERENCE_KEY, width],
+        )?;
+    }
+    Ok(())
+}
+
+fn read_legacy_column_width(connection: &Connection) -> StoreResult<Option<f64>> {
+    if !sqlite_table_exists(connection, LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE)? {
+        return Ok(None);
+    }
+
+    let width = connection
+        .query_row(
+            "SELECT width
+             FROM ui_column_width_overrides
+             ORDER BY column_index ASC
+             LIMIT 1",
+            [],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()?;
+    Ok(width.filter(|value| value.is_finite()))
+}
+
+fn sqlite_table_exists(connection: &Connection, table_name: &str) -> StoreResult<bool> {
+    let table_count = connection.query_row(
+        "SELECT COUNT(*)
+         FROM sqlite_master
+         WHERE type = 'table' AND name = ?1",
+        params![table_name],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(table_count > 0)
+}
+
 fn current_time_ms() -> i64 {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -461,13 +555,17 @@ mod tests {
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
-    fn test_store() -> (TaskQueueStore, PathBuf) {
-        let root = std::env::temp_dir().join(format!(
+    fn test_root() -> PathBuf {
+        std::env::temp_dir().join(format!(
             "file-operation-store-test-{}-{}-{}",
             std::process::id(),
             current_time_ms(),
             NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        ))
+    }
+
+    fn test_store() -> (TaskQueueStore, PathBuf) {
+        let root = test_root();
         let store = TaskQueueStore::new(root.join("state.sqlite")).unwrap();
         (store, root)
     }
@@ -570,6 +668,74 @@ mod tests {
         store.clear_tasks().unwrap();
 
         assert!(store.read_tasks().unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn column_width_roundtrip_replace_and_clear() {
+        let (store, root) = test_store();
+        store.replace_column_width(Some(240.5)).unwrap();
+
+        assert_eq!(store.read_column_width().unwrap(), Some(240.5));
+
+        store.replace_column_width(Some(128.0)).unwrap();
+
+        assert_eq!(store.read_column_width().unwrap(), Some(128.0));
+
+        store.replace_column_width(None).unwrap();
+
+        assert_eq!(store.read_column_width().unwrap(), None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn clear_tasks_keeps_column_width() {
+        let (store, root) = test_store();
+        let operation = StoredOperation::CreateDirectory {
+            parent: StoredPath::from_path(Path::new("/tmp")),
+        };
+        store.insert_task(&operation).unwrap();
+        store.replace_column_width(Some(240.0)).unwrap();
+
+        store.clear_tasks().unwrap();
+
+        assert!(store.read_tasks().unwrap().is_empty());
+        assert_eq!(store.read_column_width().unwrap(), Some(240.0));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrates_leftmost_legacy_column_width_on_initialize() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let db_path = root.join("state.sqlite");
+        let connection = Connection::open(&db_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE ui_column_width_overrides (
+                    column_index INTEGER PRIMARY KEY,
+                    width REAL NOT NULL
+                );
+                INSERT INTO ui_column_width_overrides (column_index, width) VALUES (2, 360.0);
+                INSERT INTO ui_column_width_overrides (column_index, width) VALUES (0, 240.0);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = TaskQueueStore::new(db_path).unwrap();
+
+        assert_eq!(store.read_column_width().unwrap(), Some(240.0));
+        let connection = Connection::open(store.db_path()).unwrap();
+        let stored_width: f64 = connection
+            .query_row(
+                "SELECT value_real
+                 FROM ui_column_view_preferences
+                 WHERE preference_key = ?1",
+                params![COLUMN_WIDTH_PREFERENCE_KEY],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_width, 240.0);
         let _ = fs::remove_dir_all(root);
     }
 

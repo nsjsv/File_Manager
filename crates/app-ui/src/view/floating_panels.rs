@@ -24,7 +24,7 @@ use crate::model::{
 use crate::sidebar::SIDEBAR_WIDTH;
 use crate::typography::readable_text;
 
-use super::rendering_settings::gpu_rendering_button;
+use super::rendering_settings::rendering_gpu_preference_button;
 use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
@@ -476,7 +476,7 @@ pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Messag
             readable_text("Files").size(13),
             hidden_files_visibility_button(browser),
             readable_text("Rendering").size(13),
-            gpu_rendering_button(browser.rendering_backend_preference),
+            rendering_gpu_preference_button(browser.rendering_gpu_preference),
             readable_text("Terminal").size(13),
             terminal_emulator_options(browser.terminal_emulator),
         ]

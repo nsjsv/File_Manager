@@ -1,7 +1,7 @@
 use iced::{Point, Task};
 
 use crate::app::FileBrowser;
-use crate::commands::save_user_config_command;
+use crate::commands::{save_column_width_override_command, save_user_config_command};
 use crate::config;
 use crate::model::Message;
 use crate::sidebar::SIDEBAR_WIDTH;
@@ -9,22 +9,20 @@ use crate::three_column_view::{COLUMN_RESIZE_DIVIDER_WIDTH, DEFAULT_VISIBLE_COLU
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ColumnResizeDrag {
-    pub(super) column_index: usize,
     pub(super) cursor_start_x: f32,
     pub(super) width_start: f32,
     pub(super) content_width_start: f32,
 }
 
 impl FileBrowser {
-    pub(super) fn start_column_resize_drag(&mut self, column_index: usize) -> Task<Message> {
+    pub(super) fn start_column_resize_drag(&mut self, _column_index: usize) -> Task<Message> {
         if self.renaming.is_some() {
             return self.commit_rename_if_active();
         }
 
         self.column_resize_drag = Some(ColumnResizeDrag {
-            column_index,
             cursor_start_x: self.cursor_position.x,
-            width_start: self.column_width(column_index),
+            width_start: self.column_width(0),
             content_width_start: self.column_browser_content_width(),
         });
         self.drag_selection_anchor = None;
@@ -42,26 +40,18 @@ impl FileBrowser {
 
         let resized_width =
             config::normalize_column_width(drag.width_start + position.x - drag.cursor_start_x);
-        self.column_width_overrides
-            .insert(drag.column_index, resized_width);
-        self.column_width_reference_content_widths
-            .insert(drag.column_index, drag.content_width_start);
+        self.column_width_override = Some(resized_width);
+        self.column_width_reference_content_width = Some(drag.content_width_start);
     }
 
     pub(super) fn finish_column_resize_drag(&mut self) -> bool {
-        let was_resizing = self.column_resize_drag.take().is_some();
-        if was_resizing {
-            self.user_config.column_width_overrides = self.column_width_overrides.clone();
-        }
-        was_resizing
+        self.column_resize_drag.take().is_some()
     }
 
-    pub(crate) fn column_width(&self, column_index: usize) -> f32 {
-        if let Some(width) = self.column_width_overrides.get(&column_index).copied() {
+    pub(crate) fn column_width(&self, _column_index: usize) -> f32 {
+        if let Some(width) = self.column_width_override {
             let reference_content_width = self
-                .column_width_reference_content_widths
-                .get(&column_index)
-                .copied()
+                .column_width_reference_content_width
                 .unwrap_or_else(|| self.column_browser_content_width());
             return scale_column_width_to_content_width(
                 width,
@@ -86,27 +76,30 @@ impl FileBrowser {
         column_browser_content_width_for_window(self.main_window_width)
     }
 
-    pub(super) fn refresh_column_width_reference_content_widths(&mut self) {
-        let content_width = self.column_browser_content_width();
-        let column_indices = self
-            .column_width_overrides
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+    pub(super) fn refresh_column_width_reference_content_width(&mut self) {
+        self.column_width_reference_content_width = self
+            .column_width_override
+            .map(|_| self.column_browser_content_width());
+    }
 
-        self.column_width_reference_content_widths.clear();
-        for column_index in column_indices {
-            self.column_width_reference_content_widths
-                .insert(column_index, content_width);
-        }
+    pub(super) fn apply_column_width_override(&mut self, width: Option<f32>) {
+        self.column_width_override = width.map(config::normalize_column_width);
+        self.refresh_column_width_reference_content_width();
     }
 
     pub(super) fn finish_column_resize_drag_command(&mut self) -> Task<Message> {
         if self.finish_column_resize_drag() {
-            self.persist_user_config_command()
+            self.persist_column_width_override_command()
         } else {
             Task::none()
         }
+    }
+
+    pub(super) fn persist_column_width_override_command(&self) -> Task<Message> {
+        let Some(task_queue_store) = self.operation_queue.task_queue_store().cloned() else {
+            return Task::none();
+        };
+        save_column_width_override_command(task_queue_store, self.column_width_override)
     }
 
     pub(super) fn persist_user_config_command(&self) -> Task<Message> {

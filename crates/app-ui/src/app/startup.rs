@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
-use file_operation_store::TaskQueueStore;
 use iced::Task;
 
 use super::paths::path_text;
 use super::FileBrowser;
 use crate::commands::{load_directory_command, operation_store_command, sidebar_locations_command};
 use crate::config::UserConfig;
-use crate::model::{Message, SidebarLocation, StartupEnvironment};
+use crate::model::{LoadedOperationStore, Message, SidebarLocation, StartupEnvironment};
 use crate::sidebar::home_sidebar_location;
 use crate::startup_trace;
 
@@ -48,10 +47,32 @@ impl FileBrowser {
 
     pub(super) fn accept_operation_store(
         &mut self,
-        operation_store: Result<TaskQueueStore, String>,
+        operation_store: Result<LoadedOperationStore, String>,
     ) -> Task<Message> {
         match operation_store {
-            Ok(store) => self.operation_queue.set_store(store),
+            Ok(loaded_store) => {
+                let persisted_column_width_override = loaded_store.column_width_override;
+                self.operation_queue
+                    .set_store(loaded_store.task_queue_store);
+                if let Some(width) = persisted_column_width_override {
+                    self.apply_column_width_override(Some(width));
+                    if self
+                        .user_config
+                        .legacy_column_width_override
+                        .take()
+                        .is_some()
+                    {
+                        return self.persist_user_config_command();
+                    }
+                } else if self.user_config.legacy_column_width_override.is_some() {
+                    self.apply_column_width_override(self.user_config.legacy_column_width_override);
+                    self.user_config.legacy_column_width_override = None;
+                    return Task::batch([
+                        self.persist_column_width_override_command(),
+                        self.persist_user_config_command(),
+                    ]);
+                }
+            }
             Err(error) => {
                 self.error = Some(format!(
                     "Failed to initialize file operation queue storage: {error}"
@@ -72,10 +93,9 @@ impl FileBrowser {
         self.search_index.base_dir = user_config.search_index_dir.clone();
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
-        self.column_width_overrides = user_config.column_width_overrides.clone();
-        self.refresh_column_width_reference_content_widths();
+        self.apply_column_width_override(user_config.legacy_column_width_override);
         self.terminal_emulator = user_config.terminal_emulator;
-        self.rendering_backend_preference = user_config.rendering_backend_preference;
+        self.rendering_gpu_preference = user_config.rendering_gpu_preference;
         self.options.include_hidden = user_config.show_hidden_files;
         self.user_config = user_config;
     }

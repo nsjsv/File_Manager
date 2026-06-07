@@ -75,6 +75,54 @@ cargo build --release -p app-ui
 ./target/release/app-ui
 ```
 
+## 本地安装
+
+可以把 release 二进制安装到用户目录：
+
+```bash
+cargo build --release -p app-ui
+install -Dm755 target/release/app-ui ~/.local/bin/file-manager
+```
+
+然后运行：
+
+```bash
+file-manager
+```
+
+如果需要桌面启动项，可以创建 `~/.local/share/applications/file-manager.desktop`：
+
+```desktop
+[Desktop Entry]
+Type=Application
+Name=File Manager
+Exec=file-manager
+Categories=System;FileManager;
+Terminal=false
+```
+
+## 维护者发布
+
+发布新版本时：
+
+1. 更新 Cargo 工作区版本，确保 `app-ui` 包版本等于准备发布的 `X.Y.Z`。
+2. 推送形如 `vX.Y.Z` 的 tag，例如 `git tag vX.Y.Z && git push origin vX.Y.Z`。
+3. 在 GitHub 仓库配置 AUR 发布所需 Secrets：
+   - `AUR_SSH_PRIVATE_KEY`：可推送 `file-manager-bin` AUR 仓库的 SSH 私钥。
+   - `AUR_KNOWN_HOSTS`：AUR SSH 主机的 known_hosts 记录。
+   - `AUR_COMMIT_NAME`、`AUR_COMMIT_EMAIL`：可选，缺省使用 `github-actions[bot]`。
+4. release workflow 会先构建并发布 GitHub Release tarball，然后仅在 tag push 事件中渲染 `PKGBUILD`、生成 `.SRCINFO` 并推送到 AUR。
+
+`AUR_SSH_PRIVATE_KEY` 对应的公钥需要添加到 AUR 账户，并且该私钥应能在 CI 中非交互使用。`AUR_KNOWN_HOSTS` 可以用下面的命令生成，写入前请按 AUR 官方信息核对 fingerprint：
+
+```bash
+ssh-keyscan aur.archlinux.org
+```
+
+发 tag 前请确认 release workflow、`packaging/aur/file-manager-bin/PKGBUILD.in` 和 `packaging/linux/file-manager.desktop` 都已经提交到 tag 指向的 commit。
+
+release workflow 只由 `vX.Y.Z` tag push 触发，不提供手动触发入口。
+
 ## 平台说明
 
 目前主要在 Linux / Wayland 环境下开发和测试。其他发行版如果遇到预编译二进制无法运行，建议先从源码编译。

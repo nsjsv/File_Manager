@@ -2,7 +2,7 @@ use iced::widget::{button, column, container, row, Button, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{context_menu_button_style, context_menu_style};
-use crate::config::RenderingBackendPreference;
+use crate::config::RenderingGpuPreference;
 use crate::icons::IconSymbol;
 use crate::model::Message;
 use crate::typography::readable_text;
@@ -12,20 +12,23 @@ use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const RENDERER_RESTART_NOTICE_WIDTH: f32 = 420.0;
 
-pub(super) fn gpu_rendering_button(
-    preference: RenderingBackendPreference,
+pub(super) fn rendering_gpu_preference_button(
+    preference: RenderingGpuPreference,
 ) -> Button<'static, Message> {
     let label = row![
-        readable_text("GPU Rendering").size(12).width(Length::Fill),
+        readable_text("Discrete GPU").size(12).width(Length::Fill),
         readable_text(rendering_status(preference)).size(12),
-        switch_control(matches!(preference, RenderingBackendPreference::Gpu)),
+        switch_control(matches!(
+            preference,
+            RenderingGpuPreference::HighPerformanceGpu
+        )),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
 
     button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::RenderingBackendPreferenceSelected(
-            next_rendering_backend_preference(preference),
+        .on_press(Message::RenderingGpuPreferenceSelected(
+            next_rendering_gpu_preference(preference),
         ))
         .width(Length::Fill)
         .style(context_menu_button_style())
@@ -55,7 +58,7 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
         column![
             title,
             readable_text(
-                "Rendering backend changes will take effect after restarting File Manager."
+                "Rendering GPU preference changes will take effect after restarting File Manager."
             )
             .size(13),
             actions,
@@ -69,18 +72,16 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
     .into()
 }
 
-fn rendering_status(preference: RenderingBackendPreference) -> &'static str {
+fn rendering_status(preference: RenderingGpuPreference) -> &'static str {
     match preference {
-        RenderingBackendPreference::Software => "Off",
-        RenderingBackendPreference::Gpu => "On",
+        RenderingGpuPreference::DisplayGpu => "Display GPU",
+        RenderingGpuPreference::HighPerformanceGpu => "On",
     }
 }
 
-fn next_rendering_backend_preference(
-    preference: RenderingBackendPreference,
-) -> RenderingBackendPreference {
+fn next_rendering_gpu_preference(preference: RenderingGpuPreference) -> RenderingGpuPreference {
     match preference {
-        RenderingBackendPreference::Software => RenderingBackendPreference::Gpu,
-        RenderingBackendPreference::Gpu => RenderingBackendPreference::Software,
+        RenderingGpuPreference::DisplayGpu => RenderingGpuPreference::HighPerformanceGpu,
+        RenderingGpuPreference::HighPerformanceGpu => RenderingGpuPreference::DisplayGpu,
     }
 }

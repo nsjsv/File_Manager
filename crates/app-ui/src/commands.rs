@@ -21,8 +21,8 @@ use iced::Task;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
-    Message, PathSuggestionRequest, PendingOperation, SearchRequest, SidebarLocation,
-    StartupEnvironment, TransferConflictMode, TransferConflictState,
+    LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation, SearchRequest,
+    SidebarLocation, StartupEnvironment, TransferConflictMode, TransferConflictState,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::preview::{load_directory_preview_children, load_preview};
@@ -65,6 +65,16 @@ pub(crate) fn delayed_thumbnail_refresh_command(directory: PathBuf) -> Task<Mess
 
 pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Task<Message> {
     Task::perform(persist_user_config(user_config), Message::UserConfigSaved)
+}
+
+pub(crate) fn save_column_width_override_command(
+    task_queue_store: TaskQueueStore,
+    column_width_override: Option<f32>,
+) -> Task<Message> {
+    Task::perform(
+        persist_column_width_override(task_queue_store, column_width_override),
+        Message::ColumnWidthOverrideSaved,
+    )
 }
 
 pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) -> Task<Message> {
@@ -401,19 +411,37 @@ async fn persist_sidebar_bookmarks(bookmarks: Vec<SidebarLocation>) -> Result<()
     .map_err(|error| error.to_string())
 }
 
-async fn load_operation_store(path: PathBuf) -> Result<TaskQueueStore, String> {
+async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, String> {
     if path.as_os_str().is_empty() {
         return Err("state database path is unavailable".to_owned());
     }
 
-    let result = tokio::task::spawn_blocking(move || {
+    let store_outcome = tokio::task::spawn_blocking(move || {
         let store = TaskQueueStore::new(path)?;
         store.clear_tasks()?;
-        Ok::<TaskQueueStore, file_operation_store::StoreError>(store)
+        let column_width_override = store
+            .read_column_width()?
+            .map(|width| config::normalize_column_width(width as f32));
+        Ok::<LoadedOperationStore, file_operation_store::StoreError>(LoadedOperationStore {
+            task_queue_store: store,
+            column_width_override,
+        })
     })
     .await
     .map_err(|error| error.to_string())?;
-    result.map_err(|error| error.to_string())
+    store_outcome.map_err(|error| error.to_string())
+}
+
+async fn persist_column_width_override(
+    task_queue_store: TaskQueueStore,
+    column_width_override: Option<f32>,
+) -> Result<(), String> {
+    let stored_width =
+        column_width_override.map(|width| f64::from(config::normalize_column_width(width)));
+    tokio::task::spawn_blocking(move || task_queue_store.replace_column_width(stored_width))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 async fn load_thumbnail_batch(
