@@ -16,6 +16,7 @@ use crate::appearance::{
     column_resize_divider_style, dragged_row_style, hovered_row_style, icon_svg_style,
     muted_icon_svg_style, selected_icon_svg_style, selected_row_style, warning_icon_svg_style,
 };
+use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{BrowserPaneId, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
@@ -280,7 +281,8 @@ fn column_entry_row<'a>(
         row_area
     };
 
-    row_area.into()
+    let row_element: Element<'a, Message> = row_area.into();
+    track_column_entry_bounds(row_element, pane.id, entry.path.clone())
 }
 
 fn is_drag_source(pane: BrowserPaneView<'_>, path: &Path) -> bool {

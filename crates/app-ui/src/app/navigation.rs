@@ -672,7 +672,8 @@ mod tests {
         let stale_request = path_suggestion_request("docs", &browser.current_dir, 1);
 
         assert!(!browser.active_path_suggestion_request_matches(&stale_request));
-        let _command = browser.load_stable_path_suggestions(stale_request);
+        let _command = browser
+            .load_stable_path_suggestions(crate::model::BrowserPaneId::PRIMARY, stale_request);
 
         assert_eq!(browser.path_suggestions, vec![current_suggestion]);
         assert_eq!(browser.path_suggestion_selection, Some(0));
@@ -690,8 +691,11 @@ mod tests {
         );
         let stale_request = path_suggestion_request("docs", &browser.current_dir, 1);
 
-        let _command =
-            browser.accept_path_suggestions(stale_request, vec![PathBuf::from("/tmp/stale")]);
+        let _command = browser.accept_path_suggestions(
+            crate::model::BrowserPaneId::PRIMARY,
+            stale_request,
+            vec![PathBuf::from("/tmp/stale")],
+        );
 
         assert_eq!(browser.path_suggestions, vec![current_suggestion]);
         assert_eq!(browser.path_suggestion_selection, Some(0));

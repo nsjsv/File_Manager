@@ -521,7 +521,7 @@ impl FileBrowser {
                 if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
                     return Task::none();
                 }
-                self.handle_column_blank_clicked(path)
+                self.start_column_blank_selection_marquee(path)
             }
             Message::EntryReleased(pane_id) => {
                 self.activate_pane(pane_id);
@@ -607,8 +607,11 @@ impl FileBrowser {
                 self.update_file_drag(position);
                 self.update_sidebar_bookmark_drag(position);
                 self.update_column_resize_drag(position);
-                self.update_selection_marquee(position);
-                Task::none()
+                if self.update_selection_marquee(position) {
+                    crate::column_entry_bounds::column_entry_bounds_command()
+                } else {
+                    Task::none()
+                }
             }
             Message::ColumnBrowserCursorEntered(pane_id) => {
                 self.activate_pane(pane_id);
@@ -623,6 +626,9 @@ impl FileBrowser {
                 } else {
                     Task::none()
                 }
+            }
+            Message::ColumnEntryBoundsMeasured(bounds) => {
+                self.update_selection_from_column_entry_bounds(bounds)
             }
             Message::PaneCursorEntered(pane_id) => {
                 self.hovered_pane_id = Some(pane_id);

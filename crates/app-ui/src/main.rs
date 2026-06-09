@@ -2,6 +2,7 @@ mod anchored_popup;
 mod app;
 mod appearance;
 mod audio_preview;
+mod column_entry_bounds;
 mod commands;
 mod config;
 mod floating_surface;

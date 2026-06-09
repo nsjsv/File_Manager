@@ -12,10 +12,10 @@ use crate::commands::{
     open_terminal_command, preview_command, start_audio_preview_command,
 };
 use crate::model::{
-    trash_location_path, AudioPreviewPlayback, ContextMenuState, ExpandedDirectory,
-    ExpandedDirectoryStatus, FileContextMenuState, FileDragPhase, FileDragState, FileDragTarget,
-    LastClick, Message, NavigationMode, PreviewState, PreviewWindowProfile, SelectionMarquee,
-    TransferConflictMode,
+    trash_location_path, AudioPreviewPlayback, ColumnEntryBounds, ContextMenuState,
+    ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuState, FileDragPhase, FileDragState,
+    FileDragTarget, LastClick, Message, NavigationMode, PreviewState, PreviewWindowProfile,
+    SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 
@@ -104,7 +104,7 @@ impl FileBrowser {
         self.cursor_paste_directory = Some(target_directory.clone());
         if self.file_drag.is_some() {
             self.set_file_drag_target(target_directory);
-        } else {
+        } else if self.selection_marquee.is_none() {
             self.extend_drag_selection_to(path);
         }
         self.schedule_thumbnail_refresh()
@@ -160,7 +160,7 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Task<Message> {
+    pub(super) fn handle_column_blank_clicked(&mut self, _directory: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.context_menu = None;
@@ -168,16 +168,11 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.is_column_view_settings_open = false;
         self.file_drag = None;
-
-        if directory == self.current_dir {
-            self.selected_paths.clear();
-            self.selected = None;
-            self.selection_anchor = None;
-            self.rename_input.clear();
-            self.sync_path_input_to_current_directory();
-        } else {
-            self.select_path(directory);
-        }
+        self.selected_paths.clear();
+        self.selected = None;
+        self.selection_anchor = None;
+        self.rename_input.clear();
+        self.sync_path_input_to_current_directory();
 
         rename_command
     }
@@ -212,6 +207,21 @@ impl FileBrowser {
     }
 
     pub(super) fn start_selection_marquee(&mut self) -> Task<Message> {
+        self.start_selection_marquee_from(SelectionMarqueeSource::PaneBlank)
+    }
+
+    pub(super) fn start_column_blank_selection_marquee(
+        &mut self,
+        directory: PathBuf,
+    ) -> Task<Message> {
+        if self.renaming.is_some() {
+            return self.handle_column_blank_clicked(directory);
+        }
+
+        self.start_selection_marquee_from(SelectionMarqueeSource::ColumnBlank { directory })
+    }
+
+    fn start_selection_marquee_from(&mut self, source: SelectionMarqueeSource) -> Task<Message> {
         if self.renaming.is_some() {
             return self.commit_rename_if_active();
         }
@@ -221,17 +231,81 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.is_column_view_settings_open = false;
         self.file_drag = None;
+        let preserve_existing = self.keyboard_modifiers.control();
+        let base_selection = self.selected_paths.clone();
+        if !preserve_existing {
+            self.selected_paths.clear();
+            self.selected = None;
+            self.selection_anchor = None;
+            self.rename_input.clear();
+            self.sync_path_input_to_current_directory();
+        }
         self.selection_marquee = Some(SelectionMarquee {
             start: self.cursor_position,
             current: self.cursor_position,
+            source,
+            phase: SelectionMarqueePhase::WaitingForMovement,
+            base_selection,
+            preserve_existing,
         });
         Task::none()
     }
 
-    pub(super) fn update_selection_marquee(&mut self, position: iced::Point) {
+    pub(super) fn update_selection_marquee(&mut self, position: iced::Point) -> bool {
         if let Some(marquee) = &mut self.selection_marquee {
             marquee.current = position;
+            if marquee.phase == SelectionMarqueePhase::WaitingForMovement
+                && selection_marquee_distance_exceeded(marquee)
+            {
+                marquee.phase = SelectionMarqueePhase::Selecting;
+            }
+            return marquee.is_selecting();
         }
+        false
+    }
+
+    pub(super) fn update_selection_from_column_entry_bounds(
+        &mut self,
+        bounds: Vec<ColumnEntryBounds>,
+    ) -> Task<Message> {
+        let Some(marquee) = self
+            .selection_marquee
+            .as_ref()
+            .filter(|marquee| marquee.is_selecting())
+        else {
+            return Task::none();
+        };
+        let marquee_rectangle = marquee.rectangle();
+        let active_pane_id = self.active_pane_id();
+        let visible_paths = self
+            .visible_entry_paths()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let mut next_selection = if marquee.preserve_existing {
+            marquee.base_selection.clone()
+        } else {
+            HashSet::new()
+        };
+
+        for entry_bounds in bounds {
+            if entry_bounds.pane_id == active_pane_id
+                && visible_paths.contains(&entry_bounds.path)
+                && rectangles_intersect(marquee_rectangle, entry_bounds.bounds)
+            {
+                next_selection.insert(entry_bounds.path);
+            }
+        }
+
+        self.selected_paths = next_selection;
+        self.selected = self.last_visible_selected_path();
+        if let Some(selected) = self.selected.clone() {
+            self.sync_path_input_to_selected_directory(&selected);
+            self.update_rename_input(&selected);
+        } else {
+            self.rename_input.clear();
+            self.sync_path_input_to_current_directory();
+        }
+        Task::none()
     }
 
     pub(super) fn update_file_drag(&mut self, position: iced::Point) {
@@ -252,9 +326,21 @@ impl FileBrowser {
     }
 
     pub(super) fn finish_drag_selection(&mut self) -> Task<Message> {
+        let column_blank_click = self.selection_marquee.as_ref().and_then(|marquee| {
+            if marquee.is_selecting() {
+                return None;
+            }
+            match &marquee.source {
+                SelectionMarqueeSource::PaneBlank => None,
+                SelectionMarqueeSource::ColumnBlank { directory } => Some(directory.clone()),
+            }
+        });
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.sidebar_bookmark_drop_slot = None;
+        if let Some(directory) = column_blank_click {
+            return self.handle_column_blank_clicked(directory);
+        }
         let Some(file_drag) = self.file_drag.take() else {
             return Task::none();
         };
@@ -352,11 +438,11 @@ impl FileBrowser {
         let Some(anchor) = self.drag_selection_anchor.clone() else {
             if self.selection_marquee.is_some() {
                 self.drag_selection_anchor = Some(path.clone());
-                self.select_range(path.clone(), path, self.keyboard_modifiers.control());
+                self.select_drag_range(path.clone(), path, self.keyboard_modifiers.control());
             }
             return;
         };
-        self.select_range(anchor, path, self.keyboard_modifiers.control());
+        self.select_drag_range(anchor, path, self.keyboard_modifiers.control());
     }
 
     pub(super) fn select_all_visible(&mut self) -> Task<Message> {
@@ -544,6 +630,16 @@ impl FileBrowser {
         self.focus_path(target);
     }
 
+    fn select_drag_range(&mut self, anchor: PathBuf, target: PathBuf, preserve_existing: bool) {
+        if !preserve_existing {
+            self.selected_paths.clear();
+        }
+
+        for path in self.visible_range_paths(&anchor, &target) {
+            self.selected_paths.insert(path);
+        }
+    }
+
     fn visible_range_paths(&self, anchor: &Path, target: &Path) -> Vec<PathBuf> {
         let paths = self.visible_entry_paths();
         let Some(anchor_index) = paths.iter().position(|path| path == anchor) else {
@@ -644,12 +740,36 @@ impl FileBrowser {
     }
 }
 
+fn selection_marquee_distance_exceeded(marquee: &SelectionMarquee) -> bool {
+    let delta_x = marquee.current.x - marquee.start.x;
+    let delta_y = marquee.current.y - marquee.start.y;
+    delta_x * delta_x + delta_y * delta_y
+        >= POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE
+}
+
+fn rectangles_intersect(first: iced::Rectangle, second: iced::Rectangle) -> bool {
+    first.x < second.x + second.width
+        && first.x + first.width > second.x
+        && first.y < second.y + second.height
+        && first.y + first.height > second.y
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
-    use crate::{app::FileBrowser, config, model::ContextMenuState};
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+    use iced::{Point, Rectangle};
+
+    use crate::{
+        app::FileBrowser,
+        config,
+        model::{
+            BrowserPaneId, ColumnEntryBounds, ContextMenuState, SelectionMarquee,
+            SelectionMarqueePhase, SelectionMarqueeSource,
+        },
+    };
 
     fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
         DirectoryEntry::new(
@@ -664,6 +784,180 @@ mod tests {
             false,
             false,
         )
+    }
+
+    fn active_selection_marquee(
+        current: Point,
+        base_selection: HashSet<PathBuf>,
+        preserve_existing: bool,
+    ) -> SelectionMarquee {
+        SelectionMarquee {
+            start: Point::new(0.0, 0.0),
+            current,
+            source: SelectionMarqueeSource::PaneBlank,
+            phase: SelectionMarqueePhase::Selecting,
+            base_selection,
+            preserve_existing,
+        }
+    }
+
+    fn entry_bounds(path: PathBuf, x: f32, y: f32, width: f32, height: f32) -> ColumnEntryBounds {
+        ColumnEntryBounds {
+            pane_id: BrowserPaneId::PRIMARY,
+            path,
+            bounds: Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+        }
+    }
+
+    #[test]
+    fn rectangles_intersect_only_when_areas_overlap() {
+        let first = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 20.0,
+        };
+
+        assert!(super::rectangles_intersect(
+            first,
+            Rectangle {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 20.0,
+            }
+        ));
+        assert!(!super::rectangles_intersect(
+            first,
+            Rectangle {
+                x: 20.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            }
+        ));
+    }
+
+    #[test]
+    fn marquee_selection_uses_intersecting_bounds() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let inside = current_dir.join("inside.txt");
+        let outside = current_dir.join("outside.txt");
+        browser.current_dir = current_dir;
+        browser.entries = vec![
+            test_entry(inside.clone(), FileKind::File),
+            test_entry(outside.clone(), FileKind::File),
+        ];
+        browser.selection_marquee = Some(active_selection_marquee(
+            Point::new(50.0, 50.0),
+            HashSet::new(),
+            false,
+        ));
+
+        let command = browser.update_selection_from_column_entry_bounds(vec![
+            entry_bounds(inside.clone(), 10.0, 10.0, 20.0, 20.0),
+            entry_bounds(outside.clone(), 70.0, 70.0, 20.0, 20.0),
+        ]);
+        drop(command);
+
+        assert!(browser.is_path_selected(&inside));
+        assert!(!browser.is_path_selected(&outside));
+        assert_eq!(browser.selected.as_ref(), Some(&inside));
+    }
+
+    #[test]
+    fn marquee_selection_preserves_existing_selection_when_requested() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let preserved = current_dir.join("preserved.txt");
+        let added = current_dir.join("added.txt");
+        browser.current_dir = current_dir;
+        browser.entries = vec![
+            test_entry(preserved.clone(), FileKind::File),
+            test_entry(added.clone(), FileKind::File),
+        ];
+        browser.selection_marquee = Some(active_selection_marquee(
+            Point::new(50.0, 50.0),
+            HashSet::from([preserved.clone()]),
+            true,
+        ));
+
+        let command = browser.update_selection_from_column_entry_bounds(vec![entry_bounds(
+            added.clone(),
+            10.0,
+            10.0,
+            20.0,
+            20.0,
+        )]);
+        drop(command);
+
+        assert!(browser.is_path_selected(&preserved));
+        assert!(browser.is_path_selected(&added));
+    }
+
+    #[test]
+    fn clicking_any_column_blank_clears_existing_selection() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("first.txt");
+        let second = current_dir.join("second.txt");
+        let child_directory = current_dir.join("project");
+        browser.current_dir = current_dir.clone();
+        browser.entries = vec![
+            test_entry(first.clone(), FileKind::File),
+            test_entry(second.clone(), FileKind::File),
+            test_entry(child_directory.clone(), FileKind::Directory),
+        ];
+        browser.selected = Some(second.clone());
+        browser.selected_paths = HashSet::from([first, second]);
+        browser.selection_anchor = Some(child_directory.clone());
+
+        let command = browser.handle_column_blank_clicked(child_directory);
+        drop(command);
+
+        assert!(browser.selected.is_none());
+        assert!(browser.selected_paths.is_empty());
+        assert!(browser.selection_anchor.is_none());
+        assert_eq!(
+            browser.path_input,
+            crate::app::paths::path_text(&current_dir)
+        );
+    }
+
+    #[test]
+    fn pressing_blank_area_clears_selection_before_release() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("first.txt");
+        let second = current_dir.join("second.txt");
+        let child_directory = current_dir.join("project");
+        browser.current_dir = current_dir.clone();
+        browser.entries = vec![
+            test_entry(first.clone(), FileKind::File),
+            test_entry(second.clone(), FileKind::File),
+            test_entry(child_directory.clone(), FileKind::Directory),
+        ];
+        browser.selected = Some(second.clone());
+        browser.selected_paths = HashSet::from([first, second]);
+        browser.selection_anchor = Some(child_directory.clone());
+
+        let command = browser.start_column_blank_selection_marquee(child_directory);
+        drop(command);
+
+        assert!(browser.selected.is_none());
+        assert!(browser.selected_paths.is_empty());
+        assert!(browser.selection_anchor.is_none());
+        assert!(browser.selection_marquee.is_some());
+        assert_eq!(
+            browser.path_input,
+            crate::app::paths::path_text(&current_dir)
+        );
     }
 
     #[test]
