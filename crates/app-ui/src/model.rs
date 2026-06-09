@@ -23,7 +23,7 @@ pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedOperationStore {
     pub(crate) task_queue_store: TaskQueueStore,
-    pub(crate) column_width_override: Option<f32>,
+    pub(crate) column_width_overrides: HashMap<usize, f32>,
 }
 
 #[derive(Debug, Clone)]

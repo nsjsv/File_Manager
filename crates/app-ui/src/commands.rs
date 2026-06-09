@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -73,12 +74,12 @@ pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Task<
     Task::perform(persist_user_config(user_config), Message::UserConfigSaved)
 }
 
-pub(crate) fn save_column_width_override_command(
+pub(crate) fn save_column_width_overrides_command(
     task_queue_store: TaskQueueStore,
-    column_width_override: Option<f32>,
+    column_width_overrides: HashMap<usize, f32>,
 ) -> Task<Message> {
     Task::perform(
-        persist_column_width_override(task_queue_store, column_width_override),
+        persist_column_width_overrides(task_queue_store, column_width_overrides),
         Message::ColumnWidthOverrideSaved,
     )
 }
@@ -439,12 +440,16 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
     let store_outcome = tokio::task::spawn_blocking(move || {
         let store = TaskQueueStore::new(path)?;
         store.clear_tasks()?;
-        let column_width_override = store
-            .read_column_width()?
-            .map(|width| config::normalize_column_width(width as f32));
+        let column_width_overrides = store
+            .read_column_widths()?
+            .into_iter()
+            .map(|(column_index, width)| {
+                (column_index, config::normalize_column_width(width as f32))
+            })
+            .collect();
         Ok::<LoadedOperationStore, file_operation_store::StoreError>(LoadedOperationStore {
             task_queue_store: store,
-            column_width_override,
+            column_width_overrides,
         })
     })
     .await
@@ -452,13 +457,20 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
     store_outcome.map_err(|error| error.to_string())
 }
 
-async fn persist_column_width_override(
+async fn persist_column_width_overrides(
     task_queue_store: TaskQueueStore,
-    column_width_override: Option<f32>,
+    column_width_overrides: HashMap<usize, f32>,
 ) -> Result<(), String> {
-    let stored_width =
-        column_width_override.map(|width| f64::from(config::normalize_column_width(width)));
-    tokio::task::spawn_blocking(move || task_queue_store.replace_column_width(stored_width))
+    let stored_widths = column_width_overrides
+        .into_iter()
+        .map(|(column_index, width)| {
+            (
+                column_index,
+                f64::from(config::normalize_column_width(width)),
+            )
+        })
+        .collect();
+    tokio::task::spawn_blocking(move || task_queue_store.replace_column_widths(stored_widths))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())

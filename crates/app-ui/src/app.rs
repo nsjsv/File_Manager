@@ -125,8 +125,8 @@ pub(crate) struct FileBrowser {
     pub(crate) path_suggestions: Vec<PathBuf>,
     pub(crate) path_suggestion_selection: Option<usize>,
     path_suggestion_generation: u64,
-    pub(crate) column_width_override: Option<f32>,
-    column_width_reference_content_width: Option<f32>,
+    pub(crate) column_width_overrides: HashMap<usize, f32>,
+    column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) is_column_view_settings_open: bool,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
@@ -263,8 +263,8 @@ impl FileBrowser {
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
             path_suggestion_generation: 0,
-            column_width_override: user_config.legacy_column_width_override,
-            column_width_reference_content_width: None,
+            column_width_overrides: user_config.legacy_column_width_overrides.clone(),
+            column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             is_column_view_settings_open: false,
             expanded_directories: HashMap::new(),
@@ -296,7 +296,7 @@ impl FileBrowser {
             theme: Theme::Light,
             is_shutting_down: false,
         };
-        browser.refresh_column_width_reference_content_width();
+        browser.refresh_column_width_reference_content_widths();
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,

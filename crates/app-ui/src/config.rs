@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -92,7 +94,7 @@ pub(crate) struct UserConfig {
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) show_hidden_files: bool,
     pub(crate) sidebar_width: f32,
-    pub(crate) legacy_column_width_override: Option<f32>,
+    pub(crate) legacy_column_width_overrides: HashMap<usize, f32>,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
@@ -147,7 +149,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         show_hidden_files: false,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
-        legacy_column_width_override: None,
+        legacy_column_width_overrides: HashMap::new(),
         sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
@@ -160,7 +162,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         thumbnail_cache_dir: PathBuf::new(),
         show_hidden_files: false,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
-        legacy_column_width_override: None,
+        legacy_column_width_overrides: HashMap::new(),
         sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
@@ -231,7 +233,7 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
         .get(COLUMN_WIDTH_OVERRIDES_KEY)
         .and_then(toml::Value::as_table)
     {
-        config.legacy_column_width_override = parse_toml_column_width_override(table);
+        config.legacy_column_width_overrides = parse_toml_column_width_overrides(table);
     }
     if let Some(favorites) = parse_toml_sidebar_favorites(&document) {
         config.sidebar_favorites = Some(favorites);
@@ -283,7 +285,7 @@ fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
                 }
             }
             COLUMN_WIDTH_OVERRIDES_KEY => {
-                config.legacy_column_width_override = parse_legacy_column_width_override(value);
+                config.legacy_column_width_overrides = parse_legacy_column_width_overrides(value);
             }
             SIDEBAR_FAVORITES_KEY => {}
             TERMINAL_EMULATOR_KEY => {
@@ -402,18 +404,17 @@ fn sidebar_favorite_label_from_path(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-fn parse_toml_column_width_override(table: &toml::Table) -> Option<f32> {
-    let mut widths = Vec::new();
+fn parse_toml_column_width_overrides(table: &toml::Table) -> HashMap<usize, f32> {
+    let mut widths = HashMap::new();
     for (index, width) in table {
         let (Ok(index), Some(width)) = (index.parse::<usize>(), toml_number_as_f32(width)) else {
             continue;
         };
         if width.is_finite() {
-            widths.push((index, normalize_column_width(width)));
+            widths.insert(index, normalize_column_width(width));
         }
     }
-    widths.sort_by_key(|(index, _)| *index);
-    widths.into_iter().map(|(_, width)| width).next()
+    widths
 }
 
 fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
@@ -424,8 +425,8 @@ fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
     }
 }
 
-fn parse_legacy_column_width_override(value: &str) -> Option<f32> {
-    let mut widths = Vec::new();
+fn parse_legacy_column_width_overrides(value: &str) -> HashMap<usize, f32> {
+    let mut widths = HashMap::new();
     for entry in value
         .split(',')
         .map(str::trim)
@@ -439,11 +440,10 @@ fn parse_legacy_column_width_override(value: &str) -> Option<f32> {
             continue;
         };
         if width.is_finite() {
-            widths.push((index, normalize_column_width(width)));
+            widths.insert(index, normalize_column_width(width));
         }
     }
-    widths.sort_by_key(|(index, _)| *index);
-    widths.into_iter().map(|(_, width)| width).next()
+    widths
 }
 
 fn path_hash(path: &Path) -> String {
@@ -492,7 +492,8 @@ rendering_backend = "gpu"
         assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
         assert!(parsed.show_hidden_files);
         assert_eq!(parsed.sidebar_width, 260.5);
-        assert_eq!(parsed.legacy_column_width_override, Some(240.5));
+        assert_eq!(parsed.legacy_column_width_overrides.get(&0), Some(&240.5));
+        assert_eq!(parsed.legacy_column_width_overrides.get(&2), Some(&360.0));
         assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
         assert_eq!(
             parsed.rendering_gpu_preference,
@@ -509,7 +510,8 @@ rendering_backend = "gpu"
 
         assert!(parsed.show_hidden_files);
         assert_eq!(parsed.sidebar_width, 260.5);
-        assert_eq!(parsed.legacy_column_width_override, Some(240.5));
+        assert_eq!(parsed.legacy_column_width_overrides.get(&0), Some(&240.5));
+        assert_eq!(parsed.legacy_column_width_overrides.get(&2), Some(&360.0));
         assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
         assert_eq!(
             parsed.rendering_gpu_preference,
@@ -555,7 +557,7 @@ rendering_backend = "metal"
 
         assert_eq!(parsed.show_hidden_files, default.show_hidden_files);
         assert_eq!(parsed.sidebar_width, default.sidebar_width);
-        assert_eq!(parsed.legacy_column_width_override, None);
+        assert!(parsed.legacy_column_width_overrides.is_empty());
         assert_eq!(parsed.terminal_emulator, DEFAULT_TERMINAL_EMULATOR);
         assert_eq!(
             parsed.rendering_gpu_preference,
@@ -569,7 +571,7 @@ rendering_backend = "metal"
         let path = temp_dir.path().join("config.toml");
         let mut config = default_user_config();
         config.rendering_gpu_preference = RenderingGpuPreference::HighPerformanceGpu;
-        config.legacy_column_width_override = Some(240.0);
+        config.legacy_column_width_overrides.insert(0, 240.0);
 
         write_user_config(&path, &config).expect("write user config");
 
@@ -580,7 +582,7 @@ rendering_backend = "metal"
         assert!(!content.contains("[column_width_overrides]"));
 
         let parsed = parse_toml_user_config(&content, default_user_config());
-        assert_eq!(parsed.legacy_column_width_override, None);
+        assert!(parsed.legacy_column_width_overrides.is_empty());
         assert_eq!(
             parsed.rendering_gpu_preference,
             RenderingGpuPreference::HighPerformanceGpu

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
@@ -31,7 +32,8 @@ CREATE TABLE IF NOT EXISTS ui_column_view_preferences (
 );
 "#;
 
-const COLUMN_WIDTH_PREFERENCE_KEY: &str = "column_width";
+const LEGACY_COLUMN_WIDTH_PREFERENCE_KEY: &str = "column_width";
+const COLUMN_WIDTH_PREFERENCE_PREFIX: &str = "column_width.";
 const LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE: &str = "ui_column_width_overrides";
 
 #[derive(Debug)]
@@ -275,7 +277,7 @@ impl TaskQueueStore {
         }
         let connection = self.connection()?;
         connection.execute_batch(SCHEMA_SQL)?;
-        migrate_legacy_column_width(&connection)?;
+        migrate_legacy_column_widths(&connection)?;
         Ok(())
     }
 
@@ -386,31 +388,47 @@ impl TaskQueueStore {
     }
 
     pub fn read_column_width(&self) -> StoreResult<Option<f64>> {
-        let connection = self.connection()?;
-        let width = connection
-            .query_row(
-                "SELECT value_real
-                 FROM ui_column_view_preferences
-                 WHERE preference_key = ?1",
-                params![COLUMN_WIDTH_PREFERENCE_KEY],
-                |row| row.get::<_, f64>(0),
-            )
-            .optional()?;
-        Ok(width.filter(|value| value.is_finite()))
+        Ok(self.read_column_widths()?.remove(&0))
     }
 
     pub fn replace_column_width(&self, width: Option<f64>) -> StoreResult<()> {
+        let widths = width
+            .filter(|value| value.is_finite())
+            .map(|width| HashMap::from([(0, width)]))
+            .unwrap_or_default();
+        self.replace_column_widths(widths)
+    }
+
+    pub fn read_column_widths(&self) -> StoreResult<HashMap<usize, f64>> {
         let connection = self.connection()?;
-        if let Some(width) = width.filter(|value| value.is_finite()) {
+        let mut widths = read_indexed_column_widths(&connection)?;
+        if widths.is_empty() {
+            if let Some(width) = read_legacy_stored_column_width(&connection)? {
+                widths.insert(0, width);
+            }
+        }
+        Ok(widths)
+    }
+
+    pub fn replace_column_widths(&self, widths: HashMap<usize, f64>) -> StoreResult<()> {
+        let connection = self.connection()?;
+        let indexed_pattern = format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}%");
+        connection.execute(
+            "DELETE FROM ui_column_view_preferences
+             WHERE preference_key LIKE ?1 OR preference_key = ?2",
+            params![indexed_pattern, LEGACY_COLUMN_WIDTH_PREFERENCE_KEY],
+        )?;
+
+        let mut widths = widths
+            .into_iter()
+            .filter(|(_, width)| width.is_finite())
+            .collect::<Vec<_>>();
+        widths.sort_by_key(|(column_index, _)| *column_index);
+        for (column_index, width) in widths {
             connection.execute(
-                "INSERT OR REPLACE INTO ui_column_view_preferences (preference_key, value_real)
+                "INSERT INTO ui_column_view_preferences (preference_key, value_real)
                  VALUES (?1, ?2)",
-                params![COLUMN_WIDTH_PREFERENCE_KEY, width],
-            )?;
-        } else {
-            connection.execute(
-                "DELETE FROM ui_column_view_preferences WHERE preference_key = ?1",
-                params![COLUMN_WIDTH_PREFERENCE_KEY],
+                params![column_width_preference_key(column_index), width],
             )?;
         }
         Ok(())
@@ -484,46 +502,90 @@ fn sqlite_id_to_u64(id: i64) -> StoreResult<u64> {
     u64::try_from(id).map_err(|_| StoreError::InvalidTaskId(id))
 }
 
-fn migrate_legacy_column_width(connection: &Connection) -> StoreResult<()> {
-    let existing_width = connection
-        .query_row(
-            "SELECT value_real
-             FROM ui_column_view_preferences
-             WHERE preference_key = ?1",
-            params![COLUMN_WIDTH_PREFERENCE_KEY],
-            |row| row.get::<_, f64>(0),
-        )
-        .optional()?;
-    if existing_width.is_some() {
+fn migrate_legacy_column_widths(connection: &Connection) -> StoreResult<()> {
+    if !read_indexed_column_widths(connection)?.is_empty() {
         return Ok(());
     }
 
-    if let Some(width) = read_legacy_column_width(connection)? {
+    let legacy_widths = read_legacy_column_widths(connection)?;
+    for (column_index, width) in legacy_widths {
         connection.execute(
             "INSERT INTO ui_column_view_preferences (preference_key, value_real)
              VALUES (?1, ?2)",
-            params![COLUMN_WIDTH_PREFERENCE_KEY, width],
+            params![column_width_preference_key(column_index), width],
         )?;
     }
     Ok(())
 }
 
-fn read_legacy_column_width(connection: &Connection) -> StoreResult<Option<f64>> {
-    if !sqlite_table_exists(connection, LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE)? {
-        return Ok(None);
-    }
+fn read_indexed_column_widths(connection: &Connection) -> StoreResult<HashMap<usize, f64>> {
+    let indexed_pattern = format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}%");
+    let mut statement = connection.prepare(
+        "SELECT preference_key, value_real
+         FROM ui_column_view_preferences
+         WHERE preference_key LIKE ?1
+         ORDER BY preference_key ASC",
+    )?;
+    let rows = statement.query_map(params![indexed_pattern], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    })?;
 
+    let mut widths = HashMap::new();
+    for row in rows {
+        let (key, width) = row?;
+        let Some(index) = key
+            .strip_prefix(COLUMN_WIDTH_PREFERENCE_PREFIX)
+            .and_then(|index| index.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        if width.is_finite() {
+            widths.insert(index, width);
+        }
+    }
+    Ok(widths)
+}
+
+fn read_legacy_stored_column_width(connection: &Connection) -> StoreResult<Option<f64>> {
     let width = connection
         .query_row(
-            "SELECT width
-             FROM ui_column_width_overrides
-             ORDER BY column_index ASC
-             LIMIT 1",
-            [],
+            "SELECT value_real
+             FROM ui_column_view_preferences
+             WHERE preference_key = ?1",
+            params![LEGACY_COLUMN_WIDTH_PREFERENCE_KEY],
             |row| row.get::<_, f64>(0),
         )
         .optional()?;
     Ok(width.filter(|value| value.is_finite()))
+}
+
+fn read_legacy_column_widths(connection: &Connection) -> StoreResult<HashMap<usize, f64>> {
+    if !sqlite_table_exists(connection, LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE)? {
+        return Ok(HashMap::new());
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT column_index, width
+         FROM ui_column_width_overrides
+         ORDER BY column_index ASC",
+    )?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)))?;
+
+    let mut widths = HashMap::new();
+    for row in rows {
+        let (column_index, width) = row?;
+        let Ok(column_index) = usize::try_from(column_index) else {
+            continue;
+        };
+        if width.is_finite() {
+            widths.insert(column_index, width);
+        }
+    }
+    Ok(widths)
+}
+
+fn column_width_preference_key(column_index: usize) -> String {
+    format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}{column_index}")
 }
 
 fn sqlite_table_exists(connection: &Connection, table_name: &str) -> StoreResult<bool> {
@@ -672,40 +734,55 @@ mod tests {
     }
 
     #[test]
-    fn column_width_roundtrip_replace_and_clear() {
+    fn column_widths_roundtrip_replace_and_clear() {
         let (store, root) = test_store();
-        store.replace_column_width(Some(240.5)).unwrap();
+        store
+            .replace_column_widths(HashMap::from([(0, 240.5), (2, 360.0)]))
+            .unwrap();
 
-        assert_eq!(store.read_column_width().unwrap(), Some(240.5));
+        assert_eq!(
+            store.read_column_widths().unwrap(),
+            HashMap::from([(0, 240.5), (2, 360.0)])
+        );
 
-        store.replace_column_width(Some(128.0)).unwrap();
+        store
+            .replace_column_widths(HashMap::from([(1, 128.0)]))
+            .unwrap();
 
-        assert_eq!(store.read_column_width().unwrap(), Some(128.0));
+        assert_eq!(
+            store.read_column_widths().unwrap(),
+            HashMap::from([(1, 128.0)])
+        );
 
-        store.replace_column_width(None).unwrap();
+        store.replace_column_widths(HashMap::new()).unwrap();
 
-        assert_eq!(store.read_column_width().unwrap(), None);
+        assert!(store.read_column_widths().unwrap().is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn clear_tasks_keeps_column_width() {
+    fn clear_tasks_keeps_column_widths() {
         let (store, root) = test_store();
         let operation = StoredOperation::CreateDirectory {
             parent: StoredPath::from_path(Path::new("/tmp")),
         };
         store.insert_task(&operation).unwrap();
-        store.replace_column_width(Some(240.0)).unwrap();
+        store
+            .replace_column_widths(HashMap::from([(0, 240.0), (2, 360.0)]))
+            .unwrap();
 
         store.clear_tasks().unwrap();
 
         assert!(store.read_tasks().unwrap().is_empty());
-        assert_eq!(store.read_column_width().unwrap(), Some(240.0));
+        assert_eq!(
+            store.read_column_widths().unwrap(),
+            HashMap::from([(0, 240.0), (2, 360.0)])
+        );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn migrates_leftmost_legacy_column_width_on_initialize() {
+    fn migrates_legacy_column_widths_on_initialize() {
         let root = test_root();
         fs::create_dir_all(&root).unwrap();
         let db_path = root.join("state.sqlite");
@@ -724,18 +801,56 @@ mod tests {
 
         let store = TaskQueueStore::new(db_path).unwrap();
 
-        assert_eq!(store.read_column_width().unwrap(), Some(240.0));
+        assert_eq!(
+            store.read_column_widths().unwrap(),
+            HashMap::from([(0, 240.0), (2, 360.0)])
+        );
         let connection = Connection::open(store.db_path()).unwrap();
-        let stored_width: f64 = connection
+        let stored_width_0: f64 = connection
             .query_row(
                 "SELECT value_real
                  FROM ui_column_view_preferences
                  WHERE preference_key = ?1",
-                params![COLUMN_WIDTH_PREFERENCE_KEY],
+                params![column_width_preference_key(0)],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_width, 240.0);
+        assert_eq!(stored_width_0, 240.0);
+        let stored_width_2: f64 = connection
+            .query_row(
+                "SELECT value_real
+                 FROM ui_column_view_preferences
+                 WHERE preference_key = ?1",
+                params![column_width_preference_key(2)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_width_2, 360.0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_legacy_single_column_width_as_first_column() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let db_path = root.join("state.sqlite");
+        let connection = Connection::open(&db_path).unwrap();
+        connection.execute_batch(SCHEMA_SQL).unwrap();
+        connection
+            .execute(
+                "INSERT INTO ui_column_view_preferences (preference_key, value_real)
+                 VALUES (?1, ?2)",
+                params![LEGACY_COLUMN_WIDTH_PREFERENCE_KEY, 240.0],
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = TaskQueueStore::new(db_path).unwrap();
+
+        assert_eq!(
+            store.read_column_widths().unwrap(),
+            HashMap::from([(0, 240.0)])
+        );
         let _ = fs::remove_dir_all(root);
     }
 

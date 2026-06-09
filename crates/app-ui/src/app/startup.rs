@@ -54,24 +54,22 @@ impl FileBrowser {
     ) -> Task<Message> {
         match operation_store {
             Ok(loaded_store) => {
-                let persisted_column_width_override = loaded_store.column_width_override;
+                let persisted_column_width_overrides = loaded_store.column_width_overrides;
                 self.operation_queue
                     .set_store(loaded_store.task_queue_store);
-                if let Some(width) = persisted_column_width_override {
-                    self.apply_column_width_override(Some(width));
-                    if self
-                        .user_config
-                        .legacy_column_width_override
-                        .take()
-                        .is_some()
-                    {
+                if !persisted_column_width_overrides.is_empty() {
+                    self.apply_column_width_overrides(persisted_column_width_overrides);
+                    if !self.user_config.legacy_column_width_overrides.is_empty() {
+                        self.user_config.legacy_column_width_overrides.clear();
                         return self.persist_user_config_command();
                     }
-                } else if self.user_config.legacy_column_width_override.is_some() {
-                    self.apply_column_width_override(self.user_config.legacy_column_width_override);
-                    self.user_config.legacy_column_width_override = None;
+                } else if !self.user_config.legacy_column_width_overrides.is_empty() {
+                    self.apply_column_width_overrides(
+                        self.user_config.legacy_column_width_overrides.clone(),
+                    );
+                    self.user_config.legacy_column_width_overrides.clear();
                     return Task::batch([
-                        self.persist_column_width_override_command(),
+                        self.persist_column_width_overrides_command(),
                         self.persist_user_config_command(),
                     ]);
                 }
@@ -103,7 +101,7 @@ impl FileBrowser {
         self.search_index.base_dir = user_config.search_index_dir.clone();
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
-        self.apply_column_width_override(user_config.legacy_column_width_override);
+        self.apply_column_width_overrides(user_config.legacy_column_width_overrides.clone());
         self.sidebar_width = self.sidebar_width_for_window(user_config.sidebar_width);
         self.terminal_emulator = user_config.terminal_emulator;
         self.rendering_gpu_preference = user_config.rendering_gpu_preference;
