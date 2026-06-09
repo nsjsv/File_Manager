@@ -16,17 +16,17 @@ use crate::appearance::{
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
-    trash_location_path, ContextMenuState, DestructiveActionConfirmation, FileContextMenuState,
-    Message, SidebarBookmarkContextMenuState, SidebarBookmarkDropSlot, SidebarLocation,
-    SidebarLocationKind, TransferConflictChoice, TransferConflictItem, TransferConflictMetadata,
-    TransferConflictState, TRASH_LOCATION_LABEL,
+    trash_location_path, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
+    FileContextMenuState, Message, SidebarBookmarkContextMenuState, SidebarBookmarkDropSlot,
+    SidebarLocation, SidebarLocationKind, TransferConflictChoice, TransferConflictItem,
+    TransferConflictMetadata, TransferConflictState, TRASH_LOCATION_LABEL,
 };
 use crate::sidebar::SIDEBAR_WIDTH;
 use crate::typography::readable_text;
 
 use super::rendering_settings::rendering_gpu_preference_button;
 use super::toggle_switch::switch_control;
-use super::{themed_icon, IconTone, MENU_ICON_SIZE};
+use super::{tab_motion, themed_icon, IconTone, MENU_ICON_SIZE};
 
 const COLUMN_SETTINGS_FLOAT_WIDTH: f32 = 260.0;
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
@@ -399,14 +399,27 @@ fn sidebar_location_item<'a>(
     };
 
     let is_favorite = location.kind.is_user_favorite();
-    let item = mouse_area(item_container)
+    let item_content: Element<'a, Message> = if is_favorite {
+        tab_motion::translated(
+            item_container,
+            0.0,
+            browser.sidebar_bookmark_motion_offset(location.path.as_path()),
+        )
+    } else {
+        item_container.into()
+    };
+
+    let item = mouse_area(item_content)
         .on_enter(if is_favorite {
             Message::SidebarBookmarkEntered(location.path.clone())
         } else {
             Message::SidebarHovered(location.path.clone())
         })
         .on_exit(Message::SidebarHoverCleared(location.path.clone()))
-        .on_middle_press(Message::OpenDirectoryInNewTab(location.path.clone()))
+        .on_middle_press(Message::OpenDirectoryInNewTab(
+            browser.active_pane_id(),
+            location.path.clone(),
+        ))
         .on_press(if is_favorite {
             Message::SidebarBookmarkPressed(location.path.clone())
         } else {
@@ -458,7 +471,7 @@ fn sidebar_trash_item(browser: &FileBrowser) -> Element<'_, Message> {
         .on_enter(Message::SidebarHovered(trash_hover_path.clone()))
         .on_exit(Message::SidebarHoverCleared(trash_hover_path))
         .on_press(Message::TrashOpened)
-        .on_middle_press(Message::OpenTrashInNewTab)
+        .on_middle_press(Message::OpenTrashInNewTab(browser.active_pane_id()))
         .on_release(Message::DragSelectionFinished)
         .interaction(iced::mouse::Interaction::Pointer)
         .into()
@@ -609,9 +622,12 @@ fn sidebar_label(icon: IconSymbol, label: &str, tone: IconTone) -> Row<'static, 
 pub(super) fn context_menu_panel(
     menu: &ContextMenuState,
     is_trash_view: bool,
+    active_pane_id: BrowserPaneId,
 ) -> Element<'_, Message> {
     match menu {
-        ContextMenuState::FileArea(menu) => file_context_menu_panel(menu, is_trash_view),
+        ContextMenuState::FileArea(menu) => {
+            file_context_menu_panel(menu, is_trash_view, active_pane_id)
+        }
         ContextMenuState::SidebarBookmark(menu) => sidebar_bookmark_context_menu_panel(menu),
     }
 }
@@ -619,6 +635,7 @@ pub(super) fn context_menu_panel(
 fn file_context_menu_panel(
     menu: &FileContextMenuState,
     is_trash_view: bool,
+    active_pane_id: BrowserPaneId,
 ) -> Element<'_, Message> {
     if is_trash_view {
         return trash_context_menu_panel(menu);
@@ -660,7 +677,7 @@ fn file_context_menu_panel(
             menu_content = menu_content.push(menu_button(
                 IconSymbol::Folder,
                 "Open in New Tab",
-                Message::OpenDirectoryInNewTab(path.clone()),
+                Message::OpenDirectoryInNewTab(active_pane_id, path.clone()),
             ));
         }
         menu_content = menu_content

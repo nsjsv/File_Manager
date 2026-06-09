@@ -427,7 +427,7 @@ impl FileBrowser {
             },
         );
         Task::batch([
-            load_expanded_directory_command(path, self.options.clone()),
+            load_expanded_directory_command(self.active_pane_id(), path, self.options.clone()),
             self.focus_latest_column(),
         ])
     }

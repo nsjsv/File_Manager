@@ -20,7 +20,29 @@ use crate::view::path_input_id;
 const PATH_SUGGESTION_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(120);
 
 impl FileBrowser {
-    pub(super) fn accept_directory_scan(&mut self, scan: DirectoryScan) -> Task<Message> {
+    pub(super) fn accept_directory_scan(
+        &mut self,
+        pane_id: crate::model::BrowserPaneId,
+        scan: DirectoryScan,
+    ) -> Task<Message> {
+        if pane_id != self.active_pane_id() {
+            let Some(pane) = self.pane_by_id_mut(pane_id) else {
+                return Task::none();
+            };
+            if scan.path != pane.current_dir {
+                return Task::none();
+            }
+
+            pane.current_dir = scan.path;
+            pane.path_input = path_text(&pane.current_dir);
+            pane.path_suggestions.clear();
+            pane.path_suggestion_selection = None;
+            pane.entries = scan.entries;
+            pane.is_loading = false;
+            pane.sync_active_tab_state();
+            return delayed_thumbnail_refresh_command(pane_id, pane.current_dir.clone());
+        }
+
         if scan.path != self.current_dir {
             return Task::none();
         }
@@ -38,11 +60,39 @@ impl FileBrowser {
         self.sync_active_tab_state();
         Task::batch([
             command,
-            delayed_thumbnail_refresh_command(self.current_dir.clone()),
+            delayed_thumbnail_refresh_command(pane_id, self.current_dir.clone()),
         ])
     }
 
-    pub(super) fn accept_trash_scan(&mut self, scan: TrashScan) -> Task<Message> {
+    pub(super) fn accept_trash_scan(
+        &mut self,
+        pane_id: crate::model::BrowserPaneId,
+        scan: TrashScan,
+    ) -> Task<Message> {
+        if pane_id != self.active_pane_id() {
+            let Some(pane) = self.pane_by_id_mut(pane_id) else {
+                return Task::none();
+            };
+            if !pane.is_trash_view {
+                return Task::none();
+            }
+
+            pane.current_dir = trash_location_path();
+            pane.path_input = TRASH_LOCATION_LABEL.to_owned();
+            pane.path_suggestions.clear();
+            pane.path_suggestion_selection = None;
+            pane.trash_entries = scan.entries;
+            pane.entries = pane
+                .trash_entries
+                .iter()
+                .map(|trash_entry| trash_entry.entry.clone())
+                .collect();
+            pane.expanded_directories.clear();
+            pane.is_loading = false;
+            pane.sync_active_tab_state();
+            return delayed_thumbnail_refresh_command(pane_id, pane.current_dir.clone());
+        }
+
         if !self.is_trash_view {
             return Task::none();
         }
@@ -61,10 +111,11 @@ impl FileBrowser {
         self.is_loading = false;
         self.error = None;
         self.sync_active_tab_state();
-        delayed_thumbnail_refresh_command(self.current_dir.clone())
+        delayed_thumbnail_refresh_command(pane_id, self.current_dir.clone())
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
+        let pane_id = self.active_pane_id();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
         {
             self.back_stack.push(self.current_dir.clone());
@@ -83,10 +134,11 @@ impl FileBrowser {
         self.is_loading = true;
         self.error = None;
         self.sync_active_tab_state();
-        load_directory_command(path, self.options.clone())
+        load_directory_command(pane_id, path, self.options.clone())
     }
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
+        let pane_id = self.active_pane_id();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view {
             self.back_stack.push(self.current_dir.clone());
             self.forward_stack.clear();
@@ -104,7 +156,7 @@ impl FileBrowser {
         self.is_loading = true;
         self.error = None;
         self.sync_active_tab_state();
-        load_trash_command(self.options.clone())
+        load_trash_command(pane_id, self.options.clone())
     }
 
     pub(super) fn reload_current(&mut self) -> Task<Message> {
@@ -116,7 +168,7 @@ impl FileBrowser {
             self.is_loading = true;
             self.error = None;
             self.expanded_directories.clear();
-            return load_trash_command(self.options.clone());
+            return load_trash_command(self.active_pane_id(), self.options.clone());
         }
 
         self.path_input = path_text(&self.current_dir);
@@ -128,6 +180,7 @@ impl FileBrowser {
 
         let mut commands = self.refresh_expanded_directory_commands();
         commands.push(load_directory_command(
+            self.active_pane_id(),
             self.current_dir.clone(),
             self.options.clone(),
         ));
@@ -150,7 +203,7 @@ impl FileBrowser {
         expanded.status = ExpandedDirectoryStatus::Loading;
         expanded.is_expanded = true;
         expanded.animation_progress = 1.0;
-        load_expanded_directory_command(path, self.options.clone())
+        load_expanded_directory_command(self.active_pane_id(), path, self.options.clone())
     }
 
     pub(super) fn navigate_up(&mut self) -> Task<Message> {
@@ -198,24 +251,63 @@ impl FileBrowser {
         if request.input.trim().is_empty() {
             return Task::none();
         }
-        path_suggestion_input_stabilization_command(request)
+        path_suggestion_input_stabilization_command(self.active_pane_id(), request)
     }
 
     pub(super) fn load_stable_path_suggestions(
         &mut self,
+        pane_id: crate::model::BrowserPaneId,
         request: PathSuggestionRequest,
     ) -> Task<Message> {
+        if pane_id != self.active_pane_id() {
+            let Some(pane) = self.pane_by_id(pane_id) else {
+                return Task::none();
+            };
+            if !path_suggestion_request_matches_state(
+                &request,
+                &pane.path_input,
+                &pane.current_dir,
+                pane.path_suggestion_generation,
+            ) {
+                return Task::none();
+            }
+            return path_suggestions_command(pane_id, request);
+        }
+
         if !self.active_path_suggestion_request_matches(&request) {
             return Task::none();
         }
-        path_suggestions_command(request)
+        path_suggestions_command(pane_id, request)
     }
 
     pub(super) fn accept_path_suggestions(
         &mut self,
+        pane_id: crate::model::BrowserPaneId,
         request: PathSuggestionRequest,
         suggestions: Vec<PathBuf>,
     ) -> Task<Message> {
+        if pane_id != self.active_pane_id() {
+            let Some(pane) = self.pane_by_id_mut(pane_id) else {
+                return Task::none();
+            };
+            if path_suggestion_request_matches_state(
+                &request,
+                &pane.path_input,
+                &pane.current_dir,
+                pane.path_suggestion_generation,
+            ) {
+                pane.path_suggestions = suggestions;
+                if pane.path_suggestions.is_empty() {
+                    pane.path_suggestion_selection = None;
+                } else {
+                    pane.path_suggestion_selection = pane
+                        .path_suggestion_selection
+                        .filter(|index| *index < pane.path_suggestions.len());
+                }
+            }
+            return Task::none();
+        }
+
         if self.active_path_suggestion_request_matches(&request) {
             self.path_suggestions = suggestions;
             self.normalize_path_suggestion_selection();
@@ -264,7 +356,7 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         Task::batch([
             self.navigate_to(path, NavigationMode::RecordHistory),
-            iced::widget::operation::move_cursor_to_end(path_input_id()),
+            iced::widget::operation::move_cursor_to_end(path_input_id(self.active_pane_id())),
         ])
     }
 
@@ -336,16 +428,53 @@ impl FileBrowser {
         self.path_input = completed_path_text(&path);
         let request = self.next_path_suggestion_request();
         Task::batch([
-            path_suggestions_command(request),
-            iced::widget::operation::move_cursor_to_end(path_input_id()),
+            path_suggestions_command(self.active_pane_id(), request),
+            iced::widget::operation::move_cursor_to_end(path_input_id(self.active_pane_id())),
         ])
     }
 
     pub(super) fn accept_expanded_directory(
         &mut self,
+        pane_id: crate::model::BrowserPaneId,
         path: PathBuf,
         scan: Result<DirectoryScan, String>,
     ) -> Task<Message> {
+        if pane_id != self.active_pane_id() {
+            let pending_error = {
+                let Some(pane) = self.pane_by_id_mut(pane_id) else {
+                    return Task::none();
+                };
+                let expanded =
+                    pane.expanded_directories
+                        .entry(path)
+                        .or_insert_with(|| ExpandedDirectory {
+                            entries: Vec::new(),
+                            status: ExpandedDirectoryStatus::Loading,
+                            is_expanded: true,
+                            animation_progress: 0.0,
+                        });
+
+                let mut pending_error = None;
+                match scan {
+                    Ok(scan) => {
+                        expanded.entries = scan.entries;
+                        expanded.status = ExpandedDirectoryStatus::Loaded;
+                    }
+                    Err(error) => {
+                        expanded.entries.clear();
+                        expanded.status = ExpandedDirectoryStatus::Error;
+                        pending_error = Some(error);
+                    }
+                }
+                pane.sync_active_tab_state();
+                pending_error
+            };
+            if let Some(error) = pending_error {
+                self.error = Some(error);
+            }
+            return Task::none();
+        }
+
         let expanded = self
             .expanded_directories
             .entry(path)
@@ -473,18 +602,23 @@ impl FileBrowser {
 
         paths
             .into_iter()
-            .map(|path| load_expanded_directory_command(path, self.options.clone()))
+            .map(|path| {
+                load_expanded_directory_command(self.active_pane_id(), path, self.options.clone())
+            })
             .collect()
     }
 }
 
-fn path_suggestion_input_stabilization_command(request: PathSuggestionRequest) -> Task<Message> {
+fn path_suggestion_input_stabilization_command(
+    pane_id: crate::model::BrowserPaneId,
+    request: PathSuggestionRequest,
+) -> Task<Message> {
     Task::perform(
         async move {
             tokio::time::sleep(PATH_SUGGESTION_INPUT_STABILIZATION_DELAY).await;
             request
         },
-        Message::PathInputStabilized,
+        move |request| Message::PathInputStabilized(pane_id, request),
     )
 }
 

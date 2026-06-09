@@ -77,6 +77,23 @@ pub(crate) fn selection_marquee_style(theme: &Theme) -> container::Appearance {
     }
 }
 
+pub(crate) fn tab_split_overlay_style(theme: &Theme) -> container::Appearance {
+    let accent = if is_dark_theme(theme) {
+        Color::from_rgb8(125, 179, 255)
+    } else {
+        Color::from_rgb8(74, 137, 220)
+    };
+    container::Appearance {
+        background: Some(Background::Color(Color { a: 0.18, ..accent })),
+        border: Border {
+            color: Color { a: 0.74, ..accent },
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..container::Appearance::default()
+    }
+}
+
 pub(crate) fn hovered_row_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
@@ -316,6 +333,61 @@ pub(crate) fn selected_sidebar_item_style(theme: &Theme) -> container::Appearanc
         border: Border {
             radius: 8.0.into(),
             ..Border::default()
+        },
+        ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn tab_strip_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgba8(27, 35, 48, 0.78)
+        } else {
+            Color::from_rgba8(239, 243, 249, 0.84)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            ..Border::default()
+        },
+        ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn tab_item_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgba8(40, 49, 63, 0.72)
+        } else {
+            Color::from_rgba8(250, 252, 255, 0.74)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            radius: 12.0.into(),
+        },
+        ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn selected_tab_item_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgb8(54, 78, 116)
+        } else {
+            Color::from_rgb8(255, 255, 255)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: if is_dark_theme(theme) {
+                Color::from_rgb8(90, 128, 184)
+            } else {
+                Color::from_rgb8(201, 213, 232)
+            },
+            width: 1.0,
+            radius: 12.0.into(),
         },
         ..container::Appearance::default()
     }

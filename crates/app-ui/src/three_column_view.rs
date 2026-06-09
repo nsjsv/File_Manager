@@ -8,6 +8,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Padding, Theme};
 
+use crate::app::panes::BrowserPaneView;
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
@@ -17,7 +18,7 @@ use crate::appearance::{
 };
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
-use crate::model::{ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
+use crate::model::{BrowserPaneId, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
 use crate::thumbnail_cache::{LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE};
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id};
@@ -33,17 +34,21 @@ const COLUMN_ENTRY_TEXT_SIZE: u32 = 16;
 const COLUMN_ENTRY_SPACING: u32 = 8;
 const COLUMN_ENTRY_PADDING: [u16; 2] = [6, 8];
 
-pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message> {
-    let rendered_directories = column_directories(browser);
+pub(crate) fn column_browser_view<'a>(
+    browser: &'a FileBrowser,
+    pane: BrowserPaneView<'a>,
+) -> Element<'a, Message> {
+    let rendered_directories = column_directories_for_pane(pane);
     let visible_column_count = rendered_directories.len().max(DEFAULT_VISIBLE_COLUMN_COUNT);
     let mut columns = Row::new().spacing(0).height(Length::Fill);
 
     for index in 0..visible_column_count {
         if let Some(directory) = rendered_directories.get(index) {
             let active_child =
-                active_child_for_column(browser, directory, rendered_directories.get(index + 1));
+                active_child_for_column(pane, directory, rendered_directories.get(index + 1));
             columns = columns.push(directory_column(
                 browser,
+                pane,
                 index,
                 directory,
                 active_child.as_deref(),
@@ -53,12 +58,12 @@ pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message>
         }
 
         if index + 1 < visible_column_count {
-            columns = columns.push(column_resize_divider(index));
+            columns = columns.push(column_resize_divider(pane.id, index));
         }
     }
 
     let column_content: Element<'_, Message> = scrollable(columns)
-        .id(column_browser_scroll_id())
+        .id(column_browser_scroll_id(pane.id))
         .direction(auto_hide_horizontal_scrollbar_direction(
             browser.scrollbar_visibility,
             8.0,
@@ -74,16 +79,20 @@ pub(crate) fn column_browser_view(browser: &FileBrowser) -> Element<'_, Message>
             .height(Length::Fill)
             .style(column_browser_style),
     )
-    .on_press(Message::BlankAreaPressed)
+    .on_press(Message::BlankAreaPressed(pane.id))
     .on_release(Message::DragSelectionFinished)
-    .on_right_press(Message::BlankAreaRightClicked(browser.current_dir.clone()))
-    .on_enter(Message::ColumnBrowserCursorEntered)
-    .on_exit(Message::ColumnBrowserCursorExited)
+    .on_right_press(Message::BlankAreaRightClicked(
+        pane.id,
+        pane.current_dir.clone(),
+    ))
+    .on_enter(Message::ColumnBrowserCursorEntered(pane.id))
+    .on_exit(Message::ColumnBrowserCursorExited(pane.id))
     .into()
 }
 
 fn directory_column<'a>(
     browser: &'a FileBrowser,
+    pane: BrowserPaneView<'a>,
     column_index: usize,
     directory: &Path,
     active_child: Option<&Path>,
@@ -93,18 +102,18 @@ fn directory_column<'a>(
         .padding(COLUMN_PADDING)
         .width(Length::Fill);
 
-    content = content.push(column_title(browser, directory));
-    match column_content(browser, directory) {
+    content = content.push(column_title(pane, directory));
+    match column_content(pane, directory) {
         ColumnContent::Entries(entries) => {
             for entry in entries {
-                content = content.push(column_entry_row(browser, entry, active_child));
+                content = content.push(column_entry_row(browser, pane, entry, active_child));
             }
         }
         ColumnContent::Loading => {
             content = content.push(column_message("Loading..."));
         }
         ColumnContent::Empty => {
-            let message = if browser.is_trash_view {
+            let message = if pane.is_trash_view {
                 "Trash is empty"
             } else {
                 "No items"
@@ -115,7 +124,7 @@ fn directory_column<'a>(
 
     let scroll_directory = directory.to_path_buf();
     let column_scroll = scrollable(content)
-        .id(column_scroll_id(directory))
+        .id(column_scroll_id(pane.id, directory))
         .direction(auto_hide_vertical_scrollbar_direction(
             browser.scrollbar_visibility,
             8.0,
@@ -125,7 +134,7 @@ fn directory_column<'a>(
         .on_scroll(move |viewport| {
             let offset = viewport.absolute_offset();
             let bounds = viewport.bounds();
-            Message::ColumnScrolled(scroll_directory.clone(), offset.y, bounds.height)
+            Message::ColumnScrolled(pane.id, scroll_directory.clone(), offset.y, bounds.height)
         });
 
     let column = container(column_scroll)
@@ -134,11 +143,20 @@ fn directory_column<'a>(
         .style(column_panel_style);
 
     mouse_area(column)
-        .on_enter(Message::DropTargetHovered(directory.to_path_buf()))
-        .on_exit(Message::DropTargetHoverCleared(directory.to_path_buf()))
-        .on_press(Message::ColumnBlankClicked(directory.to_path_buf()))
+        .on_enter(Message::DropTargetHovered(pane.id, directory.to_path_buf()))
+        .on_exit(Message::DropTargetHoverCleared(
+            pane.id,
+            directory.to_path_buf(),
+        ))
+        .on_press(Message::ColumnBlankClicked(
+            pane.id,
+            directory.to_path_buf(),
+        ))
         .on_release(Message::DragSelectionFinished)
-        .on_right_press(Message::BlankAreaRightClicked(directory.to_path_buf()))
+        .on_right_press(Message::BlankAreaRightClicked(
+            pane.id,
+            directory.to_path_buf(),
+        ))
         .into()
 }
 
@@ -150,21 +168,21 @@ fn empty_column(width: f32) -> Element<'static, Message> {
         .into()
 }
 
-fn column_resize_divider(column_index: usize) -> Element<'static, Message> {
+fn column_resize_divider(pane_id: BrowserPaneId, column_index: usize) -> Element<'static, Message> {
     let divider = container(Space::new().width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH)))
         .width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH))
         .height(Length::Fill)
         .style(column_resize_divider_style);
 
     mouse_area(divider)
-        .on_press(Message::ColumnResizeStarted(column_index))
+        .on_press(Message::ColumnResizeStarted(pane_id, column_index))
         .on_release(Message::DragSelectionFinished)
         .interaction(iced::mouse::Interaction::ResizingHorizontally)
         .into()
 }
 
-fn column_title(browser: &FileBrowser, directory: &Path) -> Element<'static, Message> {
-    let title = if browser.is_trash_view && directory == browser.current_dir {
+fn column_title(pane: BrowserPaneView<'_>, directory: &Path) -> Element<'static, Message> {
+    let title = if pane.is_trash_view && directory == pane.current_dir.as_path() {
         TRASH_LOCATION_LABEL.to_owned()
     } else {
         directory
@@ -191,13 +209,14 @@ fn column_message(message: &'static str) -> Element<'static, Message> {
 
 fn column_entry_row<'a>(
     browser: &'a FileBrowser,
+    pane: BrowserPaneView<'a>,
     entry: &DirectoryEntry,
     active_child: Option<&Path>,
 ) -> Element<'a, Message> {
     let is_selected =
-        browser.is_path_selected(&entry.path) || active_child == Some(entry.path.as_path());
-    let is_hovered = browser.hovered_entry.as_ref() == Some(&entry.path);
-    let is_dragged = is_drag_source(browser, &entry.path);
+        pane.is_path_selected(&entry.path) || active_child == Some(entry.path.as_path());
+    let is_hovered = pane.hovered_entry == Some(&entry.path);
+    let is_dragged = is_drag_source(pane, &entry.path);
     let icon_tone = if is_dragged {
         IconTone::Muted
     } else if is_selected {
@@ -206,8 +225,8 @@ fn column_entry_row<'a>(
         IconTone::Normal
     };
 
-    let name: Element<'a, Message> = if browser.renaming.as_ref() == Some(&entry.path) {
-        text_input("File name", &browser.rename_input)
+    let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
+        text_input("File name", pane.rename_input)
             .id(rename_input_id())
             .on_input(Message::RenameInputChanged)
             .on_submit(Message::RenameSelected)
@@ -221,7 +240,7 @@ fn column_entry_row<'a>(
     };
 
     let trailing: Element<'static, Message> =
-        if entry.kind == FileKind::Directory && !browser.is_trash_view {
+        if entry.kind == FileKind::Directory && !pane.is_trash_view {
             themed_icon(IconSymbol::ChevronRight, icon_tone, CHEVRON_ICON_SIZE).into()
         } else {
             Space::new().width(Length::Fixed(CHEVRON_ICON_SIZE)).into()
@@ -248,15 +267,15 @@ fn column_entry_row<'a>(
     };
 
     let row_area = mouse_area(row_container)
-        .on_enter(Message::EntryHovered(entry.path.clone()))
-        .on_exit(Message::EntryHoverCleared(entry.path.clone()))
-        .on_press(Message::ColumnEntryClicked(entry.path.clone()))
-        .on_release(Message::EntryReleased)
-        .on_right_press(Message::EntryRightClicked(entry.path.clone()))
+        .on_enter(Message::EntryHovered(pane.id, entry.path.clone()))
+        .on_exit(Message::EntryHoverCleared(pane.id, entry.path.clone()))
+        .on_press(Message::ColumnEntryClicked(pane.id, entry.path.clone()))
+        .on_release(Message::EntryReleased(pane.id))
+        .on_right_press(Message::EntryRightClicked(pane.id, entry.path.clone()))
         .interaction(iced::mouse::Interaction::Pointer);
 
-    let row_area = if entry.kind == FileKind::Directory && !browser.is_trash_view {
-        row_area.on_middle_press(Message::OpenDirectoryInNewTab(entry.path.clone()))
+    let row_area = if entry.kind == FileKind::Directory && !pane.is_trash_view {
+        row_area.on_middle_press(Message::OpenDirectoryInNewTab(pane.id, entry.path.clone()))
     } else {
         row_area
     };
@@ -264,24 +283,24 @@ fn column_entry_row<'a>(
     row_area.into()
 }
 
-fn is_drag_source(browser: &FileBrowser, path: &Path) -> bool {
-    browser.file_drag.as_ref().is_some_and(|drag| {
+fn is_drag_source(pane: BrowserPaneView<'_>, path: &Path) -> bool {
+    pane.file_drag.is_some_and(|drag| {
         drag.is_dragging() && drag.sources.iter().any(|source| source.as_path() == path)
     })
 }
 
-fn column_content<'a>(browser: &'a FileBrowser, directory: &Path) -> ColumnContent<'a> {
-    if directory == browser.current_dir {
-        if browser.is_loading && browser.entries.is_empty() {
+fn column_content<'a>(pane: BrowserPaneView<'a>, directory: &Path) -> ColumnContent<'a> {
+    if directory == pane.current_dir.as_path() {
+        if pane.is_loading && pane.entries.is_empty() {
             return ColumnContent::Loading;
         }
-        if browser.entries.is_empty() {
+        if pane.entries.is_empty() {
             return ColumnContent::Empty;
         }
-        return ColumnContent::Entries(&browser.entries);
+        return ColumnContent::Entries(pane.entries);
     }
 
-    match browser.expanded_directories.get(directory) {
+    match pane.expanded_directories.get(directory) {
         Some(expanded) => match &expanded.status {
             ExpandedDirectoryStatus::Loading if expanded.entries.is_empty() => {
                 ColumnContent::Loading
@@ -296,31 +315,38 @@ fn column_content<'a>(browser: &'a FileBrowser, directory: &Path) -> ColumnConte
 }
 
 pub(crate) fn column_directories(browser: &FileBrowser) -> Vec<PathBuf> {
-    if browser.is_trash_view {
-        return vec![browser.current_dir.clone()];
+    let Some(pane) = browser.pane_view(browser.active_pane_id()) else {
+        return Vec::new();
+    };
+    column_directories_for_pane(pane)
+}
+
+fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<PathBuf> {
+    if pane.is_trash_view {
+        return vec![pane.current_dir.clone()];
     }
 
-    if let Some(drag) = browser.file_drag.as_ref() {
+    if let Some(drag) = pane.file_drag {
         if !drag.column_directories_snapshot.is_empty() {
             return drag.column_directories_snapshot.clone();
         }
     }
 
-    let mut directories = vec![browser.current_dir.clone()];
-    let Some(selected) = browser.selected.as_ref() else {
+    let mut directories = vec![pane.current_dir.clone()];
+    let Some(selected) = pane.selected else {
         return directories;
     };
 
-    let selected_directory = match selected_entry(browser).map(|entry| entry.kind) {
-        Some(FileKind::Directory) => selected.clone(),
+    let selected_directory = match selected_entry(pane).map(|entry| entry.kind) {
+        Some(FileKind::Directory) => selected.to_path_buf(),
         _ => selected
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| browser.current_dir.clone()),
+            .unwrap_or_else(|| pane.current_dir.clone()),
     };
 
-    if selected_directory == browser.current_dir
-        || !selected_directory.starts_with(&browser.current_dir)
+    if selected_directory == *pane.current_dir
+        || !selected_directory.starts_with(pane.current_dir.as_path())
     {
         return directories;
     }
@@ -328,10 +354,10 @@ pub(crate) fn column_directories(browser: &FileBrowser) -> Vec<PathBuf> {
     let mut ancestors = Vec::new();
     let mut cursor = Some(selected_directory.as_path());
     while let Some(path) = cursor {
-        if path == browser.current_dir {
+        if path == pane.current_dir.as_path() {
             break;
         }
-        if !path.starts_with(&browser.current_dir) {
+        if !path.starts_with(pane.current_dir.as_path()) {
             break;
         }
         ancestors.push(path.to_path_buf());
@@ -352,7 +378,7 @@ fn column_title_padding() -> Padding {
 }
 
 fn active_child_for_column(
-    browser: &FileBrowser,
+    pane: BrowserPaneView<'_>,
     directory: &Path,
     next_directory: Option<&PathBuf>,
 ) -> Option<PathBuf> {
@@ -360,16 +386,16 @@ fn active_child_for_column(
         return Some(next_directory.clone());
     }
 
-    let selected = browser.selected.as_ref()?;
+    let selected = pane.selected?;
     if selected.parent() == Some(directory) {
-        return Some(selected.clone());
+        return Some(selected.to_path_buf());
     }
     None
 }
 
-fn selected_entry(browser: &FileBrowser) -> Option<&DirectoryEntry> {
-    let selected = browser.selected.as_deref()?;
-    find_entry(&browser.entries, &browser.expanded_directories, selected)
+fn selected_entry<'a>(pane: BrowserPaneView<'a>) -> Option<&'a DirectoryEntry> {
+    let selected = pane.selected?.as_path();
+    find_entry(pane.entries, pane.expanded_directories, selected)
 }
 
 fn find_entry<'a>(
@@ -438,8 +464,12 @@ fn entry_icon(entry: &DirectoryEntry, tone: IconTone) -> Svg<'static, Theme> {
     themed_icon(symbol, tone, ROW_ICON_SIZE)
 }
 
-fn column_scroll_id(directory: &Path) -> iced::widget::Id {
-    iced::widget::Id::from(format!("column-scroll-{}", path_hash(directory)))
+fn column_scroll_id(pane_id: BrowserPaneId, directory: &Path) -> iced::widget::Id {
+    iced::widget::Id::from(format!(
+        "column-scroll-{}-{}",
+        pane_id.key(),
+        path_hash(directory)
+    ))
 }
 
 fn path_hash(path: &Path) -> String {

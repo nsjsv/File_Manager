@@ -6,7 +6,9 @@ use super::paths::path_text;
 use super::FileBrowser;
 use crate::commands::{load_directory_command, operation_store_command, sidebar_locations_command};
 use crate::config::UserConfig;
-use crate::model::{LoadedOperationStore, Message, SidebarLocation, StartupEnvironment};
+use crate::model::{
+    BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
+};
 use crate::sidebar::home_sidebar_location;
 use crate::startup_trace;
 
@@ -32,7 +34,7 @@ impl FileBrowser {
         self.sync_active_tab_state();
 
         Task::batch([
-            load_directory_command(home.clone(), self.options.clone()),
+            load_directory_command(BrowserPaneId::PRIMARY, home.clone(), self.options.clone()),
             sidebar_locations_command(home, configured_favorites),
             operation_store_command(state_database_path),
         ])
@@ -83,7 +85,14 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn accept_thumbnail_refresh_request(&mut self, directory: PathBuf) -> Task<Message> {
+    pub(super) fn accept_thumbnail_refresh_request(
+        &mut self,
+        pane_id: BrowserPaneId,
+        directory: PathBuf,
+    ) -> Task<Message> {
+        if pane_id != self.active_pane_id() {
+            return Task::none();
+        }
         if self.is_loading || self.current_dir != directory {
             return Task::none();
         }

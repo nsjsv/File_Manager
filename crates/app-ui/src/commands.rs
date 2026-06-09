@@ -21,8 +21,9 @@ use iced::Task;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
-    LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation, SearchRequest,
-    SidebarLocation, StartupEnvironment, TransferConflictMode, TransferConflictState,
+    BrowserPaneId, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
+    SearchRequest, SidebarLocation, StartupEnvironment, TransferConflictMode,
+    TransferConflictState,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::preview::{load_directory_preview_children, load_preview};
@@ -59,11 +60,13 @@ pub(crate) fn operation_store_command(path: PathBuf) -> Task<Message> {
     Task::perform(load_operation_store(path), Message::OperationStoreLoaded)
 }
 
-pub(crate) fn delayed_thumbnail_refresh_command(directory: PathBuf) -> Task<Message> {
-    Task::perform(
-        delayed_thumbnail_refresh(directory),
-        Message::ThumbnailRefreshRequested,
-    )
+pub(crate) fn delayed_thumbnail_refresh_command(
+    pane_id: BrowserPaneId,
+    directory: PathBuf,
+) -> Task<Message> {
+    Task::perform(delayed_thumbnail_refresh(directory), move |directory| {
+        Message::ThumbnailRefreshRequested(pane_id, directory)
+    })
 }
 
 pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Task<Message> {
@@ -87,29 +90,43 @@ pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) ->
     )
 }
 
-pub(crate) fn load_directory_command(path: PathBuf, options: ScanOptions) -> Task<Message> {
-    Task::perform(load_directory(path, options), Message::Loaded)
+pub(crate) fn load_directory_command(
+    pane_id: BrowserPaneId,
+    path: PathBuf,
+    options: ScanOptions,
+) -> Task<Message> {
+    Task::perform(load_directory(path, options), move |scan| {
+        Message::Loaded(pane_id, scan)
+    })
 }
 
-pub(crate) fn load_trash_command(options: ScanOptions) -> Task<Message> {
-    Task::perform(load_trash(options), Message::TrashLoaded)
+pub(crate) fn load_trash_command(pane_id: BrowserPaneId, options: ScanOptions) -> Task<Message> {
+    Task::perform(load_trash(options), move |scan| {
+        Message::TrashLoaded(pane_id, scan)
+    })
 }
 
 pub(crate) fn load_expanded_directory_command(
+    pane_id: BrowserPaneId,
     path: PathBuf,
     options: ScanOptions,
 ) -> Task<Message> {
     let expanded_path = path.clone();
     Task::perform(load_directory(path, options), move |scan| {
-        Message::ExpandedDirectoryLoaded(expanded_path.clone(), scan)
+        Message::ExpandedDirectoryLoaded(pane_id, expanded_path.clone(), scan)
     })
 }
 
-pub(crate) fn path_suggestions_command(request: PathSuggestionRequest) -> Task<Message> {
+pub(crate) fn path_suggestions_command(
+    pane_id: BrowserPaneId,
+    request: PathSuggestionRequest,
+) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
         load_path_suggestions(request.input, request.current_dir),
-        move |suggestions| Message::PathSuggestionsLoaded(issued_request.clone(), suggestions),
+        move |suggestions| {
+            Message::PathSuggestionsLoaded(pane_id, issued_request.clone(), suggestions)
+        },
     )
 }
 

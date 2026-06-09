@@ -406,7 +406,10 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         let command = self.commit_rename_if_active();
         if had_path_suggestions {
-            Task::batch([command, iced::widget::operation::focus(path_input_id())])
+            Task::batch([
+                command,
+                iced::widget::operation::focus(path_input_id(self.active_pane_id())),
+            ])
         } else {
             command
         }

@@ -46,7 +46,7 @@ impl Operation<Message> for ColumnBrowserScrollBy {
 impl FileBrowser {
     pub(super) fn focus_latest_column(&self) -> Task<Message> {
         iced::widget::operation::snap_to(
-            column_browser_scroll_id(),
+            column_browser_scroll_id(self.active_pane_id()),
             scrollable::RelativeOffset { x: 1.0, y: 0.0 },
         )
     }
@@ -64,7 +64,7 @@ impl FileBrowser {
         };
 
         advanced_widget::operate(ColumnBrowserScrollBy::new(
-            column_browser_scroll_id(),
+            column_browser_scroll_id(self.active_pane_id()),
             delta_x,
         ))
     }

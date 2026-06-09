@@ -16,7 +16,7 @@ use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
-use crate::thumbnail_cache::ThumbnailLoadOutcome;
+use crate::thumbnail_cache::{ColumnViewport, ThumbnailLoadOutcome};
 
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
@@ -31,8 +31,8 @@ pub(crate) enum Message {
     StartupEnvironmentLoaded(StartupEnvironment),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
-    Loaded(Result<DirectoryScan, String>),
-    TrashLoaded(Result<TrashScan, String>),
+    Loaded(BrowserPaneId, Result<DirectoryScan, String>),
+    TrashLoaded(BrowserPaneId, Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
@@ -64,18 +64,18 @@ pub(crate) enum Message {
     FileOperationCancelRequested(u64),
     PreviewTreeDirectoryToggled(usize),
     PreviewTreeAnimationTick,
-    ThumbnailRefreshRequested(PathBuf),
+    ThumbnailRefreshRequested(BrowserPaneId, PathBuf),
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
-    ColumnEntryClicked(PathBuf),
-    ColumnBlankClicked(PathBuf),
-    EntryReleased,
-    EntryRightClicked(PathBuf),
-    EntryHovered(PathBuf),
-    EntryHoverCleared(PathBuf),
-    DropTargetHovered(PathBuf),
-    DropTargetHoverCleared(PathBuf),
-    BlankAreaPressed,
-    BlankAreaRightClicked(PathBuf),
+    ColumnEntryClicked(BrowserPaneId, PathBuf),
+    ColumnBlankClicked(BrowserPaneId, PathBuf),
+    EntryReleased(BrowserPaneId),
+    EntryRightClicked(BrowserPaneId, PathBuf),
+    EntryHovered(BrowserPaneId, PathBuf),
+    EntryHoverCleared(BrowserPaneId, PathBuf),
+    DropTargetHovered(BrowserPaneId, PathBuf),
+    DropTargetHoverCleared(BrowserPaneId, PathBuf),
+    BlankAreaPressed(BrowserPaneId),
+    BlankAreaRightClicked(BrowserPaneId, PathBuf),
     SidebarHovered(PathBuf),
     SidebarHoverCleared(PathBuf),
     SidebarPointerMoved(Point),
@@ -88,8 +88,8 @@ pub(crate) enum Message {
     SidebarBookmarkReleased,
     SidebarBookmarkDeleteRequested(PathBuf),
     CursorMoved(Point),
-    ColumnBrowserCursorEntered,
-    ColumnBrowserCursorExited,
+    ColumnBrowserCursorEntered(BrowserPaneId),
+    ColumnBrowserCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
     DragSelectionFinished,
     DismissFloating,
@@ -106,13 +106,13 @@ pub(crate) enum Message {
     },
     CapturedPreviewShortcutPressed,
     RequestPreview,
-    PathInputChanged(String),
-    PathInputSubmitted,
-    PathSuggestionSelected(PathBuf),
+    PathInputChanged(BrowserPaneId, String),
+    PathInputSubmitted(BrowserPaneId),
+    PathSuggestionSelected(BrowserPaneId, PathBuf),
     PathSuggestionMoved(PathSuggestionDirection),
     PathSuggestionCompleted(PathSuggestionDirection),
-    PathInputStabilized(PathSuggestionRequest),
-    PathSuggestionsLoaded(PathSuggestionRequest, Vec<PathBuf>),
+    PathInputStabilized(BrowserPaneId, PathSuggestionRequest),
+    PathSuggestionsLoaded(BrowserPaneId, PathSuggestionRequest, Vec<PathBuf>),
     SystemThemeDetected(Theme),
     UserConfigSaved(Result<(), String>),
     ColumnWidthOverrideSaved(Result<(), String>),
@@ -125,7 +125,7 @@ pub(crate) enum Message {
     SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
     SearchMatchSelected(PathBuf),
     SearchActivated,
-    ExpandedDirectoryLoaded(PathBuf, Result<DirectoryScan, String>),
+    ExpandedDirectoryLoaded(BrowserPaneId, PathBuf, Result<DirectoryScan, String>),
     ObservedDirectoryChanged(PathBuf),
     ColumnSettingsToggled,
     ShowHiddenFilesToggled,
@@ -134,18 +134,20 @@ pub(crate) enum Message {
     RendererRestartNoticeDismissed,
     CapturedWheelScrolled(mouse::ScrollDelta),
     ScrollbarAutoHideElapsed(u64),
-    ScrollbarAnimationTick,
-    ColumnScrolled(PathBuf, f32, f32),
-    ColumnResizeStarted(usize),
-    OpenDirectoryInNewTab(PathBuf),
-    OpenTrashInNewTab,
-    TabPressed(usize),
-    TabCloseRequested(usize),
-    TabDragEntered(usize),
+    WindowChromeAnimationTick,
+    ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
+    ColumnResizeStarted(BrowserPaneId, usize),
+    OpenDirectoryInNewTab(BrowserPaneId, PathBuf),
+    OpenTrashInNewTab(BrowserPaneId),
+    TabPressed(BrowserPaneId, usize),
+    TabCloseRequested(BrowserPaneId, usize),
+    TabDragEntered(BrowserPaneId, usize),
     TabDragFinished,
+    PaneBack(BrowserPaneId),
+    PaneForward(BrowserPaneId),
+    PaneUp(BrowserPaneId),
     NavigateTo(PathBuf),
     TrashOpened,
-    Up,
     Back,
     Forward,
     RenameInputFocusChecked(bool),
@@ -273,6 +275,130 @@ pub(crate) struct StartupEnvironment {
     pub(crate) state_database_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct BrowserPaneId(pub(crate) u64);
+
+impl BrowserPaneId {
+    pub(crate) const PRIMARY: Self = Self(0);
+
+    pub(crate) fn key(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SplitAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SplitRegion {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl SplitRegion {
+    pub(crate) fn axis(self) -> SplitAxis {
+        match self {
+            Self::Left | Self::Right => SplitAxis::Horizontal,
+            Self::Top | Self::Bottom => SplitAxis::Vertical,
+        }
+    }
+
+    pub(crate) fn places_dragged_first(self) -> bool {
+        matches!(self, Self::Left | Self::Top)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserPaneLayout {
+    Single {
+        active: BrowserPaneId,
+    },
+    Split {
+        axis: SplitAxis,
+        first: BrowserPaneId,
+        second: BrowserPaneId,
+        active: BrowserPaneId,
+    },
+}
+
+impl BrowserPaneLayout {
+    pub(crate) fn active(self) -> BrowserPaneId {
+        match self {
+            Self::Single { active } | Self::Split { active, .. } => active,
+        }
+    }
+
+    pub(crate) fn with_active(self, next_active: BrowserPaneId) -> Self {
+        match self {
+            Self::Single { .. } => Self::Single {
+                active: next_active,
+            },
+            Self::Split {
+                axis,
+                first,
+                second,
+                ..
+            } => Self::Split {
+                axis,
+                first,
+                second,
+                active: next_active,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BrowserPane {
+    pub(crate) id: BrowserPaneId,
+    pub(crate) current_dir: PathBuf,
+    pub(crate) is_trash_view: bool,
+    pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) trash_entries: Vec<TrashEntry>,
+    pub(crate) selected: Option<PathBuf>,
+    pub(crate) selected_paths: HashSet<PathBuf>,
+    pub(crate) selection_anchor: Option<PathBuf>,
+    pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
+    pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
+    pub(crate) tabs: Vec<BrowserTab>,
+    pub(crate) active_tab_id: usize,
+    pub(crate) path_input: String,
+    pub(crate) path_suggestions: Vec<PathBuf>,
+    pub(crate) path_suggestion_selection: Option<usize>,
+    pub(crate) path_suggestion_generation: u64,
+    pub(crate) back_stack: Vec<PathBuf>,
+    pub(crate) forward_stack: Vec<PathBuf>,
+    pub(crate) is_loading: bool,
+}
+
+impl BrowserPane {
+    pub(crate) fn sync_active_tab_state(&mut self) {
+        let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == self.active_tab_id)
+        else {
+            return;
+        };
+
+        tab.directory = self.current_dir.clone();
+        tab.is_trash_view = self.is_trash_view;
+        tab.entries = self.entries.clone();
+        tab.trash_entries = self.trash_entries.clone();
+        tab.selected = self.selected.clone();
+        tab.selected_paths = self.selected_paths.clone();
+        tab.selection_anchor = self.selection_anchor.clone();
+        tab.expanded_directories = self.expanded_directories.clone();
+        tab.back_stack = self.back_stack.clone();
+        tab.forward_stack = self.forward_stack.clone();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BrowserTab {
     pub(crate) id: usize,
@@ -286,6 +412,66 @@ pub(crate) struct BrowserTab {
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
+}
+
+impl BrowserTab {
+    pub(crate) fn directory(id: usize, directory: PathBuf) -> Self {
+        Self {
+            id,
+            directory,
+            is_trash_view: false,
+            entries: Vec::new(),
+            trash_entries: Vec::new(),
+            selected: None,
+            selected_paths: HashSet::new(),
+            selection_anchor: None,
+            expanded_directories: HashMap::new(),
+            back_stack: Vec::new(),
+            forward_stack: Vec::new(),
+        }
+    }
+
+    pub(crate) fn trash(id: usize) -> Self {
+        Self {
+            id,
+            directory: trash_location_path(),
+            is_trash_view: true,
+            entries: Vec::new(),
+            trash_entries: Vec::new(),
+            selected: None,
+            selected_paths: HashSet::new(),
+            selection_anchor: None,
+            expanded_directories: HashMap::new(),
+            back_stack: Vec::new(),
+            forward_stack: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TabDragMode {
+    Reorder,
+    Split,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TabSplitTarget {
+    pub(crate) region: SplitRegion,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TabDragState {
+    pub(crate) source_pane_id: BrowserPaneId,
+    pub(crate) tab_id: usize,
+    pub(crate) phase: FileDragPhase,
+    pub(crate) mode: TabDragMode,
+    pub(crate) split_target: Option<TabSplitTarget>,
+}
+
+impl TabDragState {
+    pub(crate) fn is_dragging(&self) -> bool {
+        matches!(self.phase, FileDragPhase::Dragging)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +503,8 @@ pub(crate) enum SidebarBookmarkDropSlot {
 #[derive(Debug, Clone)]
 pub(crate) struct SidebarBookmarkDragState {
     pub(crate) path: PathBuf,
+    pub(crate) origin: Point,
+    pub(crate) source_index: usize,
     pub(crate) phase: FileDragPhase,
     pub(crate) order_changed: bool,
 }

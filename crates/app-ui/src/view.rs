@@ -3,6 +3,7 @@ mod markdown_preview;
 mod preview_panel;
 mod rendering_settings;
 mod search_panel;
+mod tab_motion;
 mod toggle_switch;
 
 pub(crate) use preview_panel::view_preview_window;
@@ -15,17 +16,18 @@ use std::path::Path;
 
 use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text_input, Button, Column, Row, Svg,
+    button, container, mouse_area, row, text_input, Button, Column, Row, Space, Svg,
 };
 use iced::{Alignment, Element, Length, Point, Theme};
 
 use crate::anchored_popup::anchored_popup;
+use crate::app::panes::BrowserPaneView;
 use crate::app::FileBrowser;
 use crate::appearance::{
-    app_content_style, auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
-    drag_preview_style, icon_svg_style, navigation_icon_button_style, path_suggestion_item_style,
-    path_suggestions_style, selected_icon_svg_style, selected_path_suggestion_item_style,
-    selected_sidebar_item_style, warning_icon_svg_style,
+    app_content_style, drag_preview_style, icon_svg_style, navigation_icon_button_style,
+    path_suggestion_item_style, path_suggestions_style, selected_icon_svg_style,
+    selected_path_suggestion_item_style, selected_tab_item_style, tab_item_style,
+    tab_split_overlay_style, tab_strip_style, warning_icon_svg_style,
 };
 use crate::floating_surface::{
     dismissable_blocking_floating_surface, floating_surface, modal_floating_surface,
@@ -33,7 +35,10 @@ use crate::floating_surface::{
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
-use crate::model::{Message, OperationQueuePanelMode, TRASH_LOCATION_LABEL};
+use crate::model::{
+    BrowserPaneId, BrowserPaneLayout, Message, OperationQueuePanelMode, SplitAxis,
+    TRASH_LOCATION_LABEL,
+};
 use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
     OPERATION_QUEUE_INDICATOR_RIGHT, OPERATION_QUEUE_PANEL_BOTTOM,
@@ -52,6 +57,10 @@ use rendering_settings::renderer_restart_notice_panel;
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const TAB_ICON_SIZE: f32 = 14.0;
 const TAB_CLOSE_ICON_SIZE: f32 = 12.0;
+const TAB_CLOSE_SLOT_WIDTH: f32 = 22.0;
+const TAB_BAR_EXPANDED_HEIGHT: f32 = 34.0;
+const TAB_FILL_PORTION: u16 = 1000;
+const TAB_DRAG_PREVIEW_WIDTH: f32 = 220.0;
 pub(super) const MENU_ICON_SIZE: f32 = 16.0;
 const TAB_LABEL_MAX_CHARS: usize = 24;
 const PATH_SUGGESTION_MAX_CHARS: usize = 72;
@@ -90,12 +99,12 @@ pub(crate) fn rename_input_id() -> iced::widget::Id {
     iced::widget::Id::new("rename-input")
 }
 
-pub(crate) fn path_input_id() -> iced::widget::Id {
-    iced::widget::Id::new("path-input")
+pub(crate) fn path_input_id(pane_id: BrowserPaneId) -> iced::widget::Id {
+    iced::widget::Id::from(format!("path-input-{}", pane_id.key()))
 }
 
-pub(crate) fn column_browser_scroll_id() -> iced::widget::Id {
-    iced::widget::Id::new("column-browser")
+pub(crate) fn column_browser_scroll_id(pane_id: BrowserPaneId) -> iced::widget::Id {
+    iced::widget::Id::from(format!("column-browser-{}", pane_id.key()))
 }
 
 pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static, Message> {
@@ -108,29 +117,9 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 }
 
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
-    let tabs = tab_bar(browser);
-    let navigation_bar = row![
-        navigation_icon_button(IconSymbol::ArrowLeft, Message::Back),
-        navigation_icon_button(IconSymbol::ArrowRight, Message::Forward),
-        navigation_icon_button(IconSymbol::ArrowUp, Message::Up),
-        path_input_panel(browser),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Start);
-
-    let header_content = column![tabs, navigation_bar]
-        .spacing(14)
-        .padding(18)
-        .width(Length::Fill);
-
-    let main_content = column![header_content, column_browser_view(browser)]
-        .spacing(0)
-        .width(Length::Fill)
-        .height(Length::Fill);
-
     let content = row![
         sidebar_view(browser),
-        container(main_content)
+        container(panes_view(browser))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(app_content_style),
@@ -162,7 +151,11 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     } else if let Some(context_menu) = &browser.context_menu {
         floating_input = BrowserFloatingInput::DismissibleBlocking;
         floating.push(FloatingContent {
-            element: context_menu_panel(context_menu, browser.is_trash_view),
+            element: context_menu_panel(
+                context_menu,
+                browser.is_trash_view,
+                browser.active_pane_id(),
+            ),
             placement: FloatingPlacement::At(context_menu.position()),
         });
     } else if browser.is_column_view_settings_open {
@@ -170,6 +163,20 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating.push(FloatingContent {
             element: column_settings_panel(browser),
             placement: FloatingPlacement::Center,
+        });
+    }
+
+    if let Some(bounds) = browser.tab_split_overlay_bounds() {
+        floating.push(FloatingContent {
+            element: tab_split_overlay(bounds.width, bounds.height),
+            placement: FloatingPlacement::Free(bounds.top_left),
+        });
+    }
+
+    if let Some(tab_preview) = tab_drag_preview_panel(browser) {
+        floating.push(FloatingContent {
+            element: tab_preview,
+            placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
         });
     }
 
@@ -236,6 +243,68 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     }
 }
 
+fn panes_view(browser: &FileBrowser) -> Element<'_, Message> {
+    match browser.pane_layout {
+        BrowserPaneLayout::Single { active } => pane_view(browser, active),
+        BrowserPaneLayout::Split {
+            axis,
+            first,
+            second,
+            ..
+        } => match axis {
+            SplitAxis::Horizontal => Row::new()
+                .spacing(0)
+                .push(pane_view(browser, first))
+                .push(pane_view(browser, second))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            SplitAxis::Vertical => Column::new()
+                .spacing(0)
+                .push(pane_view(browser, first))
+                .push(pane_view(browser, second))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        },
+    }
+}
+
+fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Message> {
+    let Some(pane) = browser.pane_view(pane_id) else {
+        return Space::new().width(Length::Fill).height(Length::Fill).into();
+    };
+
+    let navigation_bar = row![
+        navigation_icon_button(IconSymbol::ArrowLeft, Message::PaneBack(pane_id)),
+        navigation_icon_button(IconSymbol::ArrowRight, Message::PaneForward(pane_id)),
+        navigation_icon_button(IconSymbol::ArrowUp, Message::PaneUp(pane_id)),
+        path_input_panel(pane),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Start);
+
+    let header_content = container(navigation_bar).padding(18).width(Length::Fill);
+    let mut main_content = Column::new().spacing(0).push(header_content);
+    if pane.tab_bar_should_occupy_layout() {
+        main_content = main_content.push(tab_bar(pane));
+    }
+
+    main_content
+        .push(column_browser_view(browser, pane))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn tab_split_overlay(width: f32, height: f32) -> Element<'static, Message> {
+    container(Space::new().width(Length::Fill).height(Length::Fill))
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
+        .style(tab_split_overlay_style)
+        .into()
+}
+
 fn drag_preview_position(cursor_position: Point) -> Point {
     Point::new(
         cursor_position.x + DRAG_PREVIEW_OFFSET_X,
@@ -294,6 +363,21 @@ fn drag_preview_entry_item(entry: &DirectoryEntry) -> (IconSymbol, IconTone, Str
     (symbol, tone, entry.name().to_string_lossy().into_owned())
 }
 
+fn tab_drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>> {
+    let preview = browser.tab_drag_preview()?;
+    Some(
+        container(tab_title_content(
+            preview.directory,
+            preview.is_trash_view,
+            IconTone::Selected,
+        ))
+        .padding([7, 10])
+        .width(Length::Fixed(TAB_DRAG_PREVIEW_WIDTH))
+        .style(selected_tab_item_style)
+        .into(),
+    )
+}
+
 fn navigation_icon_button(icon: IconSymbol, message: Message) -> Button<'static, Message> {
     button(themed_icon(icon, IconTone::Normal, TOOLBAR_ICON_SIZE))
         .on_press(message)
@@ -301,75 +385,113 @@ fn navigation_icon_button(icon: IconSymbol, message: Message) -> Button<'static,
         .style(navigation_icon_button_style())
 }
 
-fn tab_bar(browser: &FileBrowser) -> Element<'_, Message> {
-    let mut tabs = Row::new().spacing(6).align_y(Alignment::Center);
-    for tab in &browser.tabs {
+fn tab_bar<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
+    let reveal_fraction = pane.tab_bar_reveal_fraction;
+    if reveal_fraction <= f32::EPSILON && pane.tabs.len() <= 1 {
+        return Space::new().height(Length::Fixed(0.0)).into();
+    }
+
+    let mut tabs = Row::new()
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
+    for tab in pane.tabs {
         tabs = tabs.push(tab_button(
+            pane.id,
             tab.id,
             tab.directory.as_path(),
             tab.is_trash_view,
-            tab.id == browser.active_tab_id,
+            tab.id == pane.active_tab_id,
+            pane.tab_width_fraction(tab.id),
+            pane.tab_shift_offset(tab.id),
         ));
     }
 
-    container(
-        scrollable(tabs)
-            .direction(auto_hide_horizontal_scrollbar_direction(
-                browser.scrollbar_visibility,
-                6.0,
-            ))
-            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
-            .height(Length::Shrink)
-            .width(Length::Fill),
-    )
-    .width(Length::Fill)
-    .into()
+    container(tabs)
+        .height(Length::Fixed(TAB_BAR_EXPANDED_HEIGHT * reveal_fraction))
+        .width(Length::Fill)
+        .padding([3, 18])
+        .style(tab_strip_style)
+        .into()
 }
 
 fn tab_button<'a>(
+    pane_id: BrowserPaneId,
     tab_id: usize,
     directory: &'a Path,
     is_trash_view: bool,
     is_active: bool,
+    width_fraction: f32,
+    shift_offset: f32,
 ) -> Element<'a, Message> {
     let tone = if is_active {
         IconTone::Selected
     } else {
         IconTone::Normal
     };
+    let title = tab_title_content(directory, is_trash_view, tone);
+    let label = row![
+        Space::new().width(Length::Fixed(TAB_CLOSE_SLOT_WIDTH)),
+        container(title).center_x(Length::Fill),
+        button(themed_icon(IconSymbol::Close, tone, TAB_CLOSE_ICON_SIZE))
+            .on_press(Message::TabCloseRequested(pane_id, tab_id))
+            .padding([2, 2])
+            .width(Length::Fixed(TAB_CLOSE_SLOT_WIDTH))
+            .style(navigation_icon_button_style()),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .width(Length::Fill);
+
+    let tab = container(label)
+        .padding([4, 8])
+        .width(Length::Fill)
+        .clip(true);
+    let tab = tab.style(if is_active {
+        selected_tab_item_style
+    } else {
+        tab_item_style
+    });
+
+    let tab = tab_motion::translated(tab, shift_offset, 0.0);
+
+    container(
+        mouse_area(tab)
+            .on_press(Message::TabPressed(pane_id, tab_id))
+            .on_middle_press(Message::TabCloseRequested(pane_id, tab_id))
+            .on_enter(Message::TabDragEntered(pane_id, tab_id))
+            .on_release(Message::TabDragFinished)
+            .interaction(iced::mouse::Interaction::Pointer),
+    )
+    .width(Length::FillPortion(tab_width_portion(width_fraction)))
+    .into()
+}
+
+fn tab_title_content<'a>(
+    directory: &'a Path,
+    is_trash_view: bool,
+    tone: IconTone,
+) -> Row<'a, Message> {
     let symbol = if is_trash_view {
         IconSymbol::Trash
     } else {
         IconSymbol::Folder
     };
-    let label = row![
+    row![
         themed_icon(symbol, tone, TAB_ICON_SIZE),
-        readable_text(tab_title(directory, is_trash_view)).size(13),
-        button(themed_icon(IconSymbol::Close, tone, TAB_CLOSE_ICON_SIZE))
-            .on_press(Message::TabCloseRequested(tab_id))
-            .padding([2, 2])
-            .style(navigation_icon_button_style()),
+        readable_text(tab_title_text(directory, is_trash_view)).size(13),
     ]
     .spacing(6)
-    .align_y(Alignment::Center);
-
-    let tab = container(label).padding([4, 8]);
-    let tab = if is_active {
-        tab.style(selected_sidebar_item_style)
-    } else {
-        tab
-    };
-
-    mouse_area(tab)
-        .on_press(Message::TabPressed(tab_id))
-        .on_middle_press(Message::TabCloseRequested(tab_id))
-        .on_enter(Message::TabDragEntered(tab_id))
-        .on_release(Message::TabDragFinished)
-        .interaction(iced::mouse::Interaction::Pointer)
-        .into()
+    .align_y(Alignment::Center)
 }
 
-fn tab_title(directory: &Path, is_trash_view: bool) -> String {
+fn tab_width_portion(intro_fraction: f32) -> u16 {
+    ((TAB_FILL_PORTION as f32) * intro_fraction.clamp(0.0, 1.0))
+        .round()
+        .max(1.0) as u16
+}
+
+fn tab_title_text(directory: &Path, is_trash_view: bool) -> String {
     if is_trash_view {
         return TRASH_LOCATION_LABEL.to_owned();
     }
@@ -382,8 +504,8 @@ fn tab_title(directory: &Path, is_trash_view: bool) -> String {
     format_middle_ellipsized_text(&title, TAB_LABEL_MAX_CHARS)
 }
 
-fn path_input_panel(browser: &FileBrowser) -> Element<'_, Message> {
-    if browser.is_trash_view {
+fn path_input_panel<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
+    if pane.is_trash_view {
         return container(
             row![
                 themed_icon(IconSymbol::Trash, IconTone::Normal, TOOLBAR_ICON_SIZE),
@@ -397,27 +519,28 @@ fn path_input_panel(browser: &FileBrowser) -> Element<'_, Message> {
         .into();
     }
 
-    let input = text_input("Path", &browser.path_input)
-        .id(path_input_id())
-        .on_input(Message::PathInputChanged)
-        .on_submit(Message::PathInputSubmitted)
+    let input = text_input("Path", pane.path_input)
+        .id(path_input_id(pane.id))
+        .on_input(move |value| Message::PathInputChanged(pane.id, value))
+        .on_submit(Message::PathInputSubmitted(pane.id))
         .padding([7, 10])
         .size(16)
         .width(Length::Fill);
 
-    let popup = (!browser.path_suggestions.is_empty()).then(|| path_suggestions_panel(browser));
+    let popup = (!pane.path_suggestions.is_empty()).then(|| path_suggestions_panel(pane));
 
     container(anchored_popup(input, popup))
         .width(Length::Fill)
         .into()
 }
 
-fn path_suggestions_panel(browser: &FileBrowser) -> Element<'_, Message> {
+fn path_suggestions_panel<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
     let mut suggestions = Column::new().spacing(3).padding(4);
-    for (index, suggestion) in browser.path_suggestions.iter().enumerate() {
+    for (index, suggestion) in pane.path_suggestions.iter().enumerate() {
         suggestions = suggestions.push(path_suggestion_row(
+            pane.id,
             suggestion,
-            browser.path_suggestion_selection == Some(index),
+            pane.path_suggestion_selection == Some(index),
         ));
     }
 
@@ -427,7 +550,11 @@ fn path_suggestions_panel(browser: &FileBrowser) -> Element<'_, Message> {
         .into()
 }
 
-fn path_suggestion_row(path: &Path, is_selected: bool) -> Element<'_, Message> {
+fn path_suggestion_row(
+    pane_id: BrowserPaneId,
+    path: &Path,
+    is_selected: bool,
+) -> Element<'_, Message> {
     let label = path.to_string_lossy();
     let label = format_middle_ellipsized_text(label.as_ref(), PATH_SUGGESTION_MAX_CHARS);
     let item = container(readable_text(label).size(13).width(Length::Fill))
@@ -440,7 +567,7 @@ fn path_suggestion_row(path: &Path, is_selected: bool) -> Element<'_, Message> {
     };
 
     mouse_area(item)
-        .on_press(Message::PathSuggestionSelected(path.to_path_buf()))
+        .on_press(Message::PathSuggestionSelected(pane_id, path.to_path_buf()))
         .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }

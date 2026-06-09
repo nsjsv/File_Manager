@@ -3,6 +3,7 @@ mod column_scroll;
 mod events;
 mod file_operations;
 mod navigation;
+pub(crate) mod panes;
 mod paths;
 mod preview_state;
 mod rendering_settings;
@@ -36,6 +37,8 @@ use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command, system_theme_command,
 };
 use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
+use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
+use crate::app::tabs::{TabAnimationState, TabBarReveal};
 use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
     MAIN_WINDOW_INITIAL_WIDTH,
@@ -43,12 +46,12 @@ use crate::app::windows::{
 use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
-    AudioPreviewPlayback, BrowserTab, ContextMenuState, DestructiveActionConfirmation,
-    ExpandedDirectory, FileDragState, Message, NavigationMode, OperationQueuePanelMode,
-    PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarVisibility,
-    SearchIndexRuntime, SearchState, SelectionMarquee, SidebarBookmarkDragState,
-    SidebarBookmarkDropSlot, SidebarLocation, TextPreviewDocument, TransferConflictState,
-    VideoPreviewPlayback,
+    AudioPreviewPlayback, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
+    ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message,
+    NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState,
+    PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
+    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -90,6 +93,7 @@ pub(crate) struct FileBrowser {
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
     pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
     pub(crate) sidebar_bookmark_drag: Option<SidebarBookmarkDragState>,
+    pub(crate) sidebar_bookmark_motion: HashMap<PathBuf, SidebarBookmarkMotionState>,
     pub(crate) renaming: Option<PathBuf>,
     pending_created_entry_rename: Option<PathBuf>,
     pub(crate) pending_operation: Option<PendingOperation>,
@@ -100,7 +104,11 @@ pub(crate) struct FileBrowser {
     pub(crate) search_index: SearchIndexRuntime,
     pub(crate) tabs: Vec<BrowserTab>,
     pub(crate) active_tab_id: usize,
-    tab_drag_id: Option<usize>,
+    tab_bar_reveal: TabBarReveal,
+    pub(crate) tab_animations: HashMap<usize, TabAnimationState>,
+    pub(crate) panes: Vec<BrowserPane>,
+    pub(crate) pane_layout: BrowserPaneLayout,
+    tab_drag: Option<TabDragState>,
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
     pub(crate) options: ScanOptions,
@@ -139,6 +147,7 @@ pub(crate) struct FileBrowser {
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
     next_tab_id: usize,
+    next_pane_id: u64,
     theme: Theme,
     is_shutting_down: bool,
 }
@@ -167,6 +176,28 @@ impl FileBrowser {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
+        let initial_tab = BrowserTab::directory(0, placeholder_dir.clone());
+        let initial_pane = BrowserPane {
+            id: BrowserPaneId::PRIMARY,
+            current_dir: placeholder_dir.clone(),
+            is_trash_view: false,
+            entries: Vec::new(),
+            trash_entries: Vec::new(),
+            selected: None,
+            selected_paths: HashSet::new(),
+            selection_anchor: None,
+            expanded_directories: HashMap::new(),
+            column_viewports: HashMap::new(),
+            tabs: vec![initial_tab.clone()],
+            active_tab_id: initial_tab.id,
+            path_input: String::new(),
+            path_suggestions: Vec::new(),
+            path_suggestion_selection: None,
+            path_suggestion_generation: 0,
+            back_stack: Vec::new(),
+            forward_stack: Vec::new(),
+            is_loading: true,
+        };
         let mut browser = Self {
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
@@ -194,6 +225,7 @@ impl FileBrowser {
             sidebar_locations: Vec::new(),
             sidebar_bookmark_drop_slot: None,
             sidebar_bookmark_drag: None,
+            sidebar_bookmark_motion: HashMap::new(),
             renaming: None,
             pending_created_entry_rename: None,
             pending_operation: None,
@@ -202,21 +234,15 @@ impl FileBrowser {
             search: None,
             search_window: None,
             search_index: SearchIndexRuntime::new(PathBuf::new()),
-            tabs: vec![BrowserTab {
-                id: 0,
-                directory: placeholder_dir.clone(),
-                is_trash_view: false,
-                entries: Vec::new(),
-                trash_entries: Vec::new(),
-                selected: None,
-                selected_paths: HashSet::new(),
-                selection_anchor: None,
-                expanded_directories: HashMap::new(),
-                back_stack: Vec::new(),
-                forward_stack: Vec::new(),
-            }],
+            tabs: vec![initial_tab],
             active_tab_id: 0,
-            tab_drag_id: None,
+            tab_bar_reveal: TabBarReveal::default(),
+            tab_animations: HashMap::new(),
+            panes: vec![initial_pane],
+            pane_layout: BrowserPaneLayout::Single {
+                active: BrowserPaneId::PRIMARY,
+            },
+            tab_drag: None,
             selection_marquee: None,
             file_drag: None,
             options: options.clone(),
@@ -255,6 +281,7 @@ impl FileBrowser {
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
             next_tab_id: 1,
+            next_pane_id: 1,
             theme: Theme::Light,
             is_shutting_down: false,
         };
@@ -298,9 +325,14 @@ impl FileBrowser {
             );
         }
 
-        if self.scrollbar_animation_is_active() {
+        if self.scrollbar_animation_is_active()
+            || self.tab_bar_reveal_animation_is_active()
+            || self.tab_animation_is_active()
+            || self.sidebar_bookmark_motion_is_active()
+        {
             subscriptions.push(
-                time::every(SCROLLBAR_ANIMATION_INTERVAL).map(|_| Message::ScrollbarAnimationTick),
+                time::every(SCROLLBAR_ANIMATION_INTERVAL)
+                    .map(|_| Message::WindowChromeAnimationTick),
             );
         }
 
@@ -336,15 +368,23 @@ impl FileBrowser {
             Message::OperationStoreLoaded(operation_store) => {
                 self.accept_operation_store(operation_store)
             }
-            Message::Loaded(Ok(scan)) => self.accept_directory_scan(scan),
-            Message::Loaded(Err(error)) => {
-                self.is_loading = false;
+            Message::Loaded(pane_id, Ok(scan)) => self.accept_directory_scan(pane_id, scan),
+            Message::Loaded(pane_id, Err(error)) => {
+                if pane_id == self.active_pane_id() {
+                    self.is_loading = false;
+                } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
+                    pane.is_loading = false;
+                }
                 self.error = Some(error);
                 Task::none()
             }
-            Message::TrashLoaded(Ok(scan)) => self.accept_trash_scan(scan),
-            Message::TrashLoaded(Err(error)) => {
-                self.is_loading = false;
+            Message::TrashLoaded(pane_id, Ok(scan)) => self.accept_trash_scan(pane_id, scan),
+            Message::TrashLoaded(pane_id, Err(error)) => {
+                if pane_id == self.active_pane_id() {
+                    self.is_loading = false;
+                } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
+                    pane.is_loading = false;
+                }
                 self.error = Some(error);
                 Task::none()
             }
@@ -460,13 +500,20 @@ impl FileBrowser {
                 self.toggle_preview_tree_directory(entry_id)
             }
             Message::PreviewTreeAnimationTick => self.advance_preview_tree_animation(),
-            Message::ThumbnailRefreshRequested(directory) => {
-                self.accept_thumbnail_refresh_request(directory)
+            Message::ThumbnailRefreshRequested(pane_id, directory) => {
+                self.accept_thumbnail_refresh_request(pane_id, directory)
             }
             Message::ThumbnailBatchLoaded(outcomes) => self.accept_thumbnail_batch(outcomes),
-            Message::ColumnEntryClicked(path) => self.handle_column_entry_clicked(path),
-            Message::ColumnBlankClicked(path) => self.handle_column_blank_clicked(path),
-            Message::EntryReleased => {
+            Message::ColumnEntryClicked(pane_id, path) => {
+                self.activate_pane(pane_id);
+                self.handle_column_entry_clicked(path)
+            }
+            Message::ColumnBlankClicked(pane_id, path) => {
+                self.activate_pane(pane_id);
+                self.handle_column_blank_clicked(path)
+            }
+            Message::EntryReleased(pane_id) => {
+                self.activate_pane(pane_id);
                 self.finish_tab_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
@@ -474,8 +521,14 @@ impl FileBrowser {
                     self.finish_drag_selection(),
                 ])
             }
-            Message::EntryRightClicked(path) => self.handle_entry_right_clicked(path),
-            Message::EntryHovered(path) => {
+            Message::EntryRightClicked(pane_id, path) => {
+                self.activate_pane(pane_id);
+                self.handle_entry_right_clicked(path)
+            }
+            Message::EntryHovered(pane_id, path) => {
+                if pane_id != self.active_pane_id() {
+                    return Task::none();
+                }
                 self.cursor_search_directory = Some(
                     path.parent()
                         .map(|parent| parent.to_path_buf())
@@ -483,19 +536,34 @@ impl FileBrowser {
                 );
                 self.handle_entry_hovered(path)
             }
-            Message::EntryHoverCleared(path) => self.handle_entry_hover_cleared(path),
-            Message::DropTargetHovered(directory) => {
+            Message::EntryHoverCleared(pane_id, path) => {
+                if pane_id != self.active_pane_id() {
+                    return Task::none();
+                }
+                self.handle_entry_hover_cleared(path)
+            }
+            Message::DropTargetHovered(pane_id, directory) => {
+                if pane_id != self.active_pane_id() {
+                    return Task::none();
+                }
                 self.cursor_search_directory = Some(directory.clone());
                 self.handle_drop_target_hovered(directory)
             }
-            Message::DropTargetHoverCleared(directory) => {
+            Message::DropTargetHoverCleared(pane_id, directory) => {
+                if pane_id != self.active_pane_id() {
+                    return Task::none();
+                }
                 if self.cursor_search_directory.as_ref() == Some(&directory) {
                     self.cursor_search_directory = None;
                 }
                 self.handle_drop_target_hover_cleared(directory)
             }
-            Message::BlankAreaPressed => self.start_selection_marquee(),
-            Message::BlankAreaRightClicked(directory) => {
+            Message::BlankAreaPressed(pane_id) => {
+                self.activate_pane(pane_id);
+                self.start_selection_marquee()
+            }
+            Message::BlankAreaRightClicked(pane_id, directory) => {
+                self.activate_pane(pane_id);
                 self.handle_blank_area_right_clicked(directory)
             }
             Message::SidebarHovered(path) => self.handle_sidebar_hovered(path),
@@ -519,20 +587,26 @@ impl FileBrowser {
             Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
             Message::CursorMoved(position) => {
                 self.cursor_position = position;
+                self.update_tab_drag(position);
                 self.update_file_drag(position);
                 self.update_sidebar_bookmark_drag(position);
                 self.update_column_resize_drag(position);
                 self.update_selection_marquee(position);
                 Task::none()
             }
-            Message::ColumnBrowserCursorEntered => {
+            Message::ColumnBrowserCursorEntered(pane_id) => {
+                self.activate_pane(pane_id);
                 self.is_cursor_over_column_browser = true;
                 Task::none()
             }
-            Message::ColumnBrowserCursorExited => {
-                self.is_cursor_over_column_browser = false;
-                self.cursor_search_directory = None;
-                self.clear_cursor_paste_target()
+            Message::ColumnBrowserCursorExited(pane_id) => {
+                if pane_id == self.active_pane_id() {
+                    self.is_cursor_over_column_browser = false;
+                    self.cursor_search_directory = None;
+                    self.clear_cursor_paste_target()
+                } else {
+                    Task::none()
+                }
             }
             Message::KeyboardModifiersChanged(modifiers) => {
                 self.keyboard_modifiers = modifiers;
@@ -561,9 +635,16 @@ impl FileBrowser {
             }
             Message::CapturedPreviewShortcutPressed => self.handle_captured_preview_shortcut(),
             Message::RequestPreview => self.request_preview(),
-            Message::PathInputChanged(value) => self.update_path_input(value),
-            Message::PathInputSubmitted => self.submit_path_input(),
-            Message::PathSuggestionSelected(path) => {
+            Message::PathInputChanged(pane_id, value) => {
+                self.activate_pane(pane_id);
+                self.update_path_input(value)
+            }
+            Message::PathInputSubmitted(pane_id) => {
+                self.activate_pane(pane_id);
+                self.submit_path_input()
+            }
+            Message::PathSuggestionSelected(pane_id, path) => {
+                self.activate_pane(pane_id);
                 self.path_suggestions.clear();
                 self.path_suggestion_selection = None;
                 self.navigate_to(path, NavigationMode::RecordHistory)
@@ -574,9 +655,11 @@ impl FileBrowser {
             Message::PathSuggestionCompleted(direction) => {
                 self.complete_search_scope_or_path_suggestion(direction)
             }
-            Message::PathInputStabilized(request) => self.load_stable_path_suggestions(request),
-            Message::PathSuggestionsLoaded(request, suggestions) => {
-                self.accept_path_suggestions(request, suggestions)
+            Message::PathInputStabilized(pane_id, request) => {
+                self.load_stable_path_suggestions(pane_id, request)
+            }
+            Message::PathSuggestionsLoaded(pane_id, request, suggestions) => {
+                self.accept_path_suggestions(pane_id, request, suggestions)
             }
             Message::SystemThemeDetected(theme) => {
                 self.theme = theme;
@@ -614,8 +697,8 @@ impl FileBrowser {
             Message::SearchIndexBuilt(root, outcome) => self.accept_search_index(root, outcome),
             Message::SearchMatchSelected(path) => self.activate_search_match(path),
             Message::SearchActivated => self.activate_selected_search_match(),
-            Message::ExpandedDirectoryLoaded(path, scan) => {
-                self.accept_expanded_directory(path, scan)
+            Message::ExpandedDirectoryLoaded(pane_id, path, scan) => {
+                self.accept_expanded_directory(pane_id, path, scan)
             }
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::ColumnSettingsToggled => {
@@ -644,28 +727,43 @@ impl FileBrowser {
                 }
                 Task::none()
             }
-            Message::ScrollbarAnimationTick => self.advance_scrollbar_animation(),
-            Message::ColumnScrolled(directory, offset_y, height) => {
+            Message::WindowChromeAnimationTick => Task::batch([
+                self.advance_scrollbar_animation(),
+                self.advance_tab_bar_reveal_animation(),
+                self.advance_tab_animations(),
+                self.advance_sidebar_bookmark_motion(),
+            ]),
+            Message::ColumnScrolled(pane_id, directory, offset_y, height) => {
+                self.activate_pane(pane_id);
                 self.handle_column_scrolled(directory, offset_y, height)
             }
-            Message::ColumnResizeStarted(column_index) => {
+            Message::ColumnResizeStarted(pane_id, column_index) => {
+                self.activate_pane(pane_id);
                 self.start_column_resize_drag(column_index)
             }
-            Message::OpenDirectoryInNewTab(path) => Task::batch([
-                self.commit_rename_if_active(),
-                self.open_directory_in_new_tab(path),
-            ]),
-            Message::OpenTrashInNewTab => {
+            Message::OpenDirectoryInNewTab(pane_id, path) => {
+                self.activate_pane(pane_id);
+                Task::batch([
+                    self.commit_rename_if_active(),
+                    self.open_directory_in_new_tab(path),
+                ])
+            }
+            Message::OpenTrashInNewTab(pane_id) => {
+                self.activate_pane(pane_id);
                 Task::batch([self.commit_rename_if_active(), self.open_trash_in_new_tab()])
             }
-            Message::TabPressed(tab_id) => {
+            Message::TabPressed(pane_id, tab_id) => {
+                self.activate_pane(pane_id);
                 let rename_command = self.commit_rename_if_active();
-                self.start_tab_drag(tab_id);
+                self.start_tab_drag(pane_id, tab_id);
                 Task::batch([rename_command, self.select_tab(tab_id)])
             }
-            Message::TabCloseRequested(tab_id) => self.close_tab(tab_id),
-            Message::TabDragEntered(tab_id) => {
-                self.reorder_dragged_tab(tab_id);
+            Message::TabCloseRequested(pane_id, tab_id) => {
+                self.activate_pane(pane_id);
+                self.close_tab(tab_id)
+            }
+            Message::TabDragEntered(pane_id, tab_id) => {
+                self.reorder_dragged_tab(pane_id, tab_id);
                 Task::none()
             }
             Message::TabDragFinished => {
@@ -684,9 +782,20 @@ impl FileBrowser {
                 self.commit_rename_if_active(),
                 self.open_trash_view(NavigationMode::RecordHistory),
             ]),
-            Message::Up => Task::batch([self.commit_rename_if_active(), self.navigate_up()]),
             Message::Back => Task::batch([self.commit_rename_if_active(), self.navigate_back()]),
             Message::Forward => {
+                Task::batch([self.commit_rename_if_active(), self.navigate_forward()])
+            }
+            Message::PaneUp(pane_id) => {
+                self.activate_pane(pane_id);
+                Task::batch([self.commit_rename_if_active(), self.navigate_up()])
+            }
+            Message::PaneBack(pane_id) => {
+                self.activate_pane(pane_id);
+                Task::batch([self.commit_rename_if_active(), self.navigate_back()])
+            }
+            Message::PaneForward(pane_id) => {
+                self.activate_pane(pane_id);
                 Task::batch([self.commit_rename_if_active(), self.navigate_forward()])
             }
             Message::RenameInputFocusChecked(is_focused) => {
