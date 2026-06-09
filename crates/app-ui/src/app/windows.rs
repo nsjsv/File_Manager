@@ -364,6 +364,10 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if button == mouse::Button::Left && self.start_ctrl_shift_pane_drag(status) {
+            return Task::none();
+        }
+
         let pointer_command = match (button, status) {
             (mouse::Button::Left | mouse::Button::Right, event::Status::Captured) => {
                 if self.renaming.is_some() {

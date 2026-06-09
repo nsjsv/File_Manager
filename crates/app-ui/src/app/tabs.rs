@@ -750,7 +750,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
     pane
 }
 
-fn apply_active_tab_to_pane(pane: &mut BrowserPane) {
+pub(super) fn apply_active_tab_to_pane(pane: &mut BrowserPane) {
     let Some(tab) = pane
         .tabs
         .iter()
@@ -762,7 +762,7 @@ fn apply_active_tab_to_pane(pane: &mut BrowserPane) {
     apply_tab_to_pane(pane, &tab);
 }
 
-fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
+pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.current_dir = tab.directory.clone();
     pane.is_trash_view = tab.is_trash_view;
     pane.entries = tab.entries.clone();

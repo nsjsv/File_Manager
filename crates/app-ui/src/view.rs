@@ -173,9 +173,23 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
+    if let Some(bounds) = browser.pane_drag_overlay_bounds() {
+        floating.push(FloatingContent {
+            element: tab_split_overlay(bounds.width, bounds.height),
+            placement: FloatingPlacement::Free(bounds.top_left),
+        });
+    }
+
     if let Some(tab_preview) = tab_drag_preview_panel(browser) {
         floating.push(FloatingContent {
             element: tab_preview,
+            placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
+        });
+    }
+
+    if let Some(pane_preview) = pane_drag_preview_panel(browser) {
+        floating.push(FloatingContent {
+            element: pane_preview,
             placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
         });
     }
@@ -290,10 +304,14 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         main_content = main_content.push(tab_bar(pane));
     }
 
-    main_content
+    let pane_content = main_content
         .push(column_browser_view(browser, pane))
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Fill);
+
+    mouse_area(pane_content)
+        .on_enter(Message::PaneCursorEntered(pane_id))
+        .on_exit(Message::PaneCursorExited(pane_id))
         .into()
 }
 
@@ -365,6 +383,21 @@ fn drag_preview_entry_item(entry: &DirectoryEntry) -> (IconSymbol, IconTone, Str
 
 fn tab_drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>> {
     let preview = browser.tab_drag_preview()?;
+    Some(
+        container(tab_title_content(
+            preview.directory,
+            preview.is_trash_view,
+            IconTone::Selected,
+        ))
+        .padding([7, 10])
+        .width(Length::Fixed(TAB_DRAG_PREVIEW_WIDTH))
+        .style(selected_tab_item_style)
+        .into(),
+    )
+}
+
+fn pane_drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>> {
+    let preview = browser.pane_drag_preview()?;
     Some(
         container(tab_title_content(
             preview.directory,

@@ -90,6 +90,8 @@ pub(crate) enum Message {
     CursorMoved(Point),
     ColumnBrowserCursorEntered(BrowserPaneId),
     ColumnBrowserCursorExited(BrowserPaneId),
+    PaneCursorEntered(BrowserPaneId),
+    PaneCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
     DragSelectionFinished,
     DismissFloating,
@@ -469,6 +471,25 @@ pub(crate) struct TabDragState {
 }
 
 impl TabDragState {
+    pub(crate) fn is_dragging(&self) -> bool {
+        matches!(self.phase, FileDragPhase::Dragging)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneDropTarget {
+    Split(SplitRegion),
+    Merge(BrowserPaneId),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PaneDragState {
+    pub(crate) source_pane_id: BrowserPaneId,
+    pub(crate) phase: FileDragPhase,
+    pub(crate) target: Option<PaneDropTarget>,
+}
+
+impl PaneDragState {
     pub(crate) fn is_dragging(&self) -> bool {
         matches!(self.phase, FileDragPhase::Dragging)
     }

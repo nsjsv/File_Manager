@@ -3,6 +3,7 @@ mod column_scroll;
 mod events;
 mod file_operations;
 mod navigation;
+mod pane_drag;
 pub(crate) mod panes;
 mod paths;
 mod preview_state;
@@ -48,10 +49,10 @@ use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
     ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message,
-    NavigationMode, OperationQueuePanelMode, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
-    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    NavigationMode, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize,
+    PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
+    SelectionMarquee, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
+    TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -109,6 +110,7 @@ pub(crate) struct FileBrowser {
     pub(crate) panes: Vec<BrowserPane>,
     pub(crate) pane_layout: BrowserPaneLayout,
     tab_drag: Option<TabDragState>,
+    pane_drag: Option<PaneDragState>,
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
     pub(crate) options: ScanOptions,
@@ -131,6 +133,7 @@ pub(crate) struct FileBrowser {
     pub(crate) main_window_width: f32,
     pub(crate) main_window_height: f32,
     is_cursor_over_column_browser: bool,
+    hovered_pane_id: Option<BrowserPaneId>,
     keyboard_modifiers: keyboard::Modifiers,
     selection_anchor: Option<PathBuf>,
     drag_selection_anchor: Option<PathBuf>,
@@ -243,6 +246,7 @@ impl FileBrowser {
                 active: BrowserPaneId::PRIMARY,
             },
             tab_drag: None,
+            pane_drag: None,
             selection_marquee: None,
             file_drag: None,
             options: options.clone(),
@@ -265,6 +269,7 @@ impl FileBrowser {
             main_window_width: MAIN_WINDOW_INITIAL_WIDTH,
             main_window_height: MAIN_WINDOW_INITIAL_HEIGHT,
             is_cursor_over_column_browser: false,
+            hovered_pane_id: None,
             keyboard_modifiers: keyboard::Modifiers::default(),
             selection_anchor: None,
             drag_selection_anchor: None,
@@ -506,15 +511,22 @@ impl FileBrowser {
             Message::ThumbnailBatchLoaded(outcomes) => self.accept_thumbnail_batch(outcomes),
             Message::ColumnEntryClicked(pane_id, path) => {
                 self.activate_pane(pane_id);
+                if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
+                    return Task::none();
+                }
                 self.handle_column_entry_clicked(path)
             }
             Message::ColumnBlankClicked(pane_id, path) => {
                 self.activate_pane(pane_id);
+                if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
+                    return Task::none();
+                }
                 self.handle_column_blank_clicked(path)
             }
             Message::EntryReleased(pane_id) => {
                 self.activate_pane(pane_id);
                 self.finish_tab_drag();
+                self.finish_pane_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
@@ -560,6 +572,9 @@ impl FileBrowser {
             }
             Message::BlankAreaPressed(pane_id) => {
                 self.activate_pane(pane_id);
+                if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
+                    return Task::none();
+                }
                 self.start_selection_marquee()
             }
             Message::BlankAreaRightClicked(pane_id, directory) => {
@@ -588,6 +603,7 @@ impl FileBrowser {
             Message::CursorMoved(position) => {
                 self.cursor_position = position;
                 self.update_tab_drag(position);
+                self.update_pane_drag(position);
                 self.update_file_drag(position);
                 self.update_sidebar_bookmark_drag(position);
                 self.update_column_resize_drag(position);
@@ -608,12 +624,23 @@ impl FileBrowser {
                     Task::none()
                 }
             }
+            Message::PaneCursorEntered(pane_id) => {
+                self.hovered_pane_id = Some(pane_id);
+                Task::none()
+            }
+            Message::PaneCursorExited(pane_id) => {
+                if self.hovered_pane_id == Some(pane_id) {
+                    self.hovered_pane_id = None;
+                }
+                Task::none()
+            }
             Message::KeyboardModifiersChanged(modifiers) => {
                 self.keyboard_modifiers = modifiers;
                 Task::none()
             }
             Message::DragSelectionFinished => {
                 self.finish_tab_drag();
+                self.finish_pane_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
@@ -768,6 +795,7 @@ impl FileBrowser {
             }
             Message::TabDragFinished => {
                 self.finish_tab_drag();
+                self.finish_pane_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_column_resize_drag_command(),
