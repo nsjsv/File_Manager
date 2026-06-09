@@ -104,6 +104,7 @@ impl FileBrowser {
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
         self.apply_column_width_override(user_config.legacy_column_width_override);
+        self.sidebar_width = self.sidebar_width_for_window(user_config.sidebar_width);
         self.terminal_emulator = user_config.terminal_emulator;
         self.rendering_gpu_preference = user_config.rendering_gpu_preference;
         self.options.include_hidden = user_config.show_hidden_files;

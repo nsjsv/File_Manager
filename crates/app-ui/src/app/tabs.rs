@@ -11,7 +11,6 @@ use crate::model::{
     NavigationMode, SplitAxis, SplitRegion, TabDragMode, TabDragState, TabSplitTarget,
     TRASH_LOCATION_LABEL,
 };
-use crate::sidebar::SIDEBAR_WIDTH;
 
 const TAB_BAR_REVEAL_DURATION: Duration = Duration::from_millis(180);
 const TAB_BAR_HIDE_DURATION: Duration = Duration::from_millis(140);
@@ -713,7 +712,7 @@ impl FileBrowser {
     }
 
     fn active_tab_bar_width_estimate(&self) -> f32 {
-        let content_width = (self.main_window_width - SIDEBAR_WIDTH).max(1.0);
+        let content_width = (self.main_window_width - self.sidebar_width).max(1.0);
         match self.pane_layout {
             BrowserPaneLayout::Split {
                 axis: SplitAxis::Horizontal,

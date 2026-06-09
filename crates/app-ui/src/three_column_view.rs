@@ -26,6 +26,7 @@ use crate::view::{column_browser_scroll_id, rename_input_id};
 
 pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 3;
 pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 6.0;
+const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 const ROW_ICON_SIZE: f32 = 18.0;
 const CHEVRON_ICON_SIZE: f32 = 15.0;
 const COLUMN_CONTENT_SPACING: u32 = 4;
@@ -170,10 +171,17 @@ fn empty_column(width: f32) -> Element<'static, Message> {
 }
 
 fn column_resize_divider(pane_id: BrowserPaneId, column_index: usize) -> Element<'static, Message> {
-    let divider = container(Space::new().width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH)))
-        .width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH))
+    let visible_line = container(Space::new().width(Length::Fixed(COLUMN_RESIZE_LINE_WIDTH)))
+        .width(Length::Fixed(COLUMN_RESIZE_LINE_WIDTH))
         .height(Length::Fill)
         .style(column_resize_divider_style);
+    let divider = row![
+        Space::new().width(Length::Fill),
+        visible_line,
+        Space::new().width(Length::Fill),
+    ]
+    .width(Length::Fixed(COLUMN_RESIZE_DIVIDER_WIDTH))
+    .height(Length::Fill);
 
     mouse_area(divider)
         .on_press(Message::ColumnResizeStarted(pane_id, column_index))

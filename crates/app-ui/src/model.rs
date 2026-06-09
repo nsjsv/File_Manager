@@ -87,6 +87,7 @@ pub(crate) enum Message {
     SidebarBookmarkEntered(PathBuf),
     SidebarBookmarkReleased,
     SidebarBookmarkDeleteRequested(PathBuf),
+    SidebarResizeStarted,
     CursorMoved(Point),
     ColumnBrowserCursorEntered(BrowserPaneId),
     ColumnBrowserCursorExited(BrowserPaneId),

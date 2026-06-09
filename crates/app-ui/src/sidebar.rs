@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 use crate::config::SidebarFavoriteConfig;
 use crate::model::{SidebarLocation, SidebarLocationKind};
 
-pub(crate) const SIDEBAR_WIDTH: f32 = 180.0;
-
 pub(crate) fn home_sidebar_location(home: &Path) -> SidebarLocation {
     SidebarLocation {
         label: "Home".to_owned(),

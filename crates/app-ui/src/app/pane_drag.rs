@@ -9,7 +9,6 @@ use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, FileDragPhase, OperationQueuePanelMode,
     PaneDragState, PaneDropTarget, SplitAxis, SplitRegion,
 };
-use crate::sidebar::SIDEBAR_WIDTH;
 
 const PANE_DROP_CENTER_FRACTION: f32 = 0.28;
 
@@ -155,6 +154,7 @@ impl FileBrowser {
             && self.tab_drag.is_none()
             && self.file_drag.is_none()
             && self.sidebar_bookmark_drag.is_none()
+            && self.sidebar_resize_drag.is_none()
             && self.column_resize_drag.is_none()
             && self.selection_marquee.is_none()
     }
@@ -251,12 +251,13 @@ impl FileBrowser {
     }
 
     fn pane_bounds(&self) -> Vec<PaneBounds> {
-        let content_width = (self.main_window_width - SIDEBAR_WIDTH).max(1.0);
+        let sidebar_width = self.sidebar_width;
+        let content_width = (self.main_window_width - sidebar_width).max(1.0);
         let content_height = self.main_window_height.max(1.0);
         match self.pane_layout {
             BrowserPaneLayout::Single { active } => vec![PaneBounds {
                 id: active,
-                top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                top_left: Point::new(sidebar_width, 0.0),
                 width: content_width,
                 height: content_height,
             }],
@@ -270,13 +271,13 @@ impl FileBrowser {
                 vec![
                     PaneBounds {
                         id: first,
-                        top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                        top_left: Point::new(sidebar_width, 0.0),
                         width: half_width,
                         height: content_height,
                     },
                     PaneBounds {
                         id: second,
-                        top_left: Point::new(SIDEBAR_WIDTH + half_width, 0.0),
+                        top_left: Point::new(sidebar_width + half_width, 0.0),
                         width: half_width,
                         height: content_height,
                     },
@@ -292,13 +293,13 @@ impl FileBrowser {
                 vec![
                     PaneBounds {
                         id: first,
-                        top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                        top_left: Point::new(sidebar_width, 0.0),
                         width: content_width,
                         height: half_height,
                     },
                     PaneBounds {
                         id: second,
-                        top_left: Point::new(SIDEBAR_WIDTH, half_height),
+                        top_left: Point::new(sidebar_width, half_height),
                         width: content_width,
                         height: half_height,
                     },
@@ -308,29 +309,30 @@ impl FileBrowser {
     }
 
     fn split_region_overlay_bounds(&self, region: SplitRegion) -> SplitOverlayBounds {
-        let content_width = (self.main_window_width - SIDEBAR_WIDTH).max(1.0);
+        let sidebar_width = self.sidebar_width;
+        let content_width = (self.main_window_width - sidebar_width).max(1.0);
         let content_height = self.main_window_height.max(1.0);
         let half_width = content_width / 2.0;
         let half_height = content_height / 2.0;
 
         match region {
             SplitRegion::Left => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                top_left: Point::new(sidebar_width, 0.0),
                 width: half_width,
                 height: content_height,
             },
             SplitRegion::Right => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH + half_width, 0.0),
+                top_left: Point::new(sidebar_width + half_width, 0.0),
                 width: half_width,
                 height: content_height,
             },
             SplitRegion::Top => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                top_left: Point::new(sidebar_width, 0.0),
                 width: content_width,
                 height: half_height,
             },
             SplitRegion::Bottom => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH, half_height),
+                top_left: Point::new(sidebar_width, half_height),
                 width: content_width,
                 height: half_height,
             },

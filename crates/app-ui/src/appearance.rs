@@ -273,6 +273,11 @@ pub(crate) fn column_browser_style(theme: &Theme) -> container::Appearance {
             Color::from_rgb8(250, 252, 255)
         })),
         text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            ..Border::default()
+        },
         ..container::Appearance::default()
     }
 }
@@ -285,22 +290,13 @@ pub(crate) fn column_panel_style(theme: &Theme) -> container::Appearance {
             Color::from_rgba8(255, 255, 255, 0.78)
         })),
         text_color: Some(base_text_color(theme)),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            ..Border::default()
-        },
         ..container::Appearance::default()
     }
 }
 
 pub(crate) fn column_resize_divider_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(54, 65, 82, 0.52)
-        } else {
-            Color::from_rgba8(218, 225, 235, 0.72)
-        })),
+        background: Some(Background::Color(subtle_border_color(theme))),
         ..container::Appearance::default()
     }
 }

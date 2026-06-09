@@ -13,6 +13,7 @@ mod scrollbar;
 mod search;
 mod selection;
 mod sidebar_bookmarks;
+mod sidebar_resize;
 mod startup;
 mod tabs;
 mod text_input_shortcuts;
@@ -39,6 +40,7 @@ use crate::app::runtime::{
 };
 use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
+use crate::app::sidebar_resize::SidebarResizeDrag;
 use crate::app::tabs::{TabAnimationState, TabBarReveal};
 use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
@@ -95,6 +97,8 @@ pub(crate) struct FileBrowser {
     pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
     pub(crate) sidebar_bookmark_drag: Option<SidebarBookmarkDragState>,
     pub(crate) sidebar_bookmark_motion: HashMap<PathBuf, SidebarBookmarkMotionState>,
+    pub(crate) sidebar_width: f32,
+    sidebar_resize_drag: Option<SidebarResizeDrag>,
     pub(crate) renaming: Option<PathBuf>,
     pending_created_entry_rename: Option<PathBuf>,
     pub(crate) pending_operation: Option<PendingOperation>,
@@ -229,6 +233,8 @@ impl FileBrowser {
             sidebar_bookmark_drop_slot: None,
             sidebar_bookmark_drag: None,
             sidebar_bookmark_motion: HashMap::new(),
+            sidebar_width: user_config.sidebar_width,
+            sidebar_resize_drag: None,
             renaming: None,
             pending_created_entry_rename: None,
             pending_operation: None,
@@ -529,6 +535,7 @@ impl FileBrowser {
                 self.finish_pane_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
+                    self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
                 ])
@@ -600,12 +607,14 @@ impl FileBrowser {
             Message::SidebarBookmarkEntered(path) => self.handle_sidebar_bookmark_entered(path),
             Message::SidebarBookmarkReleased => self.finish_sidebar_bookmark_drag(),
             Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
+            Message::SidebarResizeStarted => self.start_sidebar_resize_drag(),
             Message::CursorMoved(position) => {
                 self.cursor_position = position;
                 self.update_tab_drag(position);
                 self.update_pane_drag(position);
                 self.update_file_drag(position);
                 self.update_sidebar_bookmark_drag(position);
+                self.update_sidebar_resize_drag(position);
                 self.update_column_resize_drag(position);
                 if self.update_selection_marquee(position) {
                     crate::column_entry_bounds::column_entry_bounds_command()
@@ -649,6 +658,7 @@ impl FileBrowser {
                 self.finish_pane_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
+                    self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
                 ])
@@ -804,6 +814,7 @@ impl FileBrowser {
                 self.finish_pane_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
+                    self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
                     self.finish_drag_selection(),
                 ])

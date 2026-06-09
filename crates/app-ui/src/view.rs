@@ -44,7 +44,6 @@ use crate::operation_queue_view::{
     OPERATION_QUEUE_INDICATOR_RIGHT, OPERATION_QUEUE_PANEL_BOTTOM,
 };
 use crate::selection_marquee::selection_marquee_overlay;
-use crate::sidebar::SIDEBAR_WIDTH;
 use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
@@ -64,7 +63,7 @@ const TAB_DRAG_PREVIEW_WIDTH: f32 = 220.0;
 pub(super) const MENU_ICON_SIZE: f32 = 16.0;
 const TAB_LABEL_MAX_CHARS: usize = 24;
 const PATH_SUGGESTION_MAX_CHARS: usize = 72;
-const ERROR_NOTIFICATION_FLOAT_X: f32 = SIDEBAR_WIDTH + 18.0;
+const ERROR_NOTIFICATION_CONTENT_OFFSET_X: f32 = 18.0;
 const ERROR_NOTIFICATION_FLOAT_Y: f32 = 18.0;
 const RENDERER_RESTART_NOTICE_ERROR_OFFSET_Y: f32 = 58.0;
 const DRAG_PREVIEW_ICON_SIZE: f32 = 18.0;
@@ -198,7 +197,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating.push(FloatingContent {
             element: error_notification_panel(error),
             placement: FloatingPlacement::At(iced::Point::new(
-                ERROR_NOTIFICATION_FLOAT_X,
+                browser.sidebar_width + ERROR_NOTIFICATION_CONTENT_OFFSET_X,
                 ERROR_NOTIFICATION_FLOAT_Y,
             )),
         });
@@ -213,7 +212,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating.push(FloatingContent {
             element: renderer_restart_notice_panel(),
             placement: FloatingPlacement::At(iced::Point::new(
-                ERROR_NOTIFICATION_FLOAT_X,
+                browser.sidebar_width + ERROR_NOTIFICATION_CONTENT_OFFSET_X,
                 notice_y,
             )),
         });
@@ -228,7 +227,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating.push(FloatingContent {
             element: operation_queue_panel(&browser.operation_queue, browser.scrollbar_visibility),
             placement: FloatingPlacement::BottomLeft {
-                left: SIDEBAR_WIDTH + 12.0,
+                left: browser.sidebar_width + 12.0,
                 bottom: OPERATION_QUEUE_PANEL_BOTTOM,
             },
         });
@@ -238,7 +237,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating.push(FloatingContent {
             element: indicator,
             placement: FloatingPlacement::BottomRightInArea {
-                area_width: SIDEBAR_WIDTH,
+                area_width: browser.sidebar_width,
                 right: OPERATION_QUEUE_INDICATOR_RIGHT,
                 bottom: OPERATION_QUEUE_INDICATOR_BOTTOM,
             },

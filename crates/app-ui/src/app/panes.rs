@@ -9,7 +9,6 @@ use super::FileBrowser;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserTab, ExpandedDirectory, FileDragState, SplitRegion,
 };
-use crate::sidebar::SIDEBAR_WIDTH;
 
 const SPLIT_TARGET_MIN_CONTENT_WIDTH: f32 = 1.0;
 
@@ -162,14 +161,15 @@ impl FileBrowser {
         if content_width <= SPLIT_TARGET_MIN_CONTENT_WIDTH || self.main_window_height <= 1.0 {
             return None;
         }
-        if position.x < SIDEBAR_WIDTH || position.y < 0.0 {
+        let sidebar_width = self.sidebar_width;
+        if position.x < sidebar_width || position.y < 0.0 {
             return None;
         }
-        if position.x > SIDEBAR_WIDTH + content_width || position.y > self.main_window_height {
+        if position.x > sidebar_width + content_width || position.y > self.main_window_height {
             return None;
         }
 
-        let local_x = ((position.x - SIDEBAR_WIDTH) / content_width).clamp(0.0, 1.0);
+        let local_x = ((position.x - sidebar_width) / content_width).clamp(0.0, 1.0);
         let local_y = (position.y / self.main_window_height).clamp(0.0, 1.0);
         let horizontal_bias = (local_x - 0.5).abs();
         let vertical_bias = (local_y - 0.5).abs();
@@ -195,27 +195,28 @@ impl FileBrowser {
         let target = drag.split_target?;
         let content_width = self.split_content_width();
         let content_height = self.main_window_height.max(1.0);
+        let sidebar_width = self.sidebar_width;
         let half_width = content_width / 2.0;
         let half_height = content_height / 2.0;
 
         let bounds = match target.region {
             SplitRegion::Left => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                top_left: Point::new(sidebar_width, 0.0),
                 width: half_width,
                 height: content_height,
             },
             SplitRegion::Right => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH + half_width, 0.0),
+                top_left: Point::new(sidebar_width + half_width, 0.0),
                 width: half_width,
                 height: content_height,
             },
             SplitRegion::Top => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH, 0.0),
+                top_left: Point::new(sidebar_width, 0.0),
                 width: content_width,
                 height: half_height,
             },
             SplitRegion::Bottom => SplitOverlayBounds {
-                top_left: Point::new(SIDEBAR_WIDTH, half_height),
+                top_left: Point::new(sidebar_width, half_height),
                 width: content_width,
                 height: half_height,
             },
@@ -282,6 +283,6 @@ impl FileBrowser {
     }
 
     fn split_content_width(&self) -> f32 {
-        (self.main_window_width - SIDEBAR_WIDTH).max(1.0)
+        (self.main_window_width - self.sidebar_width).max(1.0)
     }
 }

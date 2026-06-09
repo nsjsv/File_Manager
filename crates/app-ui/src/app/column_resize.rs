@@ -4,7 +4,6 @@ use crate::app::FileBrowser;
 use crate::commands::{save_column_width_override_command, save_user_config_command};
 use crate::config;
 use crate::model::Message;
-use crate::sidebar::SIDEBAR_WIDTH;
 use crate::three_column_view::{COLUMN_RESIZE_DIVIDER_WIDTH, DEFAULT_VISIBLE_COLUMN_COUNT};
 
 #[derive(Debug, Clone, Copy)]
@@ -73,7 +72,7 @@ impl FileBrowser {
     }
 
     fn column_browser_content_width(&self) -> f32 {
-        column_browser_content_width_for_window(self.main_window_width)
+        column_browser_content_width_for_window(self.main_window_width, self.sidebar_width)
     }
 
     pub(super) fn refresh_column_width_reference_content_width(&mut self) {
@@ -115,9 +114,9 @@ impl FileBrowser {
     }
 }
 
-fn column_browser_content_width_for_window(main_window_width: f32) -> f32 {
+fn column_browser_content_width_for_window(main_window_width: f32, sidebar_width: f32) -> f32 {
     let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
-    (main_window_width - SIDEBAR_WIDTH - divider_width).max(1.0)
+    (main_window_width - sidebar_width - divider_width).max(1.0)
 }
 
 fn scale_column_width_to_content_width(

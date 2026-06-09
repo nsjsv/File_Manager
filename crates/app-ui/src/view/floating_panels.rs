@@ -13,6 +13,7 @@ use crate::appearance::{
     navigation_icon_button_style, selected_sidebar_item_style, sidebar_bookmark_drop_slot_style,
     sidebar_style,
 };
+use crate::config;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
@@ -21,7 +22,6 @@ use crate::model::{
     SidebarLocation, SidebarLocationKind, TransferConflictChoice, TransferConflictItem,
     TransferConflictMetadata, TransferConflictState, TRASH_LOCATION_LABEL,
 };
-use crate::sidebar::SIDEBAR_WIDTH;
 use crate::typography::readable_text;
 
 use super::rendering_settings::rendering_gpu_preference_button;
@@ -34,7 +34,10 @@ const ERROR_NOTIFICATION_MAX_CHARS: usize = 96;
 const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
 const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
 const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
-const SIDEBAR_LABEL_MAX_CHARS: usize = 22;
+const SIDEBAR_LABEL_REFERENCE_MAX_CHARS: usize = 22;
+const SIDEBAR_LABEL_MIN_CHARS: usize = 14;
+const SIDEBAR_LABEL_MAX_CHARS: usize = 44;
+const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 const SIDEBAR_ITEM_VERTICAL_PADDING: f32 = 12.0;
 const SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT: f32 = MENU_ICON_SIZE + SIDEBAR_ITEM_VERTICAL_PADDING;
 
@@ -351,27 +354,47 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         }
     }
 
-    let sidebar_panel = container(
-        scrollable(sidebar)
-            .direction(auto_hide_vertical_scrollbar_direction(
-                browser.scrollbar_visibility,
-                6.0,
-            ))
-            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
-            .height(Length::Fill),
-    )
-    .width(Length::Fixed(SIDEBAR_WIDTH))
-    .height(Length::Fill)
-    .style(sidebar_style);
+    let sidebar_scroller = scrollable(sidebar)
+        .direction(auto_hide_vertical_scrollbar_direction(
+            browser.scrollbar_visibility,
+            6.0,
+        ))
+        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+        .height(Length::Fill);
+    let sidebar_content_panel = container(sidebar_scroller)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
-    if can_drop_bookmark {
-        mouse_area(sidebar_panel)
+    let sidebar_content: Element<'_, Message> = if can_drop_bookmark {
+        mouse_area(sidebar_content_panel)
             .on_move(Message::SidebarPointerMoved)
             .on_exit(Message::SidebarPointerExited)
             .into()
     } else {
-        sidebar_panel.into()
-    }
+        sidebar_content_panel.into()
+    };
+
+    container(
+        row![sidebar_content, sidebar_resize_handle()]
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fixed(browser.sidebar_width))
+    .height(Length::Fill)
+    .style(sidebar_style)
+    .into()
+}
+
+fn sidebar_resize_handle() -> Element<'static, Message> {
+    let handle = container(Space::new().width(Length::Fixed(SIDEBAR_RESIZE_HANDLE_WIDTH)))
+        .width(Length::Fixed(SIDEBAR_RESIZE_HANDLE_WIDTH))
+        .height(Length::Fill);
+
+    mouse_area(handle)
+        .on_press(Message::SidebarResizeStarted)
+        .on_release(Message::DragSelectionFinished)
+        .interaction(iced::mouse::Interaction::ResizingHorizontally)
+        .into()
 }
 
 fn sidebar_location_item<'a>(
@@ -389,6 +412,7 @@ fn sidebar_location_item<'a>(
         sidebar_icon_symbol(location),
         &location.label,
         tone,
+        sidebar_label_max_chars(browser.sidebar_width),
     ))
     .padding([6, 8])
     .width(Length::Fill);
@@ -458,6 +482,7 @@ fn sidebar_trash_item(browser: &FileBrowser) -> Element<'_, Message> {
         IconSymbol::Trash,
         TRASH_LOCATION_LABEL,
         trash_tone,
+        sidebar_label_max_chars(browser.sidebar_width),
     ))
     .padding([6, 8])
     .width(Length::Fill);
@@ -609,14 +634,26 @@ impl SidebarPresentation {
     }
 }
 
-fn sidebar_label(icon: IconSymbol, label: &str, tone: IconTone) -> Row<'static, Message> {
-    let label = format_middle_ellipsized_text(label, SIDEBAR_LABEL_MAX_CHARS);
+fn sidebar_label(
+    icon: IconSymbol,
+    label: &str,
+    tone: IconTone,
+    max_chars: usize,
+) -> Row<'static, Message> {
+    let label = format_middle_ellipsized_text(label, max_chars);
     row![
         themed_icon(icon, tone, MENU_ICON_SIZE),
         readable_text(label).width(Length::Fill)
     ]
     .spacing(8)
     .align_y(Alignment::Center)
+}
+
+fn sidebar_label_max_chars(sidebar_width: f32) -> usize {
+    let content_width = (sidebar_width - SIDEBAR_RESIZE_HANDLE_WIDTH).max(1.0);
+    let scaled_chars =
+        SIDEBAR_LABEL_REFERENCE_MAX_CHARS as f32 * content_width / config::DEFAULT_SIDEBAR_WIDTH;
+    (scaled_chars.round() as usize).clamp(SIDEBAR_LABEL_MIN_CHARS, SIDEBAR_LABEL_MAX_CHARS)
 }
 
 pub(super) fn context_menu_panel(

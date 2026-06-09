@@ -11,7 +11,7 @@ use crate::model::{
     SidebarBookmarkContextMenuState, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
     SidebarLocation, SidebarLocationKind,
 };
-use crate::sidebar::{sidebar_favorite_configs, SIDEBAR_WIDTH};
+use crate::sidebar::sidebar_favorite_configs;
 
 const SIDEBAR_HEADER_HEIGHT: f32 = 24.0;
 const SIDEBAR_LOCATION_ROW_HEIGHT: f32 = 32.8;
@@ -236,7 +236,7 @@ impl FileBrowser {
             .unwrap_or(drag.source_index);
         let projected_index =
             projected_sidebar_bookmark_index(drag.source_index, delta_y, favorites.len());
-        let cursor_inside_sidebar_x = (0.0..=SIDEBAR_WIDTH).contains(&position.x);
+        let cursor_inside_sidebar_x = (0.0..=self.sidebar_width).contains(&position.x);
         let should_activate = matches!(drag.phase, FileDragPhase::WaitingForMovement { .. })
             && delta_x * delta_x + delta_y * delta_y
                 >= POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE;
