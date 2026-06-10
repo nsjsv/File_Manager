@@ -183,6 +183,152 @@ async fn file_search_index_respects_gitignore_rules() {
 }
 
 #[tokio::test]
+async fn search_file_tree_respects_gitignore_rules() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join(".gitignore"), "target/\n*.log\n").unwrap();
+    fs::create_dir_all(dir.path().join("target")).unwrap();
+    fs::write(dir.path().join("target/cache.log"), b"ignored").unwrap();
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/app.rs"), b"shown").unwrap();
+
+    let ignored = search_file_tree(
+        dir.path(),
+        "cache",
+        FileSearchOptions {
+            include_hidden: true,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    let shown = search_file_tree(
+        dir.path(),
+        "app",
+        FileSearchOptions {
+            include_hidden: true,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(ignored.matches.is_empty());
+    assert_eq!(shown.matches.len(), 1);
+    assert_eq!(shown.matches[0].path, dir.path().join("src/app.rs"));
+}
+
+#[tokio::test]
+async fn file_search_index_uses_project_manifest_for_readiness() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("meta.json"), b"{}").unwrap();
+
+    assert!(!file_search_index_exists(dir.path()));
+}
+
+#[tokio::test]
+async fn file_search_index_rebuild_invalidates_cached_catalog() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    fs::write(dir.path().join("first-note.txt"), b"one").unwrap();
+
+    build_file_search_index(
+        dir.path(),
+        index_dir.path(),
+        FileSearchIndexOptions {
+            include_hidden: true,
+        },
+    )
+    .await
+    .unwrap();
+    let first = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "first",
+        FileSearchOptions {
+            include_hidden: true,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.matches.len(), 1);
+
+    fs::remove_file(dir.path().join("first-note.txt")).unwrap();
+    fs::write(dir.path().join("second-note.txt"), b"two").unwrap();
+    build_file_search_index(
+        dir.path(),
+        index_dir.path(),
+        FileSearchIndexOptions {
+            include_hidden: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let stale = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "first",
+        FileSearchOptions {
+            include_hidden: true,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    let refreshed = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "second",
+        FileSearchOptions {
+            include_hidden: true,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(stale.matches.is_empty());
+    assert_eq!(refreshed.matches.len(), 1);
+    assert_eq!(
+        refreshed.matches[0].path,
+        dir.path().join("second-note.txt")
+    );
+}
+
+#[tokio::test]
+async fn file_search_index_respects_result_limit() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    for index in 0..20 {
+        fs::write(dir.path().join(format!("note-{index:02}.txt")), b"note").unwrap();
+    }
+
+    build_file_search_index(
+        dir.path(),
+        index_dir.path(),
+        FileSearchIndexOptions {
+            include_hidden: true,
+        },
+    )
+    .await
+    .unwrap();
+    let search = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "note",
+        FileSearchOptions {
+            include_hidden: true,
+            limit: 5,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(search.matches.len(), 5);
+}
+
+#[tokio::test]
 async fn search_file_tree_respects_hidden_option() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join(".secret-note"), b"hidden").unwrap();

@@ -7,7 +7,7 @@ use file_core::{
     DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexOutcome, FileSearchMatch,
     FileSearchOutcome, TrashEntry, TrashRestoreEntry, TrashScan,
 };
-use file_operation_store::TaskQueueStore;
+use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
 use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Rectangle, Theme};
@@ -18,12 +18,17 @@ use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailLoadOutcome};
 
+pub(crate) use crate::startup_index_tree::{
+    StartupIndexDirectoryChildren, StartupIndexEntrySelection, StartupIndexRootSeed,
+    StartupIndexSetupState, StartupIndexTreeEntry,
+};
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedOperationStore {
     pub(crate) task_queue_store: TaskQueueStore,
     pub(crate) column_width_overrides: HashMap<usize, f32>,
+    pub(crate) restored_tasks: Vec<StoredTask>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +134,13 @@ pub(crate) enum Message {
     SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
     SearchMatchSelected(PathBuf),
     SearchActivated,
+    StartupIndexHiddenContentVisibilityToggled,
+    StartupIndexEntryToggled(usize),
+    StartupIndexDirectoryToggled(usize),
+    StartupIndexTreeAnimationTick,
+    StartupIndexDirectoryChildrenLoaded(u64, PathBuf, Result<Vec<DirectoryEntry>, String>),
+    StartupIndexAccepted,
+    StartupIndexSkipped,
     ExpandedDirectoryLoaded(BrowserPaneId, PathBuf, Result<DirectoryScan, String>),
     ObservedDirectoryChanged(PathBuf),
     ColumnSettingsToggled,

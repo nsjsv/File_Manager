@@ -13,6 +13,21 @@ impl FileBrowser {
         result: Result<FileOperationOutcome, String>,
     ) -> Task<Message> {
         let completed_successfully = result.is_ok();
+        let search_index_root = self
+            .operation_queue
+            .operation(task_id)
+            .and_then(|operation| {
+                if let QueuedFileOperation::BuildSearchIndex { root, .. } = operation {
+                    Some(root.clone())
+                } else {
+                    None
+                }
+            });
+        let search_index_result = match &result {
+            Ok(FileOperationOutcome::SearchIndex { outcome }) => Some(Ok(outcome.clone())),
+            Err(error) if search_index_root.is_some() => Some(Err(error.clone())),
+            _ => None,
+        };
         let is_history_replay = self.operation_history.is_replaying(task_id);
         let created_path = (completed_successfully && !is_history_replay)
             .then(|| {
@@ -38,6 +53,10 @@ impl FileBrowser {
         let (finished, storage_error) = self.operation_queue.finish(task_id, queue_result);
         if let Some(error) = storage_error {
             self.error = Some(error);
+        }
+
+        if let (Some(root), Some(index_result)) = (search_index_root, search_index_result) {
+            return self.accept_search_index(root, index_result);
         }
 
         if finished {
@@ -144,7 +163,7 @@ impl FileBrowser {
         self.show_operation_queue_temporarily()
     }
 
-    fn show_operation_queue_temporarily(&mut self) -> Task<Message> {
+    pub(super) fn show_operation_queue_temporarily(&mut self) -> Task<Message> {
         self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
         self.operation_queue.open_panel();
         self.operation_queue_auto_hide_generation =

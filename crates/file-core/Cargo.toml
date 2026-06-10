@@ -8,7 +8,7 @@ license.workspace = true
 ignore = "0.4.25"
 notify.workspace = true
 nucleo.workspace = true
-tantivy.workspace = true
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

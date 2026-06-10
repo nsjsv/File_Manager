@@ -4,7 +4,7 @@ use file_core::{
     FileOperationControls, FileOperationRunState, TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
-    StoredOperation, StoredPath, StoredProgress, StoredTaskStatus, StoredTransfer,
+    StoredOperation, StoredPath, StoredProgress, StoredTask, StoredTaskStatus, StoredTransfer,
     StoredTrashEntry, TaskQueueStore,
 };
 use tokio::sync::watch;
@@ -18,15 +18,38 @@ const ACTIVE_TRANSFER_PROGRESS_LIMIT: f32 = 0.999;
 
 #[derive(Debug, Clone)]
 pub(crate) enum QueuedFileOperation {
-    Rename { path: PathBuf, new_name: String },
-    CreateDirectory { parent: PathBuf },
-    CreateEmptyFile { parent: PathBuf },
-    Trash { paths: Vec<PathBuf> },
-    Restore { entries: Vec<TrashRestoreEntry> },
-    DeleteTrashEntries { entries: Vec<TrashRestoreEntry> },
+    Rename {
+        path: PathBuf,
+        new_name: String,
+    },
+    CreateDirectory {
+        parent: PathBuf,
+    },
+    CreateEmptyFile {
+        parent: PathBuf,
+    },
+    Trash {
+        paths: Vec<PathBuf>,
+    },
+    Restore {
+        entries: Vec<TrashRestoreEntry>,
+    },
+    DeleteTrashEntries {
+        entries: Vec<TrashRestoreEntry>,
+    },
     EmptyTrash,
-    Copy { transfers: Vec<QueuedTransfer> },
-    Move { transfers: Vec<QueuedTransfer> },
+    Copy {
+        transfers: Vec<QueuedTransfer>,
+    },
+    Move {
+        transfers: Vec<QueuedTransfer>,
+    },
+    BuildSearchIndex {
+        root: PathBuf,
+        index_dir: PathBuf,
+        selected_paths: Vec<PathBuf>,
+        include_hidden: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +81,7 @@ impl QueuedFileOperation {
             Self::EmptyTrash => "Empty Trash",
             Self::Copy { .. } => "Copy",
             Self::Move { .. } => "Move",
+            Self::BuildSearchIndex { .. } => "Build Search Index",
         }
     }
 
@@ -74,6 +98,11 @@ impl QueuedFileOperation {
             Self::DeleteTrashEntries { entries } => trash_entries_detail(entries),
             Self::EmptyTrash => "All trash items".to_owned(),
             Self::Copy { transfers } | Self::Move { transfers } => transfers_detail(transfers),
+            Self::BuildSearchIndex {
+                root,
+                selected_paths,
+                ..
+            } => search_index_detail(root, selected_paths),
         }
     }
 
@@ -83,6 +112,10 @@ impl QueuedFileOperation {
             Self::CreateEmptyFile { parent } => Some(parent.join(NEW_FILE_NAME)),
             _ => None,
         }
+    }
+
+    pub(crate) fn supports_pause(&self) -> bool {
+        !matches!(self, Self::BuildSearchIndex { .. })
     }
 
     fn to_stored(&self) -> StoredOperation {
@@ -116,6 +149,40 @@ impl QueuedFileOperation {
             Self::Move { transfers } => StoredOperation::Move {
                 transfers: stored_transfers(transfers),
             },
+            Self::BuildSearchIndex {
+                root,
+                index_dir,
+                selected_paths,
+                include_hidden,
+            } => StoredOperation::SearchIndex {
+                root: StoredPath::from_path(root),
+                index_dir: StoredPath::from_path(index_dir),
+                selected_paths: selected_paths
+                    .iter()
+                    .map(|path| StoredPath::from_path(path))
+                    .collect(),
+                include_hidden: *include_hidden,
+            },
+        }
+    }
+
+    fn from_resumable_stored(operation: StoredOperation) -> Option<Self> {
+        match operation {
+            StoredOperation::SearchIndex {
+                root,
+                index_dir,
+                selected_paths,
+                include_hidden,
+            } => Some(Self::BuildSearchIndex {
+                root: root.to_path_buf(),
+                index_dir: index_dir.to_path_buf(),
+                selected_paths: selected_paths
+                    .into_iter()
+                    .map(|path| path.to_path_buf())
+                    .collect(),
+                include_hidden,
+            }),
+            _ => None,
         }
     }
 }
@@ -262,8 +329,20 @@ impl FileOperationQueue {
         }
     }
 
-    pub(crate) fn set_store(&mut self, store: TaskQueueStore) {
+    pub(crate) fn set_store_and_restore(
+        &mut self,
+        store: TaskQueueStore,
+        stored_tasks: Vec<StoredTask>,
+    ) -> Option<String> {
         self.store = Some(store);
+        let mut storage_error = None;
+
+        for stored_task in stored_tasks {
+            storage_error =
+                combine_storage_errors(storage_error, self.restore_stored_task(stored_task));
+        }
+
+        combine_storage_errors(storage_error, self.start_next())
     }
 
     pub(crate) fn task_queue_store(&self) -> Option<&TaskQueueStore> {
@@ -510,6 +589,57 @@ impl FileOperationQueue {
         None
     }
 
+    fn restore_stored_task(&mut self, stored_task: StoredTask) -> Option<String> {
+        let StoredTask {
+            id,
+            operation,
+            status,
+            progress,
+            ..
+        } = stored_task;
+
+        if stored_status_is_terminal(status) {
+            return None;
+        }
+
+        let Some(operation) = QueuedFileOperation::from_resumable_stored(operation) else {
+            return self.mark_interrupted_non_resumable_task_failed(id, progress);
+        };
+
+        let (run_state_sender, run_state_receiver) = watch::channel(FileOperationRunState::Running);
+        self.tasks.push(FileOperationTask {
+            id,
+            operation,
+            status: FileOperationStatus::Pending,
+            progress: FileOperationProgress::pending(),
+            error: None,
+            is_read: false,
+            cancel: CancellationToken::new(),
+            run_state_sender,
+            run_state_receiver,
+            is_persisted: true,
+        });
+        let position = self.tasks.len().saturating_sub(1);
+        self.persist_task_state(position)
+    }
+
+    fn mark_interrupted_non_resumable_task_failed(
+        &self,
+        id: u64,
+        progress: StoredProgress,
+    ) -> Option<String> {
+        self.store
+            .as_ref()?
+            .update_task_state(
+                id,
+                StoredTaskStatus::Failed,
+                progress,
+                Some("Task was interrupted and cannot safely resume"),
+            )
+            .err()
+            .map(storage_error)
+    }
+
     fn allocate_local_id(&mut self) -> u64 {
         loop {
             let id = self.next_local_id;
@@ -641,11 +771,31 @@ fn trash_entries_detail(entries: &[TrashRestoreEntry]) -> String {
     }
 }
 
+fn search_index_detail(root: &Path, selected_paths: &[PathBuf]) -> String {
+    match selected_paths {
+        [] => format!("Location: {}", path_label(root)),
+        [path] if path == root => format!("Location: {}", path_label(root)),
+        [path] => format!("{} in {}", path_label(path), path_label(root)),
+        [first, ..] => format!(
+            "{} and {} total locations",
+            path_label(first),
+            selected_paths.len()
+        ),
+    }
+}
+
 fn path_label(path: &Path) -> String {
     path.file_name()
         .unwrap_or(path.as_os_str())
         .to_string_lossy()
         .into_owned()
+}
+
+fn stored_status_is_terminal(status: StoredTaskStatus) -> bool {
+    matches!(
+        status,
+        StoredTaskStatus::Failed | StoredTaskStatus::Completed | StoredTaskStatus::Canceled
+    )
 }
 
 #[cfg(test)]

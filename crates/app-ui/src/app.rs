@@ -15,6 +15,7 @@ mod selection;
 mod sidebar_bookmarks;
 mod sidebar_resize;
 mod startup;
+mod startup_index_setup;
 mod tabs;
 mod text_input_shortcuts;
 mod thumbnailing;
@@ -54,7 +55,8 @@ use crate::model::{
     NavigationMode, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
     SelectionMarquee, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
-    TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    StartupIndexSetupState, TabDragState, TextPreviewDocument, TransferConflictState,
+    VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -105,6 +107,7 @@ pub(crate) struct FileBrowser {
     pub(crate) transfer_conflict: Option<TransferConflictState>,
     pub(crate) destructive_action_confirmation: Option<DestructiveActionConfirmation>,
     pub(crate) search: Option<SearchState>,
+    pub(crate) startup_index_setup: Option<StartupIndexSetupState>,
     search_window: Option<window::Id>,
     pub(crate) search_index: SearchIndexRuntime,
     pub(crate) tabs: Vec<BrowserTab>,
@@ -241,6 +244,7 @@ impl FileBrowser {
             transfer_conflict: None,
             destructive_action_confirmation: None,
             search: None,
+            startup_index_setup: None,
             search_window: None,
             search_index: SearchIndexRuntime::new(PathBuf::new()),
             tabs: vec![initial_tab],
@@ -333,6 +337,13 @@ impl FileBrowser {
             subscriptions.push(
                 time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
                     .map(|_| Message::PreviewTreeAnimationTick),
+            );
+        }
+
+        if self.startup_index_tree_animation_is_active() {
+            subscriptions.push(
+                time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
+                    .map(|_| Message::StartupIndexTreeAnimationTick),
             );
         }
 
@@ -740,6 +751,27 @@ impl FileBrowser {
             Message::SearchIndexBuilt(root, outcome) => self.accept_search_index(root, outcome),
             Message::SearchMatchSelected(path) => self.activate_search_match(path),
             Message::SearchActivated => self.activate_selected_search_match(),
+            Message::StartupIndexHiddenContentVisibilityToggled => {
+                self.toggle_startup_index_hidden_content_visibility()
+            }
+            Message::StartupIndexEntryToggled(entry_id) => {
+                self.toggle_startup_index_entry(entry_id)
+            }
+            Message::StartupIndexDirectoryToggled(entry_id) => {
+                self.toggle_startup_index_directory(entry_id)
+            }
+            Message::StartupIndexTreeAnimationTick => self.advance_startup_index_tree_animation(),
+            Message::StartupIndexDirectoryChildrenLoaded(
+                request_generation,
+                parent_path,
+                children_outcome,
+            ) => self.accept_startup_index_directory_children(
+                request_generation,
+                parent_path,
+                children_outcome,
+            ),
+            Message::StartupIndexAccepted => self.accept_startup_index_setup(),
+            Message::StartupIndexSkipped => self.skip_startup_index_setup(),
             Message::ExpandedDirectoryLoaded(pane_id, path, scan) => {
                 self.accept_expanded_directory(pane_id, path, scan)
             }

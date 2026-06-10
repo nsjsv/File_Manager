@@ -22,9 +22,10 @@ pub use ops::{
 };
 pub use scan::{scan_directory, DirectoryScan, FileError, ScanOptions, ScanWarning};
 pub use search::{
-    build_file_search_index, file_search_index_exists, search_file_index, search_file_tree,
-    FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchMatch, FileSearchOptions,
-    FileSearchOutcome,
+    build_file_search_index, build_file_search_index_for_paths,
+    build_file_search_index_for_paths_with_progress, file_search_index_exists, search_file_index,
+    search_file_tree, FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchIndexProgress,
+    FileSearchMatch, FileSearchOptions, FileSearchOutcome,
 };
 pub use sort::{
     apply_entry_options, compare_entries, filter_hidden, sort_entries, SortDirection, SortField,

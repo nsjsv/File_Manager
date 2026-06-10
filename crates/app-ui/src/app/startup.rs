@@ -9,6 +9,7 @@ use crate::config::UserConfig;
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
 };
+use crate::operation_queue::QueuedFileOperation;
 use crate::sidebar::home_sidebar_location;
 use crate::startup_trace;
 
@@ -32,8 +33,10 @@ impl FileBrowser {
         self.is_loading = true;
         self.error = None;
         self.sync_active_tab_state();
+        let startup_index_setup_command = self.refresh_startup_index_setup_choices();
 
         Task::batch([
+            startup_index_setup_command,
             load_directory_command(BrowserPaneId::PRIMARY, home.clone(), self.options.clone()),
             sidebar_locations_command(home, configured_favorites),
             operation_store_command(state_database_path),
@@ -45,7 +48,7 @@ impl FileBrowser {
         sidebar_locations: Vec<SidebarLocation>,
     ) -> Task<Message> {
         self.sidebar_locations = sidebar_locations;
-        Task::none()
+        self.refresh_startup_index_setup_choices()
     }
 
     pub(super) fn accept_operation_store(
@@ -55,13 +58,33 @@ impl FileBrowser {
         match operation_store {
             Ok(loaded_store) => {
                 let persisted_column_width_overrides = loaded_store.column_width_overrides;
-                self.operation_queue
-                    .set_store(loaded_store.task_queue_store);
+                let previous_task_count = self.operation_queue.task_count();
+                if let Some(error) = self.operation_queue.set_store_and_restore(
+                    loaded_store.task_queue_store,
+                    loaded_store.restored_tasks,
+                ) {
+                    self.error = Some(error);
+                }
+                for task in self.operation_queue.tasks() {
+                    if let QueuedFileOperation::BuildSearchIndex { root, .. } = &task.operation {
+                        self.search_index.indexing_roots.insert(root.clone());
+                        self.search_index.errors.remove(root);
+                    }
+                }
+                let restored_queue_command =
+                    if self.operation_queue.task_count() > previous_task_count {
+                        self.show_operation_queue_temporarily()
+                    } else {
+                        Task::none()
+                    };
                 if !persisted_column_width_overrides.is_empty() {
                     self.apply_column_width_overrides(persisted_column_width_overrides);
                     if !self.user_config.legacy_column_width_overrides.is_empty() {
                         self.user_config.legacy_column_width_overrides.clear();
-                        return self.persist_user_config_command();
+                        return Task::batch([
+                            self.persist_user_config_command(),
+                            restored_queue_command,
+                        ]);
                     }
                 } else if !self.user_config.legacy_column_width_overrides.is_empty() {
                     self.apply_column_width_overrides(
@@ -71,8 +94,10 @@ impl FileBrowser {
                     return Task::batch([
                         self.persist_column_width_overrides_command(),
                         self.persist_user_config_command(),
+                        restored_queue_command,
                     ]);
                 }
+                return restored_queue_command;
             }
             Err(error) => {
                 self.error = Some(format!(

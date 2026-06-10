@@ -58,6 +58,10 @@ impl FileOperationControls {
         Self { cancel, run_state }
     }
 
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
     pub async fn wait_until_running(&mut self) -> Result<(), FileError> {
         loop {
             if self.cancel.is_cancelled() {

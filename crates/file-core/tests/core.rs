@@ -7,11 +7,12 @@ use std::{fs, io};
 use file_core::{
     available_transfer_target_path, build_file_search_index, check_transfer_conflicts, copy_path,
     copy_path_with_options, create_directory, create_empty_file, create_file_with_contents,
-    filter_hidden, is_transfer_target_available, move_path, move_path_with_options, rename_path,
-    scan_directory, search_file_index, search_file_tree, sort_entries, watch_directory,
-    DirectoryEntry, EntryMetadata, FileError, FileKind, FileOperationControls,
-    FileOperationRunState, FileSearchIndexOptions, FileSearchOptions, FileTransferOptions,
-    ScanOptions, SortDirection, SortField, TransferConflictCheck, TransferConflictStrategy,
+    file_search_index_exists, filter_hidden, is_transfer_target_available, move_path,
+    move_path_with_options, rename_path, scan_directory, search_file_index, search_file_tree,
+    sort_entries, watch_directory, DirectoryEntry, EntryMetadata, FileError, FileKind,
+    FileOperationControls, FileOperationRunState, FileSearchIndexOptions, FileSearchOptions,
+    FileTransferOptions, ScanOptions, SortDirection, SortField, TransferConflictCheck,
+    TransferConflictStrategy,
 };
 use tempfile::tempdir;
 

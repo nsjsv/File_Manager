@@ -3,6 +3,7 @@ mod markdown_preview;
 mod preview_panel;
 mod rendering_settings;
 mod search_panel;
+mod startup_index_setup;
 mod tab_motion;
 mod toggle_switch;
 
@@ -52,6 +53,7 @@ use floating_panels::{
     error_notification_panel, sidebar_view, transfer_conflict_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
+use startup_index_setup::startup_index_setup_panel;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const TAB_ICON_SIZE: f32 = 14.0;
@@ -128,7 +130,13 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
 
     let mut floating = Vec::new();
     let mut floating_input = BrowserFloatingInput::Plain;
-    if let Some(confirmation) = &browser.destructive_action_confirmation {
+    if let Some(startup_index_setup) = &browser.startup_index_setup {
+        floating_input = BrowserFloatingInput::Modal;
+        floating.push(FloatingContent {
+            element: startup_index_setup_panel(startup_index_setup, browser.scrollbar_visibility),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(confirmation) = &browser.destructive_action_confirmation {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: destructive_action_confirmation_panel(confirmation),

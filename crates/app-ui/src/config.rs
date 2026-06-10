@@ -16,6 +16,7 @@ const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
 const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
+const STARTUP_INDEX_PROMPT_KEY: &str = "startup_index_prompt";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
 const COLUMN_WIDTH_OVERRIDES_KEY: &str = "column_width_overrides";
 const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
@@ -32,6 +33,29 @@ pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 140.0;
 pub(crate) const MAX_SIDEBAR_WIDTH: f32 = 360.0;
 pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartupIndexPromptStatus {
+    Pending,
+    Completed,
+}
+
+impl StartupIndexPromptStatus {
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "completed" => Some(Self::Completed),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RenderingGpuPreference {
@@ -93,6 +117,7 @@ pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) show_hidden_files: bool,
+    pub(crate) startup_index_prompt: StartupIndexPromptStatus,
     pub(crate) sidebar_width: f32,
     pub(crate) legacy_column_width_overrides: HashMap<usize, f32>,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
@@ -148,6 +173,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         search_index_dir: cache_base.join("search-index"),
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         show_hidden_files: false,
+        startup_index_prompt: StartupIndexPromptStatus::Pending,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         legacy_column_width_overrides: HashMap::new(),
         sidebar_favorites: None,
@@ -161,6 +187,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         search_index_dir: PathBuf::new(),
         thumbnail_cache_dir: PathBuf::new(),
         show_hidden_files: false,
+        startup_index_prompt: StartupIndexPromptStatus::Pending,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         legacy_column_width_overrides: HashMap::new(),
         sidebar_favorites: None,
@@ -226,6 +253,11 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     {
         config.show_hidden_files = value;
     }
+    if let Some(value) = toml_string(&document, STARTUP_INDEX_PROMPT_KEY) {
+        if let Some(status) = StartupIndexPromptStatus::from_config_value(value) {
+            config.startup_index_prompt = status;
+        }
+    }
     if let Some(width) = document.get(SIDEBAR_WIDTH_KEY).and_then(toml_number_as_f32) {
         config.sidebar_width = normalize_sidebar_width(width);
     }
@@ -279,6 +311,11 @@ fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
                 "false" => config.show_hidden_files = false,
                 _ => {}
             },
+            STARTUP_INDEX_PROMPT_KEY => {
+                if let Some(status) = StartupIndexPromptStatus::from_config_value(value) {
+                    config.startup_index_prompt = status;
+                }
+            }
             SIDEBAR_WIDTH_KEY => {
                 if let Ok(width) = value.parse::<f32>() {
                     config.sidebar_width = normalize_sidebar_width(width);
@@ -331,6 +368,10 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
     document.insert(
         SHOW_HIDDEN_FILES_KEY.to_string(),
         toml::Value::Boolean(config.show_hidden_files),
+    );
+    document.insert(
+        STARTUP_INDEX_PROMPT_KEY.to_string(),
+        toml::Value::String(config.startup_index_prompt.config_value().to_string()),
     );
     document.insert(
         SIDEBAR_WIDTH_KEY.to_string(),
@@ -477,6 +518,7 @@ mod tests {
 search_index_dir = "/tmp/search-index"
 thumbnail_cache_dir = "/tmp/thumbnails"
 show_hidden_files = true
+startup_index_prompt = "completed"
 sidebar_width = 260.5
 terminal_emulator = "ghostty"
 rendering_backend = "gpu"
@@ -491,6 +533,10 @@ rendering_backend = "gpu"
         assert_eq!(parsed.search_index_dir, PathBuf::from("/tmp/search-index"));
         assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
         assert!(parsed.show_hidden_files);
+        assert_eq!(
+            parsed.startup_index_prompt,
+            StartupIndexPromptStatus::Completed
+        );
         assert_eq!(parsed.sidebar_width, 260.5);
         assert_eq!(parsed.legacy_column_width_overrides.get(&0), Some(&240.5));
         assert_eq!(parsed.legacy_column_width_overrides.get(&2), Some(&360.0));
@@ -504,11 +550,15 @@ rendering_backend = "gpu"
     #[test]
     fn parses_legacy_user_config() {
         let parsed = parse_legacy_user_config(
-            "show_hidden_files=true\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\n",
+            "show_hidden_files=true\nstartup_index_prompt=completed\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\n",
             default_user_config(),
         );
 
         assert!(parsed.show_hidden_files);
+        assert_eq!(
+            parsed.startup_index_prompt,
+            StartupIndexPromptStatus::Completed
+        );
         assert_eq!(parsed.sidebar_width, 260.5);
         assert_eq!(parsed.legacy_column_width_overrides.get(&0), Some(&240.5));
         assert_eq!(parsed.legacy_column_width_overrides.get(&2), Some(&360.0));
@@ -547,6 +597,7 @@ rendering_backend = "gpu"
         let parsed = parse_toml_user_config(
             r#"
 show_hidden_files = "maybe"
+startup_index_prompt = "later"
 sidebar_width = "wide"
 column_width_overrides = "bad"
 terminal_emulator = "missing"
@@ -556,6 +607,7 @@ rendering_backend = "metal"
         );
 
         assert_eq!(parsed.show_hidden_files, default.show_hidden_files);
+        assert_eq!(parsed.startup_index_prompt, default.startup_index_prompt);
         assert_eq!(parsed.sidebar_width, default.sidebar_width);
         assert!(parsed.legacy_column_width_overrides.is_empty());
         assert_eq!(parsed.terminal_emulator, DEFAULT_TERMINAL_EMULATOR);
@@ -578,6 +630,7 @@ rendering_backend = "metal"
         let content = fs::read_to_string(path).expect("read user config");
         assert!(content.starts_with("# File Manager user configuration\n"));
         assert!(content.contains("sidebar_width = 180.0\n"));
+        assert!(content.contains("startup_index_prompt = \"pending\"\n"));
         assert!(content.contains("rendering_backend = \"gpu\"\n"));
         assert!(!content.contains("[column_width_overrides]"));
 

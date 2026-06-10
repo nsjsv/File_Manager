@@ -150,7 +150,8 @@ fn operation_task_controls(task: &FileOperationTask) -> Element<'_, Message> {
     if matches!(
         task.status,
         FileOperationStatus::Running | FileOperationStatus::Paused
-    ) {
+    ) && task.operation.supports_pause()
+    {
         controls = controls.push(task_control_button(
             pause_label,
             Message::FileOperationPauseToggled(task.id),

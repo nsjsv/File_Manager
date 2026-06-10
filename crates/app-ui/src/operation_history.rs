@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use file_core::{TransferConflictStrategy, TrashRestoreEntry};
+use file_core::{FileSearchIndexOutcome, TransferConflictStrategy, TrashRestoreEntry};
 
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
@@ -37,6 +37,9 @@ pub(crate) enum FileOperationOutcome {
     },
     Move {
         transfers: Vec<CompletedTransfer>,
+    },
+    SearchIndex {
+        outcome: FileSearchIndexOutcome,
     },
 }
 
@@ -214,6 +217,7 @@ impl FileOperationHistoryItem {
                 transfers: transfers.clone(),
             }),
             FileOperationOutcome::Move { .. } => None,
+            FileOperationOutcome::SearchIndex { .. } => None,
         }
     }
 

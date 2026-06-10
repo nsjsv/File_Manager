@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use file_core::{
-    copy_path_with_options, create_directory, create_empty_file, delete_trash_entry, empty_trash,
-    move_path_with_options, rename_path, restore_trash_entry, trash_path_with_restore_entry,
-    CopyProgress, FileOperationControls, FileTransferOptions, TransferConflictStrategy,
+    build_file_search_index_for_paths_with_progress, copy_path_with_options, create_directory,
+    create_empty_file, delete_trash_entry, empty_trash, move_path_with_options, rename_path,
+    restore_trash_entry, trash_path_with_restore_entry, CopyProgress, FileOperationControls,
+    FileSearchIndexOptions, FileSearchIndexProgress, FileTransferOptions, TransferConflictStrategy,
     TrashRestoreEntry,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
@@ -108,6 +109,77 @@ async fn run_queued_file_operation(
                 QueuedTransferMode::Move,
             )
             .await
+        }
+        QueuedFileOperation::BuildSearchIndex {
+            root,
+            index_dir,
+            selected_paths,
+            include_hidden,
+        } => {
+            run_queued_search_index(
+                root,
+                index_dir,
+                selected_paths,
+                include_hidden,
+                controls,
+                task_id,
+                output,
+            )
+            .await
+        }
+    }
+}
+
+async fn run_queued_search_index(
+    root: PathBuf,
+    index_dir: PathBuf,
+    selected_paths: Vec<PathBuf>,
+    include_hidden: bool,
+    mut controls: FileOperationControls,
+    task_id: u64,
+    output: &mut IcedSender<Message>,
+) -> Result<FileOperationOutcome, String> {
+    send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
+    let cancel = controls.cancellation_token();
+    controls
+        .wait_until_running()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut build = Box::pin(build_file_search_index_for_paths_with_progress(
+        root,
+        index_dir,
+        selected_paths,
+        FileSearchIndexOptions { include_hidden },
+        cancel,
+        move |progress| {
+            let _ = progress_sender.send(progress);
+        },
+    ));
+    let mut progress_open = true;
+
+    loop {
+        tokio::select! {
+            progress = progress_receiver.recv(), if progress_open => {
+                match progress {
+                    Some(progress) => send_search_index_progress(output, task_id, progress).await,
+                    None => progress_open = false,
+                }
+            }
+            outcome = &mut build => {
+                let outcome = outcome.map_err(|error| error.to_string())?;
+                send_file_operation_progress(
+                    output,
+                    task_id,
+                    FileOperationProgressUpdate::Items {
+                        completed: 1,
+                        total: 1,
+                    },
+                )
+                .await;
+                return Ok(FileOperationOutcome::SearchIndex { outcome });
+            }
         }
     }
 }
@@ -470,6 +542,30 @@ async fn send_copy_progress(
         },
     )
     .await;
+}
+
+async fn send_search_index_progress(
+    output: &mut IcedSender<Message>,
+    task_id: u64,
+    progress: FileSearchIndexProgress,
+) {
+    match progress {
+        FileSearchIndexProgress::IndexedPaths {
+            completed_paths,
+            total_paths,
+            indexed_count: _,
+        } => {
+            send_file_operation_progress(
+                output,
+                task_id,
+                FileOperationProgressUpdate::Items {
+                    completed: completed_paths,
+                    total: total_paths,
+                },
+            )
+            .await;
+        }
+    }
 }
 
 async fn send_file_operation_progress(

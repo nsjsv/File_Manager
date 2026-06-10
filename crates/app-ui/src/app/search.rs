@@ -308,7 +308,7 @@ impl FileBrowser {
             .unwrap_or_else(|| self.current_dir.clone())
     }
 
-    fn ensure_search_index(&mut self, root: PathBuf) -> Task<Message> {
+    pub(super) fn ensure_search_index(&mut self, root: PathBuf) -> Task<Message> {
         if self.search_index.indexing_roots.contains(&root) {
             self.sync_active_search_index_status();
             return Task::none();

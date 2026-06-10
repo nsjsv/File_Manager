@@ -186,6 +186,24 @@ pub(crate) fn preview_directory_children_command(
     )
 }
 
+pub(crate) fn startup_index_directory_children_command(
+    path: PathBuf,
+    request_generation: u64,
+    options: ScanOptions,
+) -> Task<Message> {
+    let parent_path = path.clone();
+    Task::perform(
+        load_directory_preview_children(path, options),
+        move |children_outcome| {
+            Message::StartupIndexDirectoryChildrenLoaded(
+                request_generation,
+                parent_path.clone(),
+                children_outcome,
+            )
+        },
+    )
+}
+
 pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     let image_path = path.clone();
     Task::perform(load_image_dimensions(path), move |dimensions| {
@@ -439,7 +457,7 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
 
     let store_outcome = tokio::task::spawn_blocking(move || {
         let store = TaskQueueStore::new(path)?;
-        store.clear_tasks()?;
+        let restored_tasks = store.read_tasks()?;
         let column_width_overrides = store
             .read_column_widths()?
             .into_iter()
@@ -450,6 +468,7 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
         Ok::<LoadedOperationStore, file_operation_store::StoreError>(LoadedOperationStore {
             task_queue_store: store,
             column_width_overrides,
+            restored_tasks,
         })
     })
     .await

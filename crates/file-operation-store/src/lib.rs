@@ -155,15 +155,38 @@ pub struct StoredTrashEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StoredOperation {
-    Rename { path: StoredPath, new_name: String },
-    CreateDirectory { parent: StoredPath },
-    CreateEmptyFile { parent: StoredPath },
-    Trash { paths: Vec<StoredPath> },
-    Restore { entries: Vec<StoredTrashEntry> },
-    DeleteTrashEntries { entries: Vec<StoredTrashEntry> },
+    Rename {
+        path: StoredPath,
+        new_name: String,
+    },
+    CreateDirectory {
+        parent: StoredPath,
+    },
+    CreateEmptyFile {
+        parent: StoredPath,
+    },
+    Trash {
+        paths: Vec<StoredPath>,
+    },
+    Restore {
+        entries: Vec<StoredTrashEntry>,
+    },
+    DeleteTrashEntries {
+        entries: Vec<StoredTrashEntry>,
+    },
     EmptyTrash,
-    Copy { transfers: Vec<StoredTransfer> },
-    Move { transfers: Vec<StoredTransfer> },
+    Copy {
+        transfers: Vec<StoredTransfer>,
+    },
+    Move {
+        transfers: Vec<StoredTransfer>,
+    },
+    SearchIndex {
+        root: StoredPath,
+        index_dir: StoredPath,
+        selected_paths: Vec<StoredPath>,
+        include_hidden: bool,
+    },
 }
 
 impl StoredOperation {
@@ -178,6 +201,7 @@ impl StoredOperation {
             Self::EmptyTrash => "empty_trash",
             Self::Copy { .. } => "copy",
             Self::Move { .. } => "move",
+            Self::SearchIndex { .. } => "search_index",
         }
     }
 }
