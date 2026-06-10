@@ -247,6 +247,47 @@ mod tests {
     }
 
     #[test]
+    fn captured_copy_and_cut_shortcuts_stay_with_focused_widget() {
+        for key in [Key::Character("c".into()), Key::Character("x".into())] {
+            let event = key_pressed(key, keyboard::Modifiers::CTRL);
+
+            let message = route_event(event, event::Status::Captured);
+
+            assert!(message.is_none());
+        }
+    }
+
+    #[test]
+    fn ignored_copy_and_cut_shortcuts_route_file_operations() {
+        let copy = key_pressed(Key::Character("c".into()), keyboard::Modifiers::CTRL);
+        let cut = key_pressed(Key::Character("x".into()), keyboard::Modifiers::CTRL);
+
+        assert!(matches!(
+            route_event(copy, event::Status::Ignored),
+            Some(Message::CopySelected)
+        ));
+        assert!(matches!(
+            route_event(cut, event::Status::Ignored),
+            Some(Message::MoveSelected)
+        ));
+    }
+
+    #[test]
+    fn named_clipboard_shortcuts_respect_captured_status() {
+        for key in [
+            Key::Named(key::Named::Copy),
+            Key::Named(key::Named::Paste),
+            Key::Named(key::Named::Cut),
+        ] {
+            let event = key_pressed(key, keyboard::Modifiers::default());
+
+            let message = route_event(event, event::Status::Captured);
+
+            assert!(message.is_none());
+        }
+    }
+
+    #[test]
     fn captured_ctrl_a_stays_with_focused_widget() {
         let event = key_pressed(Key::Character("a".into()), keyboard::Modifiers::CTRL);
 

@@ -541,7 +541,10 @@ impl FileBrowser {
                 self.start_column_blank_selection_marquee(path)
             }
             Message::EntryReleased(pane_id) => {
-                self.activate_pane(pane_id);
+                let releasing_file_drag = self.file_drag.is_some();
+                if !releasing_file_drag {
+                    self.activate_pane(pane_id);
+                }
                 self.finish_tab_drag();
                 self.finish_pane_drag();
                 Task::batch([
@@ -556,37 +559,49 @@ impl FileBrowser {
                 self.handle_entry_right_clicked(path)
             }
             Message::EntryHovered(pane_id, path) => {
-                if pane_id != self.active_pane_id() {
-                    return Task::none();
+                if pane_id == self.active_pane_id() {
+                    self.cursor_search_directory = Some(
+                        path.parent()
+                            .map(|parent| parent.to_path_buf())
+                            .unwrap_or_else(|| self.current_dir.clone()),
+                    );
+                    self.handle_entry_hovered(path)
+                } else if self.file_drag.is_some() {
+                    self.handle_file_drag_entry_hovered_in_pane(pane_id, path)
+                } else {
+                    Task::none()
                 }
-                self.cursor_search_directory = Some(
-                    path.parent()
-                        .map(|parent| parent.to_path_buf())
-                        .unwrap_or_else(|| self.current_dir.clone()),
-                );
-                self.handle_entry_hovered(path)
             }
             Message::EntryHoverCleared(pane_id, path) => {
-                if pane_id != self.active_pane_id() {
-                    return Task::none();
+                if pane_id == self.active_pane_id() {
+                    self.handle_entry_hover_cleared(path)
+                } else if self.file_drag.is_some() {
+                    self.handle_file_drag_entry_hover_cleared_in_pane(pane_id, path)
+                } else {
+                    Task::none()
                 }
-                self.handle_entry_hover_cleared(path)
             }
             Message::DropTargetHovered(pane_id, directory) => {
-                if pane_id != self.active_pane_id() {
-                    return Task::none();
+                if pane_id == self.active_pane_id() {
+                    self.cursor_search_directory = Some(directory.clone());
+                    self.handle_drop_target_hovered(directory)
+                } else if self.file_drag.is_some() {
+                    self.handle_file_drag_drop_target_hovered_in_pane(pane_id, directory)
+                } else {
+                    Task::none()
                 }
-                self.cursor_search_directory = Some(directory.clone());
-                self.handle_drop_target_hovered(directory)
             }
             Message::DropTargetHoverCleared(pane_id, directory) => {
-                if pane_id != self.active_pane_id() {
-                    return Task::none();
+                if pane_id == self.active_pane_id() {
+                    if self.cursor_search_directory.as_ref() == Some(&directory) {
+                        self.cursor_search_directory = None;
+                    }
+                    self.handle_drop_target_hover_cleared(directory)
+                } else if self.file_drag.is_some() {
+                    self.handle_file_drag_drop_target_hover_cleared_in_pane(pane_id, directory)
+                } else {
+                    Task::none()
                 }
-                if self.cursor_search_directory.as_ref() == Some(&directory) {
-                    self.cursor_search_directory = None;
-                }
-                self.handle_drop_target_hover_cleared(directory)
             }
             Message::BlankAreaPressed(pane_id) => {
                 self.activate_pane(pane_id);
@@ -634,7 +649,9 @@ impl FileBrowser {
                 }
             }
             Message::ColumnBrowserCursorEntered(pane_id) => {
-                self.activate_pane(pane_id);
+                if self.file_drag.is_none() {
+                    self.activate_pane(pane_id);
+                }
                 self.is_cursor_over_column_browser = true;
                 Task::none()
             }

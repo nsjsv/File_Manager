@@ -12,7 +12,7 @@ use crate::commands::{
     open_terminal_command, preview_command, start_audio_preview_command,
 };
 use crate::model::{
-    trash_location_path, AudioPreviewPlayback, ColumnEntryBounds, ContextMenuState,
+    trash_location_path, AudioPreviewPlayback, BrowserPaneId, ColumnEntryBounds, ContextMenuState,
     ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuState, FileDragPhase, FileDragState,
     FileDragTarget, LastClick, Message, NavigationMode, PreviewState, PreviewWindowProfile,
     SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource, TransferConflictMode,
@@ -134,6 +134,70 @@ impl FileBrowser {
         Task::none()
     }
 
+    pub(super) fn handle_file_drag_entry_hovered_in_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+        path: PathBuf,
+    ) -> Task<Message> {
+        if self.file_drag.is_none() {
+            return Task::none();
+        }
+
+        let Some(target_directory) = self.cursor_paste_directory_for_entry_in_pane(pane_id, &path)
+        else {
+            self.clear_file_drag_target();
+            return Task::none();
+        };
+
+        self.set_file_drag_target(target_directory);
+        Task::none()
+    }
+
+    pub(super) fn handle_file_drag_entry_hover_cleared_in_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+        path: PathBuf,
+    ) -> Task<Message> {
+        if self.file_drag.is_none() {
+            return Task::none();
+        }
+
+        if let Some(target_directory) =
+            self.cursor_paste_directory_for_entry_in_pane(pane_id, &path)
+        {
+            self.clear_file_drag_target_if_matching(&target_directory);
+        }
+        Task::none()
+    }
+
+    pub(super) fn handle_file_drag_drop_target_hovered_in_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+        directory: PathBuf,
+    ) -> Task<Message> {
+        if self.file_drag.is_none() {
+            return Task::none();
+        }
+        if !self.pane_accepts_file_drag(pane_id) {
+            self.clear_file_drag_target();
+            return Task::none();
+        }
+
+        self.set_file_drag_target(directory);
+        Task::none()
+    }
+
+    pub(super) fn handle_file_drag_drop_target_hover_cleared_in_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+        directory: PathBuf,
+    ) -> Task<Message> {
+        if self.file_drag.is_some() && self.pane_accepts_file_drag(pane_id) {
+            self.clear_file_drag_target_if_matching(&directory);
+        }
+        Task::none()
+    }
+
     pub(super) fn handle_sidebar_hovered(&mut self, path: PathBuf) -> Task<Message> {
         self.hovered_sidebar = Some(path.clone());
         self.cursor_paste_directory = None;
@@ -160,7 +224,7 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn handle_column_blank_clicked(&mut self, _directory: PathBuf) -> Task<Message> {
+    pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.context_menu = None;
@@ -168,11 +232,7 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.is_column_view_settings_open = false;
         self.file_drag = None;
-        self.selected_paths.clear();
-        self.selected = None;
-        self.selection_anchor = None;
-        self.rename_input.clear();
-        self.sync_path_input_to_current_directory();
+        self.focus_column_blank_context_or_clear_selection(directory);
 
         rename_command
     }
@@ -226,6 +286,12 @@ impl FileBrowser {
             return self.commit_rename_if_active();
         }
 
+        let column_context_directory = match &source {
+            SelectionMarqueeSource::ColumnBlank { directory } => {
+                self.column_blank_context_directory(directory)
+            }
+            SelectionMarqueeSource::PaneBlank => None,
+        };
         self.clear_preview();
         self.context_menu = None;
         self.drag_selection_anchor = None;
@@ -234,11 +300,11 @@ impl FileBrowser {
         let preserve_existing = self.keyboard_modifiers.control();
         let base_selection = self.selected_paths.clone();
         if !preserve_existing {
-            self.selected_paths.clear();
-            self.selected = None;
-            self.selection_anchor = None;
-            self.rename_input.clear();
-            self.sync_path_input_to_current_directory();
+            if let Some(directory) = column_context_directory {
+                self.select_path(directory);
+            } else {
+                self.clear_column_blank_selection_context();
+            }
         }
         self.selection_marquee = Some(SelectionMarquee {
             start: self.cursor_position,
@@ -249,6 +315,31 @@ impl FileBrowser {
             preserve_existing,
         });
         Task::none()
+    }
+
+    fn focus_column_blank_context_or_clear_selection(&mut self, directory: PathBuf) {
+        if let Some(directory) = self.column_blank_context_directory(&directory) {
+            self.select_path(directory);
+        } else {
+            self.clear_column_blank_selection_context();
+        }
+    }
+
+    fn column_blank_context_directory(&self, directory: &Path) -> Option<PathBuf> {
+        if directory == self.current_dir || self.entry_kind(directory) != Some(FileKind::Directory)
+        {
+            None
+        } else {
+            Some(directory.to_path_buf())
+        }
+    }
+
+    fn clear_column_blank_selection_context(&mut self) {
+        self.selected_paths.clear();
+        self.selected = None;
+        self.selection_anchor = None;
+        self.rename_input.clear();
+        self.sync_path_input_to_current_directory();
     }
 
     pub(super) fn update_selection_marquee(&mut self, position: iced::Point) -> bool {
@@ -585,6 +676,43 @@ impl FileBrowser {
         }
     }
 
+    fn cursor_paste_directory_for_entry_in_pane(
+        &self,
+        pane_id: BrowserPaneId,
+        path: &Path,
+    ) -> Option<PathBuf> {
+        let pane = self.pane_view(pane_id)?;
+        if pane.is_trash_view {
+            return None;
+        }
+
+        let entry_kind = pane
+            .entries
+            .iter()
+            .chain(
+                pane.expanded_directories
+                    .values()
+                    .flat_map(|expanded| expanded.entries.iter()),
+            )
+            .find(|entry| entry.path == path)
+            .map(|entry| entry.kind);
+
+        if entry_kind == Some(FileKind::Directory) {
+            Some(path.to_path_buf())
+        } else {
+            Some(
+                path.parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| pane.current_dir.clone()),
+            )
+        }
+    }
+
+    fn pane_accepts_file_drag(&self, pane_id: BrowserPaneId) -> bool {
+        self.pane_view(pane_id)
+            .is_some_and(|pane| !pane.is_trash_view)
+    }
+
     fn entry_parent_directory(&self, path: &Path) -> PathBuf {
         path.parent()
             .map(Path::to_path_buf)
@@ -902,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_any_column_blank_clears_existing_selection() {
+    fn clicking_current_column_blank_clears_existing_selection() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let current_dir = PathBuf::from("/workspace");
         let first = current_dir.join("first.txt");
@@ -918,7 +1046,7 @@ mod tests {
         browser.selected_paths = HashSet::from([first, second]);
         browser.selection_anchor = Some(child_directory.clone());
 
-        let command = browser.handle_column_blank_clicked(child_directory);
+        let command = browser.handle_column_blank_clicked(current_dir.clone());
         drop(command);
 
         assert!(browser.selected.is_none());
@@ -931,7 +1059,38 @@ mod tests {
     }
 
     #[test]
-    fn pressing_blank_area_clears_selection_before_release() {
+    fn clicking_child_column_blank_preserves_open_column_context() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("first.txt");
+        let second = current_dir.join("second.txt");
+        let child_directory = current_dir.join("project");
+        browser.current_dir = current_dir;
+        browser.entries = vec![
+            test_entry(first.clone(), FileKind::File),
+            test_entry(second.clone(), FileKind::File),
+            test_entry(child_directory.clone(), FileKind::Directory),
+        ];
+        browser.selected = Some(second);
+        browser.selected_paths = HashSet::from([first]);
+
+        let command = browser.handle_column_blank_clicked(child_directory.clone());
+        drop(command);
+
+        assert_eq!(browser.selected.as_ref(), Some(&child_directory));
+        assert_eq!(
+            browser.selected_paths,
+            HashSet::from([child_directory.clone()])
+        );
+        assert_eq!(browser.selection_anchor.as_ref(), Some(&child_directory));
+        assert_eq!(
+            browser.path_input,
+            crate::app::paths::path_text(&child_directory)
+        );
+    }
+
+    #[test]
+    fn pressing_current_column_blank_clears_selection_before_release() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let current_dir = PathBuf::from("/workspace");
         let first = current_dir.join("first.txt");
@@ -947,7 +1106,7 @@ mod tests {
         browser.selected_paths = HashSet::from([first, second]);
         browser.selection_anchor = Some(child_directory.clone());
 
-        let command = browser.start_column_blank_selection_marquee(child_directory);
+        let command = browser.start_column_blank_selection_marquee(current_dir.clone());
         drop(command);
 
         assert!(browser.selected.is_none());
@@ -957,6 +1116,38 @@ mod tests {
         assert_eq!(
             browser.path_input,
             crate::app::paths::path_text(&current_dir)
+        );
+    }
+
+    #[test]
+    fn pressing_child_column_blank_preserves_open_column_before_release() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("first.txt");
+        let second = current_dir.join("second.txt");
+        let child_directory = current_dir.join("project");
+        browser.current_dir = current_dir;
+        browser.entries = vec![
+            test_entry(first.clone(), FileKind::File),
+            test_entry(second.clone(), FileKind::File),
+            test_entry(child_directory.clone(), FileKind::Directory),
+        ];
+        browser.selected = Some(second);
+        browser.selected_paths = HashSet::from([first]);
+
+        let command = browser.start_column_blank_selection_marquee(child_directory.clone());
+        drop(command);
+
+        assert_eq!(browser.selected.as_ref(), Some(&child_directory));
+        assert_eq!(
+            browser.selected_paths,
+            HashSet::from([child_directory.clone()])
+        );
+        assert_eq!(browser.selection_anchor.as_ref(), Some(&child_directory));
+        assert!(browser.selection_marquee.is_some());
+        assert_eq!(
+            browser.path_input,
+            crate::app::paths::path_text(&child_directory)
         );
     }
 

@@ -346,6 +346,9 @@ fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<PathBuf> {
     let Some(selected) = pane.selected else {
         return directories;
     };
+    if pane.selected_paths.len() != 1 || !pane.selected_paths.contains(selected) {
+        return directories;
+    }
 
     let selected_directory = match selected_entry(pane).map(|entry| entry.kind) {
         Some(FileKind::Directory) => selected.to_path_buf(),
@@ -529,4 +532,101 @@ enum IconTone {
     Selected,
     Muted,
     Warning,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+
+    use super::*;
+
+    fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
+        DirectoryEntry::new(
+            path,
+            kind,
+            EntryMetadata {
+                len: 0,
+                modified: None,
+                readonly: false,
+            },
+            false,
+            false,
+            false,
+        )
+    }
+
+    fn test_pane_view<'a>(
+        current_dir: &'a PathBuf,
+        entries: &'a [DirectoryEntry],
+        selected: Option<&'a PathBuf>,
+        selected_paths: &'a HashSet<PathBuf>,
+        expanded_directories: &'a HashMap<PathBuf, crate::model::ExpandedDirectory>,
+    ) -> BrowserPaneView<'a> {
+        BrowserPaneView {
+            id: BrowserPaneId::PRIMARY,
+            current_dir,
+            is_trash_view: false,
+            entries,
+            selected,
+            selected_paths,
+            hovered_entry: None,
+            expanded_directories,
+            tabs: &[],
+            active_tab_id: 0,
+            tab_animations: None,
+            path_input: "",
+            path_suggestions: &[],
+            path_suggestion_selection: None,
+            is_loading: false,
+            renaming: None,
+            rename_input: "",
+            file_drag: None,
+            tab_bar_reveal_fraction: 0.0,
+        }
+    }
+
+    #[test]
+    fn single_selected_directory_opens_child_column() {
+        let current_dir = PathBuf::from("/workspace");
+        let directory = current_dir.join("alpha");
+        let entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+        let selected_paths = HashSet::from([directory.clone()]);
+        let expanded_directories = HashMap::new();
+        let pane = test_pane_view(
+            &current_dir,
+            &entries,
+            Some(&directory),
+            &selected_paths,
+            &expanded_directories,
+        );
+
+        assert_eq!(
+            column_directories_for_pane(pane),
+            vec![current_dir, directory]
+        );
+    }
+
+    #[test]
+    fn multiple_selected_directories_do_not_open_child_column() {
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("alpha");
+        let second = current_dir.join("beta");
+        let entries = vec![
+            test_entry(first.clone(), FileKind::Directory),
+            test_entry(second.clone(), FileKind::Directory),
+        ];
+        let selected_paths = HashSet::from([first, second.clone()]);
+        let expanded_directories = HashMap::new();
+        let pane = test_pane_view(
+            &current_dir,
+            &entries,
+            Some(&second),
+            &selected_paths,
+            &expanded_directories,
+        );
+
+        assert_eq!(column_directories_for_pane(pane), vec![current_dir]);
+    }
 }
