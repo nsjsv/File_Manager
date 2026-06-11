@@ -12,6 +12,7 @@ mod measured_middle_ellipsized_text;
 mod model;
 mod operation_history;
 mod operation_queue;
+mod operation_queue_display;
 mod operation_queue_view;
 mod preview;
 mod selection_marquee;

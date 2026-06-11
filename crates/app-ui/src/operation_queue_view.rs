@@ -9,6 +9,7 @@ use crate::appearance::{
 use crate::formatting::format_middle_ellipsized_text;
 use crate::model::{Message, ScrollbarVisibility};
 use crate::operation_queue::{FileOperationQueue, FileOperationStatus, FileOperationTask};
+use crate::operation_queue_display::FileOperationPathLines;
 use crate::typography::readable_text;
 
 pub(crate) const OPERATION_QUEUE_PANEL_WIDTH: f32 = 360.0;
@@ -17,8 +18,9 @@ pub(crate) const OPERATION_QUEUE_INDICATOR_SIZE: f32 = 30.0;
 pub(crate) const OPERATION_QUEUE_INDICATOR_RIGHT: f32 = 14.0;
 pub(crate) const OPERATION_QUEUE_INDICATOR_BOTTOM: f32 = 14.0;
 
-const TASK_DETAIL_MAX_CHARS: usize = 44;
-const TASK_ERROR_MAX_CHARS: usize = 140;
+const TASK_FILE_NAME_MAX_CHARS: usize = 24;
+const TASK_PATH_MAX_CHARS: usize = 46;
+const TASK_ERROR_MAX_CHARS: usize = 120;
 const TASK_LIST_MAX_HEIGHT: f32 = 320.0;
 
 pub(crate) fn operation_queue_indicator(
@@ -57,7 +59,7 @@ pub(crate) fn operation_queue_panel(
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let mut tasks = column![].spacing(8);
+    let mut tasks = column![].spacing(6);
     if queue.tasks().is_empty() {
         tasks = tasks.push(empty_queue_row());
     } else {
@@ -86,15 +88,22 @@ pub(crate) fn operation_queue_panel(
 }
 
 fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
-    let detail = format_middle_ellipsized_text(&task.operation.detail(), TASK_DETAIL_MAX_CHARS);
+    let path_lines = task.operation.path_lines();
     let title = row![
-        readable_text(task.operation.title())
-            .size(14)
+        readable_text(operation_title_text(task.operation.title(), &path_lines))
+            .size(13)
             .width(Length::Fill),
-        readable_text(task.status.label()).size(12),
+        readable_text(task.status.label()).size(11),
     ]
-    .spacing(8)
+    .spacing(6)
     .align_y(Alignment::Center);
+
+    let paths = column![
+        readable_text(path_line_text("Original", &path_lines.original_path)).size(11),
+        readable_text(path_line_text("Directory", &path_lines.directory_path)).size(11),
+    ]
+    .spacing(2)
+    .width(Length::Fill);
 
     let progress = progress_bar(
         0.0..=1.0,
@@ -106,23 +115,25 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
             }
         }),
     )
-    .girth(Length::Fixed(4.0));
+    .girth(Length::Fixed(3.0));
 
-    let mut body = column![title, readable_text(detail).size(12), progress]
-        .spacing(6)
+    let mut body = column![title, paths, progress]
+        .spacing(4)
         .width(Length::Fill);
 
     if let Some(error) = task.error.as_deref() {
         body = body.push(
             readable_text(format_middle_ellipsized_text(error, TASK_ERROR_MAX_CHARS))
-                .size(12)
+                .size(11)
                 .width(Length::Fill),
         );
     }
 
-    let controls = operation_task_controls(task);
-    let content = column![body, controls].spacing(8);
-    let item = container(content).padding(10).width(Length::Fill);
+    let mut content = column![body].spacing(6);
+    if let Some(controls) = operation_task_controls(task) {
+        content = content.push(controls);
+    }
+    let item = container(content).padding(8).width(Length::Fill);
     let item = if task.status == FileOperationStatus::Failed {
         item.style(error_notification_style)
     } else {
@@ -130,6 +141,21 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
     };
 
     item.into()
+}
+
+fn operation_title_text(title: &str, path_lines: &FileOperationPathLines) -> String {
+    let file_name = format_middle_ellipsized_text(&path_lines.file_name, TASK_FILE_NAME_MAX_CHARS);
+    let more_count = path_lines.total_items.saturating_sub(1);
+    if more_count == 0 {
+        format!("{title} - {file_name}")
+    } else {
+        format!("{title} - {file_name} (+{more_count})")
+    }
+}
+
+fn path_line_text(label: &'static str, path: &str) -> String {
+    let path = format_middle_ellipsized_text(path, TASK_PATH_MAX_CHARS);
+    format!("{label}: {path}")
 }
 
 fn empty_queue_row() -> Element<'static, Message> {
@@ -140,34 +166,39 @@ fn empty_queue_row() -> Element<'static, Message> {
         .into()
 }
 
-fn operation_task_controls(task: &FileOperationTask) -> Element<'_, Message> {
+fn operation_task_controls(task: &FileOperationTask) -> Option<Element<'static, Message>> {
     let pause_label = match task.status {
         FileOperationStatus::Paused => "Resume",
         _ => "Pause",
     };
-
-    let mut controls = row![].spacing(6).align_y(Alignment::Center);
-    if matches!(
+    let can_pause = matches!(
         task.status,
         FileOperationStatus::Running | FileOperationStatus::Paused
-    ) && task.operation.supports_pause()
-    {
+    ) && task.operation.supports_pause();
+    let can_cancel = matches!(
+        task.status,
+        FileOperationStatus::Pending | FileOperationStatus::Running | FileOperationStatus::Paused
+    );
+
+    if !can_pause && !can_cancel {
+        return None;
+    }
+
+    let mut controls = row![].spacing(6).align_y(Alignment::Center);
+    if can_pause {
         controls = controls.push(task_control_button(
             pause_label,
             Message::FileOperationPauseToggled(task.id),
         ));
     }
-    if matches!(
-        task.status,
-        FileOperationStatus::Pending | FileOperationStatus::Running | FileOperationStatus::Paused
-    ) {
+    if can_cancel {
         controls = controls.push(task_control_button(
             "Cancel",
             Message::FileOperationCancelRequested(task.id),
         ));
     }
 
-    controls.into()
+    Some(controls.into())
 }
 
 fn task_control_button(label: &'static str, message: Message) -> Element<'static, Message> {

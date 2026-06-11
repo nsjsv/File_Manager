@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use file_core::{
     FileOperationControls, FileOperationRunState, TransferConflictStrategy, TrashRestoreEntry,
@@ -82,27 +82,6 @@ impl QueuedFileOperation {
             Self::Copy { .. } => "Copy",
             Self::Move { .. } => "Move",
             Self::BuildSearchIndex { .. } => "Build Search Index",
-        }
-    }
-
-    pub(crate) fn detail(&self) -> String {
-        match self {
-            Self::Rename { path, new_name } => {
-                format!("{} -> {new_name}", path_label(path))
-            }
-            Self::CreateDirectory { parent } | Self::CreateEmptyFile { parent } => {
-                format!("Location: {}", path_label(parent))
-            }
-            Self::Trash { paths } => paths_detail(paths),
-            Self::Restore { entries } => restore_entries_detail(entries),
-            Self::DeleteTrashEntries { entries } => trash_entries_detail(entries),
-            Self::EmptyTrash => "All trash items".to_owned(),
-            Self::Copy { transfers } | Self::Move { transfers } => transfers_detail(transfers),
-            Self::BuildSearchIndex {
-                root,
-                selected_paths,
-                ..
-            } => search_index_detail(root, selected_paths),
         }
     }
 
@@ -722,78 +701,6 @@ fn combine_storage_errors(first: Option<String>, second: Option<String>) -> Opti
         (Some(error), None) | (None, Some(error)) => Some(error),
         (None, None) => None,
     }
-}
-
-fn paths_detail(paths: &[PathBuf]) -> String {
-    match paths {
-        [] => "No items".to_owned(),
-        [path] => path_label(path),
-        [first, ..] => format!("{} and {} total items", path_label(first), paths.len()),
-    }
-}
-
-fn transfers_detail(transfers: &[QueuedTransfer]) -> String {
-    match transfers {
-        [] => "No items".to_owned(),
-        [transfer] => format!(
-            "{} -> {}",
-            path_label(&transfer.source),
-            path_label(&transfer.target)
-        ),
-        [transfer, ..] => format!(
-            "{} and {} total items",
-            path_label(&transfer.source),
-            transfers.len()
-        ),
-    }
-}
-
-fn restore_entries_detail(entries: &[TrashRestoreEntry]) -> String {
-    match entries {
-        [] => "No items".to_owned(),
-        [entry] => format!(
-            "{} -> {}",
-            path_label(&entry.trash_path),
-            path_label(&entry.original_path)
-        ),
-        [entry, ..] => format!(
-            "{} and {} total items",
-            path_label(&entry.original_path),
-            entries.len()
-        ),
-    }
-}
-
-fn trash_entries_detail(entries: &[TrashRestoreEntry]) -> String {
-    match entries {
-        [] => "No items".to_owned(),
-        [entry] => path_label(&entry.trash_path),
-        [entry, ..] => format!(
-            "{} and {} total items",
-            path_label(&entry.trash_path),
-            entries.len()
-        ),
-    }
-}
-
-fn search_index_detail(root: &Path, selected_paths: &[PathBuf]) -> String {
-    match selected_paths {
-        [] => format!("Location: {}", path_label(root)),
-        [path] if path == root => format!("Location: {}", path_label(root)),
-        [path] => format!("{} in {}", path_label(path), path_label(root)),
-        [first, ..] => format!(
-            "{} and {} total locations",
-            path_label(first),
-            selected_paths.len()
-        ),
-    }
-}
-
-fn path_label(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
 }
 
 fn stored_status_is_terminal(status: StoredTaskStatus) -> bool {
