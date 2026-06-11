@@ -148,7 +148,6 @@ impl FileBrowser {
             && self.destructive_action_confirmation.is_none()
             && self.transfer_conflict.is_none()
             && self.context_menu.is_none()
-            && !self.is_column_view_settings_open
             && self.path_suggestions.is_empty()
             && !self.operation_queue_interaction_is_open()
             && self.tab_drag.is_none()

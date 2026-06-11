@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use file_core::FileOperationVerification;
 use file_core::TrashRestoreEntry;
 
 use crate::operation_queue::{
@@ -37,7 +39,7 @@ impl QueuedFileOperation {
                 directory_path: "Trash".to_owned(),
                 total_items: 1,
             },
-            Self::Copy { transfers } | Self::Move { transfers } => {
+            Self::Copy { transfers, .. } | Self::Move { transfers, .. } => {
                 path_lines_from_transfers(transfers)
             }
             Self::BuildSearchIndex {
@@ -155,6 +157,7 @@ mod tests {
                 PathBuf::from("/home/user/report.txt"),
                 PathBuf::from("/tmp/report.txt"),
             )],
+            verification: FileOperationVerification::default(),
         };
 
         let path_lines = operation.path_lines();

@@ -1,6 +1,5 @@
 use std::time::SystemTime;
 
-use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
 use iced::widget::{
     button, column, container, mouse_area, row, scrollable, text, text_input, Button, Row, Space,
 };
@@ -24,11 +23,8 @@ use crate::model::{
 };
 use crate::typography::readable_text;
 
-use super::rendering_settings::rendering_gpu_preference_button;
-use super::toggle_switch::switch_control;
 use super::{tab_motion, themed_icon, IconTone, MENU_ICON_SIZE};
 
-const COLUMN_SETTINGS_FLOAT_WIDTH: f32 = 260.0;
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
 const ERROR_NOTIFICATION_MAX_CHARS: usize = 96;
 const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
@@ -305,7 +301,7 @@ pub(super) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
             IconTone::Normal,
             MENU_ICON_SIZE
         ))
-        .on_press(Message::ColumnSettingsToggled)
+        .on_press(Message::SettingsOpened)
         .padding([4, 6])
         .style(navigation_icon_button_style()),
     ]
@@ -541,74 +537,6 @@ fn sidebar_icon_symbol(location: &SidebarLocation) -> IconSymbol {
         SidebarLocationKind::Videos => IconSymbol::Video,
         SidebarLocationKind::Bookmark => IconSymbol::Bookmark,
     }
-}
-
-pub(super) fn column_settings_panel(browser: &FileBrowser) -> Element<'_, Message> {
-    container(
-        column![
-            readable_text("Settings").size(16),
-            readable_text("Files").size(13),
-            hidden_files_visibility_button(browser),
-            readable_text("Rendering").size(13),
-            rendering_gpu_preference_button(browser.rendering_gpu_preference),
-            readable_text("Terminal").size(13),
-            terminal_emulator_options(browser.terminal_emulator),
-        ]
-        .spacing(6),
-    )
-    .padding(14)
-    .width(Length::Fixed(COLUMN_SETTINGS_FLOAT_WIDTH))
-    .style(context_menu_style)
-    .into()
-}
-
-fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Message> {
-    let mut options = iced::widget::Column::new().spacing(4);
-    for terminal_emulator in TERMINAL_EMULATOR_OPTIONS {
-        options = options.push(terminal_emulator_button(*terminal_emulator, selected));
-    }
-    options.into()
-}
-
-fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Message> {
-    let status = if browser.options.include_hidden {
-        "On"
-    } else {
-        "Off"
-    };
-    let label = row![
-        readable_text("Show Hidden Files")
-            .size(12)
-            .width(Length::Fill),
-        readable_text(status).size(12),
-        switch_control(browser.options.include_hidden),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::ShowHiddenFilesToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn terminal_emulator_button(
-    terminal_emulator: TerminalEmulator,
-    selected_emulator: TerminalEmulator,
-) -> Button<'static, Message> {
-    let label = container(readable_text(terminal_emulator.label()).size(12))
-        .padding([5, 8])
-        .width(Length::Fill);
-    let label = if terminal_emulator == selected_emulator {
-        label.style(selected_sidebar_item_style)
-    } else {
-        label
-    };
-
-    button(label)
-        .on_press(Message::TerminalEmulatorSelected(terminal_emulator))
-        .width(Length::Fill)
-        .style(context_menu_button_style())
 }
 
 fn sidebar_presentation(browser: &FileBrowser, location: &SidebarLocation) -> SidebarPresentation {

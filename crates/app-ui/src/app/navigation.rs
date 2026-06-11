@@ -304,6 +304,24 @@ impl FileBrowser {
         }
     }
 
+    pub(super) fn focus_active_path_input(&mut self) -> Task<Message> {
+        if self.destructive_action_confirmation.is_some() || self.transfer_conflict.is_some() {
+            return Task::none();
+        }
+
+        self.context_menu = None;
+        self.shortcut_capture = None;
+        self.operation_queue.close_panel();
+        self.path_suggestions.clear();
+        self.path_suggestion_selection = None;
+        let input_id = path_input_id(self.active_pane_id());
+        Task::batch([
+            self.commit_rename_if_active(),
+            iced::widget::operation::focus(input_id.clone()),
+            iced::widget::operation::select_all(input_id),
+        ])
+    }
+
     pub(super) fn update_path_input(&mut self, value: String) -> Task<Message> {
         self.path_input = value;
         self.path_suggestions.clear();

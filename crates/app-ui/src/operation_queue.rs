@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use file_core::{
-    FileOperationControls, FileOperationRunState, TransferConflictStrategy, TrashRestoreEntry,
+    FileOperationControls, FileOperationRunState, FileOperationVerification,
+    TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
     StoredOperation, StoredPath, StoredProgress, StoredTask, StoredTaskStatus, StoredTransfer,
@@ -40,9 +41,11 @@ pub(crate) enum QueuedFileOperation {
     EmptyTrash,
     Copy {
         transfers: Vec<QueuedTransfer>,
+        verification: FileOperationVerification,
     },
     Move {
         transfers: Vec<QueuedTransfer>,
+        verification: FileOperationVerification,
     },
     BuildSearchIndex {
         root: PathBuf,
@@ -122,10 +125,10 @@ impl QueuedFileOperation {
                 entries: stored_trash_entries(entries),
             },
             Self::EmptyTrash => StoredOperation::EmptyTrash,
-            Self::Copy { transfers } => StoredOperation::Copy {
+            Self::Copy { transfers, .. } => StoredOperation::Copy {
                 transfers: stored_transfers(transfers),
             },
-            Self::Move { transfers } => StoredOperation::Move {
+            Self::Move { transfers, .. } => StoredOperation::Move {
                 transfers: stored_transfers(transfers),
             },
             Self::BuildSearchIndex {

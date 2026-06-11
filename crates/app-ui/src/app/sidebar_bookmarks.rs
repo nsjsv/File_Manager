@@ -152,7 +152,6 @@ impl FileBrowser {
             return rename_command;
         }
         self.context_menu = None;
-        self.is_column_view_settings_open = false;
         self.file_drag = None;
         self.selection_marquee = None;
         self.sidebar_bookmark_drop_slot = None;
@@ -181,7 +180,6 @@ impl FileBrowser {
         }
 
         self.clear_preview();
-        self.is_column_view_settings_open = false;
         self.operation_queue.close_panel();
         self.file_drag = None;
         self.selection_marquee = None;

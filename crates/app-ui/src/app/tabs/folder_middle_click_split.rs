@@ -32,7 +32,6 @@ impl FileBrowser {
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
-        self.is_column_view_settings_open = false;
 
         let source_id = self.active_pane_id();
         let destination_id = self.middle_click_split_destination_pane_id(source_id);

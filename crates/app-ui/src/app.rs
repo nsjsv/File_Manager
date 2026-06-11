@@ -12,6 +12,7 @@ mod runtime;
 mod scrollbar;
 mod search;
 mod selection;
+mod shortcuts;
 mod sidebar_bookmarks;
 mod sidebar_resize;
 mod startup;
@@ -54,16 +55,17 @@ use crate::model::{
     ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message,
     NavigationMode, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
-    SelectionMarquee, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
-    StartupIndexSetupState, TabDragState, TextPreviewDocument, TransferConflictState,
-    VideoPreviewPlayback,
+    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
+    TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
+use crate::shortcuts::ShortcutCaptureState;
 use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
-use crate::view::{rename_input_id, view_browser, view_preview_window, view_search_window};
+use crate::view::{view_browser, view_preview_window, view_search_window, view_settings_window};
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
@@ -109,6 +111,7 @@ pub(crate) struct FileBrowser {
     pub(crate) search: Option<SearchState>,
     pub(crate) startup_index_setup: Option<StartupIndexSetupState>,
     search_window: Option<window::Id>,
+    settings_window: Option<window::Id>,
     pub(crate) search_index: SearchIndexRuntime,
     pub(crate) tabs: Vec<BrowserTab>,
     pub(crate) active_tab_id: usize,
@@ -131,7 +134,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_width_overrides: HashMap<usize, f32>,
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
-    pub(crate) is_column_view_settings_open: bool,
+    pub(crate) selected_settings_category: SettingsCategory,
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) rename_input: String,
@@ -143,6 +146,7 @@ pub(crate) struct FileBrowser {
     is_cursor_over_column_browser: bool,
     hovered_pane_id: Option<BrowserPaneId>,
     keyboard_modifiers: keyboard::Modifiers,
+    pub(crate) shortcut_capture: Option<ShortcutCaptureState>,
     selection_anchor: Option<PathBuf>,
     drag_selection_anchor: Option<PathBuf>,
     column_resize_drag: Option<ColumnResizeDrag>,
@@ -164,6 +168,10 @@ pub(crate) struct FileBrowser {
 }
 
 impl FileBrowser {
+    pub(crate) fn file_operation_verification(&self) -> file_core::FileOperationVerification {
+        self.user_config.file_operation_verification
+    }
+
     fn boot() -> (Self, Task<Message>) {
         let (main_window, open_main_window) = window::open(main_window_settings());
         let user_config = config::ui_thread_startup_config();
@@ -248,6 +256,7 @@ impl FileBrowser {
             search: None,
             startup_index_setup: None,
             search_window: None,
+            settings_window: None,
             search_index: SearchIndexRuntime::new(PathBuf::new()),
             tabs: vec![initial_tab],
             active_tab_id: 0,
@@ -272,7 +281,7 @@ impl FileBrowser {
             column_width_overrides: user_config.legacy_column_width_overrides.clone(),
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
-            is_column_view_settings_open: false,
+            selected_settings_category: SettingsCategory::General,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             rename_input: String::new(),
@@ -284,6 +293,7 @@ impl FileBrowser {
             is_cursor_over_column_browser: false,
             hovered_pane_id: None,
             keyboard_modifiers: keyboard::Modifiers::default(),
+            shortcut_capture: None,
             selection_anchor: None,
             drag_selection_anchor: None,
             column_resize_drag: None,
@@ -488,7 +498,6 @@ impl FileBrowser {
             }
             Message::FileOperationIndicatorPressed => {
                 self.context_menu = None;
-                self.is_column_view_settings_open = false;
                 if self.operation_queue.is_panel_open()
                     && self.operation_queue_panel_mode == OperationQueuePanelMode::InteractiveList
                 {
@@ -704,6 +713,14 @@ impl FileBrowser {
                 self.keyboard_modifiers = modifiers;
                 Task::none()
             }
+            Message::KeyboardKeyPressed {
+                key,
+                modifiers,
+                status,
+            } => self.handle_keyboard_key_pressed(key, modifiers, status),
+            Message::ShortcutCaptureStarted(binding_id) => self.start_shortcut_capture(binding_id),
+            Message::ShortcutCaptureCanceled => self.cancel_shortcut_capture(),
+            Message::ShortcutBindingReset(binding_id) => self.reset_shortcut_binding(binding_id),
             Message::DragSelectionFinished => {
                 self.finish_tab_drag();
                 self.finish_pane_drag();
@@ -724,12 +741,9 @@ impl FileBrowser {
             }
             Message::WindowFocused(window) => self.handle_window_focused(window),
             Message::WindowUnfocused(window) => self.handle_window_unfocused(window),
-            Message::FocusedWindowEscapePressed => self.handle_focused_window_escape_pressed(),
             Message::WindowPointerPressed { button, status } => {
                 self.handle_window_pointer_pressed(button, status)
             }
-            Message::CapturedPreviewShortcutPressed => self.handle_captured_preview_shortcut(),
-            Message::RequestPreview => self.request_preview(),
             Message::PathInputChanged(pane_id, value) => {
                 self.activate_pane(pane_id);
                 self.update_path_input(value)
@@ -743,12 +757,6 @@ impl FileBrowser {
                 self.path_suggestions.clear();
                 self.path_suggestion_selection = None;
                 self.navigate_to(path, NavigationMode::RecordHistory)
-            }
-            Message::PathSuggestionMoved(direction) => {
-                self.move_search_or_path_suggestion_selection(direction)
-            }
-            Message::PathSuggestionCompleted(direction) => {
-                self.complete_search_scope_or_path_suggestion(direction)
             }
             Message::PathInputStabilized(pane_id, request) => {
                 self.load_stable_path_suggestions(pane_id, request)
@@ -775,8 +783,6 @@ impl FileBrowser {
                 self.error = Some(format!("Failed to save sidebar favorites: {error}"));
                 Task::none()
             }
-            Message::SearchOpened if self.is_trash_view => Task::none(),
-            Message::SearchOpened => self.open_search(),
             Message::SearchInputChanged(query) => self.update_search_query(query),
             Message::SearchInputStabilized(request) => self.load_stable_search_matches(request),
             Message::SearchFocusRequested => {
@@ -817,16 +823,19 @@ impl FileBrowser {
                 self.accept_expanded_directory(pane_id, path, scan)
             }
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
-            Message::ColumnSettingsToggled => {
-                self.is_column_view_settings_open = !self.is_column_view_settings_open;
-                self.context_menu = None;
+            Message::SettingsOpened => self.open_settings(),
+            Message::SettingsCategorySelected(category) => {
+                self.selected_settings_category = category;
                 Task::none()
             }
             Message::ShowHiddenFilesToggled => self.toggle_show_hidden_files(),
+            Message::FileOperationVerificationSelected(verification) => {
+                self.user_config.file_operation_verification = verification;
+                self.persist_user_config_command()
+            }
             Message::TerminalEmulatorSelected(terminal_emulator) => {
                 self.terminal_emulator = terminal_emulator;
                 self.user_config.terminal_emulator = terminal_emulator;
-                self.is_column_view_settings_open = false;
                 self.persist_user_config_command()
             }
             Message::RenderingGpuPreferenceSelected(preference) => {
@@ -907,9 +916,6 @@ impl FileBrowser {
                 self.commit_rename_if_active(),
                 self.open_trash_view(NavigationMode::RecordHistory),
             ]),
-            Message::RefreshRequested => {
-                Task::batch([self.commit_rename_if_active(), self.reload_visible_panes()])
-            }
             Message::Back => Task::batch([self.commit_rename_if_active(), self.navigate_back()]),
             Message::Forward => {
                 Task::batch([self.commit_rename_if_active(), self.navigate_forward()])
@@ -937,20 +943,9 @@ impl FileBrowser {
                 self.rename_input = value;
                 Task::none()
             }
-            Message::BeginRename(path) => {
-                self.context_menu = None;
-                self.select_path(path.clone());
-                self.renaming = Some(path);
-                let input_id = rename_input_id();
-                Task::batch([
-                    iced::widget::operation::focus(input_id.clone()),
-                    iced::widget::operation::select_all(input_id),
-                ])
-            }
+            Message::BeginRename(path) => self.begin_rename(path),
             Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
             Message::RenameSelected => self.commit_rename(),
-            Message::UndoFileOperation => self.undo_file_operation(),
-            Message::RedoFileOperation => self.redo_file_operation(),
             Message::CreateDirectory(directory) => self.create_directory_in(directory),
             Message::CreateEmptyFile(directory) => self.create_empty_file_in(directory),
             Message::TrashSelected => self.trash_selected(),
@@ -966,9 +961,6 @@ impl FileBrowser {
                 content,
             } => self.accept_desktop_clipboard_paste(paste_directory, fallback_operation, content),
             Message::ClipboardFileCreated(result) => self.accept_clipboard_file_created(result),
-            Message::PrimarySelectAllRequested => {
-                text_input_shortcuts::select_focused_text_or_visible_files_command()
-            }
             Message::TransferConflictsChecked {
                 mode,
                 transfers,
@@ -1008,6 +1000,8 @@ impl FileBrowser {
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.search_window == Some(window) {
             view_search_window(self.search.as_ref(), self.scrollbar_visibility)
+        } else if self.settings_window == Some(window) {
+            view_settings_window(self)
         } else if self.preview_window == Some(window) {
             view_preview_window(
                 self.preview.as_ref(),

@@ -221,7 +221,6 @@ impl FileBrowser {
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
-        self.is_column_view_settings_open = false;
 
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -240,7 +239,6 @@ impl FileBrowser {
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
-        self.is_column_view_settings_open = false;
 
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;

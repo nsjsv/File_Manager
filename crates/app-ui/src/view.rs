@@ -1,8 +1,11 @@
+mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;
 mod preview_panel;
 mod rendering_settings;
 mod search_panel;
+mod settings_window;
+mod shortcut_settings;
 mod startup_index_setup;
 mod tab_motion;
 mod toggle_switch;
@@ -12,6 +15,7 @@ pub(crate) use search_panel::{
     search_input_id, search_results_id, view_search_window, SEARCH_RESULTS_HEIGHT,
     SEARCH_RESULTS_PADDING, SEARCH_RESULT_ROW_HEIGHT, SEARCH_RESULT_ROW_SPACING,
 };
+pub(crate) use settings_window::view_settings_window;
 
 use std::path::Path;
 
@@ -49,8 +53,8 @@ use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
 use floating_panels::{
-    column_settings_panel, context_menu_panel, destructive_action_confirmation_panel,
-    error_notification_panel, sidebar_view, transfer_conflict_panel,
+    context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
+    sidebar_view, transfer_conflict_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
 use startup_index_setup::startup_index_setup_panel;
@@ -164,12 +168,6 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
                 browser.active_pane_id(),
             ),
             placement: FloatingPlacement::At(context_menu.position()),
-        });
-    } else if browser.is_column_view_settings_open {
-        floating_input = BrowserFloatingInput::DismissibleBlocking;
-        floating.push(FloatingContent {
-            element: column_settings_panel(browser),
-            placement: FloatingPlacement::Center,
         });
     }
 

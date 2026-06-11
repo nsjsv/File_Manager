@@ -14,7 +14,7 @@ use crate::FileError;
 mod copy;
 pub use copy::{
     copy_path, copy_path_with_options, CopyProgress, FileOperationControls, FileOperationRunState,
-    FileTransferOptions, ProgressSender, TransferConflictStrategy,
+    FileOperationVerification, FileTransferOptions, ProgressSender, TransferConflictStrategy,
 };
 
 pub async fn rename_path(
@@ -152,6 +152,7 @@ pub async fn move_path_with_options(
     let mut controls = transfer_options.controls;
     let progress = transfer_options.progress;
     let conflict_strategy = transfer_options.conflict_strategy;
+    let verification = transfer_options.verification;
     controls.wait_until_running().await?;
 
     if from == to {
@@ -185,7 +186,7 @@ pub async fn move_path_with_options(
             .as_ref()
             .is_some_and(std::fs::Metadata::is_dir)
     {
-        move_directory_merge(&from, &to, &mut controls).await?;
+        move_directory_merge(&from, &to, &mut controls, verification).await?;
         send_move_progress(progress, from, to.clone(), total);
         return Ok(Some(to));
     }
@@ -197,13 +198,15 @@ pub async fn move_path_with_options(
         return Ok(None);
     };
 
-    fs::rename(&from, &to)
-        .await
-        .map_err(|source| FileError::Move {
-            from: from.clone(),
-            to: to.clone(),
-            source,
-        })?;
+    move_prepared_path(
+        &from,
+        &to,
+        &source_metadata,
+        &mut controls,
+        progress.clone(),
+        verification,
+    )
+    .await?;
 
     send_move_progress(progress, from, to.clone(), total);
 
@@ -260,10 +263,77 @@ async fn remove_move_target(
     })
 }
 
+async fn move_prepared_path(
+    from: &Path,
+    to: &Path,
+    source_metadata: &std::fs::Metadata,
+    controls: &mut FileOperationControls,
+    progress: Option<ProgressSender>,
+    verification: FileOperationVerification,
+) -> Result<(), FileError> {
+    match fs::rename(from, to).await {
+        Ok(()) => Ok(()),
+        Err(source) if is_cross_device_rename_error(&source) => {
+            copy_then_remove_source(from, to, source_metadata, controls, progress, verification)
+                .await
+        }
+        Err(source) => Err(FileError::Move {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+async fn copy_then_remove_source(
+    from: &Path,
+    to: &Path,
+    source_metadata: &std::fs::Metadata,
+    controls: &mut FileOperationControls,
+    progress: Option<ProgressSender>,
+    verification: FileOperationVerification,
+) -> Result<(), FileError> {
+    let copy_options = FileTransferOptions::new(controls.clone())
+        .with_optional_progress(progress)
+        .with_conflict_strategy(TransferConflictStrategy::Fail)
+        .with_verification(verification);
+    copy_path_with_options(from, to, copy_options).await?;
+    remove_moved_source(from, to, source_metadata).await
+}
+
+async fn remove_moved_source(
+    from: &Path,
+    to: &Path,
+    source_metadata: &std::fs::Metadata,
+) -> Result<(), FileError> {
+    let result = if source_metadata.is_dir() {
+        fs::remove_dir_all(from).await
+    } else {
+        fs::remove_file(from).await
+    };
+
+    result.map_err(|source| FileError::Move {
+        from: from.to_path_buf(),
+        to: to.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(unix)]
+fn is_cross_device_rename_error(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(18)
+}
+
+#[cfg(not(unix))]
+fn is_cross_device_rename_error(_error: &io::Error) -> bool {
+    false
+}
+
 async fn move_directory_merge(
     from: &Path,
     to: &Path,
     controls: &mut FileOperationControls,
+    verification: FileOperationVerification,
 ) -> Result<(), FileError> {
     if to.starts_with(from) {
         return Err(FileError::InvalidInput {
@@ -313,6 +383,13 @@ async fn move_directory_merge(
                     path: source_child.clone(),
                     source,
                 })?;
+            let source_metadata =
+                fs::metadata(&source_child)
+                    .await
+                    .map_err(|source| FileError::Metadata {
+                        path: source_child.clone(),
+                        source,
+                    })?;
             let target_metadata = transfer_target_metadata_if_exists(&target_child)
                 .await
                 .map_err(|source| FileError::Move {
@@ -328,13 +405,15 @@ async fn move_directory_merge(
                 continue;
             }
 
-            fs::rename(&source_child, &target_child)
-                .await
-                .map_err(|source| FileError::Move {
-                    from: source_child,
-                    to: target_child,
-                    source,
-                })?;
+            move_prepared_path(
+                &source_child,
+                &target_child,
+                &source_metadata,
+                controls,
+                None,
+                verification,
+            )
+            .await?;
         }
     }
 

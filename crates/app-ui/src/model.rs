@@ -16,7 +16,9 @@ use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
+use crate::shortcuts::ShortcutBindingId;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailLoadOutcome};
+use file_core::FileOperationVerification;
 
 pub(crate) use crate::startup_index_tree::{
     StartupIndexDirectoryChildren, StartupIndexEntrySelection, StartupIndexRootSeed,
@@ -101,6 +103,14 @@ pub(crate) enum Message {
     PaneCursorEntered(BrowserPaneId),
     PaneCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
+    KeyboardKeyPressed {
+        key: keyboard::Key,
+        modifiers: keyboard::Modifiers,
+        status: event::Status,
+    },
+    ShortcutCaptureStarted(ShortcutBindingId),
+    ShortcutCaptureCanceled,
+    ShortcutBindingReset(ShortcutBindingId),
     DragSelectionFinished,
     DismissFloating,
     DestructiveActionConfirmed,
@@ -109,25 +119,19 @@ pub(crate) enum Message {
     AuxiliaryWindowResized(window::Id, f32, f32),
     WindowFocused(window::Id),
     WindowUnfocused(window::Id),
-    FocusedWindowEscapePressed,
     WindowPointerPressed {
         button: mouse::Button,
         status: event::Status,
     },
-    CapturedPreviewShortcutPressed,
-    RequestPreview,
     PathInputChanged(BrowserPaneId, String),
     PathInputSubmitted(BrowserPaneId),
     PathSuggestionSelected(BrowserPaneId, PathBuf),
-    PathSuggestionMoved(PathSuggestionDirection),
-    PathSuggestionCompleted(PathSuggestionDirection),
     PathInputStabilized(BrowserPaneId, PathSuggestionRequest),
     PathSuggestionsLoaded(BrowserPaneId, PathSuggestionRequest, Vec<PathBuf>),
     SystemThemeDetected(Theme),
     UserConfigSaved(Result<(), String>),
     ColumnWidthOverrideSaved(Result<(), String>),
     SidebarBookmarksSaved(Result<(), String>),
-    SearchOpened,
     SearchInputChanged(String),
     SearchInputStabilized(SearchRequest),
     SearchFocusRequested,
@@ -144,8 +148,10 @@ pub(crate) enum Message {
     StartupIndexSkipped,
     ExpandedDirectoryLoaded(BrowserPaneId, PathBuf, Result<DirectoryScan, String>),
     ObservedDirectoryChanged(PathBuf),
-    ColumnSettingsToggled,
+    SettingsOpened,
+    SettingsCategorySelected(SettingsCategory),
     ShowHiddenFilesToggled,
+    FileOperationVerificationSelected(FileOperationVerification),
     TerminalEmulatorSelected(TerminalEmulator),
     RenderingGpuPreferenceSelected(RenderingGpuPreference),
     RendererRestartNoticeDismissed,
@@ -166,7 +172,6 @@ pub(crate) enum Message {
     PaneUp(BrowserPaneId),
     NavigateTo(PathBuf),
     TrashOpened,
-    RefreshRequested,
     Back,
     Forward,
     RenameInputFocusChecked(bool),
@@ -174,8 +179,6 @@ pub(crate) enum Message {
     BeginRename(PathBuf),
     OpenTerminalHere(PathBuf),
     RenameSelected,
-    UndoFileOperation,
-    RedoFileOperation,
     CreateDirectory(PathBuf),
     CreateEmptyFile(PathBuf),
     TrashSelected,
@@ -191,7 +194,6 @@ pub(crate) enum Message {
         content: Result<Option<DesktopClipboardContent>, String>,
     },
     ClipboardFileCreated(Result<PathBuf, String>),
-    PrimarySelectAllRequested,
     TransferConflictsChecked {
         mode: TransferConflictMode,
         transfers: Vec<QueuedTransfer>,
@@ -227,6 +229,32 @@ pub(crate) enum DestructiveActionConfirmation {
 pub(crate) enum OperationQueuePanelMode {
     PassivePreview,
     InteractiveList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsCategory {
+    General,
+    FileOperations,
+    Rendering,
+    Shortcuts,
+}
+
+impl SettingsCategory {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::General,
+        Self::FileOperations,
+        Self::Rendering,
+        Self::Shortcuts,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::FileOperations => "File Operations",
+            Self::Rendering => "Rendering",
+            Self::Shortcuts => "Shortcuts",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

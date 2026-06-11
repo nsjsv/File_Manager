@@ -16,7 +16,6 @@ impl FileBrowser {
         self.rendering_gpu_preference = preference;
         self.user_config.rendering_gpu_preference = preference;
         self.renderer_restart_notice_visible = true;
-        self.is_column_view_settings_open = false;
         self.persist_user_config_command()
     }
 

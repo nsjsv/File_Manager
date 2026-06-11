@@ -34,10 +34,15 @@ const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
 const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
 const MIN_SEARCH_WIDTH: f32 = 520.0;
 const MIN_SEARCH_HEIGHT: f32 = 360.0;
+const DEFAULT_SETTINGS_WIDTH: f32 = 760.0;
+const DEFAULT_SETTINGS_HEIGHT: f32 = 560.0;
+const MIN_SETTINGS_WIDTH: f32 = 640.0;
+const MIN_SETTINGS_HEIGHT: f32 = 420.0;
 pub(super) const MAIN_WINDOW_INITIAL_WIDTH: f32 = 1180.0;
 pub(super) const MAIN_WINDOW_INITIAL_HEIGHT: f32 = 680.0;
 const MAIN_WINDOW_APP_ID: &str = "file-manager";
 const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
+const SETTINGS_WINDOW_APP_ID: &str = "file-manager-settings";
 const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
 const VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT: f32 = 88.0;
 const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
@@ -60,6 +65,17 @@ fn search_window_settings() -> window::Settings {
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = SEARCH_WINDOW_APP_ID.to_owned();
+    settings
+}
+
+fn settings_window_settings() -> window::Settings {
+    let mut settings = window::Settings {
+        size: Size::new(DEFAULT_SETTINGS_WIDTH, DEFAULT_SETTINGS_HEIGHT),
+        min_size: Some(Size::new(MIN_SETTINGS_WIDTH, MIN_SETTINGS_HEIGHT)),
+        exit_on_close_request: false,
+        ..window::Settings::default()
+    };
+    settings.platform_specific.application_id = SETTINGS_WINDOW_APP_ID.to_owned();
     settings
 }
 
@@ -203,6 +219,8 @@ impl FileBrowser {
     pub(super) fn window_title(&self, window: window::Id) -> String {
         if self.search_window == Some(window) {
             "Search - File Manager".to_owned()
+        } else if self.settings_window == Some(window) {
+            "Settings - File Manager".to_owned()
         } else if self.preview_window == Some(window) {
             "Preview - File Manager".to_owned()
         } else {
@@ -225,6 +243,45 @@ impl FileBrowser {
     pub(super) fn close_search_window(&mut self) -> Task<Message> {
         self.search = None;
         let Some(window) = self.search_window.take() else {
+            return Task::none();
+        };
+        if self.focused_window == window {
+            self.focused_window = self.main_window;
+        }
+        window::close(window)
+    }
+
+    pub(super) fn open_settings(&mut self) -> Task<Message> {
+        self.context_menu = None;
+        self.shortcut_capture = None;
+        self.operation_queue.close_panel();
+        self.file_drag = None;
+        self.sidebar_bookmark_drag = None;
+        self.sidebar_bookmark_drop_slot = None;
+        self.selection_marquee = None;
+        self.path_suggestions.clear();
+        self.path_suggestion_selection = None;
+        Task::batch([
+            self.commit_rename_if_active(),
+            self.ensure_settings_window(),
+        ])
+    }
+
+    fn ensure_settings_window(&mut self) -> Task<Message> {
+        if let Some(window) = self.settings_window {
+            self.focused_window = window;
+            return window::gain_focus(window);
+        }
+
+        let (window, command) = window::open(settings_window_settings());
+        self.settings_window = Some(window);
+        self.focused_window = window;
+        command.discard()
+    }
+
+    pub(super) fn close_settings_window(&mut self) -> Task<Message> {
+        self.shortcut_capture = None;
+        let Some(window) = self.settings_window.take() else {
             return Task::none();
         };
         if self.focused_window == window {
@@ -349,6 +406,9 @@ impl FileBrowser {
         if self.search_window == Some(self.focused_window) {
             return self.close_search_window();
         }
+        if self.settings_window == Some(self.focused_window) {
+            return self.close_settings_window();
+        }
         if self.preview_window == Some(self.focused_window) {
             return self.close_preview_window();
         }
@@ -400,7 +460,7 @@ impl FileBrowser {
 
         let had_path_suggestions = !self.path_suggestions.is_empty();
         self.context_menu = None;
-        self.is_column_view_settings_open = false;
+        self.shortcut_capture = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
         self.sidebar_bookmark_drag = None;
@@ -430,6 +490,8 @@ impl FileBrowser {
 
         if self.search_window == Some(window_id) {
             self.close_search_window()
+        } else if self.settings_window == Some(window_id) {
+            self.close_settings_window()
         } else if self.preview_window == Some(window_id) {
             self.close_preview_window()
         } else {
@@ -444,8 +506,11 @@ impl FileBrowser {
         self.clear_preview();
         self.pending_preview_resize = None;
 
-        let mut commands = Vec::with_capacity(4);
+        let mut commands = Vec::with_capacity(5);
         if let Some(window) = self.search_window.take() {
+            commands.push(window::close(window));
+        }
+        if let Some(window) = self.settings_window.take() {
             commands.push(window::close(window));
         }
         if let Some(window) = self.preview_window.take() {

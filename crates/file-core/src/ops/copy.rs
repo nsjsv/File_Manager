@@ -1,3 +1,4 @@
+use std::io;
 use std::path::{Path, PathBuf};
 
 use tokio::fs;
@@ -31,6 +32,19 @@ pub enum TransferConflictStrategy {
     Skip,
     KeepBoth,
     Merge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileOperationVerification {
+    Off,
+    BasicMetadata,
+    Strong,
+}
+
+impl Default for FileOperationVerification {
+    fn default() -> Self {
+        Self::BasicMetadata
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +102,7 @@ pub struct FileTransferOptions {
     pub(super) controls: FileOperationControls,
     pub(super) progress: Option<ProgressSender>,
     pub(super) conflict_strategy: TransferConflictStrategy,
+    pub(super) verification: FileOperationVerification,
 }
 
 impl FileTransferOptions {
@@ -96,6 +111,7 @@ impl FileTransferOptions {
             controls,
             progress: None,
             conflict_strategy: TransferConflictStrategy::Fail,
+            verification: FileOperationVerification::default(),
         }
     }
 
@@ -115,6 +131,11 @@ impl FileTransferOptions {
 
     pub fn with_conflict_strategy(mut self, conflict_strategy: TransferConflictStrategy) -> Self {
         self.conflict_strategy = conflict_strategy;
+        self
+    }
+
+    pub fn with_verification(mut self, verification: FileOperationVerification) -> Self {
+        self.verification = verification;
         self
     }
 }
@@ -152,6 +173,7 @@ async fn copy_path_with_transfer_options(
     let mut controls = transfer_options.controls;
     let progress = transfer_options.progress;
     let conflict_strategy = transfer_options.conflict_strategy;
+    let verification = transfer_options.verification;
     controls.wait_until_running().await?;
 
     let metadata = fs::metadata(&from)
@@ -172,6 +194,7 @@ async fn copy_path_with_transfer_options(
             &mut controls,
             progress.as_ref(),
             conflict_strategy,
+            verification,
         )
         .await?;
         return Ok(Some(to));
@@ -185,6 +208,7 @@ async fn copy_path_with_transfer_options(
         &mut controls,
         progress.as_ref(),
         &mut buffer,
+        verification,
     )
     .await?;
     Ok(Some(to))
@@ -197,6 +221,7 @@ async fn copy_file(
     progress: Option<&ProgressSender>,
     conflict_strategy: TransferConflictStrategy,
     buffer: &mut [u8],
+    verification: FileOperationVerification,
 ) -> Result<(), FileError> {
     let metadata = fs::metadata(from)
         .await
@@ -207,7 +232,16 @@ async fn copy_file(
     let Some(to) = prepare_copy_target(from, to, &metadata, conflict_strategy).await? else {
         return Ok(());
     };
-    copy_file_to_target(from, &to, &metadata, controls, progress, buffer).await
+    copy_file_to_target(
+        from,
+        &to,
+        &metadata,
+        controls,
+        progress,
+        buffer,
+        verification,
+    )
+    .await
 }
 
 async fn copy_file_to_target(
@@ -217,6 +251,7 @@ async fn copy_file_to_target(
     controls: &mut FileOperationControls,
     progress: Option<&ProgressSender>,
     buffer: &mut [u8],
+    verification: FileOperationVerification,
 ) -> Result<(), FileError> {
     let mut reader = fs::File::open(from)
         .await
@@ -277,11 +312,161 @@ async fn copy_file_to_target(
         }
     }
 
-    writer.flush().await.map_err(|source| FileError::Copy {
+    if let Err(source) = writer.flush().await {
+        let _ = fs::remove_file(to).await;
+        return Err(FileError::Copy {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        });
+    }
+    drop(writer);
+
+    if verification != FileOperationVerification::Off {
+        if let Err(source) = fs::set_permissions(to, metadata.permissions()).await {
+            let _ = fs::remove_file(to).await;
+            return Err(FileError::Copy {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            });
+        }
+        if let Err(error) =
+            verify_copied_file(from, to, metadata, controls, buffer, verification).await
+        {
+            let _ = fs::remove_file(to).await;
+            return Err(error);
+        }
+    }
+
+    Ok(())
+}
+
+async fn verify_copied_file(
+    from: &Path,
+    to: &Path,
+    source_metadata: &std::fs::Metadata,
+    controls: &mut FileOperationControls,
+    buffer: &mut [u8],
+    verification: FileOperationVerification,
+) -> Result<(), FileError> {
+    controls.wait_until_running().await?;
+    let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
         from: from.to_path_buf(),
         to: to.to_path_buf(),
         source,
-    })
+    })?;
+    if !target_metadata.is_file() {
+        return Err(copy_verification_error(
+            from,
+            to,
+            "target is not a regular file after copy",
+        ));
+    }
+    if target_metadata.len() != source_metadata.len() {
+        return Err(copy_verification_error(
+            from,
+            to,
+            "target file size differs from source after copy",
+        ));
+    }
+    if target_metadata.permissions().readonly() != source_metadata.permissions().readonly() {
+        return Err(copy_verification_error(
+            from,
+            to,
+            "target readonly flag differs from source after copy",
+        ));
+    }
+    if verification == FileOperationVerification::Strong {
+        verify_file_contents_match(from, to, controls, buffer).await?;
+    }
+    Ok(())
+}
+
+async fn verify_file_contents_match(
+    from: &Path,
+    to: &Path,
+    controls: &mut FileOperationControls,
+    source_buffer: &mut [u8],
+) -> Result<(), FileError> {
+    let mut source = fs::File::open(from)
+        .await
+        .map_err(|source| FileError::Copy {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        })?;
+    let mut target = fs::File::open(to).await.map_err(|source| FileError::Copy {
+        from: from.to_path_buf(),
+        to: to.to_path_buf(),
+        source,
+    })?;
+    let mut target_buffer = vec![0; source_buffer.len()];
+
+    loop {
+        controls.wait_until_running().await?;
+        let source_read = source
+            .read(source_buffer)
+            .await
+            .map_err(|source| FileError::Copy {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            })?;
+        let target_read =
+            target
+                .read(&mut target_buffer)
+                .await
+                .map_err(|source| FileError::Copy {
+                    from: from.to_path_buf(),
+                    to: to.to_path_buf(),
+                    source,
+                })?;
+
+        if source_read != target_read
+            || source_buffer[..source_read] != target_buffer[..target_read]
+        {
+            return Err(copy_verification_error(
+                from,
+                to,
+                "target file contents differ from source after copy",
+            ));
+        }
+        if source_read == 0 {
+            return Ok(());
+        }
+    }
+}
+
+async fn verify_copied_directory(
+    from: &Path,
+    to: &Path,
+    verification: FileOperationVerification,
+) -> Result<(), FileError> {
+    if verification == FileOperationVerification::Off {
+        return Ok(());
+    }
+    let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
+        from: from.to_path_buf(),
+        to: to.to_path_buf(),
+        source,
+    })?;
+    if !target_metadata.is_dir() {
+        return Err(copy_verification_error(
+            from,
+            to,
+            "target is not a directory after copy",
+        ));
+    }
+    Ok(())
+}
+
+fn copy_verification_error(from: &Path, to: &Path, message: &'static str) -> FileError {
+    FileError::Copy {
+        from: from.to_path_buf(),
+        to: to.to_path_buf(),
+        source: io::Error::new(io::ErrorKind::InvalidData, message),
+    }
 }
 
 async fn copy_directory(
@@ -290,6 +475,7 @@ async fn copy_directory(
     controls: &mut FileOperationControls,
     progress: Option<&ProgressSender>,
     conflict_strategy: TransferConflictStrategy,
+    verification: FileOperationVerification,
 ) -> Result<(), FileError> {
     if to.starts_with(from) {
         return Err(FileError::InvalidInput {
@@ -299,6 +485,12 @@ async fn copy_directory(
     }
 
     let created_root = ensure_copy_directory_target(from, to, conflict_strategy).await?;
+    if let Err(error) = verify_copied_directory(from, to, verification).await {
+        if created_root {
+            let _ = fs::remove_dir_all(to).await;
+        }
+        return Err(error);
+    }
 
     let mut buffer = vec![0; COPY_BUFFER_SIZE];
     let mut pending_directories = vec![(from.to_path_buf(), to.to_path_buf())];
@@ -365,8 +557,26 @@ async fn copy_directory(
                 )
                 .await?
                 {
-                    ensure_copy_directory_target(&source_child, &target_child, conflict_strategy)
-                        .await?;
+                    if let Err(error) = ensure_copy_directory_target(
+                        &source_child,
+                        &target_child,
+                        conflict_strategy,
+                    )
+                    .await
+                    {
+                        if created_root {
+                            let _ = fs::remove_dir_all(to).await;
+                        }
+                        return Err(error);
+                    }
+                    if let Err(error) =
+                        verify_copied_directory(&source_child, &target_child, verification).await
+                    {
+                        if created_root {
+                            let _ = fs::remove_dir_all(to).await;
+                        }
+                        return Err(error);
+                    }
                     pending_directories.push((source_child, target_child));
                 }
             } else if let Err(error) = copy_file(
@@ -376,10 +586,11 @@ async fn copy_directory(
                 progress,
                 nested_copy_conflict_strategy(conflict_strategy),
                 &mut buffer,
+                verification,
             )
             .await
             {
-                if matches!(&error, FileError::Cancelled) && created_root {
+                if created_root {
                     let _ = fs::remove_dir_all(to).await;
                 }
                 return Err(error);

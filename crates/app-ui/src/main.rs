@@ -16,6 +16,7 @@ mod operation_queue_display;
 mod operation_queue_view;
 mod preview;
 mod selection_marquee;
+mod shortcuts;
 mod sidebar;
 mod startup_index_tree;
 mod startup_trace;

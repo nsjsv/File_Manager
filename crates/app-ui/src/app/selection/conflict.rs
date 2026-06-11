@@ -52,12 +52,14 @@ impl FileBrowser {
         transfers: Vec<QueuedTransfer>,
     ) -> Task<Message> {
         match mode {
-            TransferConflictMode::Copy => {
-                self.enqueue_file_operation(QueuedFileOperation::Copy { transfers })
-            }
-            TransferConflictMode::Move => {
-                self.enqueue_file_operation(QueuedFileOperation::Move { transfers })
-            }
+            TransferConflictMode::Copy => self.enqueue_file_operation(QueuedFileOperation::Copy {
+                transfers,
+                verification: self.file_operation_verification(),
+            }),
+            TransferConflictMode::Move => self.enqueue_file_operation(QueuedFileOperation::Move {
+                transfers,
+                verification: self.file_operation_verification(),
+            }),
         }
     }
 

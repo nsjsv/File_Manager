@@ -27,7 +27,6 @@ impl FileBrowser {
         self.sidebar_bookmark_drop_slot = None;
         self.clear_preview();
         self.context_menu = None;
-        self.is_column_view_settings_open = false;
         Task::none()
     }
 

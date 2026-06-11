@@ -19,6 +19,7 @@ use crate::model::{
     TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
+use crate::shortcuts::FileSelectionDirection;
 
 #[cfg(test)]
 mod activation_tests;
@@ -38,7 +39,6 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_column_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
-        self.is_column_view_settings_open = false;
         let column_directories_snapshot = crate::three_column_view::column_directories(self);
         let was_selected = self.is_path_selected(&path);
         let rename_command = self.commit_rename_if_active();
@@ -243,7 +243,6 @@ impl FileBrowser {
         self.context_menu = None;
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.is_column_view_settings_open = false;
         self.file_drag = None;
         self.focus_column_blank_context_or_clear_selection(directory);
 
@@ -308,7 +307,6 @@ impl FileBrowser {
         self.clear_preview();
         self.context_menu = None;
         self.drag_selection_anchor = None;
-        self.is_column_view_settings_open = false;
         self.file_drag = None;
         let preserve_existing = self.keyboard_modifiers.control();
         let base_selection = self.selected_paths.clone();
@@ -637,6 +635,114 @@ impl FileBrowser {
         Task::none()
     }
 
+    pub(super) fn activate_selected_path(&mut self) -> Task<Message> {
+        if !self.file_browser_content_shortcuts_enabled() {
+            return Task::none();
+        }
+        let Some(path) = self.selected.clone() else {
+            return Task::none();
+        };
+        self.activate_path(path)
+    }
+
+    pub(super) fn move_file_selection(
+        &mut self,
+        direction: FileSelectionDirection,
+    ) -> Task<Message> {
+        if !self.file_browser_content_shortcuts_enabled() {
+            return Task::none();
+        }
+
+        match direction {
+            FileSelectionDirection::Up => {
+                self.move_file_selection_vertically(SelectionStep::Previous)
+            }
+            FileSelectionDirection::Down => {
+                self.move_file_selection_vertically(SelectionStep::Next)
+            }
+            FileSelectionDirection::Left => self.move_file_selection_to_parent_column(),
+            FileSelectionDirection::Right => self.move_file_selection_to_child_column(),
+        }
+    }
+
+    fn move_file_selection_vertically(&mut self, step: SelectionStep) -> Task<Message> {
+        let directory = self
+            .selected
+            .as_ref()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| self.current_dir.clone());
+        let paths = self.entry_paths_in_directory(&directory);
+        let Some(target) = stepped_selection_target(&paths, self.selected.as_deref(), step) else {
+            return Task::none();
+        };
+
+        self.select_path_from_keyboard(target);
+        Task::none()
+    }
+
+    fn move_file_selection_to_parent_column(&mut self) -> Task<Message> {
+        let Some(selected) = self.selected.clone() else {
+            return Task::none();
+        };
+        let Some(parent) = selected.parent().map(Path::to_path_buf) else {
+            return Task::none();
+        };
+        if parent == self.current_dir || self.entry_kind(&parent) != Some(FileKind::Directory) {
+            return Task::none();
+        }
+
+        self.select_path_from_keyboard(parent.clone());
+        self.set_deepest_open_column_directory(Some(parent));
+        Task::none()
+    }
+
+    fn move_file_selection_to_child_column(&mut self) -> Task<Message> {
+        let Some(selected) = self.selected.clone() else {
+            return self.move_file_selection_vertically(SelectionStep::Next);
+        };
+        if self.entry_kind(&selected) != Some(FileKind::Directory) {
+            return Task::none();
+        }
+
+        let first_child = self.entry_paths_in_directory(&selected).into_iter().next();
+        let open_command = self.open_column_for_directory(selected);
+        if let Some(path) = first_child {
+            self.select_path_from_keyboard(path);
+        }
+        open_command
+    }
+
+    fn entry_paths_in_directory(&self, directory: &Path) -> Vec<PathBuf> {
+        if directory == self.current_dir.as_path() {
+            return self
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+        }
+
+        self.expanded_directories
+            .get(directory)
+            .map(|expanded| {
+                expanded
+                    .entries
+                    .iter()
+                    .map(|entry| entry.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn select_path_from_keyboard(&mut self, path: PathBuf) {
+        self.select_path(path.clone());
+        self.selection_anchor = Some(path);
+        self.drag_selection_anchor = None;
+        self.selection_marquee = None;
+        self.file_drag = None;
+        self.path_suggestions.clear();
+        self.path_suggestion_selection = None;
+    }
+
     pub(super) fn request_preview(&mut self) -> Task<Message> {
         if self.preview.is_some() {
             self.context_menu = None;
@@ -953,6 +1059,31 @@ impl FileBrowser {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SelectionStep {
+    Previous,
+    Next,
+}
+
+fn stepped_selection_target(
+    paths: &[PathBuf],
+    selected: Option<&Path>,
+    step: SelectionStep,
+) -> Option<PathBuf> {
+    if paths.is_empty() {
+        return None;
+    }
+
+    let current = selected.and_then(|selected| paths.iter().position(|path| path == selected));
+    let index = match (current, step) {
+        (Some(index), SelectionStep::Previous) => index.saturating_sub(1),
+        (Some(index), SelectionStep::Next) => (index + 1).min(paths.len() - 1),
+        (None, SelectionStep::Previous) => paths.len() - 1,
+        (None, SelectionStep::Next) => 0,
+    };
+    paths.get(index).cloned()
 }
 
 fn selection_marquee_distance_exceeded(marquee: &SelectionMarquee) -> bool {

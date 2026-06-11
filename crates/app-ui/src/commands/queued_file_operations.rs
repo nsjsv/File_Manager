@@ -8,8 +8,8 @@ use file_core::{
     build_file_search_index_for_paths_with_progress, copy_path_with_options, create_directory,
     create_empty_file, delete_trash_entry, empty_trash, move_path_with_options, rename_path,
     restore_trash_entry, trash_path_with_restore_entry, CopyProgress, FileOperationControls,
-    FileSearchIndexOptions, FileSearchIndexProgress, FileTransferOptions, TransferConflictStrategy,
-    TrashRestoreEntry,
+    FileOperationVerification, FileSearchIndexOptions, FileSearchIndexProgress,
+    FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -90,23 +90,31 @@ async fn run_queued_file_operation(
             run_queued_delete_trash_entries(entries, controls, task_id, output).await
         }
         QueuedFileOperation::EmptyTrash => run_queued_empty_trash(controls, task_id, output).await,
-        QueuedFileOperation::Copy { transfers } => {
+        QueuedFileOperation::Copy {
+            transfers,
+            verification,
+        } => {
             run_queued_transfers(
                 transfers,
                 controls,
                 task_id,
                 output,
                 QueuedTransferMode::Copy,
+                verification,
             )
             .await
         }
-        QueuedFileOperation::Move { transfers } => {
+        QueuedFileOperation::Move {
+            transfers,
+            verification,
+        } => {
             run_queued_transfers(
                 transfers,
                 controls,
                 task_id,
                 output,
                 QueuedTransferMode::Move,
+                verification,
             )
             .await
         }
@@ -399,6 +407,7 @@ async fn run_queued_transfers(
     task_id: u64,
     output: &mut IcedSender<Message>,
     mode: QueuedTransferMode,
+    verification: FileOperationVerification,
 ) -> Result<FileOperationOutcome, String> {
     let can_record_history = transfers.iter().all(history_safe_transfer);
     let total = transfers.len();
@@ -410,6 +419,7 @@ async fn run_queued_transfers(
             task_id,
             output,
             mode,
+            verification,
             index,
             total,
         )
@@ -448,6 +458,7 @@ async fn run_queued_transfer(
     task_id: u64,
     output: &mut IcedSender<Message>,
     mode: QueuedTransferMode,
+    verification: FileOperationVerification,
     completed_transfers: usize,
     total_transfers: usize,
 ) -> Result<Option<CompletedTransfer>, String> {
@@ -456,7 +467,8 @@ async fn run_queued_transfer(
     let transfer = async move {
         let transfer_options = FileTransferOptions::new(controls)
             .with_progress_sender(progress_sender)
-            .with_conflict_strategy(transfer.conflict_strategy);
+            .with_conflict_strategy(transfer.conflict_strategy)
+            .with_verification(verification);
         match mode {
             QueuedTransferMode::Copy => {
                 copy_path_with_options(transfer.source, transfer.target, transfer_options).await

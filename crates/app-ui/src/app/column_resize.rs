@@ -32,7 +32,6 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.clear_preview();
         self.context_menu = None;
-        self.is_column_view_settings_open = false;
         Task::none()
     }
 

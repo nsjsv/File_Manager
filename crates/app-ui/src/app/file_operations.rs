@@ -1,4 +1,5 @@
 use iced::Task;
+use std::path::PathBuf;
 
 use super::{operation_queue_auto_hide_command, FileBrowser};
 use crate::model::{Message, OperationQueuePanelMode};
@@ -102,6 +103,27 @@ impl FileBrowser {
         }
     }
 
+    pub(super) fn begin_rename(&mut self, path: PathBuf) -> Task<Message> {
+        if self.is_trash_view {
+            return Task::none();
+        }
+
+        self.context_menu = None;
+        self.select_path(path.clone());
+        self.renaming = Some(path);
+        focus_rename_input_command()
+    }
+
+    pub(super) fn begin_rename_selected(&mut self) -> Task<Message> {
+        if !self.file_browser_content_shortcuts_enabled() {
+            return Task::none();
+        }
+        let Some(path) = self.selected.clone() else {
+            return Task::none();
+        };
+        self.begin_rename(path)
+    }
+
     pub(super) fn focus_created_entry_for_rename(&mut self) -> Task<Message> {
         let Some(path) = self.pending_created_entry_rename.clone() else {
             return Task::none();
@@ -113,11 +135,7 @@ impl FileBrowser {
         self.pending_created_entry_rename = None;
         self.select_path(path.clone());
         self.renaming = Some(path);
-        let input_id = rename_input_id();
-        Task::batch([
-            iced::widget::operation::focus(input_id.clone()),
-            iced::widget::operation::select_all(input_id),
-        ])
+        focus_rename_input_command()
     }
 
     pub(super) fn enqueue_file_operation(
@@ -170,4 +188,12 @@ impl FileBrowser {
             self.operation_queue_auto_hide_generation.wrapping_add(1);
         operation_queue_auto_hide_command(self.operation_queue_auto_hide_generation)
     }
+}
+
+fn focus_rename_input_command() -> Task<Message> {
+    let input_id = rename_input_id();
+    Task::batch([
+        iced::widget::operation::focus(input_id.clone()),
+        iced::widget::operation::select_all(input_id),
+    ])
 }

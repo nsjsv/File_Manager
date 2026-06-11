@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use file_core::{FileSearchIndexOutcome, TransferConflictStrategy, TrashRestoreEntry};
+use file_core::{
+    FileOperationVerification, FileSearchIndexOutcome, TransferConflictStrategy, TrashRestoreEntry,
+};
 
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
@@ -243,6 +245,7 @@ impl FileOperationHistoryItem {
             }),
             Self::Move { transfers } => Some(QueuedFileOperation::Move {
                 transfers: reverse_transfers(transfers),
+                verification: FileOperationVerification::default(),
             }),
         }
     }
@@ -263,9 +266,11 @@ impl FileOperationHistoryItem {
             Self::Restore { .. } => None,
             Self::Copy { transfers } => Some(QueuedFileOperation::Copy {
                 transfers: forward_transfers(transfers),
+                verification: FileOperationVerification::default(),
             }),
             Self::Move { transfers } => Some(QueuedFileOperation::Move {
                 transfers: forward_transfers(transfers),
+                verification: FileOperationVerification::default(),
             }),
         }
     }
@@ -358,7 +363,7 @@ mod tests {
 
         let operation = item.undo_operation().expect("undo operation");
 
-        let QueuedFileOperation::Move { transfers } = operation else {
+        let QueuedFileOperation::Move { transfers, .. } = operation else {
             panic!("expected move");
         };
         assert_eq!(transfers[0].source, PathBuf::from("/b/two"));

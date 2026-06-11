@@ -8,6 +8,9 @@ use std::{fs, io};
 #[cfg(test)]
 use desktop_linux::DisplayRendererGpuClass;
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
+use file_core::FileOperationVerification;
+
+use crate::shortcuts::ShortcutConfig;
 
 const APP_DIR_NAME: &str = "file-manager";
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -24,10 +27,14 @@ const SIDEBAR_FAVORITE_LABEL_KEY: &str = "label";
 const SIDEBAR_FAVORITE_PATH_KEY: &str = "path";
 const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
+const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
+const SHORTCUTS_KEY: &str = "shortcuts";
 
 pub(crate) const DEFAULT_TERMINAL_EMULATOR: TerminalEmulator = TerminalEmulator::Automatic;
 pub(crate) const DEFAULT_RENDERING_GPU_PREFERENCE: RenderingGpuPreference =
     RenderingGpuPreference::DisplayGpu;
+pub(crate) const DEFAULT_FILE_OPERATION_VERIFICATION: FileOperationVerification =
+    FileOperationVerification::BasicMetadata;
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 180.0;
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 140.0;
 pub(crate) const MAX_SIDEBAR_WIDTH: f32 = 360.0;
@@ -112,6 +119,37 @@ impl RenderingGpuPreference {
     }
 }
 
+pub(crate) fn file_operation_verification_from_config_value(
+    value: &str,
+) -> Option<FileOperationVerification> {
+    match value {
+        "off" => Some(FileOperationVerification::Off),
+        "basic_metadata" => Some(FileOperationVerification::BasicMetadata),
+        "strong" => Some(FileOperationVerification::Strong),
+        _ => None,
+    }
+}
+
+pub(crate) fn file_operation_verification_config_value(
+    verification: FileOperationVerification,
+) -> &'static str {
+    match verification {
+        FileOperationVerification::Off => "off",
+        FileOperationVerification::BasicMetadata => "basic_metadata",
+        FileOperationVerification::Strong => "strong",
+    }
+}
+
+pub(crate) fn file_operation_verification_label(
+    verification: FileOperationVerification,
+) -> &'static str {
+    match verification {
+        FileOperationVerification::Off => "Off",
+        FileOperationVerification::BasicMetadata => "Basic + Metadata",
+        FileOperationVerification::Strong => "Strong",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
@@ -123,6 +161,8 @@ pub(crate) struct UserConfig {
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
+    pub(crate) file_operation_verification: FileOperationVerification,
+    pub(crate) shortcuts: ShortcutConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +219,8 @@ pub(crate) fn default_user_config() -> UserConfig {
         sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
+        file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
+        shortcuts: ShortcutConfig::defaults(),
     }
 }
 
@@ -193,6 +235,8 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
+        file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
+        shortcuts: ShortcutConfig::defaults(),
     }
 }
 
@@ -280,6 +324,14 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
             config.rendering_gpu_preference = preference;
         }
     }
+    if let Some(value) = toml_string(&document, FILE_OPERATION_VERIFICATION_KEY) {
+        if let Some(verification) = file_operation_verification_from_config_value(value) {
+            config.file_operation_verification = verification;
+        }
+    }
+    if let Some(table) = document.get(SHORTCUTS_KEY).and_then(toml::Value::as_table) {
+        config.shortcuts.apply_toml_table(table);
+    }
     config
 }
 
@@ -335,6 +387,11 @@ fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
                     config.rendering_gpu_preference = preference;
                 }
             }
+            FILE_OPERATION_VERIFICATION_KEY => {
+                if let Some(verification) = file_operation_verification_from_config_value(value) {
+                    config.file_operation_verification = verification;
+                }
+            }
             _ => {}
         }
     }
@@ -384,6 +441,17 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
     document.insert(
         RENDERING_BACKEND_KEY.to_string(),
         toml::Value::String(config.rendering_gpu_preference.config_value().to_string()),
+    );
+    document.insert(
+        FILE_OPERATION_VERIFICATION_KEY.to_string(),
+        toml::Value::String(
+            file_operation_verification_config_value(config.file_operation_verification)
+                .to_string(),
+        ),
+    );
+    document.insert(
+        SHORTCUTS_KEY.to_string(),
+        toml::Value::Table(config.shortcuts.toml_table()),
     );
     if let Some(favorites) = &config.sidebar_favorites {
         document.insert(
@@ -522,6 +590,7 @@ startup_index_prompt = "completed"
 sidebar_width = 260.5
 terminal_emulator = "ghostty"
 rendering_backend = "gpu"
+file_operation_verification = "strong"
 
 [column_width_overrides]
 0 = 240.5
@@ -545,12 +614,16 @@ rendering_backend = "gpu"
             parsed.rendering_gpu_preference,
             RenderingGpuPreference::HighPerformanceGpu
         );
+        assert_eq!(
+            parsed.file_operation_verification,
+            FileOperationVerification::Strong
+        );
     }
 
     #[test]
     fn parses_legacy_user_config() {
         let parsed = parse_legacy_user_config(
-            "show_hidden_files=true\nstartup_index_prompt=completed\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\n",
+            "show_hidden_files=true\nstartup_index_prompt=completed\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\nfile_operation_verification=strong\n",
             default_user_config(),
         );
 
@@ -566,6 +639,10 @@ rendering_backend = "gpu"
         assert_eq!(
             parsed.rendering_gpu_preference,
             RenderingGpuPreference::HighPerformanceGpu
+        );
+        assert_eq!(
+            parsed.file_operation_verification,
+            FileOperationVerification::Strong
         );
     }
 
@@ -602,6 +679,7 @@ sidebar_width = "wide"
 column_width_overrides = "bad"
 terminal_emulator = "missing"
 rendering_backend = "metal"
+file_operation_verification = "maybe"
 "#,
             default.clone(),
         );
@@ -614,6 +692,10 @@ rendering_backend = "metal"
         assert_eq!(
             parsed.rendering_gpu_preference,
             DEFAULT_RENDERING_GPU_PREFERENCE
+        );
+        assert_eq!(
+            parsed.file_operation_verification,
+            DEFAULT_FILE_OPERATION_VERIFICATION
         );
     }
 
@@ -632,6 +714,7 @@ rendering_backend = "metal"
         assert!(content.contains("sidebar_width = 180.0\n"));
         assert!(content.contains("startup_index_prompt = \"pending\"\n"));
         assert!(content.contains("rendering_backend = \"gpu\"\n"));
+        assert!(content.contains("file_operation_verification = \"basic_metadata\"\n"));
         assert!(!content.contains("[column_width_overrides]"));
 
         let parsed = parse_toml_user_config(&content, default_user_config());
@@ -639,6 +722,10 @@ rendering_backend = "metal"
         assert_eq!(
             parsed.rendering_gpu_preference,
             RenderingGpuPreference::HighPerformanceGpu
+        );
+        assert_eq!(
+            parsed.file_operation_verification,
+            DEFAULT_FILE_OPERATION_VERIFICATION
         );
     }
 

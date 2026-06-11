@@ -128,7 +128,6 @@ impl FileBrowser {
         self.destructive_action_confirmation = Some(confirmation);
         self.transfer_conflict = None;
         self.context_menu = None;
-        self.is_column_view_settings_open = false;
         self.operation_queue.close_panel();
     }
 
