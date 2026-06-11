@@ -155,6 +155,7 @@ pub(crate) enum Message {
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
     ColumnResizeStarted(BrowserPaneId, usize),
     OpenDirectoryInNewTab(BrowserPaneId, PathBuf),
+    OpenDirectoryFromMiddleClick(BrowserPaneId, PathBuf),
     OpenTrashInNewTab(BrowserPaneId),
     TabPressed(BrowserPaneId, usize),
     TabCloseRequested(BrowserPaneId, usize),

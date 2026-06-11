@@ -21,6 +21,9 @@ const TAB_REORDER_HORIZONTAL_PADDING: f32 = 36.0;
 const TAB_REORDER_SPACING: f32 = 6.0;
 const TAB_REORDER_MIN_SLOT_WIDTH: f32 = 48.0;
 
+#[cfg(test)]
+mod open_directory_middle_click_tests;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TabBarReveal {
     Hidden,
@@ -250,6 +253,81 @@ impl FileBrowser {
         self.back_stack.clear();
         self.forward_stack.clear();
         self.open_trash_view(NavigationMode::KeepHistory)
+    }
+
+    pub(super) fn open_directory_from_middle_click(&mut self, directory: PathBuf) -> Task<Message> {
+        let Some(axis) = self.folder_middle_click_split_axis() else {
+            return self.open_directory_in_new_tab(directory);
+        };
+
+        self.open_directory_in_split(directory, axis)
+    }
+
+    fn folder_middle_click_split_axis(&self) -> Option<SplitAxis> {
+        if self.keyboard_modifiers.control() {
+            Some(SplitAxis::Vertical)
+        } else if self.keyboard_modifiers.shift() {
+            Some(SplitAxis::Horizontal)
+        } else {
+            None
+        }
+    }
+
+    fn open_directory_in_split(&mut self, directory: PathBuf, axis: SplitAxis) -> Task<Message> {
+        self.sync_active_tab_state();
+        self.context_menu = None;
+        self.clear_preview();
+        self.is_column_view_settings_open = false;
+
+        let source_id = self.active_pane_id();
+        let destination_id = self.middle_click_split_destination_pane_id(source_id);
+        let tab = self.next_directory_tab(directory);
+        self.put_directory_tab_in_pane(destination_id, tab);
+
+        self.pane_layout = BrowserPaneLayout::Split {
+            axis,
+            first: source_id,
+            second: destination_id,
+            active: destination_id,
+        };
+
+        if let Some(destination) = self.pane_by_id(destination_id).cloned() {
+            self.restore_pane_snapshot(destination);
+            self.sync_tab_bar_visibility();
+        }
+        self.reload_current()
+    }
+
+    fn middle_click_split_destination_pane_id(
+        &mut self,
+        source_id: BrowserPaneId,
+    ) -> BrowserPaneId {
+        match self.pane_layout {
+            BrowserPaneLayout::Single { .. } => self.new_pane_id(),
+            BrowserPaneLayout::Split { first, second, .. } => {
+                if source_id == first {
+                    second
+                } else {
+                    first
+                }
+            }
+        }
+    }
+
+    fn next_directory_tab(&mut self, directory: PathBuf) -> BrowserTab {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+        BrowserTab::directory(tab_id, directory)
+    }
+
+    fn put_directory_tab_in_pane(&mut self, pane_id: BrowserPaneId, tab: BrowserTab) {
+        if let Some(pane) = self.pane_by_id_mut(pane_id) {
+            pane.tabs.push(tab.clone());
+            pane.active_tab_id = tab.id;
+            apply_tab_to_pane(pane, &tab);
+        } else {
+            self.panes.push(pane_from_tab(pane_id, tab));
+        }
     }
 
     pub(super) fn select_tab(&mut self, tab_id: usize) -> Task<Message> {

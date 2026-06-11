@@ -290,7 +290,10 @@ fn column_entry_row<'a>(
         .interaction(iced::mouse::Interaction::Pointer);
 
     let row_area = if entry.kind == FileKind::Directory && !pane.is_trash_view {
-        row_area.on_middle_press(Message::OpenDirectoryInNewTab(pane.id, entry.path.clone()))
+        row_area.on_middle_press(Message::OpenDirectoryFromMiddleClick(
+            pane.id,
+            entry.path.clone(),
+        ))
     } else {
         row_area
     };

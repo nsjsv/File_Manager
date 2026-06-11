@@ -863,6 +863,13 @@ impl FileBrowser {
                     self.open_directory_in_new_tab(path),
                 ])
             }
+            Message::OpenDirectoryFromMiddleClick(pane_id, path) => {
+                self.activate_pane(pane_id);
+                Task::batch([
+                    self.commit_rename_if_active(),
+                    self.open_directory_from_middle_click(path),
+                ])
+            }
             Message::OpenTrashInNewTab(pane_id) => {
                 self.activate_pane(pane_id);
                 Task::batch([self.commit_rename_if_active(), self.open_trash_in_new_tab()])

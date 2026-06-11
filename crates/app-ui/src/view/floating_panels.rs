@@ -440,7 +440,7 @@ fn sidebar_location_item<'a>(
             Message::SidebarHovered(location.path.clone())
         })
         .on_exit(Message::SidebarHoverCleared(location.path.clone()))
-        .on_middle_press(Message::OpenDirectoryInNewTab(
+        .on_middle_press(Message::OpenDirectoryFromMiddleClick(
             browser.active_pane_id(),
             location.path.clone(),
         ))
