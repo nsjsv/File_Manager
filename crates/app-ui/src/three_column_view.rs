@@ -82,7 +82,10 @@ pub(crate) fn column_browser_view<'a>(
             .style(column_browser_style),
     )
     .on_press(Message::BlankAreaPressed(pane.id))
-    .on_release(Message::DragSelectionFinished)
+    .on_release(Message::DropTargetReleased(
+        pane.id,
+        pane.current_dir.clone(),
+    ))
     .on_right_press(Message::BlankAreaRightClicked(
         pane.id,
         pane.current_dir.clone(),
@@ -154,7 +157,10 @@ fn directory_column<'a>(
             pane.id,
             directory.to_path_buf(),
         ))
-        .on_release(Message::DragSelectionFinished)
+        .on_release(Message::DropTargetReleased(
+            pane.id,
+            directory.to_path_buf(),
+        ))
         .on_right_press(Message::BlankAreaRightClicked(
             pane.id,
             directory.to_path_buf(),
@@ -279,7 +285,7 @@ fn column_entry_row<'a>(
         .on_enter(Message::EntryHovered(pane.id, entry.path.clone()))
         .on_exit(Message::EntryHoverCleared(pane.id, entry.path.clone()))
         .on_press(Message::ColumnEntryClicked(pane.id, entry.path.clone()))
-        .on_release(Message::EntryReleased(pane.id))
+        .on_release(Message::EntryReleased(pane.id, entry.path.clone()))
         .on_right_press(Message::EntryRightClicked(pane.id, entry.path.clone()))
         .interaction(iced::mouse::Interaction::Pointer);
 
@@ -331,7 +337,7 @@ pub(crate) fn column_directories(browser: &FileBrowser) -> Vec<PathBuf> {
     column_directories_for_pane(pane)
 }
 
-fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<PathBuf> {
+pub(crate) fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<PathBuf> {
     if pane.is_trash_view {
         return vec![pane.current_dir.clone()];
     }
@@ -343,34 +349,32 @@ fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<PathBuf> {
     }
 
     let mut directories = vec![pane.current_dir.clone()];
-    let Some(selected) = pane.selected else {
-        return directories;
-    };
-    if pane.selected_paths.len() != 1 || !pane.selected_paths.contains(selected) {
-        return directories;
+    if let Some(open_directory) = pane.deepest_open_column_directory {
+        append_column_directory_chain(
+            &mut directories,
+            pane.current_dir.as_path(),
+            open_directory.as_path(),
+        );
     }
+    directories
+}
 
-    let selected_directory = match selected_entry(pane).map(|entry| entry.kind) {
-        Some(FileKind::Directory) => selected.to_path_buf(),
-        _ => selected
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| pane.current_dir.clone()),
-    };
-
-    if selected_directory == *pane.current_dir
-        || !selected_directory.starts_with(pane.current_dir.as_path())
-    {
-        return directories;
+fn append_column_directory_chain(
+    directories: &mut Vec<PathBuf>,
+    current_dir: &Path,
+    selected_directory: &Path,
+) {
+    if selected_directory == current_dir || !selected_directory.starts_with(current_dir) {
+        return;
     }
 
     let mut ancestors = Vec::new();
-    let mut cursor = Some(selected_directory.as_path());
+    let mut cursor = Some(selected_directory);
     while let Some(path) = cursor {
-        if path == pane.current_dir.as_path() {
+        if path == current_dir {
             break;
         }
-        if !path.starts_with(pane.current_dir.as_path()) {
+        if !path.starts_with(current_dir) {
             break;
         }
         ancestors.push(path.to_path_buf());
@@ -378,7 +382,6 @@ fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<PathBuf> {
     }
     ancestors.reverse();
     directories.extend(ancestors);
-    directories
 }
 
 fn column_title_padding() -> Padding {
@@ -402,32 +405,6 @@ fn active_child_for_column(
     let selected = pane.selected?;
     if selected.parent() == Some(directory) {
         return Some(selected.to_path_buf());
-    }
-    None
-}
-
-fn selected_entry<'a>(pane: BrowserPaneView<'a>) -> Option<&'a DirectoryEntry> {
-    let selected = pane.selected?.as_path();
-    find_entry(pane.entries, pane.expanded_directories, selected)
-}
-
-fn find_entry<'a>(
-    entries: &'a [DirectoryEntry],
-    expanded_directories: &'a std::collections::HashMap<PathBuf, crate::model::ExpandedDirectory>,
-    path: &Path,
-) -> Option<&'a DirectoryEntry> {
-    for entry in entries {
-        if entry.path == path {
-            return Some(entry);
-        }
-        let Some(expanded) = expanded_directories.get(&entry.path) else {
-            continue;
-        };
-        if matches!(expanded.status, ExpandedDirectoryStatus::Loaded) {
-            if let Some(child) = find_entry(&expanded.entries, expanded_directories, path) {
-                return Some(child);
-            }
-        }
     }
     None
 }
@@ -557,11 +534,21 @@ mod tests {
         )
     }
 
+    fn loaded_expanded_directory(entries: Vec<DirectoryEntry>) -> crate::model::ExpandedDirectory {
+        crate::model::ExpandedDirectory {
+            entries,
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: true,
+            animation_progress: 1.0,
+        }
+    }
+
     fn test_pane_view<'a>(
         current_dir: &'a PathBuf,
         entries: &'a [DirectoryEntry],
         selected: Option<&'a PathBuf>,
         selected_paths: &'a HashSet<PathBuf>,
+        deepest_open_column_directory: Option<&'a PathBuf>,
         expanded_directories: &'a HashMap<PathBuf, crate::model::ExpandedDirectory>,
     ) -> BrowserPaneView<'a> {
         BrowserPaneView {
@@ -571,6 +558,7 @@ mod tests {
             entries,
             selected,
             selected_paths,
+            deepest_open_column_directory,
             hovered_entry: None,
             expanded_directories,
             tabs: &[],
@@ -588,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn single_selected_directory_opens_child_column() {
+    fn open_column_context_opens_child_column() {
         let current_dir = PathBuf::from("/workspace");
         let directory = current_dir.join("alpha");
         let entries = vec![test_entry(directory.clone(), FileKind::Directory)];
@@ -599,6 +587,7 @@ mod tests {
             &entries,
             Some(&directory),
             &selected_paths,
+            Some(&directory),
             &expanded_directories,
         );
 
@@ -606,6 +595,25 @@ mod tests {
             column_directories_for_pane(pane),
             vec![current_dir, directory]
         );
+    }
+
+    #[test]
+    fn selected_directory_without_open_column_context_does_not_open_child_column() {
+        let current_dir = PathBuf::from("/workspace");
+        let directory = current_dir.join("alpha");
+        let entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+        let selected_paths = HashSet::from([directory.clone()]);
+        let expanded_directories = HashMap::new();
+        let pane = test_pane_view(
+            &current_dir,
+            &entries,
+            Some(&directory),
+            &selected_paths,
+            None,
+            &expanded_directories,
+        );
+
+        assert_eq!(column_directories_for_pane(pane), vec![current_dir]);
     }
 
     #[test]
@@ -624,9 +632,39 @@ mod tests {
             &entries,
             Some(&second),
             &selected_paths,
+            None,
             &expanded_directories,
         );
 
         assert_eq!(column_directories_for_pane(pane), vec![current_dir]);
+    }
+
+    #[test]
+    fn multi_selection_preserves_open_child_column() {
+        let current_dir = PathBuf::from("/workspace");
+        let open_directory = current_dir.join("project");
+        let selected_file = current_dir.join("notes.txt");
+        let entries = vec![
+            test_entry(open_directory.clone(), FileKind::Directory),
+            test_entry(selected_file.clone(), FileKind::File),
+        ];
+        let selected_paths = HashSet::from([open_directory.clone(), selected_file.clone()]);
+        let expanded_directories = HashMap::from([(
+            open_directory.clone(),
+            loaded_expanded_directory(Vec::new()),
+        )]);
+        let pane = test_pane_view(
+            &current_dir,
+            &entries,
+            Some(&selected_file),
+            &selected_paths,
+            Some(&open_directory),
+            &expanded_directories,
+        );
+
+        assert_eq!(
+            column_directories_for_pane(pane),
+            vec![current_dir, open_directory]
+        );
     }
 }

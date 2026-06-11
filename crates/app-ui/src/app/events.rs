@@ -145,6 +145,7 @@ fn keyboard_shortcut_message(event: &Event, status: event::Status) -> Option<Mes
         Key::Character("z") | Key::Character("Z") if primary_modifier(*modifiers) => {
             Some(Message::UndoFileOperation)
         }
+        Key::Named(key::Named::F5) => Some(Message::RefreshRequested),
         Key::Named(key::Named::Escape) => Some(Message::FocusedWindowEscapePressed),
         Key::Named(key::Named::Copy) => Some(Message::CopySelected),
         Key::Named(key::Named::Paste) => Some(Message::PastePending),
@@ -348,6 +349,15 @@ mod tests {
         let message = route_event(event, event::Status::Captured);
 
         assert!(matches!(message, Some(Message::SearchOpened)));
+    }
+
+    #[test]
+    fn f5_refreshes_even_when_widget_captured_keyboard() {
+        let event = key_pressed(Key::Named(key::Named::F5), keyboard::Modifiers::default());
+
+        let message = route_event(event, event::Status::Captured);
+
+        assert!(matches!(message, Some(Message::RefreshRequested)));
     }
 
     #[test]

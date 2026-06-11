@@ -73,12 +73,13 @@ pub(crate) enum Message {
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
     ColumnEntryClicked(BrowserPaneId, PathBuf),
     ColumnBlankClicked(BrowserPaneId, PathBuf),
-    EntryReleased(BrowserPaneId),
+    EntryReleased(BrowserPaneId, PathBuf),
     EntryRightClicked(BrowserPaneId, PathBuf),
     EntryHovered(BrowserPaneId, PathBuf),
     EntryHoverCleared(BrowserPaneId, PathBuf),
     DropTargetHovered(BrowserPaneId, PathBuf),
     DropTargetHoverCleared(BrowserPaneId, PathBuf),
+    DropTargetReleased(BrowserPaneId, PathBuf),
     BlankAreaPressed(BrowserPaneId),
     BlankAreaRightClicked(BrowserPaneId, PathBuf),
     SidebarHovered(PathBuf),
@@ -164,6 +165,7 @@ pub(crate) enum Message {
     PaneUp(BrowserPaneId),
     NavigateTo(PathBuf),
     TrashOpened,
+    RefreshRequested,
     Back,
     Forward,
     RenameInputFocusChecked(bool),
@@ -349,6 +351,13 @@ impl BrowserPaneLayout {
         }
     }
 
+    pub(crate) fn visible_pane_ids(self) -> Vec<BrowserPaneId> {
+        match self {
+            Self::Single { active } => vec![active],
+            Self::Split { first, second, .. } => vec![first, second],
+        }
+    }
+
     pub(crate) fn with_active(self, next_active: BrowserPaneId) -> Self {
         match self {
             Self::Single { .. } => Self::Single {
@@ -379,6 +388,7 @@ pub(crate) struct BrowserPane {
     pub(crate) selected: Option<PathBuf>,
     pub(crate) selected_paths: HashSet<PathBuf>,
     pub(crate) selection_anchor: Option<PathBuf>,
+    pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) tabs: Vec<BrowserTab>,
@@ -409,6 +419,7 @@ impl BrowserPane {
         tab.selected = self.selected.clone();
         tab.selected_paths = self.selected_paths.clone();
         tab.selection_anchor = self.selection_anchor.clone();
+        tab.deepest_open_column_directory = self.deepest_open_column_directory.clone();
         tab.expanded_directories = self.expanded_directories.clone();
         tab.back_stack = self.back_stack.clone();
         tab.forward_stack = self.forward_stack.clone();
@@ -425,6 +436,7 @@ pub(crate) struct BrowserTab {
     pub(crate) selected: Option<PathBuf>,
     pub(crate) selected_paths: HashSet<PathBuf>,
     pub(crate) selection_anchor: Option<PathBuf>,
+    pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
@@ -441,6 +453,7 @@ impl BrowserTab {
             selected: None,
             selected_paths: HashSet::new(),
             selection_anchor: None,
+            deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
@@ -457,6 +470,7 @@ impl BrowserTab {
             selected: None,
             selected_paths: HashSet::new(),
             selection_anchor: None,
+            deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
@@ -512,6 +526,7 @@ impl PaneDragState {
 #[derive(Debug, Clone)]
 pub(crate) struct FileDragState {
     pub(crate) sources: Vec<PathBuf>,
+    pub(crate) pressed_path: PathBuf,
     pub(crate) target: Option<FileDragTarget>,
     pub(crate) phase: FileDragPhase,
     pub(crate) column_directories_snapshot: Vec<PathBuf>,
@@ -557,7 +572,7 @@ pub(crate) enum FileDragPhase {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LastClick {
+pub(crate) struct LastActivationClick {
     pub(crate) path: PathBuf,
     pub(crate) at: Instant,
 }

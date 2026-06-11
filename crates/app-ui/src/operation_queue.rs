@@ -349,6 +349,11 @@ impl FileOperationQueue {
         self.store.as_ref()
     }
 
+    #[cfg(test)]
+    fn set_store(&mut self, store: TaskQueueStore) {
+        self.store = Some(store);
+    }
+
     pub(crate) fn tasks(&self) -> &[FileOperationTask] {
         &self.tasks
     }

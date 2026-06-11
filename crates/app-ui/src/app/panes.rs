@@ -7,7 +7,8 @@ use iced::Point;
 use super::tabs::{TabAnimationState, TabBarReveal};
 use super::FileBrowser;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserTab, ExpandedDirectory, FileDragState, SplitRegion,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, ExpandedDirectory, FileDragState,
+    SplitRegion,
 };
 
 const SPLIT_TARGET_MIN_CONTENT_WIDTH: f32 = 1.0;
@@ -20,6 +21,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) entries: &'a [DirectoryEntry],
     pub(crate) selected: Option<&'a PathBuf>,
     pub(crate) selected_paths: &'a HashSet<PathBuf>,
+    pub(crate) deepest_open_column_directory: Option<&'a PathBuf>,
     pub(crate) hovered_entry: Option<&'a PathBuf>,
     pub(crate) expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) tabs: &'a [BrowserTab],
@@ -71,6 +73,48 @@ impl FileBrowser {
         self.pane_layout.active()
     }
 
+    pub(super) fn pane_id_at_position(&self, position: Point) -> Option<BrowserPaneId> {
+        let sidebar_width = self.sidebar_width;
+        let content_width = self.split_content_width();
+        let content_height = self.main_window_height.max(1.0);
+        if position.x < sidebar_width
+            || position.x > sidebar_width + content_width
+            || position.y < 0.0
+            || position.y > content_height
+        {
+            return None;
+        }
+
+        match self.pane_layout {
+            BrowserPaneLayout::Single { active } => Some(active),
+            BrowserPaneLayout::Split {
+                axis: crate::model::SplitAxis::Horizontal,
+                first,
+                second,
+                ..
+            } => {
+                let local_x = position.x - sidebar_width;
+                if local_x < content_width / 2.0 {
+                    Some(first)
+                } else {
+                    Some(second)
+                }
+            }
+            BrowserPaneLayout::Split {
+                axis: crate::model::SplitAxis::Vertical,
+                first,
+                second,
+                ..
+            } => {
+                if position.y < content_height / 2.0 {
+                    Some(first)
+                } else {
+                    Some(second)
+                }
+            }
+        }
+    }
+
     pub(crate) fn pane_view(&self, pane_id: BrowserPaneId) -> Option<BrowserPaneView<'_>> {
         if pane_id == self.active_pane_id() {
             return Some(BrowserPaneView {
@@ -80,6 +124,7 @@ impl FileBrowser {
                 entries: &self.entries,
                 selected: self.selected.as_ref(),
                 selected_paths: &self.selected_paths,
+                deepest_open_column_directory: self.deepest_open_column_directory.as_ref(),
                 hovered_entry: self.hovered_entry.as_ref(),
                 expanded_directories: &self.expanded_directories,
                 tabs: &self.tabs,
@@ -104,6 +149,7 @@ impl FileBrowser {
             entries: &pane.entries,
             selected: pane.selected.as_ref(),
             selected_paths: &pane.selected_paths,
+            deepest_open_column_directory: pane.deepest_open_column_directory.as_ref(),
             hovered_entry: None,
             expanded_directories: &pane.expanded_directories,
             tabs: &pane.tabs,
@@ -234,6 +280,7 @@ impl FileBrowser {
             selected: self.selected.clone(),
             selected_paths: self.selected_paths.clone(),
             selection_anchor: self.selection_anchor.clone(),
+            deepest_open_column_directory: self.deepest_open_column_directory.clone(),
             expanded_directories: self.expanded_directories.clone(),
             column_viewports: self.column_viewports.clone(),
             tabs: self.tabs.clone(),
@@ -256,6 +303,7 @@ impl FileBrowser {
         self.selected = pane.selected;
         self.selected_paths = pane.selected_paths;
         self.selection_anchor = pane.selection_anchor;
+        self.deepest_open_column_directory = pane.deepest_open_column_directory;
         self.expanded_directories = pane.expanded_directories;
         self.column_viewports = pane.column_viewports;
         self.tabs = pane.tabs;
@@ -279,7 +327,7 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.column_resize_drag = None;
-        self.last_click = None;
+        self.last_activation_click = None;
     }
 
     fn split_content_width(&self) -> f32 {

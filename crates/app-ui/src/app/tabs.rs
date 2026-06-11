@@ -208,6 +208,7 @@ impl FileBrowser {
         tab.selected = self.selected.clone();
         tab.selected_paths = self.selected_paths.clone();
         tab.selection_anchor = self.selection_anchor.clone();
+        tab.deepest_open_column_directory = self.deepest_open_column_directory.clone();
         tab.expanded_directories = self.expanded_directories.clone();
         tab.back_stack = self.back_stack.clone();
         tab.forward_stack = self.forward_stack.clone();
@@ -273,6 +274,7 @@ impl FileBrowser {
         self.selected = tab.selected;
         self.selected_paths = tab.selected_paths;
         self.selection_anchor = tab.selection_anchor;
+        self.deepest_open_column_directory = tab.deepest_open_column_directory;
         self.expanded_directories = tab.expanded_directories;
         self.back_stack = tab.back_stack;
         self.forward_stack = tab.forward_stack;
@@ -733,6 +735,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         selected: tab.selected.clone(),
         selected_paths: tab.selected_paths.clone(),
         selection_anchor: tab.selection_anchor.clone(),
+        deepest_open_column_directory: tab.deepest_open_column_directory.clone(),
         expanded_directories: tab.expanded_directories.clone(),
         column_viewports: HashMap::new(),
         tabs: vec![tab.clone()],
@@ -769,6 +772,7 @@ pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.selected = tab.selected.clone();
     pane.selected_paths = tab.selected_paths.clone();
     pane.selection_anchor = tab.selection_anchor.clone();
+    pane.deepest_open_column_directory = tab.deepest_open_column_directory.clone();
     pane.expanded_directories = tab.expanded_directories.clone();
     pane.path_input = path_input_for_tab(tab);
     pane.path_suggestions.clear();

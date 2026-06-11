@@ -132,6 +132,7 @@ pub(crate) struct FileBrowser {
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) is_column_view_settings_open: bool,
+    pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) rename_input: String,
     pub(crate) is_loading: bool,
@@ -145,7 +146,7 @@ pub(crate) struct FileBrowser {
     selection_anchor: Option<PathBuf>,
     drag_selection_anchor: Option<PathBuf>,
     column_resize_drag: Option<ColumnResizeDrag>,
-    last_click: Option<crate::model::LastClick>,
+    last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
     operation_history: FileOperationHistory,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
@@ -196,6 +197,7 @@ impl FileBrowser {
             selected: None,
             selected_paths: HashSet::new(),
             selection_anchor: None,
+            deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             column_viewports: HashMap::new(),
             tabs: vec![initial_tab.clone()],
@@ -271,6 +273,7 @@ impl FileBrowser {
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             is_column_view_settings_open: false,
+            deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             rename_input: String::new(),
             is_loading: true,
@@ -284,7 +287,7 @@ impl FileBrowser {
             selection_anchor: None,
             drag_selection_anchor: None,
             column_resize_drag: None,
-            last_click: None,
+            last_activation_click: None,
             operation_queue: FileOperationQueue::new(),
             operation_history: FileOperationHistory::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
@@ -540,8 +543,11 @@ impl FileBrowser {
                 }
                 self.start_column_blank_selection_marquee(path)
             }
-            Message::EntryReleased(pane_id) => {
+            Message::EntryReleased(pane_id, path) => {
                 let releasing_file_drag = self.file_drag.is_some();
+                let release_directory = releasing_file_drag
+                    .then(|| self.file_drag_release_directory_for_entry(pane_id, &path))
+                    .flatten();
                 if !releasing_file_drag {
                     self.activate_pane(pane_id);
                 }
@@ -551,7 +557,8 @@ impl FileBrowser {
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
-                    self.finish_drag_selection(),
+                    self.finish_drag_selection(release_directory),
+                    self.schedule_thumbnail_refresh(),
                 ])
             }
             Message::EntryRightClicked(pane_id, path) => {
@@ -602,6 +609,22 @@ impl FileBrowser {
                 } else {
                     Task::none()
                 }
+            }
+            Message::DropTargetReleased(pane_id, directory) => {
+                let release_directory = if self.file_drag.is_some() {
+                    self.file_drag_release_directory_for_drop_target(pane_id, directory)
+                } else {
+                    None
+                };
+                self.finish_tab_drag();
+                self.finish_pane_drag();
+                Task::batch([
+                    self.finish_sidebar_bookmark_drag(),
+                    self.finish_sidebar_resize_drag_command(),
+                    self.finish_column_resize_drag_command(),
+                    self.finish_drag_selection(release_directory),
+                    self.schedule_thumbnail_refresh(),
+                ])
             }
             Message::BlankAreaPressed(pane_id) => {
                 self.activate_pane(pane_id);
@@ -688,7 +711,8 @@ impl FileBrowser {
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
-                    self.finish_drag_selection(),
+                    self.finish_drag_selection(None),
+                    self.schedule_thumbnail_refresh(),
                 ])
             }
             Message::DismissFloating => self.dismiss_floating(),
@@ -826,8 +850,7 @@ impl FileBrowser {
                 self.advance_sidebar_bookmark_motion(),
             ]),
             Message::ColumnScrolled(pane_id, directory, offset_y, height) => {
-                self.activate_pane(pane_id);
-                self.handle_column_scrolled(directory, offset_y, height)
+                self.handle_column_scrolled(pane_id, directory, offset_y, height)
             }
             Message::ColumnResizeStarted(pane_id, column_index) => {
                 self.activate_pane(pane_id);
@@ -865,7 +888,8 @@ impl FileBrowser {
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
-                    self.finish_drag_selection(),
+                    self.finish_drag_selection(None),
+                    self.schedule_thumbnail_refresh(),
                 ])
             }
             Message::NavigateTo(path) => Task::batch([
@@ -876,6 +900,9 @@ impl FileBrowser {
                 self.commit_rename_if_active(),
                 self.open_trash_view(NavigationMode::RecordHistory),
             ]),
+            Message::RefreshRequested => {
+                Task::batch([self.commit_rename_if_active(), self.reload_visible_panes()])
+            }
             Message::Back => Task::batch([self.commit_rename_if_active(), self.navigate_back()]),
             Message::Forward => {
                 Task::batch([self.commit_rename_if_active(), self.navigate_forward()])

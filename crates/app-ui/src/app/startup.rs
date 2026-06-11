@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::Task;
 
@@ -30,6 +30,7 @@ impl FileBrowser {
         self.sidebar_locations = vec![home_sidebar_location(&home)];
         self.entries.clear();
         self.trash_entries.clear();
+        self.deepest_open_column_directory = None;
         self.is_loading = true;
         self.error = None;
         self.sync_active_tab_state();
@@ -113,13 +114,19 @@ impl FileBrowser {
         pane_id: BrowserPaneId,
         directory: PathBuf,
     ) -> Task<Message> {
-        if pane_id != self.active_pane_id() {
+        if !self.thumbnail_refresh_matches_pane(pane_id, &directory) {
             return Task::none();
         }
-        if self.is_loading || self.current_dir != directory {
-            return Task::none();
+        self.schedule_thumbnail_refresh_for_pane(pane_id)
+    }
+
+    fn thumbnail_refresh_matches_pane(&self, pane_id: BrowserPaneId, directory: &Path) -> bool {
+        if pane_id == self.active_pane_id() {
+            return !self.is_loading && self.current_dir.as_path() == directory;
         }
-        self.schedule_thumbnail_refresh()
+
+        self.pane_by_id(pane_id)
+            .is_some_and(|pane| !pane.is_loading && pane.current_dir.as_path() == directory)
     }
 
     fn apply_loaded_user_config(&mut self, user_config: UserConfig) {

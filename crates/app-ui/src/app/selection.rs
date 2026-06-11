@@ -14,11 +14,14 @@ use crate::commands::{
 use crate::model::{
     trash_location_path, AudioPreviewPlayback, BrowserPaneId, ColumnEntryBounds, ContextMenuState,
     ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuState, FileDragPhase, FileDragState,
-    FileDragTarget, LastClick, Message, NavigationMode, PreviewState, PreviewWindowProfile,
-    SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource, TransferConflictMode,
+    FileDragTarget, LastActivationClick, Message, NavigationMode, PreviewState,
+    PreviewWindowProfile, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
+    TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 
+#[cfg(test)]
+mod activation_tests;
 mod clipboard;
 mod conflict;
 
@@ -44,10 +47,13 @@ impl FileBrowser {
         let has_selection_modifier =
             self.keyboard_modifiers.control() || self.keyboard_modifiers.shift();
         let is_double_click = !has_selection_modifier
-            && self.last_click.as_ref().is_some_and(|last_click| {
-                last_click.path == path
-                    && now.duration_since(last_click.at) <= DOUBLE_CLICK_THRESHOLD
-            });
+            && self
+                .last_activation_click
+                .as_ref()
+                .is_some_and(|last_activation_click| {
+                    last_activation_click.path == path
+                        && now.duration_since(last_activation_click.at) <= DOUBLE_CLICK_THRESHOLD
+                });
 
         if self.keyboard_modifiers.shift() {
             let anchor = self
@@ -74,20 +80,27 @@ impl FileBrowser {
             } else {
                 self.select_path(path.clone());
             }
+            self.update_open_column_directory_for_entry(&path);
             self.drag_selection_anchor = None;
             self.selection_marquee = None;
-            self.start_file_drag(column_directories_snapshot);
+            self.start_file_drag(path.clone(), column_directories_snapshot);
         }
 
-        self.last_click = Some(LastClick {
-            path: path.clone(),
-            at: now,
-        });
+        self.last_activation_click = if has_selection_modifier {
+            None
+        } else {
+            Some(LastActivationClick {
+                path: path.clone(),
+                at: now,
+            })
+        };
 
         let action_command = if is_double_click {
             self.drag_selection_anchor = None;
             self.file_drag = None;
             self.activate_path(path)
+        } else if has_selection_modifier {
+            Task::none()
         } else {
             self.open_column_for_directory(path)
         };
@@ -299,6 +312,9 @@ impl FileBrowser {
         self.file_drag = None;
         let preserve_existing = self.keyboard_modifiers.control();
         let base_selection = self.selected_paths.clone();
+        if column_context_directory.is_some() || !preserve_existing {
+            self.set_deepest_open_column_directory(column_context_directory.clone());
+        }
         if !preserve_existing {
             if let Some(directory) = column_context_directory {
                 self.select_path(directory);
@@ -319,6 +335,7 @@ impl FileBrowser {
 
     fn focus_column_blank_context_or_clear_selection(&mut self, directory: PathBuf) {
         if let Some(directory) = self.column_blank_context_directory(&directory) {
+            self.set_deepest_open_column_directory(Some(directory.clone()));
             self.select_path(directory);
         } else {
             self.clear_column_blank_selection_context();
@@ -334,7 +351,22 @@ impl FileBrowser {
         }
     }
 
+    fn update_open_column_directory_for_entry(&mut self, path: &Path) {
+        let next_directory = match self.entry_kind(path) {
+            Some(FileKind::Directory) => Some(path.to_path_buf()),
+            _ => path.parent().map(Path::to_path_buf),
+        };
+        self.set_deepest_open_column_directory(next_directory);
+    }
+
+    fn set_deepest_open_column_directory(&mut self, directory: Option<PathBuf>) {
+        self.deepest_open_column_directory = directory.filter(|directory| {
+            directory != &self.current_dir && directory.starts_with(self.current_dir.as_path())
+        });
+    }
+
     fn clear_column_blank_selection_context(&mut self) {
+        self.deepest_open_column_directory = None;
         self.selected_paths.clear();
         self.selected = None;
         self.selection_anchor = None;
@@ -416,7 +448,10 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn finish_drag_selection(&mut self) -> Task<Message> {
+    pub(super) fn finish_drag_selection(
+        &mut self,
+        release_directory: Option<PathBuf>,
+    ) -> Task<Message> {
         let column_blank_click = self.selection_marquee.as_ref().and_then(|marquee| {
             if marquee.is_selecting() {
                 return None;
@@ -437,10 +472,19 @@ impl FileBrowser {
         };
 
         if !file_drag.is_dragging() {
+            self.finish_stationary_file_drag(file_drag);
             return Task::none();
         }
 
-        let Some(target) = file_drag.target else {
+        let cursor_fallback_directory = release_directory
+            .clone()
+            .or_else(|| self.file_drag_drop_directory_at_cursor());
+        let Some(target) = resolve_file_drag_target(
+            &file_drag.sources,
+            release_directory,
+            file_drag.target,
+            cursor_fallback_directory,
+        ) else {
             return Task::none();
         };
 
@@ -454,7 +498,11 @@ impl FileBrowser {
         }
     }
 
-    fn start_file_drag(&mut self, column_directories_snapshot: Vec<PathBuf>) {
+    fn start_file_drag(
+        &mut self,
+        pressed_path: PathBuf,
+        column_directories_snapshot: Vec<PathBuf>,
+    ) {
         self.sidebar_bookmark_drop_slot = None;
         if self.is_trash_view {
             self.file_drag = None;
@@ -464,12 +512,24 @@ impl FileBrowser {
         let sources = self.selected_paths_for_operation();
         self.file_drag = (!sources.is_empty()).then_some(FileDragState {
             sources,
+            pressed_path,
             target: None,
             phase: FileDragPhase::WaitingForMovement {
                 origin: self.cursor_position,
             },
             column_directories_snapshot,
         });
+    }
+
+    fn finish_stationary_file_drag(&mut self, file_drag: FileDragState) {
+        if file_drag.sources.len() > 1
+            && file_drag
+                .sources
+                .iter()
+                .any(|source| source == &file_drag.pressed_path)
+        {
+            self.select_path(file_drag.pressed_path);
+        }
     }
 
     fn set_file_drag_target(&mut self, directory: PathBuf) {
@@ -491,6 +551,32 @@ impl FileBrowser {
                 file_drag.target = None;
             }
         }
+    }
+
+    pub(super) fn file_drag_release_directory_for_entry(
+        &self,
+        pane_id: BrowserPaneId,
+        path: &Path,
+    ) -> Option<PathBuf> {
+        self.cursor_paste_directory_for_entry_in_pane(pane_id, path)
+    }
+
+    pub(super) fn file_drag_release_directory_for_drop_target(
+        &self,
+        pane_id: BrowserPaneId,
+        directory: PathBuf,
+    ) -> Option<PathBuf> {
+        self.pane_accepts_file_drag(pane_id).then_some(directory)
+    }
+
+    fn file_drag_drop_directory_at_cursor(&self) -> Option<PathBuf> {
+        let pane_id = self.pane_id_at_position(self.cursor_position)?;
+        if pane_id == self.active_pane_id() {
+            return None;
+        }
+
+        let pane = self.pane_view(pane_id)?;
+        (!pane.is_trash_view).then(|| pane.current_dir.clone())
     }
 
     fn move_dragged_files(
@@ -587,6 +673,7 @@ impl FileBrowser {
         if self.entry_kind(&path) != Some(FileKind::Directory) {
             return Task::none();
         }
+        self.set_deepest_open_column_directory(Some(path.clone()));
 
         if let Some(expanded) = self.expanded_directories.get_mut(&path) {
             expanded.is_expanded = true;
@@ -882,6 +969,43 @@ fn rectangles_intersect(first: iced::Rectangle, second: iced::Rectangle) -> bool
         && first.y + first.height > second.y
 }
 
+fn resolve_file_drag_target(
+    sources: &[PathBuf],
+    release_directory: Option<PathBuf>,
+    target: Option<FileDragTarget>,
+    fallback_directory: Option<PathBuf>,
+) -> Option<FileDragTarget> {
+    if let Some(release_directory) = release_directory {
+        return Some(FileDragTarget::Directory(release_directory));
+    }
+
+    match target {
+        Some(FileDragTarget::Directory(target_directory)) => {
+            if file_drag_directory_target_needs_fallback(sources, &target_directory) {
+                if let Some(fallback_directory) = fallback_directory {
+                    Some(FileDragTarget::Directory(fallback_directory))
+                } else {
+                    Some(FileDragTarget::Directory(target_directory))
+                }
+            } else {
+                Some(FileDragTarget::Directory(target_directory))
+            }
+        }
+        Some(FileDragTarget::SidebarBookmarkSlot(slot)) => {
+            Some(FileDragTarget::SidebarBookmarkSlot(slot))
+        }
+        None => fallback_directory.map(FileDragTarget::Directory),
+    }
+}
+
+fn file_drag_directory_target_needs_fallback(sources: &[PathBuf], target: &Path) -> bool {
+    sources.iter().any(|source| {
+        source == target
+            || target.starts_with(source)
+            || source.parent().is_some_and(|parent| parent == target)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -894,7 +1018,7 @@ mod tests {
         app::FileBrowser,
         config,
         model::{
-            BrowserPaneId, ColumnEntryBounds, ContextMenuState, SelectionMarquee,
+            BrowserPaneId, ColumnEntryBounds, ContextMenuState, FileDragTarget, SelectionMarquee,
             SelectionMarqueePhase, SelectionMarqueeSource,
         },
     };
@@ -969,6 +1093,65 @@ mod tests {
                 height: 20.0,
             }
         ));
+    }
+
+    #[test]
+    fn drag_target_falls_back_from_source_parent_to_pane_directory() {
+        let source = PathBuf::from("/right/file.txt");
+        let source_parent = PathBuf::from("/right");
+        let fallback = PathBuf::from("/left");
+
+        let target = super::resolve_file_drag_target(
+            &[source],
+            None,
+            Some(FileDragTarget::Directory(source_parent)),
+            Some(fallback.clone()),
+        );
+
+        assert!(matches!(target, Some(FileDragTarget::Directory(path)) if path == fallback));
+    }
+
+    #[test]
+    fn drag_target_keeps_hovered_directory_in_target_pane() {
+        let source = PathBuf::from("/right/file.txt");
+        let hovered = PathBuf::from("/left/folder");
+        let fallback = PathBuf::from("/left");
+
+        let target = super::resolve_file_drag_target(
+            &[source],
+            None,
+            Some(FileDragTarget::Directory(hovered.clone())),
+            Some(fallback),
+        );
+
+        assert!(matches!(target, Some(FileDragTarget::Directory(path)) if path == hovered));
+    }
+
+    #[test]
+    fn drag_target_prefers_release_column_over_stale_hover_target() {
+        let source = PathBuf::from("/right/file.txt");
+        let stale_hover_target = PathBuf::from("/right");
+        let release_column = PathBuf::from("/left/actual-column");
+        let fallback = PathBuf::from("/left");
+
+        let target = super::resolve_file_drag_target(
+            &[source],
+            Some(release_column.clone()),
+            Some(FileDragTarget::Directory(stale_hover_target)),
+            Some(fallback),
+        );
+
+        assert!(matches!(target, Some(FileDragTarget::Directory(path)) if path == release_column));
+    }
+
+    #[test]
+    fn drag_target_uses_pane_directory_when_hover_target_missing() {
+        let source = PathBuf::from("/right/file.txt");
+        let fallback = PathBuf::from("/left");
+
+        let target = super::resolve_file_drag_target(&[source], None, None, Some(fallback.clone()));
+
+        assert!(matches!(target, Some(FileDragTarget::Directory(path)) if path == fallback));
     }
 
     #[test]
@@ -1077,6 +1260,10 @@ mod tests {
         let command = browser.handle_column_blank_clicked(child_directory.clone());
         drop(command);
 
+        assert_eq!(
+            browser.deepest_open_column_directory.as_ref(),
+            Some(&child_directory)
+        );
         assert_eq!(browser.selected.as_ref(), Some(&child_directory));
         assert_eq!(
             browser.selected_paths,
@@ -1138,6 +1325,10 @@ mod tests {
         let command = browser.start_column_blank_selection_marquee(child_directory.clone());
         drop(command);
 
+        assert_eq!(
+            browser.deepest_open_column_directory.as_ref(),
+            Some(&child_directory)
+        );
         assert_eq!(browser.selected.as_ref(), Some(&child_directory));
         assert_eq!(
             browser.selected_paths,
@@ -1149,6 +1340,78 @@ mod tests {
             browser.path_input,
             crate::app::paths::path_text(&child_directory)
         );
+    }
+
+    #[test]
+    fn dragging_child_column_blank_preserves_open_column_context() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("first.txt");
+        let second = current_dir.join("second.txt");
+        let child_directory = current_dir.join("project");
+        browser.current_dir = current_dir;
+        browser.entries = vec![
+            test_entry(first.clone(), FileKind::File),
+            test_entry(second.clone(), FileKind::File),
+            test_entry(child_directory.clone(), FileKind::Directory),
+        ];
+        browser.selected = Some(second);
+        browser.selected_paths = HashSet::from([first]);
+
+        let press_command = browser.start_column_blank_selection_marquee(child_directory.clone());
+        drop(press_command);
+        browser
+            .selection_marquee
+            .as_mut()
+            .expect("selection marquee starts")
+            .phase = SelectionMarqueePhase::Selecting;
+
+        let drag_command = browser.update_selection_from_column_entry_bounds(Vec::new());
+        drop(drag_command);
+
+        assert_eq!(
+            browser.deepest_open_column_directory.as_ref(),
+            Some(&child_directory)
+        );
+        assert_eq!(
+            crate::three_column_view::column_directories(&browser),
+            vec![browser.current_dir.clone(), child_directory.clone()]
+        );
+        assert!(browser.selected.is_none());
+        assert!(browser.selected_paths.is_empty());
+        assert_eq!(
+            browser.path_input,
+            crate::app::paths::path_text(&browser.current_dir)
+        );
+    }
+
+    #[test]
+    fn releasing_selected_item_without_drag_collapses_multi_selection() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let current_dir = PathBuf::from("/workspace");
+        let first = current_dir.join("first.txt");
+        let second = current_dir.join("second.txt");
+        browser.current_dir = current_dir;
+        browser.entries = vec![
+            test_entry(first.clone(), FileKind::File),
+            test_entry(second.clone(), FileKind::File),
+        ];
+        browser.selected = Some(first.clone());
+        browser.selected_paths = HashSet::from([first.clone(), second.clone()]);
+
+        let press_command = browser.handle_column_entry_clicked(second.clone());
+        drop(press_command);
+        assert_eq!(
+            browser.selected_paths,
+            HashSet::from([first, second.clone()])
+        );
+
+        let release_command = browser.finish_drag_selection(None);
+        drop(release_command);
+
+        assert_eq!(browser.selected.as_ref(), Some(&second));
+        assert_eq!(browser.selected_paths, HashSet::from([second.clone()]));
+        assert_eq!(browser.selection_anchor.as_ref(), Some(&second));
     }
 
     #[test]

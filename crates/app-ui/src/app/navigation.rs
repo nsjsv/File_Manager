@@ -11,8 +11,8 @@ use crate::commands::{
     load_trash_command, path_suggestions_command,
 };
 use crate::model::{
-    trash_location_path, ExpandedDirectory, ExpandedDirectoryStatus, Message, NavigationMode,
-    PathSuggestionDirection, PathSuggestionRequest, TRASH_LOCATION_LABEL,
+    trash_location_path, BrowserPaneId, ExpandedDirectory, ExpandedDirectoryStatus, Message,
+    NavigationMode, PathSuggestionDirection, PathSuggestionRequest, TRASH_LOCATION_LABEL,
 };
 use crate::startup_trace;
 use crate::view::path_input_id;
@@ -87,6 +87,7 @@ impl FileBrowser {
                 .iter()
                 .map(|trash_entry| trash_entry.entry.clone())
                 .collect();
+            pane.deepest_open_column_directory = None;
             pane.expanded_directories.clear();
             pane.is_loading = false;
             pane.sync_active_tab_state();
@@ -107,6 +108,7 @@ impl FileBrowser {
             .iter()
             .map(|trash_entry| trash_entry.entry.clone())
             .collect();
+        self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
         self.is_loading = false;
         self.error = None;
@@ -128,6 +130,7 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         self.entries.clear();
         self.trash_entries.clear();
+        self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
         self.column_viewports.clear();
         self.clear_selection_context();
@@ -150,6 +153,7 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         self.entries.clear();
         self.trash_entries.clear();
+        self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
         self.column_viewports.clear();
         self.clear_selection_context();
@@ -167,6 +171,7 @@ impl FileBrowser {
             self.clear_transient_interaction_state();
             self.is_loading = true;
             self.error = None;
+            self.deepest_open_column_directory = None;
             self.expanded_directories.clear();
             return load_trash_command(self.active_pane_id(), self.options.clone());
         }
@@ -184,6 +189,62 @@ impl FileBrowser {
             self.current_dir.clone(),
             self.options.clone(),
         ));
+        Task::batch(commands)
+    }
+
+    pub(super) fn reload_visible_panes(&mut self) -> Task<Message> {
+        let active_pane_id = self.active_pane_id();
+        let mut commands = vec![self.reload_current()];
+        self.sync_active_pane_state();
+
+        for pane_id in self.pane_layout.visible_pane_ids() {
+            if pane_id != active_pane_id {
+                commands.push(self.reload_inactive_pane(pane_id));
+            }
+        }
+
+        Task::batch(commands)
+    }
+
+    fn reload_inactive_pane(&mut self, pane_id: BrowserPaneId) -> Task<Message> {
+        let options = self.options.clone();
+        let Some(pane) = self.pane_by_id_mut(pane_id) else {
+            return Task::none();
+        };
+
+        pane.path_suggestions.clear();
+        pane.path_suggestion_selection = None;
+        pane.is_loading = true;
+
+        if pane.is_trash_view {
+            pane.path_input = TRASH_LOCATION_LABEL.to_owned();
+            pane.deepest_open_column_directory = None;
+            pane.expanded_directories.clear();
+            pane.sync_active_tab_state();
+            return load_trash_command(pane_id, options);
+        }
+
+        pane.path_input = path_text(&pane.current_dir);
+        let current_dir = pane.current_dir.clone();
+        let expanded_paths = pane
+            .expanded_directories
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in &expanded_paths {
+            if let Some(expanded) = pane.expanded_directories.get_mut(path) {
+                expanded.status = ExpandedDirectoryStatus::Loading;
+                expanded.is_expanded = true;
+                expanded.animation_progress = 1.0;
+            }
+        }
+        pane.sync_active_tab_state();
+
+        let mut commands = expanded_paths
+            .into_iter()
+            .map(|path| load_expanded_directory_command(pane_id, path, options.clone()))
+            .collect::<Vec<_>>();
+        commands.push(load_directory_command(pane_id, current_dir, options));
         Task::batch(commands)
     }
 
@@ -562,7 +623,7 @@ impl FileBrowser {
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
         self.cursor_search_directory = None;
-        self.last_click = None;
+        self.last_activation_click = None;
         self.clear_preview();
         self.context_menu = None;
         self.renaming = None;
@@ -579,7 +640,7 @@ impl FileBrowser {
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
         self.cursor_search_directory = None;
-        self.last_click = None;
+        self.last_activation_click = None;
         self.clear_preview();
         self.context_menu = None;
         self.renaming = None;

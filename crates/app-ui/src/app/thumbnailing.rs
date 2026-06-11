@@ -6,7 +6,7 @@ use thumbnails::ThumbnailRequest;
 
 use super::FileBrowser;
 use crate::commands::thumbnail_batch_command;
-use crate::model::{Message, PreviewContent, PreviewState};
+use crate::model::{BrowserPane, BrowserPaneId, Message, PreviewContent, PreviewState};
 use crate::thumbnail_cache::{
     request_for_entry, ColumnViewport, ThumbnailHandleEntry, ThumbnailLoadOutcome,
     ThumbnailPriority, ThumbnailPurpose, LIST_THUMBNAIL_EDGE, PREVIEW_THUMBNAIL_MAX_EDGE,
@@ -14,6 +14,7 @@ use crate::thumbnail_cache::{
 
 const ESTIMATED_ROW_HEIGHT: f32 = 56.0;
 const OVERSCAN_ROWS: usize = 28;
+const INITIAL_THUMBNAIL_ROWS: usize = OVERSCAN_ROWS * 2 + 1;
 const PREVIEW_THUMBNAIL_MIN_EDGE: u32 = 512;
 const PREVIEW_RESIZE_EXTRA_PIXELS: u32 = 128;
 
@@ -24,20 +25,41 @@ impl FileBrowser {
         self.pump_thumbnail_queue()
     }
 
+    pub(super) fn schedule_thumbnail_refresh_for_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+    ) -> Task<Message> {
+        if pane_id == self.active_pane_id() {
+            self.schedule_interaction_thumbnails();
+        }
+        self.schedule_rendered_column_thumbnails_for_pane(pane_id);
+        self.pump_thumbnail_queue()
+    }
+
     pub(super) fn handle_column_scrolled(
         &mut self,
+        pane_id: BrowserPaneId,
         directory: PathBuf,
         offset_y: f32,
         height: f32,
     ) -> Task<Message> {
-        self.column_viewports.insert(
-            directory.clone(),
-            ColumnViewport {
-                offset_y: offset_y.max(0.0),
-                height: height.max(1.0),
-            },
+        let viewport = ColumnViewport {
+            offset_y: offset_y.max(0.0),
+            height: height.max(1.0),
+        };
+        if pane_id == self.active_pane_id() {
+            self.column_viewports.insert(directory.clone(), viewport);
+        } else {
+            let Some(pane) = self.pane_by_id_mut(pane_id) else {
+                return Task::none();
+            };
+            pane.column_viewports.insert(directory.clone(), viewport);
+        }
+        self.schedule_directory_thumbnails_for_pane(
+            pane_id,
+            &directory,
+            ThumbnailPriority::Focused,
         );
-        self.schedule_directory_thumbnails(&directory, ThumbnailPriority::Focused);
         self.pump_thumbnail_queue()
     }
 
@@ -197,7 +219,13 @@ impl FileBrowser {
     }
 
     fn schedule_rendered_column_thumbnails(&mut self) {
-        let directories = rendered_column_directories_for_browser(self);
+        for pane_id in self.pane_layout.visible_pane_ids() {
+            self.schedule_rendered_column_thumbnails_for_pane(pane_id);
+        }
+    }
+
+    fn schedule_rendered_column_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
+        let directories = rendered_column_directories_for_browser(self, pane_id);
         let focused_index = directories.len().saturating_sub(1);
         for (index, directory) in directories.iter().enumerate() {
             let priority = if index == focused_index {
@@ -205,31 +233,60 @@ impl FileBrowser {
             } else {
                 ThumbnailPriority::Visible
             };
-            self.schedule_directory_thumbnails(directory, priority);
+            self.schedule_directory_thumbnails_for_pane(pane_id, directory, priority);
         }
     }
 
-    fn schedule_directory_thumbnails(&mut self, directory: &Path, priority: ThumbnailPriority) {
-        let requests = self.thumbnail_requests_for_directory_range(directory);
+    fn schedule_directory_thumbnails_for_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+        directory: &Path,
+        priority: ThumbnailPriority,
+    ) {
+        let requests = self.thumbnail_requests_for_pane_directory_range(pane_id, directory);
         for request in requests {
             self.thumbnail_cache
                 .enqueue_request(request, ThumbnailPurpose::List, priority);
         }
     }
 
-    fn thumbnail_requests_for_directory_range(&self, directory: &Path) -> Vec<ThumbnailRequest> {
-        let Some(entries) = self.entries_for_directory(directory) else {
+    fn thumbnail_requests_for_pane_directory_range(
+        &self,
+        pane_id: BrowserPaneId,
+        directory: &Path,
+    ) -> Vec<ThumbnailRequest> {
+        let Some(entries) = self.entries_for_pane_directory(pane_id, directory) else {
             return Vec::new();
         };
         if entries.is_empty() {
             return Vec::new();
         }
 
-        let (start, end) = self.thumbnail_range_for_directory(directory, entries.len());
+        let (start, end) =
+            self.thumbnail_range_for_pane_directory(pane_id, directory, entries.len());
         entries[start..end]
             .iter()
             .filter_map(|entry| request_for_entry(entry, LIST_THUMBNAIL_EDGE))
             .collect()
+    }
+
+    fn entries_for_pane_directory(
+        &self,
+        pane_id: BrowserPaneId,
+        directory: &Path,
+    ) -> Option<&[DirectoryEntry]> {
+        if pane_id == self.active_pane_id() {
+            return self.entries_for_directory(directory);
+        }
+
+        let pane = self.pane_by_id(pane_id)?;
+        if directory == pane.current_dir {
+            return Some(&pane.entries);
+        }
+
+        pane.expanded_directories
+            .get(directory)
+            .map(|expanded| expanded.entries.as_slice())
     }
 
     fn entries_for_directory(&self, directory: &Path) -> Option<&[DirectoryEntry]> {
@@ -242,18 +299,29 @@ impl FileBrowser {
             .map(|expanded| expanded.entries.as_slice())
     }
 
-    fn thumbnail_range_for_directory(&self, directory: &Path, len: usize) -> (usize, usize) {
-        let Some(viewport) = self.column_viewports.get(directory).copied() else {
-            return (0, 0);
-        };
-        let first_visible = (viewport.offset_y / ESTIMATED_ROW_HEIGHT).floor().max(0.0) as usize;
-        let visible_count = (viewport.height / ESTIMATED_ROW_HEIGHT).ceil().max(1.0) as usize;
-        let start = first_visible.saturating_sub(OVERSCAN_ROWS);
-        let end = first_visible
-            .saturating_add(visible_count)
-            .saturating_add(OVERSCAN_ROWS * 2)
-            .min(len);
-        (start, end)
+    fn thumbnail_range_for_pane_directory(
+        &self,
+        pane_id: BrowserPaneId,
+        directory: &Path,
+        len: usize,
+    ) -> (usize, usize) {
+        thumbnail_range_for_viewport(
+            self.column_viewport_for_pane_directory(pane_id, directory),
+            len,
+        )
+    }
+
+    fn column_viewport_for_pane_directory(
+        &self,
+        pane_id: BrowserPaneId,
+        directory: &Path,
+    ) -> Option<ColumnViewport> {
+        if pane_id == self.active_pane_id() {
+            return self.column_viewports.get(directory).copied();
+        }
+
+        self.pane_by_id(pane_id)
+            .and_then(|pane| pane.column_viewports.get(directory).copied())
     }
 
     fn preview_thumbnail_edge(&self) -> u32 {
@@ -267,8 +335,11 @@ impl FileBrowser {
 
     fn is_current_thumbnail_request(&self, request: &ThumbnailRequest) -> bool {
         self.entry_for_path(&request.source)
-            .and_then(|entry| request_for_entry(entry, request.max_edge))
-            .is_some_and(|current| current.key() == request.key())
+            .is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
+            || self
+                .panes
+                .iter()
+                .any(|pane| thumbnail_request_matches_pane(pane, request))
     }
 
     fn is_active_preview_loading(&self, path: &Path) -> bool {
@@ -279,8 +350,154 @@ impl FileBrowser {
     }
 }
 
-fn rendered_column_directories_for_browser(browser: &FileBrowser) -> Vec<PathBuf> {
-    crate::three_column_view::column_directories(browser)
+fn rendered_column_directories_for_browser(
+    browser: &FileBrowser,
+    pane_id: BrowserPaneId,
+) -> Vec<PathBuf> {
+    browser
+        .pane_view(pane_id)
+        .map(crate::three_column_view::column_directories_for_pane)
+        .unwrap_or_default()
+}
+
+fn thumbnail_request_matches_entry(entry: &DirectoryEntry, request: &ThumbnailRequest) -> bool {
+    request_for_entry(entry, request.max_edge).is_some_and(|current| current.key() == request.key())
+}
+
+fn thumbnail_request_matches_pane(pane: &BrowserPane, request: &ThumbnailRequest) -> bool {
+    pane.entries
+        .iter()
+        .chain(
+            pane.expanded_directories
+                .values()
+                .flat_map(|expanded| expanded.entries.iter()),
+        )
+        .find(|entry| entry.path == request.source)
+        .is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
+}
+
+fn thumbnail_range_for_viewport(viewport: Option<ColumnViewport>, len: usize) -> (usize, usize) {
+    let Some(viewport) = viewport else {
+        return (0, INITIAL_THUMBNAIL_ROWS.min(len));
+    };
+    let first_visible = (viewport.offset_y / ESTIMATED_ROW_HEIGHT).floor().max(0.0) as usize;
+    let visible_count = (viewport.height / ESTIMATED_ROW_HEIGHT).ceil().max(1.0) as usize;
+    let start = first_visible.saturating_sub(OVERSCAN_ROWS);
+    let end = first_visible
+        .saturating_add(visible_count)
+        .saturating_add(OVERSCAN_ROWS * 2)
+        .min(len);
+    (start, end)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+
+    use file_core::{EntryMetadata, FileKind};
+
+    use super::*;
+    use crate::config::ui_thread_startup_config;
+    use crate::model::{BrowserPaneLayout, BrowserTab, SplitAxis};
+
+    #[test]
+    fn missing_viewport_schedules_initial_thumbnail_rows() {
+        let range = thumbnail_range_for_viewport(None, 100);
+
+        assert_eq!(range, (0, INITIAL_THUMBNAIL_ROWS));
+    }
+
+    #[test]
+    fn measured_viewport_schedules_visible_rows_with_overscan() {
+        let viewport = ColumnViewport {
+            offset_y: ESTIMATED_ROW_HEIGHT * 40.0,
+            height: ESTIMATED_ROW_HEIGHT * 3.0,
+        };
+
+        let range = thumbnail_range_for_viewport(Some(viewport), 120);
+
+        assert_eq!(range, (12, 99));
+    }
+
+    #[test]
+    fn inactive_pane_thumbnail_request_matches_current_entry() {
+        let (browser, _, _, image_entry) = browser_with_inactive_image_pane();
+        let request = request_for_entry(&image_entry, LIST_THUMBNAIL_EDGE).expect("image request");
+
+        assert!(browser.is_current_thumbnail_request(&request));
+    }
+
+    #[test]
+    fn inactive_pane_thumbnail_range_uses_its_own_viewport() {
+        let (browser, inactive_id, inactive_dir, image_entry) = browser_with_inactive_image_pane();
+
+        let requests = browser
+            .thumbnail_requests_for_pane_directory_range(inactive_id, inactive_dir.as_path());
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source, image_entry.path);
+    }
+
+    fn browser_with_inactive_image_pane() -> (FileBrowser, BrowserPaneId, PathBuf, DirectoryEntry) {
+        let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+        let inactive_id = BrowserPaneId(1);
+        let inactive_dir = PathBuf::from("/inactive");
+        let image_entry = image_entry("/inactive/photo.png");
+        let tab = BrowserTab::directory(1, inactive_dir.clone());
+
+        browser.panes.push(BrowserPane {
+            id: inactive_id,
+            current_dir: inactive_dir.clone(),
+            is_trash_view: false,
+            entries: vec![image_entry.clone()],
+            trash_entries: Vec::new(),
+            selected: None,
+            selected_paths: HashSet::new(),
+            selection_anchor: None,
+            deepest_open_column_directory: None,
+            expanded_directories: HashMap::new(),
+            column_viewports: HashMap::from([(
+                inactive_dir.clone(),
+                ColumnViewport {
+                    offset_y: 0.0,
+                    height: ESTIMATED_ROW_HEIGHT,
+                },
+            )]),
+            tabs: vec![tab.clone()],
+            active_tab_id: tab.id,
+            path_input: inactive_dir.to_string_lossy().into_owned(),
+            path_suggestions: Vec::new(),
+            path_suggestion_selection: None,
+            path_suggestion_generation: 0,
+            back_stack: Vec::new(),
+            forward_stack: Vec::new(),
+            is_loading: false,
+        });
+        browser.pane_layout = BrowserPaneLayout::Split {
+            axis: SplitAxis::Horizontal,
+            first: BrowserPaneId::PRIMARY,
+            second: inactive_id,
+            active: BrowserPaneId::PRIMARY,
+        };
+
+        (browser, inactive_id, inactive_dir, image_entry)
+    }
+
+    fn image_entry(path: &str) -> DirectoryEntry {
+        DirectoryEntry::new(
+            PathBuf::from(path),
+            FileKind::File,
+            EntryMetadata {
+                len: 10,
+                modified: None,
+                readonly: false,
+            },
+            false,
+            false,
+            false,
+        )
+    }
 }
 
 fn thumbnail_preview_content(path: PathBuf, ready: ThumbnailHandleEntry) -> PreviewContent {

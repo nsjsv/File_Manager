@@ -60,7 +60,7 @@ impl FileBrowser {
         }
 
         if finished {
-            self.reload_current()
+            self.reload_visible_panes()
         } else {
             Task::none()
         }
