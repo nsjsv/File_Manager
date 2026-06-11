@@ -14,7 +14,8 @@ use crate::appearance::{
     auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
     auto_hide_vertical_scrollbar_direction, column_browser_style, column_panel_style,
     column_resize_divider_style, dragged_row_style, hovered_row_style, icon_svg_style,
-    muted_icon_svg_style, selected_icon_svg_style, selected_row_style, warning_icon_svg_style,
+    muted_icon_svg_style, open_child_row_style, selected_icon_svg_style, selected_row_style,
+    warning_icon_svg_style,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
@@ -228,16 +229,18 @@ fn column_entry_row<'a>(
     entry: &DirectoryEntry,
     active_child: Option<&Path>,
 ) -> Element<'a, Message> {
-    let is_selected =
-        pane.is_path_selected(&entry.path) || active_child == Some(entry.path.as_path());
-    let is_hovered = pane.hovered_entry == Some(&entry.path);
-    let is_dragged = is_drag_source(pane, &entry.path);
-    let icon_tone = if is_dragged {
-        IconTone::Muted
-    } else if is_selected {
-        IconTone::Selected
-    } else {
-        IconTone::Normal
+    let visual_state = column_entry_visual_state(
+        pane.is_path_selected(&entry.path),
+        active_child == Some(entry.path.as_path()),
+        pane.hovered_entry == Some(&entry.path),
+        is_drag_source(pane, &entry.path),
+    );
+    let icon_tone = match visual_state {
+        ColumnEntryVisualState::Dragged => IconTone::Muted,
+        ColumnEntryVisualState::Selected => IconTone::Selected,
+        ColumnEntryVisualState::Normal
+        | ColumnEntryVisualState::Hovered
+        | ColumnEntryVisualState::OpenChild => IconTone::Normal,
     };
 
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
@@ -271,14 +274,12 @@ fn column_entry_row<'a>(
     let row_container = container(row_content)
         .padding(COLUMN_ENTRY_PADDING)
         .width(Length::Fill);
-    let row_container = if is_dragged {
-        row_container.style(dragged_row_style)
-    } else if is_selected {
-        row_container.style(selected_row_style)
-    } else if is_hovered {
-        row_container.style(hovered_row_style)
-    } else {
-        row_container
+    let row_container = match visual_state {
+        ColumnEntryVisualState::Dragged => row_container.style(dragged_row_style),
+        ColumnEntryVisualState::Selected => row_container.style(selected_row_style),
+        ColumnEntryVisualState::Hovered => row_container.style(hovered_row_style),
+        ColumnEntryVisualState::OpenChild => row_container.style(open_child_row_style),
+        ColumnEntryVisualState::Normal => row_container,
     };
 
     let row_area = mouse_area(row_container)
@@ -504,6 +505,34 @@ enum ColumnContent<'a> {
     Loading,
     Empty,
     Entries(&'a [DirectoryEntry]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColumnEntryVisualState {
+    Normal,
+    Hovered,
+    OpenChild,
+    Selected,
+    Dragged,
+}
+
+fn column_entry_visual_state(
+    is_selected: bool,
+    is_open_child: bool,
+    is_hovered: bool,
+    is_dragged: bool,
+) -> ColumnEntryVisualState {
+    if is_dragged {
+        ColumnEntryVisualState::Dragged
+    } else if is_selected {
+        ColumnEntryVisualState::Selected
+    } else if is_hovered {
+        ColumnEntryVisualState::Hovered
+    } else if is_open_child {
+        ColumnEntryVisualState::OpenChild
+    } else {
+        ColumnEntryVisualState::Normal
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

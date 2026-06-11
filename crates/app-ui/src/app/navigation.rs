@@ -554,6 +554,7 @@ impl FileBrowser {
             return Task::none();
         }
 
+        let loaded_path = path.clone();
         let expanded = self
             .expanded_directories
             .entry(path)
@@ -576,9 +577,14 @@ impl FileBrowser {
             }
         }
 
+        let pending_keyboard_focus = self.complete_pending_keyboard_column_focus(&loaded_path);
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
-        Task::batch([command, self.schedule_thumbnail_refresh()])
+        Task::batch([
+            pending_keyboard_focus,
+            command,
+            self.schedule_thumbnail_refresh(),
+        ])
     }
 
     pub(crate) fn entry_for_path(&self, path: &Path) -> Option<&DirectoryEntry> {
@@ -642,6 +648,8 @@ impl FileBrowser {
         self.cursor_paste_directory = None;
         self.cursor_search_directory = None;
         self.last_activation_click = None;
+        self.column_return_targets.clear();
+        self.pending_keyboard_column_focus = None;
         self.clear_preview();
         self.context_menu = None;
         self.renaming = None;
@@ -659,6 +667,7 @@ impl FileBrowser {
         self.cursor_paste_directory = None;
         self.cursor_search_directory = None;
         self.last_activation_click = None;
+        self.pending_keyboard_column_focus = None;
         self.clear_preview();
         self.context_menu = None;
         self.renaming = None;

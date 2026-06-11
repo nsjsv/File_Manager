@@ -149,6 +149,8 @@ pub(crate) struct FileBrowser {
     pub(crate) shortcut_capture: Option<ShortcutCaptureState>,
     selection_anchor: Option<PathBuf>,
     drag_selection_anchor: Option<PathBuf>,
+    column_return_targets: HashMap<PathBuf, PathBuf>,
+    pending_keyboard_column_focus: Option<PendingKeyboardColumnFocus>,
     column_resize_drag: Option<ColumnResizeDrag>,
     last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
@@ -165,6 +167,13 @@ pub(crate) struct FileBrowser {
     next_pane_id: u64,
     theme: Theme,
     is_shutting_down: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingKeyboardColumnFocus {
+    pub(crate) pane_id: BrowserPaneId,
+    pub(crate) directory: PathBuf,
+    pub(crate) preferred_child: Option<PathBuf>,
 }
 
 impl FileBrowser {
@@ -296,6 +305,8 @@ impl FileBrowser {
             shortcut_capture: None,
             selection_anchor: None,
             drag_selection_anchor: None,
+            column_return_targets: HashMap::new(),
+            pending_keyboard_column_focus: None,
             column_resize_drag: None,
             last_activation_click: None,
             operation_queue: FileOperationQueue::new(),

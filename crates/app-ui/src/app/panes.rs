@@ -327,6 +327,7 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.column_resize_drag = None;
+        self.pending_keyboard_column_focus = None;
         self.last_activation_click = None;
     }
 

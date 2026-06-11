@@ -6,7 +6,10 @@ use file_core::{is_supported_audio_path, is_supported_video_path, DirectoryEntry
 use iced::Task;
 
 use super::paths::{self, PasteTargetMode};
-use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
+use super::{
+    FileBrowser, PendingKeyboardColumnFocus, DOUBLE_CLICK_THRESHOLD,
+    POINTER_DRAG_ACTIVATION_DISTANCE,
+};
 use crate::commands::{
     image_preview_dimensions_command, load_expanded_directory_command, open_file_command,
     open_terminal_command, preview_command, start_audio_preview_command,
@@ -35,6 +38,7 @@ impl FileBrowser {
         self.selected_paths.clear();
         self.selected_paths.insert(path.clone());
         self.selection_anchor = Some(path.clone());
+        self.pending_keyboard_column_focus = None;
         self.focus_path(path);
     }
 
@@ -676,8 +680,8 @@ impl FileBrowser {
             return Task::none();
         };
 
-        self.select_path_from_keyboard(target);
-        Task::none()
+        self.select_path_from_keyboard(target.clone());
+        self.open_column_for_keyboard_selection(target)
     }
 
     fn move_file_selection_to_parent_column(&mut self) -> Task<Message> {
@@ -691,9 +695,10 @@ impl FileBrowser {
             return Task::none();
         }
 
+        self.column_return_targets
+            .insert(parent.clone(), selected.clone());
         self.select_path_from_keyboard(parent.clone());
-        self.set_deepest_open_column_directory(Some(parent));
-        Task::none()
+        self.focus_column_containing_path(&parent)
     }
 
     fn move_file_selection_to_child_column(&mut self) -> Task<Message> {
@@ -704,12 +709,80 @@ impl FileBrowser {
             return Task::none();
         }
 
-        let first_child = self.entry_paths_in_directory(&selected).into_iter().next();
-        let open_command = self.open_column_for_directory(selected);
-        if let Some(path) = first_child {
-            self.select_path_from_keyboard(path);
+        let preferred_child = self.column_return_targets.get(&selected).cloned();
+        let open_command = self.open_column_for_directory(selected.clone());
+        if let Some(path) = self.keyboard_child_focus_target(&selected, preferred_child.as_deref())
+        {
+            self.pending_keyboard_column_focus = None;
+            self.select_path_from_keyboard(path.clone());
+            return Task::batch([open_command, self.open_column_for_keyboard_selection(path)]);
+        }
+
+        if self.directory_children_are_loading(&selected) {
+            self.pending_keyboard_column_focus = Some(PendingKeyboardColumnFocus {
+                pane_id: self.active_pane_id(),
+                directory: selected,
+                preferred_child,
+            });
+        } else {
+            self.pending_keyboard_column_focus = None;
         }
         open_command
+    }
+
+    pub(super) fn complete_pending_keyboard_column_focus(
+        &mut self,
+        directory: &Path,
+    ) -> Task<Message> {
+        let Some(pending) = self.pending_keyboard_column_focus.clone() else {
+            return Task::none();
+        };
+        if pending.pane_id != self.active_pane_id() || pending.directory != directory {
+            return Task::none();
+        }
+
+        self.pending_keyboard_column_focus = None;
+        if self.selected.as_deref() != Some(directory) {
+            return Task::none();
+        }
+
+        let Some(path) =
+            self.keyboard_child_focus_target(directory, pending.preferred_child.as_deref())
+        else {
+            return Task::none();
+        };
+
+        self.select_path_from_keyboard(path.clone());
+        self.open_column_for_keyboard_selection(path)
+    }
+
+    fn keyboard_child_focus_target(
+        &self,
+        directory: &Path,
+        preferred_child: Option<&Path>,
+    ) -> Option<PathBuf> {
+        let paths = self.entry_paths_in_directory(directory);
+        if let Some(preferred_child) = preferred_child {
+            if paths.iter().any(|path| path == preferred_child) {
+                return Some(preferred_child.to_path_buf());
+            }
+        }
+        paths.into_iter().next()
+    }
+
+    fn directory_children_are_loading(&self, directory: &Path) -> bool {
+        self.expanded_directories
+            .get(directory)
+            .is_some_and(|expanded| matches!(expanded.status, ExpandedDirectoryStatus::Loading))
+    }
+
+    fn open_column_for_keyboard_selection(&mut self, path: PathBuf) -> Task<Message> {
+        if self.entry_kind(&path) == Some(FileKind::Directory) {
+            self.open_column_for_directory(path)
+        } else {
+            self.update_open_column_directory_for_entry(&path);
+            Task::none()
+        }
     }
 
     fn entry_paths_in_directory(&self, directory: &Path) -> Vec<PathBuf> {
@@ -739,6 +812,7 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.file_drag = None;
+        self.pending_keyboard_column_focus = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
     }
@@ -1033,6 +1107,7 @@ impl FileBrowser {
     }
 
     fn focus_path(&mut self, path: PathBuf) {
+        self.pending_keyboard_column_focus = None;
         self.sync_path_input_to_selected_directory(&path);
         self.update_rename_input(&path);
         self.selected = Some(path);

@@ -40,6 +40,27 @@ pub(crate) fn selected_row_style(theme: &Theme) -> container::Appearance {
     }
 }
 
+pub(crate) fn open_child_row_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgb8(32, 43, 59)
+        } else {
+            Color::from_rgb8(235, 240, 248)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: if is_dark_theme(theme) {
+                Color::from_rgb8(72, 94, 127)
+            } else {
+                Color::from_rgb8(201, 212, 229)
+            },
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..container::Appearance::default()
+    }
+}
+
 pub(crate) fn dragged_row_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
