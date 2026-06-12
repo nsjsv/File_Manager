@@ -40,7 +40,7 @@ pub(super) fn global_event_message(
         return Some(Message::CursorMoved(*position));
     }
 
-    if let Some(message) = pointer_pressed_message(&event, status) {
+    if let Some(message) = pointer_pressed_message(&event, status, window) {
         return Some(message);
     }
 
@@ -72,7 +72,11 @@ pub(super) fn global_event_message(
     }
 }
 
-fn pointer_pressed_message(event: &Event, status: event::Status) -> Option<Message> {
+fn pointer_pressed_message(
+    event: &Event,
+    status: event::Status,
+    window: window::Id,
+) -> Option<Message> {
     let Event::Mouse(mouse::Event::ButtonPressed(button)) = event else {
         return None;
     };
@@ -80,6 +84,7 @@ fn pointer_pressed_message(event: &Event, status: event::Status) -> Option<Messa
     match button {
         mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle => {
             Some(Message::WindowPointerPressed {
+                window,
                 button: *button,
                 status,
             })
@@ -101,7 +106,15 @@ mod tests {
     use iced::keyboard::{self, key, Key};
 
     fn route_event(event: Event, status: event::Status) -> Option<Message> {
-        global_event_message(event, status, iced::window::Id::unique())
+        route_event_with_window(event, status, iced::window::Id::unique())
+    }
+
+    fn route_event_with_window(
+        event: Event,
+        status: event::Status,
+        window: window::Id,
+    ) -> Option<Message> {
+        global_event_message(event, status, window)
     }
 
     fn key_pressed(key: Key, modifiers: keyboard::Modifiers) -> Event {
@@ -165,6 +178,23 @@ mod tests {
         assert!(matches!(
             message,
             Some(Message::CapturedWheelScrolled(received)) if received == delta
+        ));
+    }
+
+    #[test]
+    fn pointer_press_reports_source_window() {
+        let window = window::Id::unique();
+        let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+
+        let message = route_event_with_window(event, event::Status::Ignored, window);
+
+        assert!(matches!(
+            message,
+            Some(Message::WindowPointerPressed {
+                window: received_window,
+                button: mouse::Button::Left,
+                status: event::Status::Ignored,
+            }) if received_window == window
         ));
     }
 

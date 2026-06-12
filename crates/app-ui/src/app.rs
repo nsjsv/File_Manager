@@ -7,6 +7,7 @@ mod pane_drag;
 pub(crate) mod panes;
 mod paths;
 mod preview_state;
+mod properties;
 mod rendering_settings;
 mod runtime;
 mod scrollbar;
@@ -14,6 +15,7 @@ mod search;
 mod selection;
 mod shortcuts;
 mod sidebar_bookmarks;
+mod sidebar_devices;
 mod sidebar_resize;
 mod startup;
 mod startup_index_setup;
@@ -28,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use desktop_linux::TerminalEmulator;
+use desktop_linux::{StorageDeviceId, TerminalEmulator};
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
@@ -38,7 +40,8 @@ use iced::{time, Element, Point, Subscription, Task, Theme};
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
-    directory_watch_subscription, operation_queue_auto_hide_command, system_theme_command,
+    directory_watch_subscription, operation_queue_auto_hide_command,
+    sidebar_device_refresh_subscription, system_theme_command,
 };
 use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
@@ -52,20 +55,24 @@ use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory, FileDragState, Message,
-    NavigationMode, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
-    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
-    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
-    TransferConflictState, VideoPreviewPlayback,
+    ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory, FileDragState,
+    FilePropertiesState, Message, NavigationMode, OperationQueuePanelMode, PaneDragState,
+    PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarVisibility,
+    SearchIndexRuntime, SearchState, SelectionMarquee, SettingsCategory, SidebarBookmarkDragState,
+    SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState, TabDragState,
+    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
 use crate::shortcuts::ShortcutCaptureState;
+use crate::sidebar_devices::SidebarDeviceState;
 use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
-use crate::view::{view_browser, view_preview_window, view_search_window, view_settings_window};
+use crate::view::{
+    view_browser, view_preview_window, view_properties_window, view_search_window,
+    view_settings_window,
+};
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
@@ -82,6 +89,7 @@ pub(crate) struct FileBrowser {
     selected_paths: HashSet<PathBuf>,
     pub(crate) hovered_entry: Option<PathBuf>,
     pub(crate) hovered_sidebar: Option<PathBuf>,
+    pub(crate) hovered_sidebar_device: Option<StorageDeviceId>,
     cursor_paste_directory: Option<PathBuf>,
     cursor_search_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
@@ -98,6 +106,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
+    pub(crate) sidebar_devices: SidebarDeviceState,
     pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
     pub(crate) sidebar_bookmark_drag: Option<SidebarBookmarkDragState>,
     pub(crate) sidebar_bookmark_motion: HashMap<PathBuf, SidebarBookmarkMotionState>,
@@ -112,6 +121,8 @@ pub(crate) struct FileBrowser {
     pub(crate) startup_index_setup: Option<StartupIndexSetupState>,
     search_window: Option<window::Id>,
     settings_window: Option<window::Id>,
+    properties_window: Option<window::Id>,
+    pub(crate) properties: Option<FilePropertiesState>,
     pub(crate) search_index: SearchIndexRuntime,
     pub(crate) tabs: Vec<BrowserTab>,
     pub(crate) active_tab_id: usize,
@@ -236,6 +247,7 @@ impl FileBrowser {
             selected_paths: HashSet::new(),
             hovered_entry: None,
             hovered_sidebar: None,
+            hovered_sidebar_device: None,
             cursor_paste_directory: None,
             cursor_search_directory: None,
             preview: None,
@@ -252,6 +264,7 @@ impl FileBrowser {
             column_viewports: HashMap::new(),
             context_menu: None,
             sidebar_locations: Vec::new(),
+            sidebar_devices: SidebarDeviceState::loading(),
             sidebar_bookmark_drop_slot: None,
             sidebar_bookmark_drag: None,
             sidebar_bookmark_motion: HashMap::new(),
@@ -266,6 +279,8 @@ impl FileBrowser {
             startup_index_setup: None,
             search_window: None,
             settings_window: None,
+            properties_window: None,
+            properties: None,
             search_index: SearchIndexRuntime::new(PathBuf::new()),
             tabs: vec![initial_tab],
             active_tab_id: 0,
@@ -342,6 +357,7 @@ impl FileBrowser {
         }
 
         let mut subscriptions = vec![event::listen_with(global_event_message)];
+        subscriptions.push(sidebar_device_refresh_subscription());
 
         if !self.is_loading && !self.is_trash_view {
             subscriptions.push(directory_watch_subscription(self.current_dir.clone()));
@@ -411,6 +427,21 @@ impl FileBrowser {
             Message::SidebarLocationsLoaded(sidebar_locations) => {
                 self.accept_sidebar_locations(sidebar_locations)
             }
+            Message::SidebarDevicesLoaded(devices) => self.accept_sidebar_devices(devices),
+            Message::SidebarDevicesRefreshRequested => self.refresh_sidebar_devices(),
+            Message::SidebarDeviceHovered(id) => self.handle_sidebar_device_hovered(id),
+            Message::SidebarDeviceHoverCleared(id) => self.handle_sidebar_device_hover_cleared(id),
+            Message::SidebarDevicePressed(id) => self.handle_sidebar_device_pressed(id),
+            Message::SidebarDeviceMiddlePressed(pane_id, id) => {
+                self.handle_sidebar_device_middle_pressed(pane_id, id)
+            }
+            Message::SidebarDeviceRightClicked(id) => self.handle_sidebar_device_right_clicked(id),
+            Message::SidebarDeviceActionSelected(id, action) => {
+                self.perform_sidebar_device_action(id, action)
+            }
+            Message::SidebarDeviceActionFinished(id, action, result) => {
+                self.accept_sidebar_device_action_finished(id, action, result)
+            }
             Message::OperationStoreLoaded(operation_store) => {
                 self.accept_operation_store(operation_store)
             }
@@ -452,6 +483,18 @@ impl FileBrowser {
             }
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
+            }
+            Message::FilePropertiesLoaded(path, properties_outcome) => {
+                self.accept_file_properties(path, properties_outcome)
+            }
+            Message::FilePropertiesCategorySelected(category) => {
+                self.select_file_properties_category(category)
+            }
+            Message::FilePropertiesPermissionToggled(class, access) => {
+                self.toggle_file_properties_permission(class, access)
+            }
+            Message::FilePropertiesPermissionsUpdated(path, permissions_outcome) => {
+                self.accept_file_properties_permissions(path, permissions_outcome)
             }
             Message::PreviewDirectoryChildrenLoaded(parent_path, children_outcome) => {
                 self.accept_preview_directory_children(parent_path, children_outcome)
@@ -752,9 +795,11 @@ impl FileBrowser {
             }
             Message::WindowFocused(window) => self.handle_window_focused(window),
             Message::WindowUnfocused(window) => self.handle_window_unfocused(window),
-            Message::WindowPointerPressed { button, status } => {
-                self.handle_window_pointer_pressed(button, status)
-            }
+            Message::WindowPointerPressed {
+                window,
+                button,
+                status,
+            } => self.handle_window_pointer_pressed(window, button, status),
             Message::PathInputChanged(pane_id, value) => {
                 self.activate_pane(pane_id);
                 self.update_path_input(value)
@@ -955,6 +1000,7 @@ impl FileBrowser {
                 Task::none()
             }
             Message::BeginRename(path) => self.begin_rename(path),
+            Message::FilePropertiesRequested(path) => self.open_file_properties(path),
             Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
             Message::RenameSelected => self.commit_rename(),
             Message::CreateDirectory(directory) => self.create_directory_in(directory),
@@ -1013,6 +1059,8 @@ impl FileBrowser {
             view_search_window(self.search.as_ref(), self.scrollbar_visibility)
         } else if self.settings_window == Some(window) {
             view_settings_window(self)
+        } else if self.properties_window == Some(window) {
+            view_properties_window(self.properties.as_ref(), self.scrollbar_visibility)
         } else if self.preview_window == Some(window) {
             view_preview_window(
                 self.preview.as_ref(),

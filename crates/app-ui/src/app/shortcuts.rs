@@ -74,6 +74,7 @@ impl FileBrowser {
             && self.transfer_conflict.is_none()
             && self.context_menu.is_none()
             && self.settings_window != Some(self.focused_window)
+            && self.properties_window != Some(self.focused_window)
             && self.renaming.is_none()
             && self.search.is_none()
             && self.shortcut_capture.is_none()
@@ -101,6 +102,7 @@ impl FileBrowser {
             ShortcutAction::MoveSelection(direction) => self.move_file_selection(direction),
             ShortcutAction::Search if self.is_trash_view => Task::none(),
             ShortcutAction::Search => self.open_search(),
+            ShortcutAction::FileProperties => self.open_selected_file_properties(),
             ShortcutAction::Refresh => {
                 Task::batch([self.commit_rename_if_active(), self.reload_visible_panes()])
             }

@@ -4,7 +4,10 @@ use iced::Task;
 
 use super::paths::path_text;
 use super::FileBrowser;
-use crate::commands::{load_directory_command, operation_store_command, sidebar_locations_command};
+use crate::commands::{
+    load_directory_command, operation_store_command, sidebar_devices_command,
+    sidebar_locations_command,
+};
 use crate::config::UserConfig;
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
@@ -40,6 +43,7 @@ impl FileBrowser {
             startup_index_setup_command,
             load_directory_command(BrowserPaneId::PRIMARY, home.clone(), self.options.clone()),
             sidebar_locations_command(home, configured_favorites),
+            sidebar_devices_command(),
             operation_store_command(state_database_path),
         ])
     }

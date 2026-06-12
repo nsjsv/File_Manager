@@ -2,15 +2,18 @@ mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;
 mod preview_panel;
+mod properties_window;
 mod rendering_settings;
 mod search_panel;
 mod settings_window;
 mod shortcut_settings;
+mod sidebar_panel;
 mod startup_index_setup;
 mod tab_motion;
 mod toggle_switch;
 
 pub(crate) use preview_panel::view_preview_window;
+pub(crate) use properties_window::view_properties_window;
 pub(crate) use search_panel::{
     search_input_id, search_results_id, view_search_window, SEARCH_RESULTS_HEIGHT,
     SEARCH_RESULTS_PADDING, SEARCH_RESULT_ROW_HEIGHT, SEARCH_RESULT_ROW_SPACING,
@@ -54,9 +57,10 @@ use crate::typography::readable_text;
 
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
-    sidebar_view, transfer_conflict_panel,
+    transfer_conflict_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
+use sidebar_panel::sidebar_view;
 use startup_index_setup::startup_index_setup_panel;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;

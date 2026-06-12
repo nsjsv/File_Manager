@@ -38,11 +38,16 @@ const DEFAULT_SETTINGS_WIDTH: f32 = 760.0;
 const DEFAULT_SETTINGS_HEIGHT: f32 = 560.0;
 const MIN_SETTINGS_WIDTH: f32 = 640.0;
 const MIN_SETTINGS_HEIGHT: f32 = 420.0;
+const DEFAULT_PROPERTIES_WIDTH: f32 = 760.0;
+const DEFAULT_PROPERTIES_HEIGHT: f32 = 560.0;
+const MIN_PROPERTIES_WIDTH: f32 = 680.0;
+const MIN_PROPERTIES_HEIGHT: f32 = 440.0;
 pub(super) const MAIN_WINDOW_INITIAL_WIDTH: f32 = 1180.0;
 pub(super) const MAIN_WINDOW_INITIAL_HEIGHT: f32 = 680.0;
 const MAIN_WINDOW_APP_ID: &str = "file-manager";
 const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
 const SETTINGS_WINDOW_APP_ID: &str = "file-manager-settings";
+const PROPERTIES_WINDOW_APP_ID: &str = "file-manager-properties";
 const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
 const VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT: f32 = 88.0;
 const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
@@ -76,6 +81,17 @@ fn settings_window_settings() -> window::Settings {
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = SETTINGS_WINDOW_APP_ID.to_owned();
+    settings
+}
+
+fn properties_window_settings() -> window::Settings {
+    let mut settings = window::Settings {
+        size: Size::new(DEFAULT_PROPERTIES_WIDTH, DEFAULT_PROPERTIES_HEIGHT),
+        min_size: Some(Size::new(MIN_PROPERTIES_WIDTH, MIN_PROPERTIES_HEIGHT)),
+        exit_on_close_request: false,
+        ..window::Settings::default()
+    };
+    settings.platform_specific.application_id = PROPERTIES_WINDOW_APP_ID.to_owned();
     settings
 }
 
@@ -221,6 +237,8 @@ impl FileBrowser {
             "Search - File Manager".to_owned()
         } else if self.settings_window == Some(window) {
             "Settings - File Manager".to_owned()
+        } else if self.properties_window == Some(window) {
+            "Properties - File Manager".to_owned()
         } else if self.preview_window == Some(window) {
             "Preview - File Manager".to_owned()
         } else {
@@ -282,6 +300,29 @@ impl FileBrowser {
     pub(super) fn close_settings_window(&mut self) -> Task<Message> {
         self.shortcut_capture = None;
         let Some(window) = self.settings_window.take() else {
+            return Task::none();
+        };
+        if self.focused_window == window {
+            self.focused_window = self.main_window;
+        }
+        window::close(window)
+    }
+
+    pub(super) fn ensure_properties_window(&mut self) -> Task<Message> {
+        if let Some(window) = self.properties_window {
+            self.focused_window = window;
+            return window::gain_focus(window);
+        }
+
+        let (window, command) = window::open(properties_window_settings());
+        self.properties_window = Some(window);
+        self.focused_window = window;
+        command.discard()
+    }
+
+    pub(super) fn close_properties_window(&mut self) -> Task<Message> {
+        self.properties = None;
+        let Some(window) = self.properties_window.take() else {
             return Task::none();
         };
         if self.focused_window == window {
@@ -409,6 +450,9 @@ impl FileBrowser {
         if self.settings_window == Some(self.focused_window) {
             return self.close_settings_window();
         }
+        if self.properties_window == Some(self.focused_window) {
+            return self.close_properties_window();
+        }
         if self.preview_window == Some(self.focused_window) {
             return self.close_preview_window();
         }
@@ -417,9 +461,14 @@ impl FileBrowser {
 
     pub(super) fn handle_window_pointer_pressed(
         &mut self,
+        window: window::Id,
         button: mouse::Button,
         status: event::Status,
     ) -> Task<Message> {
+        if window != self.main_window {
+            return Task::none();
+        }
+
         if self.preview_window == Some(self.focused_window) {
             return Task::none();
         }
@@ -492,6 +541,8 @@ impl FileBrowser {
             self.close_search_window()
         } else if self.settings_window == Some(window_id) {
             self.close_settings_window()
+        } else if self.properties_window == Some(window_id) {
+            self.close_properties_window()
         } else if self.preview_window == Some(window_id) {
             self.close_preview_window()
         } else {
@@ -503,14 +554,18 @@ impl FileBrowser {
         self.is_shutting_down = true;
         let _ = self.operation_queue.cancel_all();
         self.search = None;
+        self.properties = None;
         self.clear_preview();
         self.pending_preview_resize = None;
 
-        let mut commands = Vec::with_capacity(5);
+        let mut commands = Vec::with_capacity(6);
         if let Some(window) = self.search_window.take() {
             commands.push(window::close(window));
         }
         if let Some(window) = self.settings_window.take() {
+            commands.push(window::close(window));
+        }
+        if let Some(window) = self.properties_window.take() {
             commands.push(window::close(window));
         }
         if let Some(window) = self.preview_window.take() {

@@ -18,6 +18,7 @@ mod preview;
 mod selection_marquee;
 mod shortcuts;
 mod sidebar;
+mod sidebar_devices;
 mod startup_index_tree;
 mod startup_trace;
 mod text_preview;

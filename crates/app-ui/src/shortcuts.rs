@@ -18,6 +18,7 @@ pub(crate) enum ShortcutAction {
     NavigateUp,
     MoveSelection(FileSelectionDirection),
     Search,
+    FileProperties,
     Refresh,
     Escape,
     Preview,
@@ -63,6 +64,7 @@ pub(crate) enum ShortcutBindingId {
     MoveSelectionRight,
     Search,
     SearchAlternate,
+    FileProperties,
     Refresh,
     Escape,
     Preview,
@@ -78,7 +80,7 @@ pub(crate) enum ShortcutBindingId {
     Redo,
 }
 
-const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 25] = [
+const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 26] = [
     ShortcutBindingId::OpenSelected,
     ShortcutBindingId::RenameSelected,
     ShortcutBindingId::FocusPathInput,
@@ -91,6 +93,7 @@ const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 25] = [
     ShortcutBindingId::MoveSelectionRight,
     ShortcutBindingId::Search,
     ShortcutBindingId::SearchAlternate,
+    ShortcutBindingId::FileProperties,
     ShortcutBindingId::Refresh,
     ShortcutBindingId::Escape,
     ShortcutBindingId::Preview,
@@ -126,6 +129,7 @@ impl ShortcutBindingId {
                 ShortcutAction::MoveSelection(FileSelectionDirection::Right)
             }
             Self::Search | Self::SearchAlternate => ShortcutAction::Search,
+            Self::FileProperties => ShortcutAction::FileProperties,
             Self::Refresh => ShortcutAction::Refresh,
             Self::Escape => ShortcutAction::Escape,
             Self::Preview => ShortcutAction::Preview,
@@ -153,6 +157,7 @@ impl ShortcutBindingId {
             Self::MoveSelectionRight => "Select Child Column",
             Self::Search => "Search",
             Self::SearchAlternate => "Search Alternate",
+            Self::FileProperties => "Properties",
             Self::Refresh => "Refresh",
             Self::Escape => "Dismiss",
             Self::Preview => "Preview",
@@ -183,6 +188,7 @@ impl ShortcutBindingId {
             Self::MoveSelectionRight => "move_selection_right",
             Self::Search => "search",
             Self::SearchAlternate => "search_alternate",
+            Self::FileProperties => "file_properties",
             Self::Refresh => "refresh",
             Self::Escape => "escape",
             Self::Preview => "preview",
@@ -378,6 +384,7 @@ fn default_binding(id: ShortcutBindingId) -> KeyBinding {
         ShortcutBindingId::MoveSelectionRight => KeyBinding::named(ShortcutNamedKey::ArrowRight),
         ShortcutBindingId::Search => KeyBinding::primary_character('F'),
         ShortcutBindingId::SearchAlternate => KeyBinding::alt_named(ShortcutNamedKey::Space),
+        ShortcutBindingId::FileProperties => KeyBinding::alt_named(ShortcutNamedKey::Enter),
         ShortcutBindingId::Refresh => KeyBinding::named(ShortcutNamedKey::Function(5)),
         ShortcutBindingId::Escape => KeyBinding::named(ShortcutNamedKey::Escape),
         ShortcutBindingId::Preview => KeyBinding::named(ShortcutNamedKey::Space),
@@ -749,5 +756,21 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("Ctrl+Alt+L")
         );
+    }
+
+    #[test]
+    fn properties_default_shortcut_is_alt_enter() {
+        let shortcuts = ShortcutConfig::defaults();
+        let key = Key::Named(key::Named::Enter);
+
+        assert_eq!(
+            shortcuts.matching_action(&key, keyboard::Modifiers::ALT),
+            Some(ShortcutAction::FileProperties)
+        );
+    }
+
+    #[test]
+    fn properties_shortcut_respects_captured_events() {
+        assert!(!ShortcutAction::FileProperties.bypasses_captured_event());
     }
 }

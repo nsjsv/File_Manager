@@ -12,6 +12,7 @@ use crate::startup_trace;
 
 const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
+const SIDEBAR_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
@@ -25,6 +26,11 @@ pub(crate) fn run() -> iced::Result {
 
 pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {
     Subscription::run_with(path, directory_watch_stream)
+}
+
+pub(super) fn sidebar_device_refresh_subscription() -> Subscription<Message> {
+    iced::time::every(SIDEBAR_DEVICE_REFRESH_INTERVAL)
+        .map(|_| Message::SidebarDevicesRefreshRequested)
 }
 
 fn directory_watch_stream(path: &PathBuf) -> impl iced::futures::Stream<Item = Message> + 'static {

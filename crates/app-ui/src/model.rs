@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use desktop_linux::{DesktopClipboardContent, TerminalEmulator};
+use desktop_linux::{DesktopClipboardContent, StorageDevice, StorageDeviceId, TerminalEmulator};
 use file_core::{
     DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexOutcome, FileSearchMatch,
     FileSearchOutcome, TrashEntry, TrashRestoreEntry, TrashScan,
@@ -17,6 +18,7 @@ use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::ShortcutBindingId;
+use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailLoadOutcome};
 use file_core::FileOperationVerification;
 
@@ -37,12 +39,32 @@ pub(crate) struct LoadedOperationStore {
 pub(crate) enum Message {
     StartupEnvironmentLoaded(StartupEnvironment),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
+    SidebarDevicesLoaded(Result<Vec<StorageDevice>, String>),
+    SidebarDevicesRefreshRequested,
+    SidebarDeviceHovered(StorageDeviceId),
+    SidebarDeviceHoverCleared(StorageDeviceId),
+    SidebarDevicePressed(StorageDeviceId),
+    SidebarDeviceMiddlePressed(BrowserPaneId, StorageDeviceId),
+    SidebarDeviceRightClicked(StorageDeviceId),
+    SidebarDeviceActionSelected(StorageDeviceId, SidebarDeviceAction),
+    SidebarDeviceActionFinished(
+        StorageDeviceId,
+        SidebarDeviceAction,
+        Result<Option<PathBuf>, String>,
+    ),
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
     Loaded(BrowserPaneId, Result<DirectoryScan, String>),
     TrashLoaded(BrowserPaneId, Result<TrashScan, String>),
     OpenFileFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    FilePropertiesLoaded(PathBuf, Result<FilePropertiesSnapshot, String>),
+    FilePropertiesPermissionToggled(
+        FilePropertiesPermissionClass,
+        FilePropertiesPermissionAccess,
+    ),
+    FilePropertiesCategorySelected(FilePropertiesCategory),
+    FilePropertiesPermissionsUpdated(PathBuf, Result<FilePropertiesPermissions, String>),
     PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
     TextPreviewAction(text_editor::Action),
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
@@ -120,6 +142,7 @@ pub(crate) enum Message {
     WindowFocused(window::Id),
     WindowUnfocused(window::Id),
     WindowPointerPressed {
+        window: window::Id,
         button: mouse::Button,
         status: event::Status,
     },
@@ -177,6 +200,7 @@ pub(crate) enum Message {
     RenameInputFocusChecked(bool),
     RenameInputChanged(String),
     BeginRename(PathBuf),
+    FilePropertiesRequested(PathBuf),
     OpenTerminalHere(PathBuf),
     RenameSelected,
     CreateDirectory(PathBuf),
@@ -217,6 +241,219 @@ pub(crate) enum Message {
 pub(crate) enum PendingOperation {
     Copy(Vec<PathBuf>),
     Move(Vec<PathBuf>),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FilePropertiesState {
+    pub(crate) path: PathBuf,
+    pub(crate) load_state: FilePropertiesLoadState,
+    pub(crate) selected_category: FilePropertiesCategory,
+    pub(crate) permission_update: FilePropertiesPermissionUpdate,
+}
+
+impl FilePropertiesState {
+    pub(crate) fn loading(path: PathBuf) -> Self {
+        Self {
+            path,
+            load_state: FilePropertiesLoadState::Loading,
+            selected_category: FilePropertiesCategory::Information,
+            permission_update: FilePropertiesPermissionUpdate::Idle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FilePropertiesCategory {
+    Information,
+    Permissions,
+}
+
+impl FilePropertiesCategory {
+    pub(crate) const ALL: [Self; 2] = [Self::Information, Self::Permissions];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Information => "File Information",
+            Self::Permissions => "Permissions",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum FilePropertiesLoadState {
+    Loading,
+    Loaded(FilePropertiesSnapshot),
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FilePropertiesSnapshot {
+    pub(crate) name: OsString,
+    pub(crate) kind: FileKind,
+    pub(crate) type_label: String,
+    pub(crate) location: PathBuf,
+    pub(crate) created: Option<SystemTime>,
+    pub(crate) modified: Option<SystemTime>,
+    pub(crate) accessed: Option<SystemTime>,
+    pub(crate) size_bytes: u64,
+    pub(crate) disk_size_bytes: u64,
+    pub(crate) directory_contents: Option<FilePropertiesDirectoryContents>,
+    pub(crate) directory_contents_error: Option<String>,
+    pub(crate) permissions: Option<FilePropertiesPermissions>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FilePropertiesPermissions {
+    mode: u32,
+}
+
+impl FilePropertiesPermissions {
+    const DISPLAY_MODE_MASK: u32 = 0o7777;
+
+    pub(crate) fn from_mode(mode: u32) -> Self {
+        Self {
+            mode: mode & Self::DISPLAY_MODE_MASK,
+        }
+    }
+
+    pub(crate) fn mode(self) -> u32 {
+        self.mode
+    }
+
+    pub(crate) fn contains(
+        self,
+        class: FilePropertiesPermissionClass,
+        access: FilePropertiesPermissionAccess,
+    ) -> bool {
+        self.mode & permission_mask(class, access) != 0
+    }
+
+    pub(crate) fn toggled(
+        self,
+        class: FilePropertiesPermissionClass,
+        access: FilePropertiesPermissionAccess,
+    ) -> Self {
+        let mask = permission_mask(class, access);
+        let mode = if self.mode & mask == 0 {
+            self.mode | mask
+        } else {
+            self.mode & !mask
+        };
+        Self::from_mode(mode)
+    }
+
+    pub(crate) fn octal_string(self) -> String {
+        format!("{:04o}", self.mode)
+    }
+
+    pub(crate) fn symbolic_string(self) -> String {
+        [
+            (FilePropertiesPermissionClass::Owner, 'r', 'w', 'x'),
+            (FilePropertiesPermissionClass::Group, 'r', 'w', 'x'),
+            (FilePropertiesPermissionClass::Others, 'r', 'w', 'x'),
+        ]
+        .into_iter()
+        .flat_map(|(class, read, write, execute)| {
+            [
+                permission_char(self, class, FilePropertiesPermissionAccess::Read, read),
+                permission_char(self, class, FilePropertiesPermissionAccess::Write, write),
+                permission_char(
+                    self,
+                    class,
+                    FilePropertiesPermissionAccess::Execute,
+                    execute,
+                ),
+            ]
+        })
+        .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FilePropertiesPermissionClass {
+    Owner,
+    Group,
+    Others,
+}
+
+impl FilePropertiesPermissionClass {
+    pub(crate) const ALL: [Self; 3] = [Self::Owner, Self::Group, Self::Others];
+
+    fn shift(self) -> u32 {
+        match self {
+            Self::Owner => 6,
+            Self::Group => 3,
+            Self::Others => 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FilePropertiesPermissionAccess {
+    Read,
+    Write,
+    Execute,
+}
+
+impl FilePropertiesPermissionAccess {
+    pub(crate) const ALL: [Self; 3] = [Self::Read, Self::Write, Self::Execute];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Read => "Read",
+            Self::Write => "Write",
+            Self::Execute => "Execute",
+        }
+    }
+
+    fn bit(self) -> u32 {
+        match self {
+            Self::Read => 0o4,
+            Self::Write => 0o2,
+            Self::Execute => 0o1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FilePropertiesPermissionUpdate {
+    Idle,
+    Saving(FilePropertiesPermissions),
+    Failed(String),
+}
+
+impl FilePropertiesPermissionUpdate {
+    pub(crate) fn is_saving(&self) -> bool {
+        matches!(self, Self::Saving(_))
+    }
+}
+
+fn permission_mask(
+    class: FilePropertiesPermissionClass,
+    access: FilePropertiesPermissionAccess,
+) -> u32 {
+    access.bit() << class.shift()
+}
+
+fn permission_char(
+    permissions: FilePropertiesPermissions,
+    class: FilePropertiesPermissionClass,
+    access: FilePropertiesPermissionAccess,
+    enabled_char: char,
+) -> char {
+    if permissions.contains(class, access) {
+        enabled_char
+    } else {
+        '-'
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FilePropertiesDirectoryContents {
+    pub(crate) file_count: usize,
+    pub(crate) directory_count: usize,
+    pub(crate) total_size_bytes: u64,
+    pub(crate) total_disk_size_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -889,6 +1126,7 @@ fn preview_tree_directory_children(kind: FileKind) -> Option<PreviewTreeDirector
 pub(crate) enum ContextMenuState {
     FileArea(FileContextMenuState),
     SidebarBookmark(SidebarBookmarkContextMenuState),
+    SidebarDevice(SidebarDeviceContextMenuState),
 }
 
 impl ContextMenuState {
@@ -896,6 +1134,7 @@ impl ContextMenuState {
         match self {
             Self::FileArea(menu) => menu.position,
             Self::SidebarBookmark(menu) => menu.position,
+            Self::SidebarDevice(menu) => menu.position,
         }
     }
 
@@ -903,6 +1142,7 @@ impl ContextMenuState {
         match self {
             Self::FileArea(menu) => Some(&menu.paste_directory),
             Self::SidebarBookmark(_) => None,
+            Self::SidebarDevice(_) => None,
         }
     }
 }
@@ -1002,7 +1242,16 @@ pub(crate) enum SidebarLocationKind {
 
 impl SidebarLocationKind {
     pub(crate) fn is_user_favorite(self) -> bool {
-        !matches!(self, Self::Home)
+        matches!(
+            self,
+            Self::Desktop
+                | Self::Documents
+                | Self::Downloads
+                | Self::Pictures
+                | Self::Music
+                | Self::Videos
+                | Self::Bookmark
+        )
     }
 }
 

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,7 +24,8 @@ use iced::Task;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
-    BrowserPaneId, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
+    BrowserPaneId, FilePropertiesDirectoryContents, FilePropertiesPermissions,
+    FilePropertiesSnapshot, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
     SearchRequest, SidebarLocation, StartupEnvironment, TransferConflictMode,
     TransferConflictState,
 };
@@ -35,6 +38,8 @@ use crate::video_preview::{inspect_video_preview_metadata, load_video_preview_fr
 
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
+mod sidebar_devices;
+pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
 
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
@@ -171,6 +176,26 @@ pub(crate) fn preview_command(
     Task::perform(load_preview(path, kind, options), move |preview_outcome| {
         Message::PreviewLoaded(preview_path.clone(), preview_outcome)
     })
+}
+
+pub(crate) fn file_properties_command(path: PathBuf) -> Task<Message> {
+    let requested_path = path.clone();
+    Task::perform(load_file_properties(path), move |properties_outcome| {
+        Message::FilePropertiesLoaded(requested_path.clone(), properties_outcome)
+    })
+}
+
+pub(crate) fn set_file_properties_permissions_command(
+    path: PathBuf,
+    permissions: FilePropertiesPermissions,
+) -> Task<Message> {
+    let requested_path = path.clone();
+    Task::perform(
+        set_file_properties_permissions(path, permissions),
+        move |permissions_outcome| {
+            Message::FilePropertiesPermissionsUpdated(requested_path.clone(), permissions_outcome)
+        },
+    )
 }
 
 pub(crate) fn preview_directory_children_command(
@@ -409,6 +434,167 @@ async fn load_directory(path: PathBuf, options: ScanOptions) -> Result<Directory
 
 async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
     scan_trash(options).await.map_err(|error| error.to_string())
+}
+
+async fn load_file_properties(path: PathBuf) -> Result<FilePropertiesSnapshot, String> {
+    tokio::task::spawn_blocking(move || read_file_properties(path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+async fn set_file_properties_permissions(
+    path: PathBuf,
+    permissions: FilePropertiesPermissions,
+) -> Result<FilePropertiesPermissions, String> {
+    tokio::task::spawn_blocking(move || write_file_properties_permissions(path, permissions))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn read_file_properties(path: PathBuf) -> Result<FilePropertiesSnapshot, String> {
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    let file_type = metadata.file_type();
+    let kind = if file_type.is_dir() {
+        FileKind::Directory
+    } else if file_type.is_file() {
+        FileKind::File
+    } else if file_type.is_symlink() {
+        FileKind::Symlink
+    } else {
+        FileKind::Other
+    };
+    let type_label = if file_type.is_symlink() {
+        "Symbolic Link".to_owned()
+    } else if file_type.is_dir() {
+        "Folder".to_owned()
+    } else if file_type.is_file() {
+        "File".to_owned()
+    } else {
+        "Other".to_owned()
+    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| path.as_os_str().to_os_string());
+    let location = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    let mut directory_contents = None;
+    let mut directory_contents_error = None;
+    if file_type.is_dir() {
+        match read_directory_properties_contents(&path) {
+            Ok(contents) => directory_contents = Some(contents),
+            Err(error) => directory_contents_error = Some(error),
+        }
+    }
+
+    let size_bytes = directory_contents
+        .as_ref()
+        .map(|contents| contents.total_size_bytes)
+        .unwrap_or_else(|| metadata.len());
+    let disk_size_bytes = directory_contents
+        .as_ref()
+        .map(|contents| contents.total_disk_size_bytes)
+        .unwrap_or_else(|| metadata_disk_size(&metadata));
+
+    Ok(FilePropertiesSnapshot {
+        name,
+        kind,
+        type_label,
+        location,
+        created: metadata.created().ok(),
+        modified: metadata.modified().ok(),
+        accessed: metadata.accessed().ok(),
+        size_bytes,
+        disk_size_bytes,
+        directory_contents,
+        directory_contents_error,
+        permissions: metadata_properties_permissions(&metadata, file_type.is_symlink()),
+    })
+}
+
+#[cfg(unix)]
+fn metadata_properties_permissions(
+    metadata: &std::fs::Metadata,
+    is_symlink: bool,
+) -> Option<FilePropertiesPermissions> {
+    (!is_symlink).then(|| FilePropertiesPermissions::from_mode(metadata.permissions().mode()))
+}
+
+#[cfg(not(unix))]
+fn metadata_properties_permissions(
+    _metadata: &std::fs::Metadata,
+    _is_symlink: bool,
+) -> Option<FilePropertiesPermissions> {
+    None
+}
+
+#[cfg(unix)]
+fn write_file_properties_permissions(
+    path: PathBuf,
+    permissions: FilePropertiesPermissions,
+) -> Result<FilePropertiesPermissions, String> {
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err("symbolic link permissions cannot be changed".to_owned());
+    }
+
+    let mut fs_permissions = metadata.permissions();
+    fs_permissions.set_mode(permissions.mode());
+    std::fs::set_permissions(&path, fs_permissions).map_err(|error| error.to_string())?;
+
+    let refreshed = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    Ok(FilePropertiesPermissions::from_mode(
+        refreshed.permissions().mode(),
+    ))
+}
+
+#[cfg(not(unix))]
+fn write_file_properties_permissions(
+    _path: PathBuf,
+    _permissions: FilePropertiesPermissions,
+) -> Result<FilePropertiesPermissions, String> {
+    Err("permission editing is only available on Unix filesystems".to_owned())
+}
+
+fn read_directory_properties_contents(
+    path: &Path,
+) -> Result<FilePropertiesDirectoryContents, String> {
+    let mut contents = FilePropertiesDirectoryContents {
+        file_count: 0,
+        directory_count: 0,
+        total_size_bytes: 0,
+        total_disk_size_bytes: 0,
+    };
+
+    for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+        if file_type.is_dir() {
+            contents.directory_count += 1;
+        } else {
+            contents.file_count += 1;
+        }
+        contents.total_size_bytes = contents.total_size_bytes.saturating_add(metadata.len());
+        contents.total_disk_size_bytes = contents
+            .total_disk_size_bytes
+            .saturating_add(metadata_disk_size(&metadata));
+    }
+
+    Ok(contents)
+}
+
+#[cfg(unix)]
+fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
+    metadata.len()
 }
 
 async fn load_startup_environment() -> StartupEnvironment {
