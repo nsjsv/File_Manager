@@ -322,6 +322,7 @@ fn plain_text_preview_body<'a>(
 ) -> Element<'a, Message> {
     if let Some(document) = document {
         text_editor(document.content())
+            .placeholder("(empty file)")
             .height(Length::Fixed(scroll_height))
             .font(Font::MONOSPACE)
             .padding(8)

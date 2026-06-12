@@ -26,6 +26,7 @@ pub(crate) use crate::startup_index_tree::{
     StartupIndexDirectoryChildren, StartupIndexEntrySelection, StartupIndexRootSeed,
     StartupIndexSetupState, StartupIndexTreeEntry,
 };
+pub(crate) use crate::text_preview::{MarkdownPreviewMode, TextPreviewDocument, TextPreviewFormat};
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
 #[derive(Debug, Clone)]
@@ -882,84 +883,6 @@ pub(crate) enum PreviewContent {
         height: u32,
         duration: Option<Duration>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TextPreviewFormat {
-    Plain,
-    Markdown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkdownPreviewMode {
-    Rendered,
-    Raw,
-}
-
-pub(crate) struct TextPreviewDocument {
-    path: PathBuf,
-    content: text_editor::Content,
-    markdown_preview_mode: MarkdownPreviewMode,
-}
-
-impl TextPreviewDocument {
-    pub(crate) fn new(path: PathBuf, content: &str, format: TextPreviewFormat) -> Self {
-        Self {
-            path,
-            content: text_editor::Content::with_text(&numbered_preview_text(content)),
-            markdown_preview_mode: initial_markdown_preview_mode(format),
-        }
-    }
-
-    pub(crate) fn path(&self) -> &std::path::Path {
-        self.path.as_path()
-    }
-
-    pub(crate) fn content(&self) -> &text_editor::Content {
-        &self.content
-    }
-
-    pub(crate) fn markdown_preview_mode(&self) -> MarkdownPreviewMode {
-        self.markdown_preview_mode
-    }
-
-    pub(crate) fn select_markdown_preview_mode(&mut self, mode: MarkdownPreviewMode) {
-        self.markdown_preview_mode = mode;
-    }
-
-    pub(crate) fn perform(&mut self, action: text_editor::Action) {
-        if action.is_edit() {
-            return;
-        }
-
-        self.content.perform(action);
-    }
-}
-
-fn initial_markdown_preview_mode(format: TextPreviewFormat) -> MarkdownPreviewMode {
-    match format {
-        TextPreviewFormat::Plain => MarkdownPreviewMode::Raw,
-        TextPreviewFormat::Markdown => MarkdownPreviewMode::Rendered,
-    }
-}
-
-pub(crate) fn numbered_preview_text(content: &str) -> String {
-    if content.is_empty() {
-        return "1 | (empty file)".to_owned();
-    }
-
-    let line_count = content.lines().count().max(1);
-    let width = line_count.to_string().len();
-    let mut numbered = String::new();
-    for (index, line) in content.lines().enumerate() {
-        numbered.push_str(&format!(
-            "{:>width$} | {}\n",
-            index + 1,
-            line,
-            width = width
-        ));
-    }
-    numbered
 }
 
 #[derive(Debug, Clone)]
