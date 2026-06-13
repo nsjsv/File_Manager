@@ -235,6 +235,7 @@ impl FileBrowser {
             if let Some(expanded) = pane.expanded_directories.get_mut(path) {
                 expanded.status = ExpandedDirectoryStatus::Loading;
                 expanded.is_expanded = true;
+                expanded.is_collapsing = false;
                 expanded.animation_progress = 1.0;
             }
         }
@@ -263,6 +264,7 @@ impl FileBrowser {
 
         expanded.status = ExpandedDirectoryStatus::Loading;
         expanded.is_expanded = true;
+        expanded.is_collapsing = false;
         expanded.animation_progress = 1.0;
         load_expanded_directory_command(self.active_pane_id(), path, self.options.clone())
     }
@@ -530,6 +532,7 @@ impl FileBrowser {
                             entries: Vec::new(),
                             status: ExpandedDirectoryStatus::Loading,
                             is_expanded: true,
+                            is_collapsing: false,
                             animation_progress: 0.0,
                         });
 
@@ -562,6 +565,7 @@ impl FileBrowser {
                 entries: Vec::new(),
                 status: ExpandedDirectoryStatus::Loading,
                 is_expanded: true,
+                is_collapsing: false,
                 animation_progress: 0.0,
             });
 
@@ -684,6 +688,7 @@ impl FileBrowser {
             if let Some(expanded) = self.expanded_directories.get_mut(path) {
                 expanded.status = ExpandedDirectoryStatus::Loading;
                 expanded.is_expanded = true;
+                expanded.is_collapsing = false;
                 expanded.animation_progress = 1.0;
             }
         }

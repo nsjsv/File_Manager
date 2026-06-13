@@ -6,7 +6,9 @@ use thumbnails::ThumbnailRequest;
 
 use super::FileBrowser;
 use crate::commands::thumbnail_batch_command;
-use crate::model::{BrowserPane, BrowserPaneId, Message, PreviewContent, PreviewState};
+use crate::model::{
+    BrowserPane, BrowserPaneId, BrowserViewMode, Message, PreviewContent, PreviewState,
+};
 use crate::thumbnail_cache::{
     request_for_entry, ColumnViewport, ThumbnailHandleEntry, ThumbnailLoadOutcome,
     ThumbnailPriority, ThumbnailPurpose, LIST_THUMBNAIL_EDGE, PREVIEW_THUMBNAIL_MAX_EDGE,
@@ -59,6 +61,22 @@ impl FileBrowser {
             pane_id,
             &directory,
             ThumbnailPriority::Focused,
+        );
+        self.pump_thumbnail_queue()
+    }
+
+    pub(super) fn handle_list_scrolled(
+        &mut self,
+        pane_id: BrowserPaneId,
+        offset_y: f32,
+        height: f32,
+    ) -> Task<Message> {
+        self.schedule_visible_list_thumbnail_range_for_pane(
+            pane_id,
+            Some(ColumnViewport {
+                offset_y: offset_y.max(0.0),
+                height: height.max(1.0),
+            }),
         );
         self.pump_thumbnail_queue()
     }
@@ -225,6 +243,14 @@ impl FileBrowser {
     }
 
     fn schedule_rendered_column_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
+        if self
+            .pane_view(pane_id)
+            .is_some_and(|pane| pane.view_mode == BrowserViewMode::List)
+        {
+            self.schedule_visible_list_thumbnails_for_pane(pane_id);
+            return;
+        }
+
         let directories = rendered_column_directories_for_browser(self, pane_id);
         let focused_index = directories.len().saturating_sub(1);
         for (index, directory) in directories.iter().enumerate() {
@@ -234,6 +260,34 @@ impl FileBrowser {
                 ThumbnailPriority::Visible
             };
             self.schedule_directory_thumbnails_for_pane(pane_id, directory, priority);
+        }
+    }
+
+    fn schedule_visible_list_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
+        self.schedule_visible_list_thumbnail_range_for_pane(pane_id, None);
+    }
+
+    fn schedule_visible_list_thumbnail_range_for_pane(
+        &mut self,
+        pane_id: BrowserPaneId,
+        viewport: Option<ColumnViewport>,
+    ) {
+        let Some(pane) = self.pane_view(pane_id) else {
+            return;
+        };
+        let entries =
+            crate::visible_entries::visible_entries(pane.entries, pane.expanded_directories);
+        let (start, end) = thumbnail_range_for_viewport(viewport, entries.len());
+        let requests = entries[start..end]
+            .iter()
+            .filter_map(|visible_entry| request_for_entry(visible_entry.entry, LIST_THUMBNAIL_EDGE))
+            .collect::<Vec<_>>();
+        for request in requests {
+            self.thumbnail_cache.enqueue_request(
+                request,
+                ThumbnailPurpose::List,
+                ThumbnailPriority::Visible,
+            );
         }
     }
 
@@ -439,6 +493,33 @@ mod tests {
         assert_eq!(requests[0].source, image_entry.path);
     }
 
+    #[test]
+    fn list_scrolled_schedules_visible_list_thumbnail_requests() {
+        let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+        browser.view_mode = BrowserViewMode::List;
+        browser.entries = (0..3)
+            .map(|index| image_entry(&format!("/workspace/photo-{index}.png")))
+            .collect();
+
+        browser.schedule_visible_list_thumbnail_range_for_pane(
+            BrowserPaneId::PRIMARY,
+            Some(ColumnViewport {
+                offset_y: 0.0,
+                height: ESTIMATED_ROW_HEIGHT * 3.0,
+            }),
+        );
+
+        let queued_sources = browser
+            .thumbnail_cache
+            .take_next_batch()
+            .into_iter()
+            .map(|work| work.request.source.clone())
+            .collect::<HashSet<_>>();
+
+        assert!(queued_sources.contains(&PathBuf::from("/workspace/photo-0.png")));
+        assert!(queued_sources.contains(&PathBuf::from("/workspace/photo-1.png")));
+    }
+
     fn browser_with_inactive_image_pane() -> (FileBrowser, BrowserPaneId, PathBuf, DirectoryEntry) {
         let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
         let inactive_id = BrowserPaneId(1);
@@ -457,6 +538,7 @@ mod tests {
             selection_anchor: None,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
+            view_mode: crate::model::BrowserViewMode::Columns,
             column_viewports: HashMap::from([(
                 inactive_dir.clone(),
                 ColumnViewport {

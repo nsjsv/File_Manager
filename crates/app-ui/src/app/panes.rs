@@ -7,8 +7,8 @@ use iced::Point;
 use super::tabs::{TabAnimationState, TabBarReveal};
 use super::FileBrowser;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, ExpandedDirectory, FileDragState,
-    SplitRegion,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode, ExpandedDirectory,
+    FileDragState, SplitRegion,
 };
 
 const SPLIT_TARGET_MIN_CONTENT_WIDTH: f32 = 1.0;
@@ -24,6 +24,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) deepest_open_column_directory: Option<&'a PathBuf>,
     pub(crate) hovered_entry: Option<&'a PathBuf>,
     pub(crate) expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
+    pub(crate) view_mode: BrowserViewMode,
     pub(crate) tabs: &'a [BrowserTab],
     pub(crate) active_tab_id: usize,
     pub(crate) tab_animations: Option<&'a HashMap<usize, TabAnimationState>>,
@@ -127,6 +128,7 @@ impl FileBrowser {
                 deepest_open_column_directory: self.deepest_open_column_directory.as_ref(),
                 hovered_entry: self.hovered_entry.as_ref(),
                 expanded_directories: &self.expanded_directories,
+                view_mode: self.view_mode,
                 tabs: &self.tabs,
                 active_tab_id: self.active_tab_id,
                 tab_animations: Some(&self.tab_animations),
@@ -152,6 +154,7 @@ impl FileBrowser {
             deepest_open_column_directory: pane.deepest_open_column_directory.as_ref(),
             hovered_entry: None,
             expanded_directories: &pane.expanded_directories,
+            view_mode: pane.view_mode,
             tabs: &pane.tabs,
             active_tab_id: pane.active_tab_id,
             tab_animations: None,
@@ -282,6 +285,7 @@ impl FileBrowser {
             selection_anchor: self.selection_anchor.clone(),
             deepest_open_column_directory: self.deepest_open_column_directory.clone(),
             expanded_directories: self.expanded_directories.clone(),
+            view_mode: self.view_mode,
             column_viewports: self.column_viewports.clone(),
             tabs: self.tabs.clone(),
             active_tab_id: self.active_tab_id,
@@ -305,6 +309,7 @@ impl FileBrowser {
         self.selection_anchor = pane.selection_anchor;
         self.deepest_open_column_directory = pane.deepest_open_column_directory;
         self.expanded_directories = pane.expanded_directories;
+        self.view_mode = pane.view_mode;
         self.column_viewports = pane.column_viewports;
         self.tabs = pane.tabs;
         self.active_tab_id = pane.active_tab_id;

@@ -96,6 +96,9 @@ pub(crate) enum Message {
     PreviewTreeAnimationTick,
     ThumbnailRefreshRequested(BrowserPaneId, PathBuf),
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
+    BrowserViewModeSelected(BrowserPaneId, BrowserViewMode),
+    ListDirectoryToggled(BrowserPaneId, PathBuf),
+    ListEntryClicked(BrowserPaneId, PathBuf),
     ColumnEntryClicked(BrowserPaneId, PathBuf),
     ColumnBlankClicked(BrowserPaneId, PathBuf),
     EntryReleased(BrowserPaneId, PathBuf),
@@ -183,6 +186,7 @@ pub(crate) enum Message {
     ScrollbarAutoHideElapsed(u64),
     WindowChromeAnimationTick,
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
+    ListScrolled(BrowserPaneId, f32, f32),
     ColumnResizeStarted(BrowserPaneId, usize),
     OpenDirectoryInNewTab(BrowserPaneId, PathBuf),
     OpenDirectoryFromMiddleClick(BrowserPaneId, PathBuf),
@@ -645,6 +649,12 @@ impl BrowserPaneLayout {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserViewMode {
+    Columns,
+    List,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BrowserPane {
     pub(crate) id: BrowserPaneId,
@@ -657,6 +667,7 @@ pub(crate) struct BrowserPane {
     pub(crate) selection_anchor: Option<PathBuf>,
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
+    pub(crate) view_mode: BrowserViewMode,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) tabs: Vec<BrowserTab>,
     pub(crate) active_tab_id: usize,
@@ -688,6 +699,7 @@ impl BrowserPane {
         tab.selection_anchor = self.selection_anchor.clone();
         tab.deepest_open_column_directory = self.deepest_open_column_directory.clone();
         tab.expanded_directories = self.expanded_directories.clone();
+        tab.view_mode = self.view_mode;
         tab.back_stack = self.back_stack.clone();
         tab.forward_stack = self.forward_stack.clone();
     }
@@ -705,6 +717,7 @@ pub(crate) struct BrowserTab {
     pub(crate) selection_anchor: Option<PathBuf>,
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
+    pub(crate) view_mode: BrowserViewMode,
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
 }
@@ -722,6 +735,7 @@ impl BrowserTab {
             selection_anchor: None,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
+            view_mode: BrowserViewMode::Columns,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
         }
@@ -739,6 +753,7 @@ impl BrowserTab {
             selection_anchor: None,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
+            view_mode: BrowserViewMode::Columns,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
         }
@@ -1265,6 +1280,7 @@ pub(crate) struct ExpandedDirectory {
     pub(crate) entries: Vec<DirectoryEntry>,
     pub(crate) status: ExpandedDirectoryStatus,
     pub(crate) is_expanded: bool,
+    pub(crate) is_collapsing: bool,
     pub(crate) animation_progress: f32,
 }
 

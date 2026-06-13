@@ -3,32 +3,28 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use file_core::{DirectoryEntry, FileKind};
-use iced::widget::{
-    container, image, mouse_area, row, scrollable, text_input, Column, Row, Space, Svg,
-};
-use iced::{Alignment, Element, Length, Padding, Theme};
+use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::panes::BrowserPaneView;
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
     auto_hide_vertical_scrollbar_direction, column_browser_style, column_panel_style,
-    column_resize_divider_style, dragged_row_style, hovered_row_style, icon_svg_style,
-    muted_icon_svg_style, open_child_row_style, selected_icon_svg_style, selected_row_style,
-    warning_icon_svg_style,
+    column_resize_divider_style,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
-use crate::icons::{file_entry_icon_symbol, IconSymbol};
+use crate::file_entry_presentation::selection_run_position_for_path;
+use crate::file_entry_view::{entry_thumbnail_or_icon, themed_icon, FileEntryVisualState};
+use crate::icons::IconSymbol;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{BrowserPaneId, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
-use crate::thumbnail_cache::{LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE};
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id};
 
 pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 3;
 pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 6.0;
 const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
-const ROW_ICON_SIZE: f32 = 18.0;
 const CHEVRON_ICON_SIZE: f32 = 15.0;
 const COLUMN_CONTENT_SPACING: u32 = 4;
 const COLUMN_PADDING: [u16; 2] = [10, 8];
@@ -112,7 +108,13 @@ fn directory_column<'a>(
     match column_content(pane, directory) {
         ColumnContent::Entries(entries) => {
             for entry in entries {
-                content = content.push(column_entry_row(browser, pane, entry, active_child));
+                content = content.push(column_entry_row(
+                    browser,
+                    pane,
+                    entries,
+                    entry,
+                    active_child,
+                ));
             }
         }
         ColumnContent::Loading => {
@@ -226,22 +228,16 @@ fn column_message(message: &'static str) -> Element<'static, Message> {
 fn column_entry_row<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    entries: &[DirectoryEntry],
     entry: &DirectoryEntry,
     active_child: Option<&Path>,
 ) -> Element<'a, Message> {
-    let visual_state = column_entry_visual_state(
-        pane.is_path_selected(&entry.path),
+    let visual_state = FileEntryVisualState::from_entry_context(
+        pane,
+        &entry.path,
         active_child == Some(entry.path.as_path()),
-        pane.hovered_entry == Some(&entry.path),
-        is_drag_source(pane, &entry.path),
     );
-    let icon_tone = match visual_state {
-        ColumnEntryVisualState::Dragged => IconTone::Muted,
-        ColumnEntryVisualState::Selected => IconTone::Selected,
-        ColumnEntryVisualState::Normal
-        | ColumnEntryVisualState::Hovered
-        | ColumnEntryVisualState::OpenChild => IconTone::Normal,
-    };
+    let icon_tone = visual_state.icon_tone();
 
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
         text_input("File name", pane.rename_input)
@@ -274,12 +270,15 @@ fn column_entry_row<'a>(
     let row_container = container(row_content)
         .padding(COLUMN_ENTRY_PADDING)
         .width(Length::Fill);
-    let row_container = match visual_state {
-        ColumnEntryVisualState::Dragged => row_container.style(dragged_row_style),
-        ColumnEntryVisualState::Selected => row_container.style(selected_row_style),
-        ColumnEntryVisualState::Hovered => row_container.style(hovered_row_style),
-        ColumnEntryVisualState::OpenChild => row_container.style(open_child_row_style),
-        ColumnEntryVisualState::Normal => row_container,
+    let entry_paths = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let selection_run_position =
+        selection_run_position_for_path(&entry_paths, pane.selected_paths, &entry.path);
+    let row_container = match visual_state.row_style_for_selection_run(selection_run_position) {
+        Some(style) => row_container.style(style),
+        None => row_container,
     };
 
     let row_area = mouse_area(row_container)
@@ -301,12 +300,6 @@ fn column_entry_row<'a>(
 
     let row_element: Element<'a, Message> = row_area.into();
     track_column_entry_bounds(row_element, pane.id, entry.path.clone())
-}
-
-fn is_drag_source(pane: BrowserPaneView<'_>, path: &Path) -> bool {
-    pane.file_drag.is_some_and(|drag| {
-        drag.is_dragging() && drag.sources.iter().any(|source| source.as_path() == path)
-    })
 }
 
 fn column_content<'a>(pane: BrowserPaneView<'a>, directory: &Path) -> ColumnContent<'a> {
@@ -413,51 +406,6 @@ fn active_child_for_column(
     None
 }
 
-fn entry_thumbnail_or_icon<'a>(
-    browser: &'a FileBrowser,
-    entry: &DirectoryEntry,
-    tone: IconTone,
-) -> Element<'a, Message> {
-    if let Some(thumbnail) = browser
-        .thumbnail_cache
-        .ready_for_entry(entry, LIST_THUMBNAIL_EDGE)
-    {
-        return container(
-            image::Image::new(thumbnail.handle.clone())
-                .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
-                .height(Length::Fixed(LIST_THUMBNAIL_SIZE)),
-        )
-        .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .height(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .into();
-    }
-
-    if !thumbnails::is_supported_thumbnail_path(&entry.path) {
-        return entry_icon(entry, tone).into();
-    }
-
-    container(entry_icon(entry, tone))
-        .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .height(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .center_x(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .center_y(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .into()
-}
-
-fn entry_icon(entry: &DirectoryEntry, tone: IconTone) -> Svg<'static, Theme> {
-    let symbol = if entry.kind == FileKind::Symlink && entry.is_broken_symlink {
-        IconSymbol::TriangleAlert
-    } else {
-        file_entry_icon_symbol(entry.kind, entry.name())
-    };
-    let tone = match (symbol, tone) {
-        (IconSymbol::TriangleAlert, IconTone::Muted) => IconTone::Muted,
-        (IconSymbol::TriangleAlert, _) => IconTone::Warning,
-        _ => tone,
-    };
-    themed_icon(symbol, tone, ROW_ICON_SIZE)
-}
-
 fn column_scroll_id(pane_id: BrowserPaneId, directory: &Path) -> iced::widget::Id {
     iced::widget::Id::from(format!(
         "column-scroll-{}-{}",
@@ -486,61 +434,10 @@ fn hash_bytes(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<'static, Theme> {
-    symbol.view(size).style(icon_tone_style(tone))
-}
-
-fn icon_tone_style(
-    tone: IconTone,
-) -> fn(&Theme, iced::widget::svg::Status) -> iced::widget::svg::Style {
-    match tone {
-        IconTone::Normal => icon_svg_style(),
-        IconTone::Selected => selected_icon_svg_style(),
-        IconTone::Muted => muted_icon_svg_style(),
-        IconTone::Warning => warning_icon_svg_style(),
-    }
-}
-
 enum ColumnContent<'a> {
     Loading,
     Empty,
     Entries(&'a [DirectoryEntry]),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ColumnEntryVisualState {
-    Normal,
-    Hovered,
-    OpenChild,
-    Selected,
-    Dragged,
-}
-
-fn column_entry_visual_state(
-    is_selected: bool,
-    is_open_child: bool,
-    is_hovered: bool,
-    is_dragged: bool,
-) -> ColumnEntryVisualState {
-    if is_dragged {
-        ColumnEntryVisualState::Dragged
-    } else if is_selected {
-        ColumnEntryVisualState::Selected
-    } else if is_hovered {
-        ColumnEntryVisualState::Hovered
-    } else if is_open_child {
-        ColumnEntryVisualState::OpenChild
-    } else {
-        ColumnEntryVisualState::Normal
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum IconTone {
-    Normal,
-    Selected,
-    Muted,
-    Warning,
 }
 
 #[cfg(test)]
@@ -571,6 +468,7 @@ mod tests {
             entries,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
+            is_collapsing: false,
             animation_progress: 1.0,
         }
     }
@@ -593,6 +491,7 @@ mod tests {
             deepest_open_column_directory,
             hovered_entry: None,
             expanded_directories,
+            view_mode: crate::model::BrowserViewMode::Columns,
             tabs: &[],
             active_tab_id: 0,
             tab_animations: None,

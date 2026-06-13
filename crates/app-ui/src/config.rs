@@ -10,6 +10,7 @@ use desktop_linux::DisplayRendererGpuClass;
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::FileOperationVerification;
 
+use crate::model::BrowserViewMode;
 use crate::shortcuts::ShortcutConfig;
 
 const APP_DIR_NAME: &str = "file-manager";
@@ -28,6 +29,7 @@ const SIDEBAR_FAVORITE_PATH_KEY: &str = "path";
 const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
+const BROWSER_VIEW_MODE_KEY: &str = "browser_view_mode";
 const SHORTCUTS_KEY: &str = "shortcuts";
 
 pub(crate) const DEFAULT_TERMINAL_EMULATOR: TerminalEmulator = TerminalEmulator::Automatic;
@@ -150,6 +152,21 @@ pub(crate) fn file_operation_verification_label(
     }
 }
 
+pub(crate) fn browser_view_mode_from_config_value(value: &str) -> Option<BrowserViewMode> {
+    match value {
+        "columns" => Some(BrowserViewMode::Columns),
+        "list" => Some(BrowserViewMode::List),
+        _ => None,
+    }
+}
+
+pub(crate) fn browser_view_mode_config_value(view_mode: BrowserViewMode) -> &'static str {
+    match view_mode {
+        BrowserViewMode::Columns => "columns",
+        BrowserViewMode::List => "list",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
@@ -162,6 +179,7 @@ pub(crate) struct UserConfig {
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
     pub(crate) file_operation_verification: FileOperationVerification,
+    pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) shortcuts: ShortcutConfig,
 }
 
@@ -220,6 +238,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
+        browser_view_mode: BrowserViewMode::Columns,
         shortcuts: ShortcutConfig::defaults(),
     }
 }
@@ -236,6 +255,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
+        browser_view_mode: BrowserViewMode::Columns,
         shortcuts: ShortcutConfig::defaults(),
     }
 }
@@ -329,6 +349,11 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
             config.file_operation_verification = verification;
         }
     }
+    if let Some(value) = toml_string(&document, BROWSER_VIEW_MODE_KEY) {
+        if let Some(view_mode) = browser_view_mode_from_config_value(value) {
+            config.browser_view_mode = view_mode;
+        }
+    }
     if let Some(table) = document.get(SHORTCUTS_KEY).and_then(toml::Value::as_table) {
         config.shortcuts.apply_toml_table(table);
     }
@@ -392,6 +417,11 @@ fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
                     config.file_operation_verification = verification;
                 }
             }
+            BROWSER_VIEW_MODE_KEY => {
+                if let Some(view_mode) = browser_view_mode_from_config_value(value) {
+                    config.browser_view_mode = view_mode;
+                }
+            }
             _ => {}
         }
     }
@@ -448,6 +478,10 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
             file_operation_verification_config_value(config.file_operation_verification)
                 .to_string(),
         ),
+    );
+    document.insert(
+        BROWSER_VIEW_MODE_KEY.to_string(),
+        toml::Value::String(browser_view_mode_config_value(config.browser_view_mode).to_string()),
     );
     document.insert(
         SHORTCUTS_KEY.to_string(),
@@ -591,6 +625,7 @@ sidebar_width = 260.5
 terminal_emulator = "ghostty"
 rendering_backend = "gpu"
 file_operation_verification = "strong"
+browser_view_mode = "list"
 
 [column_width_overrides]
 0 = 240.5
@@ -618,12 +653,13 @@ file_operation_verification = "strong"
             parsed.file_operation_verification,
             FileOperationVerification::Strong
         );
+        assert_eq!(parsed.browser_view_mode, BrowserViewMode::List);
     }
 
     #[test]
     fn parses_legacy_user_config() {
         let parsed = parse_legacy_user_config(
-            "show_hidden_files=true\nstartup_index_prompt=completed\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\nfile_operation_verification=strong\n",
+            "show_hidden_files=true\nstartup_index_prompt=completed\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\nfile_operation_verification=strong\nbrowser_view_mode=list\n",
             default_user_config(),
         );
 
@@ -644,6 +680,7 @@ file_operation_verification = "strong"
             parsed.file_operation_verification,
             FileOperationVerification::Strong
         );
+        assert_eq!(parsed.browser_view_mode, BrowserViewMode::List);
     }
 
     #[test]
@@ -680,6 +717,7 @@ column_width_overrides = "bad"
 terminal_emulator = "missing"
 rendering_backend = "metal"
 file_operation_verification = "maybe"
+browser_view_mode = "cover-flow"
 "#,
             default.clone(),
         );
@@ -697,6 +735,7 @@ file_operation_verification = "maybe"
             parsed.file_operation_verification,
             DEFAULT_FILE_OPERATION_VERIFICATION
         );
+        assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
     }
 
     #[test]
@@ -715,6 +754,7 @@ file_operation_verification = "maybe"
         assert!(content.contains("startup_index_prompt = \"pending\"\n"));
         assert!(content.contains("rendering_backend = \"gpu\"\n"));
         assert!(content.contains("file_operation_verification = \"basic_metadata\"\n"));
+        assert!(content.contains("browser_view_mode = \"columns\"\n"));
         assert!(!content.contains("[column_width_overrides]"));
 
         let parsed = parse_toml_user_config(&content, default_user_config());
@@ -727,6 +767,7 @@ file_operation_verification = "maybe"
             parsed.file_operation_verification,
             DEFAULT_FILE_OPERATION_VERIFICATION
         );
+        assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
     }
 
     #[test]

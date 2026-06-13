@@ -44,8 +44,9 @@ use crate::floating_surface::{
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
+use crate::list_view::list_browser_view;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, Message, OperationQueuePanelMode, SplitAxis,
+    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, Message, OperationQueuePanelMode, SplitAxis,
     TRASH_LOCATION_LABEL,
 };
 use crate::operation_queue_view::{
@@ -65,6 +66,7 @@ use sidebar_panel::sidebar_view;
 use startup_index_setup::startup_index_setup_panel;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
+const VIEW_MODE_ICON_SIZE: f32 = 16.0;
 const TAB_ICON_SIZE: f32 = 14.0;
 const TAB_CLOSE_ICON_SIZE: f32 = 12.0;
 const TAB_CLOSE_SLOT_WIDTH: f32 = 22.0;
@@ -304,6 +306,7 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         navigation_icon_button(IconSymbol::ArrowRight, Message::PaneForward(pane_id)),
         navigation_icon_button(IconSymbol::ArrowUp, Message::PaneUp(pane_id)),
         path_input_panel(pane),
+        view_mode_buttons(pane),
     ]
     .spacing(8)
     .align_y(Alignment::Start);
@@ -315,7 +318,7 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
     }
 
     let pane_content = main_content
-        .push(column_browser_view(browser, pane))
+        .push(browser_content_view(browser, pane))
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -323,6 +326,16 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         .on_enter(Message::PaneCursorEntered(pane_id))
         .on_exit(Message::PaneCursorExited(pane_id))
         .into()
+}
+
+fn browser_content_view<'a>(
+    browser: &'a FileBrowser,
+    pane: BrowserPaneView<'a>,
+) -> Element<'a, Message> {
+    match pane.view_mode {
+        BrowserViewMode::Columns => column_browser_view(browser, pane),
+        BrowserViewMode::List => list_browser_view(browser, pane),
+    }
 }
 
 fn tab_split_overlay(width: f32, height: f32) -> Element<'static, Message> {
@@ -424,6 +437,43 @@ fn pane_drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>
 fn navigation_icon_button(icon: IconSymbol, message: Message) -> Button<'static, Message> {
     button(themed_icon(icon, IconTone::Normal, TOOLBAR_ICON_SIZE))
         .on_press(message)
+        .padding([6, 8])
+        .style(navigation_icon_button_style())
+}
+
+fn view_mode_buttons(pane: BrowserPaneView<'_>) -> Element<'static, Message> {
+    row![
+        view_mode_button(
+            pane.id,
+            pane.view_mode,
+            BrowserViewMode::Columns,
+            IconSymbol::Columns
+        ),
+        view_mode_button(
+            pane.id,
+            pane.view_mode,
+            BrowserViewMode::List,
+            IconSymbol::List
+        ),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn view_mode_button(
+    pane_id: BrowserPaneId,
+    current_mode: BrowserViewMode,
+    target_mode: BrowserViewMode,
+    icon: IconSymbol,
+) -> Button<'static, Message> {
+    let tone = if current_mode == target_mode {
+        IconTone::Selected
+    } else {
+        IconTone::Normal
+    };
+    button(themed_icon(icon, tone, VIEW_MODE_ICON_SIZE))
+        .on_press(Message::BrowserViewModeSelected(pane_id, target_mode))
         .padding([6, 8])
         .style(navigation_icon_button_style())
 }

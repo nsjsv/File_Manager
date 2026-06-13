@@ -22,6 +22,8 @@ const TAB_REORDER_SPACING: f32 = 6.0;
 const TAB_REORDER_MIN_SLOT_WIDTH: f32 = 48.0;
 
 mod folder_middle_click_split;
+#[cfg(test)]
+mod view_mode_tests;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TabBarReveal {
@@ -212,6 +214,7 @@ impl FileBrowser {
         tab.selection_anchor = self.selection_anchor.clone();
         tab.deepest_open_column_directory = self.deepest_open_column_directory.clone();
         tab.expanded_directories = self.expanded_directories.clone();
+        tab.view_mode = self.view_mode;
         tab.back_stack = self.back_stack.clone();
         tab.forward_stack = self.forward_stack.clone();
         self.sync_active_pane_state();
@@ -276,6 +279,7 @@ impl FileBrowser {
         self.selection_anchor = tab.selection_anchor;
         self.deepest_open_column_directory = tab.deepest_open_column_directory;
         self.expanded_directories = tab.expanded_directories;
+        self.view_mode = tab.view_mode;
         self.back_stack = tab.back_stack;
         self.forward_stack = tab.forward_stack;
         self.current_dir = tab.directory;
@@ -737,6 +741,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         selection_anchor: tab.selection_anchor.clone(),
         deepest_open_column_directory: tab.deepest_open_column_directory.clone(),
         expanded_directories: tab.expanded_directories.clone(),
+        view_mode: tab.view_mode,
         column_viewports: HashMap::new(),
         tabs: vec![tab.clone()],
         active_tab_id: tab.id,
@@ -774,6 +779,7 @@ pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.selection_anchor = tab.selection_anchor.clone();
     pane.deepest_open_column_directory = tab.deepest_open_column_directory.clone();
     pane.expanded_directories = tab.expanded_directories.clone();
+    pane.view_mode = tab.view_mode;
     pane.path_input = path_input_for_tab(tab);
     pane.path_suggestions.clear();
     pane.path_suggestion_selection = None;

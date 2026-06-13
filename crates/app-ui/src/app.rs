@@ -22,6 +22,7 @@ mod startup_index_setup;
 mod tabs;
 mod text_input_shortcuts;
 mod thumbnailing;
+mod view_modes;
 mod windows;
 
 pub(crate) use runtime::run;
@@ -55,12 +56,12 @@ use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory, FileDragState,
-    FilePropertiesState, Message, NavigationMode, OperationQueuePanelMode, PaneDragState,
-    PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarVisibility,
-    SearchIndexRuntime, SearchState, SelectionMarquee, SettingsCategory, SidebarBookmarkDragState,
-    SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState, TabDragState,
-    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    BrowserViewMode, ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory,
+    FileDragState, FilePropertiesState, Message, NavigationMode, OperationQueuePanelMode,
+    PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
+    ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee, SettingsCategory,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState,
+    TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -148,6 +149,7 @@ pub(crate) struct FileBrowser {
     pub(crate) selected_settings_category: SettingsCategory,
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
+    pub(crate) view_mode: BrowserViewMode,
     pub(crate) rename_input: String,
     pub(crate) is_loading: bool,
     pub(crate) error: Option<String>,
@@ -215,7 +217,9 @@ impl FileBrowser {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
-        let initial_tab = BrowserTab::directory(0, placeholder_dir.clone());
+        let initial_view_mode = user_config.browser_view_mode;
+        let mut initial_tab = BrowserTab::directory(0, placeholder_dir.clone());
+        initial_tab.view_mode = initial_view_mode;
         let initial_pane = BrowserPane {
             id: BrowserPaneId::PRIMARY,
             current_dir: placeholder_dir.clone(),
@@ -227,6 +231,7 @@ impl FileBrowser {
             selection_anchor: None,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
+            view_mode: initial_view_mode,
             column_viewports: HashMap::new(),
             tabs: vec![initial_tab.clone()],
             active_tab_id: initial_tab.id,
@@ -308,6 +313,7 @@ impl FileBrowser {
             selected_settings_category: SettingsCategory::General,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
+            view_mode: initial_view_mode,
             rename_input: String::new(),
             is_loading: true,
             error: None,
@@ -390,6 +396,7 @@ impl FileBrowser {
         if self.scrollbar_animation_is_active()
             || self.tab_bar_reveal_animation_is_active()
             || self.tab_animation_is_active()
+            || self.list_directory_animation_is_active()
             || self.sidebar_bookmark_motion_is_active()
         {
             subscriptions.push(
@@ -592,6 +599,19 @@ impl FileBrowser {
                 self.accept_thumbnail_refresh_request(pane_id, directory)
             }
             Message::ThumbnailBatchLoaded(outcomes) => self.accept_thumbnail_batch(outcomes),
+            Message::BrowserViewModeSelected(pane_id, view_mode) => {
+                self.select_browser_view_mode(pane_id, view_mode)
+            }
+            Message::ListDirectoryToggled(pane_id, path) => {
+                self.toggle_list_directory(pane_id, path)
+            }
+            Message::ListEntryClicked(pane_id, path) => {
+                self.activate_pane(pane_id);
+                if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
+                    return Task::none();
+                }
+                self.handle_list_entry_clicked(path)
+            }
             Message::ColumnEntryClicked(pane_id, path) => {
                 self.activate_pane(pane_id);
                 if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
@@ -912,10 +932,14 @@ impl FileBrowser {
                 self.advance_scrollbar_animation(),
                 self.advance_tab_bar_reveal_animation(),
                 self.advance_tab_animations(),
+                self.advance_list_directory_animations(),
                 self.advance_sidebar_bookmark_motion(),
             ]),
             Message::ColumnScrolled(pane_id, directory, offset_y, height) => {
                 self.handle_column_scrolled(pane_id, directory, offset_y, height)
+            }
+            Message::ListScrolled(pane_id, offset_y, height) => {
+                self.handle_list_scrolled(pane_id, offset_y, height)
             }
             Message::ColumnResizeStarted(pane_id, column_index) => {
                 self.activate_pane(pane_id);

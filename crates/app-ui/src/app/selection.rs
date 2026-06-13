@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use file_core::{is_supported_audio_path, is_supported_video_path, DirectoryEntry, FileKind};
+use file_core::{is_supported_audio_path, is_supported_video_path, FileKind};
 use iced::Task;
 
 use super::paths::{self, PasteTargetMode};
@@ -15,11 +15,11 @@ use crate::commands::{
     open_terminal_command, preview_command, start_audio_preview_command,
 };
 use crate::model::{
-    trash_location_path, AudioPreviewPlayback, BrowserPaneId, ColumnEntryBounds, ContextMenuState,
-    ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuState, FileDragPhase, FileDragState,
-    FileDragTarget, LastActivationClick, Message, NavigationMode, PreviewState,
-    PreviewWindowProfile, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
-    TransferConflictMode,
+    trash_location_path, AudioPreviewPlayback, BrowserPaneId, BrowserViewMode, ColumnEntryBounds,
+    ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuState,
+    FileDragPhase, FileDragState, FileDragTarget, LastActivationClick, Message, NavigationMode,
+    PreviewState, PreviewWindowProfile, SelectionMarquee, SelectionMarqueePhase,
+    SelectionMarqueeSource, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::shortcuts::FileSelectionDirection;
@@ -28,6 +28,12 @@ use crate::shortcuts::FileSelectionDirection;
 mod activation_tests;
 mod clipboard;
 mod conflict;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryClickActivation {
+    OpenColumn,
+    SelectOnly,
+}
 
 impl FileBrowser {
     pub(crate) fn is_path_selected(&self, path: &Path) -> bool {
@@ -44,6 +50,28 @@ impl FileBrowser {
 
     pub(super) fn handle_column_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
         let column_directories_snapshot = crate::three_column_view::column_directories(self);
+        self.handle_file_entry_clicked(
+            path,
+            EntryClickActivation::OpenColumn,
+            column_directories_snapshot,
+        )
+    }
+
+    pub(super) fn handle_list_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
+        let column_directories_snapshot = Vec::new();
+        self.handle_file_entry_clicked(
+            path,
+            EntryClickActivation::SelectOnly,
+            column_directories_snapshot,
+        )
+    }
+
+    fn handle_file_entry_clicked(
+        &mut self,
+        path: PathBuf,
+        activation: EntryClickActivation,
+        column_directories_snapshot: Vec<PathBuf>,
+    ) -> Task<Message> {
         let was_selected = self.is_path_selected(&path);
         let rename_command = self.commit_rename_if_active();
 
@@ -84,7 +112,9 @@ impl FileBrowser {
             } else {
                 self.select_path(path.clone());
             }
-            self.update_open_column_directory_for_entry(&path);
+            if activation == EntryClickActivation::OpenColumn {
+                self.update_open_column_directory_for_entry(&path);
+            }
             self.drag_selection_anchor = None;
             self.selection_marquee = None;
             self.start_file_drag(path.clone(), column_directories_snapshot);
@@ -106,7 +136,10 @@ impl FileBrowser {
         } else if has_selection_modifier {
             Task::none()
         } else {
-            self.open_column_for_directory(path)
+            match activation {
+                EntryClickActivation::OpenColumn => self.open_column_for_directory(path),
+                EntryClickActivation::SelectOnly => Task::none(),
+            }
         };
         Task::batch([
             rename_command,
@@ -658,15 +691,37 @@ impl FileBrowser {
         }
 
         match direction {
+            FileSelectionDirection::Up if self.view_mode == BrowserViewMode::List => {
+                self.move_file_selection_in_visible_list(SelectionStep::Previous)
+            }
+            FileSelectionDirection::Down if self.view_mode == BrowserViewMode::List => {
+                self.move_file_selection_in_visible_list(SelectionStep::Next)
+            }
             FileSelectionDirection::Up => {
                 self.move_file_selection_vertically(SelectionStep::Previous)
             }
             FileSelectionDirection::Down => {
                 self.move_file_selection_vertically(SelectionStep::Next)
             }
+            FileSelectionDirection::Left if self.view_mode == BrowserViewMode::List => {
+                self.collapse_selected_list_directory_or_select_parent()
+            }
+            FileSelectionDirection::Right if self.view_mode == BrowserViewMode::List => {
+                self.expand_selected_list_directory()
+            }
             FileSelectionDirection::Left => self.move_file_selection_to_parent_column(),
             FileSelectionDirection::Right => self.move_file_selection_to_child_column(),
         }
+    }
+
+    fn move_file_selection_in_visible_list(&mut self, step: SelectionStep) -> Task<Message> {
+        let paths = self.visible_entry_paths();
+        let Some(target) = stepped_selection_target(&paths, self.selected.as_deref(), step) else {
+            return Task::none();
+        };
+
+        self.select_path_from_keyboard(target);
+        self.schedule_thumbnail_refresh()
     }
 
     fn move_file_selection_vertically(&mut self, step: SelectionStep) -> Task<Message> {
@@ -806,7 +861,7 @@ impl FileBrowser {
             .unwrap_or_default()
     }
 
-    fn select_path_from_keyboard(&mut self, path: PathBuf) {
+    pub(super) fn select_path_from_keyboard(&mut self, path: PathBuf) {
         self.select_path(path.clone());
         self.selection_anchor = Some(path);
         self.drag_selection_anchor = None;
@@ -857,6 +912,7 @@ impl FileBrowser {
 
         if let Some(expanded) = self.expanded_directories.get_mut(&path) {
             expanded.is_expanded = true;
+            expanded.is_collapsing = false;
             expanded.animation_progress = 1.0;
             return self.focus_latest_column();
         }
@@ -867,6 +923,7 @@ impl FileBrowser {
                 entries: Vec::new(),
                 status: ExpandedDirectoryStatus::Loading,
                 is_expanded: true,
+                is_collapsing: false,
                 animation_progress: 1.0,
             },
         );
@@ -1083,27 +1140,7 @@ impl FileBrowser {
     }
 
     fn visible_entry_paths(&self) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        for entry in &self.entries {
-            self.push_visible_entry_paths(entry, &mut paths);
-        }
-        paths
-    }
-
-    fn push_visible_entry_paths(&self, entry: &DirectoryEntry, paths: &mut Vec<PathBuf>) {
-        paths.push(entry.path.clone());
-        let Some(expanded) = self
-            .expanded_directories
-            .get(&entry.path)
-            .filter(|expanded| expanded.is_expanded || expanded.animation_progress > 0.0)
-        else {
-            return;
-        };
-        if matches!(expanded.status, ExpandedDirectoryStatus::Loaded) {
-            for child in &expanded.entries {
-                self.push_visible_entry_paths(child, paths);
-            }
-        }
+        crate::visible_entries::visible_entry_paths(&self.entries, &self.expanded_directories)
     }
 
     fn focus_path(&mut self, path: PathBuf) {

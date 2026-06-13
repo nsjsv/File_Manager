@@ -6,7 +6,9 @@ use iced::{keyboard, Point};
 
 use crate::app::FileBrowser;
 use crate::config;
-use crate::model::{BrowserPaneId, ExpandedDirectory, ExpandedDirectoryStatus, FileDragPhase};
+use crate::model::{
+    BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryStatus, FileDragPhase,
+};
 use crate::shortcuts::FileSelectionDirection;
 
 fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
@@ -40,6 +42,7 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         entries,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
+        is_collapsing: false,
         animation_progress: 1.0,
     }
 }
@@ -117,6 +120,68 @@ fn plain_double_click_still_activates_directory() {
     assert!(browser.last_activation_click.is_none());
     assert_eq!(browser.back_stack, vec![PathBuf::from("/workspace")]);
     assert!(matches!(browser.is_trash_view, false));
+}
+
+#[test]
+fn list_single_click_selects_directory_without_expanding_or_opening_column() {
+    let directory = PathBuf::from("/workspace/project");
+    let child = PathBuf::from("/workspace/project/main.rs");
+    let mut browser = browser_with_entries(&[directory.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.expanded_directories.insert(
+        directory.clone(),
+        ExpandedDirectory {
+            entries: vec![test_entry(child, FileKind::File)],
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: false,
+            is_collapsing: false,
+            animation_progress: 0.0,
+        },
+    );
+
+    drop(browser.handle_list_entry_clicked(directory.clone()));
+
+    assert_eq!(browser.selected, Some(directory.clone()));
+    assert_eq!(browser.current_dir, PathBuf::from("/workspace"));
+    assert_eq!(browser.deepest_open_column_directory, None);
+    assert!(browser
+        .expanded_directories
+        .get(&directory)
+        .is_some_and(|expanded| !expanded.is_expanded));
+}
+
+#[test]
+fn list_double_click_activates_directory() {
+    let directory = PathBuf::from("/workspace/project");
+    let mut browser = browser_with_entries(&[directory.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+
+    drop(browser.handle_list_entry_clicked(directory.clone()));
+    drop(browser.handle_list_entry_clicked(directory.clone()));
+
+    assert_eq!(browser.current_dir, directory);
+    assert_eq!(browser.back_stack, vec![PathBuf::from("/workspace")]);
+}
+
+#[test]
+fn column_single_click_still_opens_child_column() {
+    let directory = PathBuf::from("/workspace/project");
+    let mut browser = browser_with_entries(&[directory.clone()]);
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+
+    drop(browser.handle_column_entry_clicked(directory.clone()));
+
+    assert_eq!(browser.current_dir, PathBuf::from("/workspace"));
+    assert_eq!(
+        browser.deepest_open_column_directory,
+        Some(directory.clone())
+    );
+    assert!(browser
+        .expanded_directories
+        .get(&directory)
+        .is_some_and(|expanded| expanded.is_expanded));
 }
 
 #[test]
@@ -201,4 +266,135 @@ fn right_arrow_focuses_first_child_after_directory_loads() {
     assert_eq!(browser.selected, Some(child));
     assert!(browser.pending_keyboard_column_focus.is_none());
     assert_eq!(browser.deepest_open_column_directory, Some(parent));
+}
+
+#[test]
+fn list_vertical_arrows_move_across_expanded_directory_levels() {
+    let parent = PathBuf::from("/workspace/project");
+    let child = PathBuf::from("/workspace/project/main.rs");
+    let sibling = PathBuf::from("/workspace/readme.txt");
+    let mut browser = browser_with_entries(&[parent.clone(), sibling.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![
+        test_entry(parent.clone(), FileKind::Directory),
+        test_entry(sibling.clone(), FileKind::File),
+    ];
+    browser.expanded_directories.insert(
+        parent.clone(),
+        loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
+    );
+    browser.select_path(parent.clone());
+
+    drop(browser.move_file_selection(FileSelectionDirection::Down));
+    assert_eq!(browser.selected, Some(child.clone()));
+
+    drop(browser.move_file_selection(FileSelectionDirection::Down));
+    assert_eq!(browser.selected, Some(sibling));
+
+    drop(browser.move_file_selection(FileSelectionDirection::Up));
+    assert_eq!(browser.selected, Some(child));
+}
+
+#[test]
+fn list_right_arrow_expands_then_focuses_first_child() {
+    let parent = PathBuf::from("/workspace/project");
+    let child = PathBuf::from("/workspace/project/main.rs");
+    let mut browser = browser_with_entries(&[parent.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.expanded_directories.insert(
+        parent.clone(),
+        ExpandedDirectory {
+            entries: vec![test_entry(child.clone(), FileKind::File)],
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: false,
+            is_collapsing: false,
+            animation_progress: 0.0,
+        },
+    );
+    browser.select_path(parent.clone());
+
+    drop(browser.move_file_selection(FileSelectionDirection::Right));
+
+    assert_eq!(browser.selected, Some(parent.clone()));
+    assert!(browser
+        .expanded_directories
+        .get(&parent)
+        .is_some_and(|expanded| expanded.is_expanded));
+
+    drop(browser.move_file_selection(FileSelectionDirection::Right));
+
+    assert_eq!(browser.selected, Some(child));
+}
+
+#[test]
+fn list_left_arrow_collapses_then_focuses_visible_parent() {
+    let parent = PathBuf::from("/workspace/project");
+    let child = PathBuf::from("/workspace/project/src");
+    let grandchild = PathBuf::from("/workspace/project/src/main.rs");
+    let mut browser = browser_with_entries(&[parent.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.expanded_directories.insert(
+        parent.clone(),
+        loaded_directory(vec![test_entry(child.clone(), FileKind::Directory)]),
+    );
+    browser.expanded_directories.insert(
+        child.clone(),
+        loaded_directory(vec![test_entry(grandchild, FileKind::File)]),
+    );
+    browser.select_path(child.clone());
+
+    drop(browser.move_file_selection(FileSelectionDirection::Left));
+
+    assert_eq!(browser.selected, Some(child.clone()));
+    assert!(browser
+        .expanded_directories
+        .get(&child)
+        .is_some_and(|expanded| expanded.is_expanded && expanded.is_collapsing));
+
+    for _ in 0..8 {
+        drop(browser.advance_list_directory_animations());
+    }
+
+    assert!(browser
+        .expanded_directories
+        .get(&child)
+        .is_some_and(|expanded| !expanded.is_expanded && !expanded.is_collapsing));
+
+    drop(browser.move_file_selection(FileSelectionDirection::Left));
+
+    assert_eq!(browser.selected, Some(parent));
+}
+
+#[test]
+fn list_select_all_and_range_use_the_same_visible_rows() {
+    let parent = PathBuf::from("/workspace/project");
+    let child = PathBuf::from("/workspace/project/main.rs");
+    let sibling = PathBuf::from("/workspace/readme.txt");
+    let mut browser = browser_with_entries(&[parent.clone(), sibling.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![
+        test_entry(parent.clone(), FileKind::Directory),
+        test_entry(sibling.clone(), FileKind::File),
+    ];
+    browser.expanded_directories.insert(
+        parent.clone(),
+        loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
+    );
+
+    drop(browser.select_all_visible());
+
+    assert_eq!(
+        browser.selected_paths,
+        HashSet::from([parent.clone(), child.clone(), sibling.clone()])
+    );
+
+    browser.keyboard_modifiers = keyboard::Modifiers::SHIFT;
+    drop(browser.handle_column_entry_clicked(sibling));
+
+    assert_eq!(
+        browser.selected_paths,
+        HashSet::from([parent, child, PathBuf::from("/workspace/readme.txt")])
+    );
 }

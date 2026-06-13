@@ -13,6 +13,7 @@ pub(crate) enum IconSymbol {
     Bookmark,
     ChevronRight,
     Close,
+    Columns,
     Copy,
     Download,
     File,
@@ -24,6 +25,7 @@ pub(crate) enum IconSymbol {
     HardDrive,
     House,
     Link,
+    List,
     Monitor,
     Music,
     Pause,
@@ -146,6 +148,7 @@ impl IconSymbol {
             Self::Bookmark => include_bytes!("../assets/icons/lucide/bookmark.svg"),
             Self::ChevronRight => CHEVRON_RIGHT_ICON,
             Self::Close => CLOSE_ICON,
+            Self::Columns => COLUMNS_ICON,
             Self::Copy => include_bytes!("../assets/icons/lucide/copy.svg"),
             Self::Download => include_bytes!("../assets/icons/lucide/download.svg"),
             Self::File => include_bytes!("../assets/icons/lucide/file.svg"),
@@ -157,6 +160,7 @@ impl IconSymbol {
             Self::HardDrive => HARD_DRIVE_ICON,
             Self::House => include_bytes!("../assets/icons/lucide/house.svg"),
             Self::Link => include_bytes!("../assets/icons/lucide/link.svg"),
+            Self::List => LIST_ICON,
             Self::Monitor => include_bytes!("../assets/icons/lucide/monitor.svg"),
             Self::Music => include_bytes!("../assets/icons/lucide/music.svg"),
             Self::Pause => PAUSE_ICON,
@@ -175,7 +179,9 @@ impl IconSymbol {
 const CHEVRON_RIGHT_ICON: &[u8] = include_bytes!("../assets/icons/lucide/chevron-right.svg");
 const CHEVRON_RIGHT_SVG: &str = include_str!("../assets/icons/lucide/chevron-right.svg");
 const CLOSE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>"#;
+const COLUMNS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>"#;
 const HARD_DRIVE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg>"#;
+const LIST_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>"#;
 const PAUSE_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>"#;
 const PLAY_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>"#;
 const SETTINGS_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.32-1.915"/><circle cx="12" cy="12" r="3"/></svg>"#;

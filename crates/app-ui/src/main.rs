@@ -5,9 +5,12 @@ mod audio_preview;
 mod column_entry_bounds;
 mod commands;
 mod config;
+mod file_entry_presentation;
+mod file_entry_view;
 mod floating_surface;
 mod formatting;
 mod icons;
+mod list_view;
 mod measured_middle_ellipsized_text;
 mod model;
 mod operation_history;
@@ -27,6 +30,7 @@ mod thumbnail_cache;
 mod typography;
 mod video_preview;
 mod view;
+mod visible_entries;
 
 struct StartupRenderingVariable {
     key: &'static str,

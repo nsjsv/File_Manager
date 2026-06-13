@@ -6,6 +6,7 @@ mod container {
     pub type Appearance = Style;
 }
 
+use crate::file_entry_presentation::SelectionRunPosition;
 use crate::model::ScrollbarVisibility;
 
 pub(crate) fn app_content_style(theme: &Theme) -> container::Appearance {
@@ -21,6 +22,16 @@ pub(crate) fn app_content_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn selected_row_style(theme: &Theme) -> container::Appearance {
+    selected_row_style_for_run(SelectionRunPosition::Single)(theme)
+}
+
+pub(crate) fn selected_row_style_for_run(
+    position: SelectionRunPosition,
+) -> impl Fn(&Theme) -> container::Appearance + Clone {
+    move |theme| selected_row_appearance(theme, position)
+}
+
+fn selected_row_appearance(theme: &Theme, position: SelectionRunPosition) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
             Color::from_rgb8(54, 78, 116)
@@ -33,10 +44,19 @@ pub(crate) fn selected_row_style(theme: &Theme) -> container::Appearance {
             Color::from_rgb8(24, 42, 72)
         }),
         border: Border {
-            radius: 8.0.into(),
+            radius: selected_run_radius(position),
             ..Border::default()
         },
         ..container::Appearance::default()
+    }
+}
+
+fn selected_run_radius(position: SelectionRunPosition) -> iced::border::Radius {
+    match position {
+        SelectionRunPosition::Single => iced::border::Radius::new(8.0),
+        SelectionRunPosition::First => iced::border::Radius::default().top(8.0),
+        SelectionRunPosition::Middle => iced::border::Radius::default(),
+        SelectionRunPosition::Last => iced::border::Radius::default().bottom(8.0),
     }
 }
 
@@ -317,6 +337,62 @@ pub(crate) fn column_panel_style(theme: &Theme) -> container::Appearance {
         })),
         text_color: Some(base_text_color(theme)),
         ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn list_panel_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgb8(18, 24, 34)
+        } else {
+            Color::from_rgb8(250, 252, 255)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            ..Border::default()
+        },
+        ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn list_header_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(if is_dark_theme(theme) {
+            Color::from_rgba8(27, 35, 48, 0.88)
+        } else {
+            Color::from_rgba8(239, 243, 249, 0.92)
+        })),
+        text_color: Some(base_text_color(theme)),
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            ..Border::default()
+        },
+        ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn list_row_style(
+    depth: usize,
+    row_index: usize,
+) -> impl Fn(&Theme) -> container::Appearance + Clone {
+    move |theme| {
+        let depth_tint = depth.min(4) as f32;
+        let stripe_tint = if row_index % 2 == 0 { 0.0 } else { 1.0 };
+        let background = if is_dark_theme(theme) {
+            let base = 20.0 + depth_tint * 3.0 + stripe_tint * 4.0;
+            Color::from_rgb8(base as u8, (base + 7.0) as u8, (base + 18.0) as u8)
+        } else {
+            let base = 255.0 - depth_tint * 5.0 - stripe_tint * 6.0;
+            Color::from_rgb8(base as u8, (base + 1.0).min(255.0) as u8, 255)
+        };
+        container::Appearance {
+            background: Some(Background::Color(background)),
+            text_color: Some(base_text_color(theme)),
+            ..container::Appearance::default()
+        }
     }
 }
 
