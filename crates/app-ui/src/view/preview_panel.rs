@@ -2,35 +2,32 @@ use std::path::Path;
 use std::time::Duration;
 
 use iced::widget::{
-    button, column, container, image, mouse_area, row, scrollable, slider, text_editor, Button,
-    Column, Space,
+    button, column, container, image, mouse_area, row, scrollable, slider, Button, Column, Space,
 };
-use iced::{Alignment, Element, Font, Length};
+use iced::{Alignment, Element, Length};
 
 use crate::appearance::{
     app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
-    navigation_icon_button_style, preview_window_panel_style, text_preview_editor_style,
+    navigation_icon_button_style, preview_window_panel_style,
 };
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, MarkdownPreviewMode, Message, PreviewContent,
-    PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarVisibility,
-    TextPreviewDocument, TextPreviewFormat, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
+    PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarVisibility,
+    TextPreviewDocument, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
 };
 use crate::typography::readable_text;
 
 use super::{
-    auxiliary_window_message, icon_tone_style, markdown_preview::markdown_preview_body,
-    themed_icon, IconTone,
+    auxiliary_window_message, icon_tone_style, text_preview_panel::text_preview_panel, themed_icon,
+    IconTone,
 };
 
 const PREVIEW_PANEL_PADDING_RESERVED_HEIGHT: f32 = 28.0;
 const PREVIEW_MIN_SCROLL_HEIGHT: f32 = 160.0;
 const PREVIEW_ICON_SIZE: f32 = 16.0;
 const PREVIEW_ENTRY_NAME_MAX_CHARS: usize = 48;
-const MARKDOWN_MODE_SWITCH_RESERVED_HEIGHT: f32 = 40.0;
-const MARKDOWN_MIN_BODY_SCROLL_HEIGHT: f32 = 120.0;
 const PREVIEW_TREE_INDENT_WIDTH: f32 = 18.0;
 const PREVIEW_TREE_TOGGLE_WIDTH: f32 = 16.0;
 const PREVIEW_TREE_TOGGLE_ROTATION_DEGREES: f32 = 90.0;
@@ -297,95 +294,6 @@ fn preview_tree_status_row(entry: &PreviewTreeEntry, message: String) -> Element
         .padding([3, 6])
         .width(Length::Fill)
         .into()
-}
-
-fn text_preview_panel<'a>(
-    rendered: &'a str,
-    format: TextPreviewFormat,
-    document: Option<&'a TextPreviewDocument>,
-    scroll_height: f32,
-    scrollbar_visibility: ScrollbarVisibility,
-) -> Column<'a, Message> {
-    let body: Element<'_, Message> = match format {
-        TextPreviewFormat::Plain => plain_text_preview_body(document, scroll_height),
-        TextPreviewFormat::Markdown => {
-            markdown_text_preview_body(rendered, document, scroll_height, scrollbar_visibility)
-        }
-    };
-
-    column![body]
-}
-
-fn plain_text_preview_body<'a>(
-    document: Option<&'a TextPreviewDocument>,
-    scroll_height: f32,
-) -> Element<'a, Message> {
-    if let Some(document) = document {
-        text_editor(document.content())
-            .placeholder("(empty file)")
-            .height(Length::Fixed(scroll_height))
-            .font(Font::MONOSPACE)
-            .padding(8)
-            .style(text_preview_editor_style())
-            .on_action(Message::TextPreviewAction)
-            .into()
-    } else {
-        readable_text("Text preview is not ready").size(14).into()
-    }
-}
-
-fn markdown_text_preview_body<'a>(
-    rendered: &'a str,
-    document: Option<&'a TextPreviewDocument>,
-    scroll_height: f32,
-    scrollbar_visibility: ScrollbarVisibility,
-) -> Element<'a, Message> {
-    let Some(document) = document else {
-        return readable_text("Text preview is not ready").size(14).into();
-    };
-    let mode = document.markdown_preview_mode();
-    let body_height =
-        (scroll_height - MARKDOWN_MODE_SWITCH_RESERVED_HEIGHT).max(MARKDOWN_MIN_BODY_SCROLL_HEIGHT);
-    let body = match mode {
-        MarkdownPreviewMode::Rendered => {
-            markdown_preview_body(rendered, body_height, scrollbar_visibility)
-        }
-        MarkdownPreviewMode::Raw => plain_text_preview_body(Some(document), body_height),
-    };
-
-    column![markdown_preview_mode_switch(mode), body]
-        .spacing(8)
-        .into()
-}
-
-fn markdown_preview_mode_switch(mode: MarkdownPreviewMode) -> Element<'static, Message> {
-    row![
-        markdown_preview_mode_button("Rendered", MarkdownPreviewMode::Rendered, mode),
-        markdown_preview_mode_button("Raw", MarkdownPreviewMode::Raw, mode),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .into()
-}
-
-fn markdown_preview_mode_button(
-    label: &'static str,
-    mode: MarkdownPreviewMode,
-    selected_mode: MarkdownPreviewMode,
-) -> Button<'static, Message> {
-    let label = if mode == selected_mode {
-        format!("[{label}]")
-    } else {
-        label.to_owned()
-    };
-    let button = button(readable_text(label).size(12))
-        .padding([4, 8])
-        .style(navigation_icon_button_style());
-    if mode == selected_mode {
-        button
-    } else {
-        button.on_press(Message::MarkdownPreviewModeSelected(mode))
-    }
 }
 
 fn image_preview_panel(

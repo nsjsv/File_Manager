@@ -38,7 +38,6 @@ impl FileBrowser {
                         path,
                         rendered,
                         format,
-                        ..
                     } => {
                         self.clear_audio_preview();
                         self.clear_video_preview();

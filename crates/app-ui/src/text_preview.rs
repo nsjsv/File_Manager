@@ -17,14 +17,20 @@ pub(crate) enum MarkdownPreviewMode {
 pub(crate) struct TextPreviewDocument {
     path: PathBuf,
     content: text_editor::Content,
+    line_numbers: text_editor::Content,
     markdown_preview_mode: MarkdownPreviewMode,
 }
 
 impl TextPreviewDocument {
     pub(crate) fn new(path: PathBuf, content: &str, format: TextPreviewFormat) -> Self {
+        let content_state = text_editor::Content::with_text(content);
+        let line_numbers =
+            text_editor::Content::with_text(&line_number_text(content_state.line_count()));
+
         Self {
             path,
-            content: text_editor::Content::with_text(content),
+            content: content_state,
+            line_numbers,
             markdown_preview_mode: initial_markdown_preview_mode(format),
         }
     }
@@ -37,6 +43,14 @@ impl TextPreviewDocument {
         &self.content
     }
 
+    pub(crate) fn line_numbers(&self) -> &text_editor::Content {
+        &self.line_numbers
+    }
+
+    pub(crate) fn line_number_digit_count(&self) -> usize {
+        self.content.line_count().max(1).to_string().len()
+    }
+
     pub(crate) fn markdown_preview_mode(&self) -> MarkdownPreviewMode {
         self.markdown_preview_mode
     }
@@ -46,12 +60,35 @@ impl TextPreviewDocument {
     }
 
     pub(crate) fn perform(&mut self, action: text_editor::Action) {
+        if let Some(line_number_action) = line_number_sync_action(&action) {
+            self.line_numbers.perform(line_number_action);
+        }
+
         if action.is_edit() {
             return;
         }
 
         self.content.perform(action);
     }
+}
+
+fn line_number_sync_action(action: &text_editor::Action) -> Option<text_editor::Action> {
+    match action {
+        text_editor::Action::Scroll { .. } => Some(action.clone()),
+        text_editor::Action::Move(motion) | text_editor::Action::Select(motion) => {
+            Some(text_editor::Action::Move(*motion))
+        }
+        _ => None,
+    }
+}
+
+fn line_number_text(line_count: usize) -> String {
+    let line_count = line_count.max(1);
+    let digit_count = line_count.to_string().len();
+    (1..=line_count)
+        .map(|line_number| format!("{line_number:>digit_count$}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn initial_markdown_preview_mode(format: TextPreviewFormat) -> MarkdownPreviewMode {
@@ -93,6 +130,7 @@ mod tests {
             TextPreviewDocument::new(PathBuf::from("note.txt"), content, TextPreviewFormat::Plain);
 
         assert_eq!(document.content().text(), content);
+        assert_eq!(document.line_numbers().text(), "1\n2\n3");
     }
 
     #[test]
@@ -101,6 +139,7 @@ mod tests {
             TextPreviewDocument::new(PathBuf::from("empty.txt"), "", TextPreviewFormat::Plain);
 
         assert_eq!(document.content().text(), "");
+        assert_eq!(document.line_numbers().text(), "1");
     }
 
     #[test]
@@ -122,5 +161,13 @@ mod tests {
 
         assert_eq!(format, TextPreviewFormat::Markdown);
         assert_eq!(rendered, markdown);
+    }
+
+    #[test]
+    fn line_number_text_uses_independent_right_aligned_gutter_content() {
+        assert_eq!(
+            line_number_text(12),
+            " 1\n 2\n 3\n 4\n 5\n 6\n 7\n 8\n 9\n10\n11\n12"
+        );
     }
 }

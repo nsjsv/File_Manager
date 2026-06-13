@@ -10,6 +10,7 @@ mod shortcut_settings;
 mod sidebar_panel;
 mod startup_index_setup;
 mod tab_motion;
+mod text_preview_panel;
 mod toggle_switch;
 
 pub(crate) use preview_panel::view_preview_window;

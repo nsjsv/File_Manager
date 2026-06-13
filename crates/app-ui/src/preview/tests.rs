@@ -141,6 +141,78 @@ async fn load_preview_renders_markdown_text_preview() {
     assert_eq!(rendered, "# Title\n\nHello **world**.\n");
 }
 
+#[tokio::test]
+async fn load_preview_reads_text_beyond_first_100_lines() {
+    let temp_dir = tempdir().expect("temp dir");
+    let text_path = temp_dir.path().join("large.txt");
+    let content = numbered_line_range(0, 150);
+    std::fs::write(&text_path, &content).expect("write text file");
+
+    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
+        .await
+        .expect("text preview");
+
+    let PreviewContent::Text { rendered, .. } = preview_content else {
+        panic!("expected text preview");
+    };
+    assert_eq!(rendered, content);
+}
+
+#[tokio::test]
+async fn load_preview_reads_ten_thousand_numbered_lines() {
+    let temp_dir = tempdir().expect("temp dir");
+    let text_path = temp_dir.path().join("ten-thousand-lines.txt");
+    let content = numbered_padded_line_range(0, 10_000, 96);
+    std::fs::write(&text_path, &content).expect("write text file");
+
+    assert!(content.len() > 256 * 1024);
+
+    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
+        .await
+        .expect("text preview");
+
+    let PreviewContent::Text { rendered, .. } = preview_content else {
+        panic!("expected text preview");
+    };
+    assert_eq!(rendered, content);
+    assert!(rendered.contains("line 9999: "));
+}
+
+#[tokio::test]
+async fn load_preview_limits_long_text_line_bytes() {
+    let temp_dir = tempdir().expect("temp dir");
+    let text_path = temp_dir.path().join("single-line.txt");
+    let content = "a".repeat(PREVIEW_TEXT_LIMIT + 32);
+    std::fs::write(&text_path, content).expect("write text file");
+
+    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
+        .await
+        .expect("text preview");
+
+    let PreviewContent::Text { rendered, .. } = preview_content else {
+        panic!("expected text preview");
+    };
+    assert_eq!(rendered.len(), PREVIEW_TEXT_LIMIT);
+}
+
+#[tokio::test]
+async fn load_preview_truncates_long_text_on_utf8_boundary() {
+    let temp_dir = tempdir().expect("temp dir");
+    let text_path = temp_dir.path().join("unicode.txt");
+    let content = "€".repeat(PREVIEW_TEXT_LIMIT);
+    std::fs::write(&text_path, content).expect("write text file");
+
+    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
+        .await
+        .expect("text preview");
+
+    let PreviewContent::Text { rendered, .. } = preview_content else {
+        panic!("expected text preview");
+    };
+    assert_eq!(rendered.as_bytes().len(), PREVIEW_TEXT_LIMIT - 1);
+    assert!(rendered.is_char_boundary(rendered.len()));
+}
+
 #[test]
 fn parse_seven_zip_listing_reads_directory_markers() {
     let members = parse_seven_zip_listing(
@@ -170,6 +242,23 @@ Attributes = A_ -rw-r--r--
     assert_eq!(members[1].kind, FileKind::File);
     assert_eq!(members[2].path, "docs\\guide.md");
     assert_eq!(members[2].kind, FileKind::File);
+}
+
+fn numbered_line_range(start: usize, end: usize) -> String {
+    let mut content = String::new();
+    for index in start..end {
+        content.push_str(&format!("line {index}\n"));
+    }
+    content
+}
+
+fn numbered_padded_line_range(start: usize, end: usize, padding: usize) -> String {
+    let filler = "x".repeat(padding);
+    let mut content = String::new();
+    for index in start..end {
+        content.push_str(&format!("line {index}: {filler}\n"));
+    }
+    content
 }
 
 fn write_zip_archive(path: &Path) {
