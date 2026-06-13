@@ -142,6 +142,7 @@ impl FileBrowser {
         self.terminal_emulator = user_config.terminal_emulator;
         self.rendering_gpu_preference = user_config.rendering_gpu_preference;
         self.options.include_hidden = user_config.show_hidden_files;
+        self.view_mode = user_config.browser_view_mode;
         self.user_config = user_config;
     }
 }

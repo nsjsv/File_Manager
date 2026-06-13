@@ -375,22 +375,29 @@ pub(crate) fn list_header_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn list_row_style(
-    depth: usize,
+    _depth: usize,
     row_index: usize,
 ) -> impl Fn(&Theme) -> container::Appearance + Clone {
     move |theme| {
-        let depth_tint = depth.min(4) as f32;
-        let stripe_tint = if row_index % 2 == 0 { 0.0 } else { 1.0 };
+        let is_alternate_row = row_index % 2 == 1;
         let background = if is_dark_theme(theme) {
-            let base = 20.0 + depth_tint * 3.0 + stripe_tint * 4.0;
-            Color::from_rgb8(base as u8, (base + 7.0) as u8, (base + 18.0) as u8)
+            if is_alternate_row {
+                Color::from_rgb8(25, 33, 45)
+            } else {
+                Color::from_rgb8(18, 24, 34)
+            }
+        } else if is_alternate_row {
+            Color::from_rgb8(242, 246, 252)
         } else {
-            let base = 255.0 - depth_tint * 5.0 - stripe_tint * 6.0;
-            Color::from_rgb8(base as u8, (base + 1.0).min(255.0) as u8, 255)
+            Color::from_rgb8(250, 252, 255)
         };
         container::Appearance {
             background: Some(Background::Color(background)),
             text_color: Some(base_text_color(theme)),
+            border: Border {
+                radius: if is_alternate_row { 7.0 } else { 0.0 }.into(),
+                ..Border::default()
+            },
             ..container::Appearance::default()
         }
     }

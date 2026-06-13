@@ -20,11 +20,11 @@ use crate::view::rename_input_id;
 
 const LIST_ROW_TEXT_SIZE: u32 = 15;
 const LIST_HEADER_TEXT_SIZE: u32 = 12;
-const LIST_CONTENT_PADDING: [u16; 2] = [6, 8];
-const LIST_ROW_HEIGHT: f32 = 54.0;
-const LIST_ROW_PADDING: [u16; 2] = [0, 10];
-const LIST_HEADER_PADDING: [u16; 2] = [5, 8];
-const LIST_ROW_SPACING: u32 = 8;
+const LIST_CONTENT_PADDING: [u16; 2] = [4, 6];
+const LIST_ROW_HEIGHT: f32 = 46.0;
+const LIST_ROW_PADDING: [u16; 2] = [0, 8];
+const LIST_HEADER_PADDING: [u16; 2] = [4, 8];
+const LIST_ROW_SPACING: u32 = 6;
 const LIST_INDENT_WIDTH: f32 = 18.0;
 const LIST_TOGGLE_WIDTH: f32 = 18.0;
 const LIST_TOGGLE_ICON_SIZE: f32 = 14.0;

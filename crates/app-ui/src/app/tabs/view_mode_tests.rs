@@ -7,7 +7,7 @@ use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode, ExpandedDirectory,
-    ExpandedDirectoryStatus, SplitAxis,
+    ExpandedDirectoryStatus, SplitAxis, StartupEnvironment,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -74,6 +74,29 @@ fn new_browser_uses_configured_default_view_mode() {
         .tabs
         .iter()
         .all(|tab| tab.view_mode == BrowserViewMode::List));
+    assert!(browser
+        .pane_by_id(BrowserPaneId::PRIMARY)
+        .is_some_and(|pane| pane.view_mode == BrowserViewMode::List));
+}
+
+#[test]
+fn loaded_user_config_updates_startup_view_mode() {
+    let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+    let mut user_config = config::default_user_config();
+    user_config.browser_view_mode = BrowserViewMode::List;
+
+    drop(browser.accept_startup_environment(StartupEnvironment {
+        home: PathBuf::from("/home/user"),
+        user_config,
+        state_database_path: PathBuf::from("/tmp/state.sqlite"),
+    }));
+
+    assert_eq!(browser.view_mode, BrowserViewMode::List);
+    assert!(browser
+        .tabs
+        .iter()
+        .find(|tab| tab.id == browser.active_tab_id)
+        .is_some_and(|tab| tab.view_mode == BrowserViewMode::List));
     assert!(browser
         .pane_by_id(BrowserPaneId::PRIMARY)
         .is_some_and(|pane| pane.view_mode == BrowserViewMode::List));
