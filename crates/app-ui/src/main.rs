@@ -18,6 +18,7 @@ mod operation_queue;
 mod operation_queue_display;
 mod operation_queue_view;
 mod preview;
+mod runtime_logging;
 mod selection_marquee;
 mod shortcuts;
 mod sidebar;
@@ -41,6 +42,7 @@ fn main() -> iced::Result {
     let startup_rendering_variables = startup_rendering_variables();
     restart_with_startup_rendering_environment(&startup_rendering_variables);
     apply_startup_rendering_environment(&startup_rendering_variables);
+    runtime_logging::init_from_env();
     startup_trace::init_from_env();
     startup_trace::mark("main_entered");
     app::run()

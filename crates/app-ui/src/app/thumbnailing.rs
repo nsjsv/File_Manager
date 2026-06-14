@@ -87,16 +87,34 @@ impl FileBrowser {
     ) -> Task<Message> {
         let max_edge = self.preview_thumbnail_edge();
         let Some(request) = request_for_entry(&entry, max_edge) else {
+            tracing::debug!(
+                target: "app_ui::preview",
+                path = ?entry.path,
+                max_edge,
+                "preview thumbnail request skipped"
+            );
             return Task::none();
         };
 
         if let Some(ready) = self.thumbnail_cache.ready_for_request(&request).cloned() {
+            tracing::debug!(
+                target: "app_ui::preview",
+                path = ?entry.path,
+                max_edge,
+                "preview thumbnail ready from cache"
+            );
             self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
                 entry.path, ready,
             )));
             return Task::none();
         }
 
+        tracing::debug!(
+            target: "app_ui::preview",
+            path = ?entry.path,
+            max_edge,
+            "preview thumbnail queued"
+        );
         self.thumbnail_cache.enqueue_request(
             request,
             ThumbnailPurpose::Preview,
@@ -116,6 +134,13 @@ impl FileBrowser {
         };
         let desired_edge = self.preview_thumbnail_edge();
         if desired_edge <= max_edge + PREVIEW_RESIZE_EXTRA_PIXELS {
+            tracing::debug!(
+                target: "app_ui::preview",
+                path = ?path,
+                current_max_edge = max_edge,
+                desired_edge,
+                "preview thumbnail refresh skipped"
+            );
             return Task::none();
         }
 
@@ -147,6 +172,13 @@ impl FileBrowser {
                 return self.open_image_preview_error_window();
             }
         };
+        tracing::info!(
+            target: "app_ui::preview",
+            path = ?path,
+            width,
+            height,
+            "image preview dimensions accepted"
+        );
 
         let Some(entry) = self.entry_for_path(&path).cloned() else {
             self.preview = Some(PreviewState::Error(
@@ -172,6 +204,16 @@ impl FileBrowser {
 
             match outcome.result {
                 Ok(thumbnail) => {
+                    tracing::debug!(
+                        target: "app_ui::thumbnail",
+                        source = ?thumbnail.source,
+                        output = ?thumbnail.output,
+                        purpose = ?outcome.work.purpose,
+                        width = thumbnail.width,
+                        height = thumbnail.height,
+                        cache_hit = thumbnail.cache_hit,
+                        "thumbnail batch item loaded"
+                    );
                     if !self.is_current_thumbnail_request(&outcome.work.request) {
                         continue;
                     }
@@ -188,6 +230,13 @@ impl FileBrowser {
                     }
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        target: "app_ui::thumbnail",
+                        source = ?outcome.work.request.source,
+                        purpose = ?outcome.work.purpose,
+                        error = %error,
+                        "thumbnail batch item failed"
+                    );
                     self.thumbnail_cache.mark_failure(key);
                     if outcome.work.purpose == ThumbnailPurpose::Preview
                         && self.is_active_preview_loading(&outcome.work.request.source)
@@ -209,6 +258,11 @@ impl FileBrowser {
         if works.is_empty() {
             return Task::none();
         }
+        tracing::debug!(
+            target: "app_ui::thumbnail",
+            count = works.len(),
+            "thumbnail batch scheduled"
+        );
         thumbnail_batch_command(self.thumbnail_cache.cache_dir(), works)
     }
 
@@ -494,12 +548,26 @@ mod tests {
     }
 
     #[test]
+    fn inactive_pane_thumbnail_range_schedules_svg_request() {
+        let (browser, inactive_id, inactive_dir, image_entry) =
+            browser_with_inactive_pane_image("/inactive/vector.svg");
+
+        let requests = browser
+            .thumbnail_requests_for_pane_directory_range(inactive_id, inactive_dir.as_path());
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source, image_entry.path);
+    }
+
+    #[test]
     fn list_scrolled_schedules_visible_list_thumbnail_requests() {
         let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
         browser.view_mode = BrowserViewMode::List;
-        browser.entries = (0..3)
-            .map(|index| image_entry(&format!("/workspace/photo-{index}.png")))
-            .collect();
+        browser.entries = vec![
+            image_entry("/workspace/photo-0.png"),
+            image_entry("/workspace/vector.svg"),
+            image_entry("/workspace/photo-2.png"),
+        ];
 
         browser.schedule_visible_list_thumbnail_range_for_pane(
             BrowserPaneId::PRIMARY,
@@ -517,14 +585,42 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert!(queued_sources.contains(&PathBuf::from("/workspace/photo-0.png")));
-        assert!(queued_sources.contains(&PathBuf::from("/workspace/photo-1.png")));
+        assert!(queued_sources.contains(&PathBuf::from("/workspace/vector.svg")));
+    }
+
+    #[test]
+    fn preview_thumbnail_refresh_skips_same_edge_window_resize() {
+        let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+        let image_entry = image_entry("/workspace/vector.svg");
+        browser.entries = vec![image_entry.clone()];
+        browser.preview_size = crate::model::PreviewSize {
+            width: 640.0,
+            height: 480.0,
+        };
+        browser.preview = Some(PreviewState::Ready(PreviewContent::Image {
+            path: image_entry.path.clone(),
+            handle: iced::widget::image::Handle::from_path("/tmp/vector-thumb.png"),
+            width: 320,
+            height: 240,
+            max_edge: 640,
+        }));
+
+        let command = browser.refresh_preview_thumbnail_for_size();
+
+        assert_eq!(command.units(), 0);
     }
 
     fn browser_with_inactive_image_pane() -> (FileBrowser, BrowserPaneId, PathBuf, DirectoryEntry) {
+        browser_with_inactive_pane_image("/inactive/photo.png")
+    }
+
+    fn browser_with_inactive_pane_image(
+        image_path: &str,
+    ) -> (FileBrowser, BrowserPaneId, PathBuf, DirectoryEntry) {
         let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
         let inactive_id = BrowserPaneId(1);
         let inactive_dir = PathBuf::from("/inactive");
-        let image_entry = image_entry("/inactive/photo.png");
+        let image_entry = image_entry(image_path);
         let tab = BrowserTab::directory(1, inactive_dir.clone());
 
         browser.panes.push(BrowserPane {

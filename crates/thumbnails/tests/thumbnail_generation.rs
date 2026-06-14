@@ -1,0 +1,180 @@
+use std::path::Path;
+
+use thumbnails::{
+    generate_image_thumbnail, is_supported_thumbnail_path, is_supported_video_path,
+    load_image_dimensions, load_or_generate_image_thumbnail, ThumbnailOptions, ThumbnailRequest,
+    ThumbnailSourceMetadata,
+};
+
+#[tokio::test]
+async fn generate_image_thumbnail_writes_small_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.png");
+    let output = dir.path().join("cache/thumb.png");
+    let image = image::RgbImage::new(64, 32);
+    image.save(&source).unwrap();
+
+    let thumbnail = generate_image_thumbnail(&source, &output, ThumbnailOptions { max_edge: 16 })
+        .await
+        .unwrap();
+
+    assert_eq!(thumbnail.source, source);
+    assert_eq!(thumbnail.output, output);
+    assert!(thumbnail.width <= 16);
+    assert!(thumbnail.height <= 16);
+    assert!(thumbnail.output.exists());
+}
+
+#[tokio::test]
+async fn load_or_generate_image_thumbnail_reuses_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.png");
+    let cache_dir = dir.path().join("cache");
+    let image = image::RgbImage::new(64, 32);
+    image.save(&source).unwrap();
+    let request = thumbnail_request(&source, 16);
+
+    let first = load_or_generate_image_thumbnail(&cache_dir, request.clone())
+        .await
+        .unwrap();
+    let second = load_or_generate_image_thumbnail(&cache_dir, request)
+        .await
+        .unwrap();
+
+    assert!(!first.cache_hit);
+    assert!(second.cache_hit);
+    assert_eq!(first.key, second.key);
+    assert_eq!(first.output, second.output);
+}
+
+#[tokio::test]
+async fn load_or_generate_image_thumbnail_reads_bmp_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.bmp");
+    let cache_dir = dir.path().join("cache");
+    let image = image::RgbImage::new(48, 24);
+    image
+        .save_with_format(&source, image::ImageFormat::Bmp)
+        .unwrap();
+    let request = thumbnail_request(&source, 12);
+
+    let thumbnail = load_or_generate_image_thumbnail(&cache_dir, request)
+        .await
+        .unwrap();
+
+    assert_eq!(thumbnail.source, source);
+    assert!(thumbnail.width <= 12);
+    assert!(thumbnail.height <= 12);
+    assert!(thumbnail.output.exists());
+}
+
+#[tokio::test]
+async fn load_or_generate_image_thumbnail_renders_svg_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.svg");
+    let cache_dir = dir.path().join("cache");
+    write_svg_image(&source);
+    let request = thumbnail_request(&source, 20);
+
+    let thumbnail = load_or_generate_image_thumbnail(&cache_dir, request)
+        .await
+        .unwrap();
+
+    assert_eq!(thumbnail.source, source);
+    assert_eq!((thumbnail.width, thumbnail.height), (20, 10));
+    assert!(thumbnail.output.exists());
+    assert_eq!(
+        image::image_dimensions(&thumbnail.output).unwrap(),
+        (20, 10)
+    );
+}
+
+#[tokio::test]
+async fn load_or_generate_image_thumbnail_upscales_small_svg_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("small.svg");
+    let cache_dir = dir.path().join("cache");
+    write_sized_svg_image(&source, 24, 24);
+    let request = thumbnail_request(&source, 128);
+
+    let thumbnail = load_or_generate_image_thumbnail(&cache_dir, request)
+        .await
+        .unwrap();
+
+    assert_eq!(thumbnail.source, source);
+    assert_eq!((thumbnail.width, thumbnail.height), (128, 128));
+    assert_eq!(
+        image::image_dimensions(&thumbnail.output).unwrap(),
+        (128, 128)
+    );
+}
+
+#[tokio::test]
+async fn load_image_dimensions_reads_source_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.png");
+    let image = image::RgbImage::new(37, 19);
+    image.save(&source).unwrap();
+
+    let dimensions = load_image_dimensions(&source).await.unwrap();
+
+    assert_eq!(dimensions, (37, 19));
+}
+
+#[tokio::test]
+async fn load_image_dimensions_reads_svg_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.svg");
+    write_svg_image(&source);
+
+    let dimensions = load_image_dimensions(&source).await.unwrap();
+
+    assert_eq!(dimensions, (80, 40));
+}
+
+#[test]
+fn supported_thumbnail_path_includes_images_and_videos() {
+    for path in [
+        "source.bmp",
+        "source.gif",
+        "source.ico",
+        "source.jpg",
+        "source.jpeg",
+        "source.png",
+        "source.svg",
+        "source.tif",
+        "source.tiff",
+        "source.webp",
+    ] {
+        assert!(is_supported_thumbnail_path(path), "{path}");
+    }
+    assert!(is_supported_thumbnail_path("clip.MP4"));
+    assert!(is_supported_video_path("movie.webm"));
+    assert!(!is_supported_thumbnail_path("notes.txt"));
+}
+
+fn thumbnail_request(source: &Path, max_edge: u32) -> ThumbnailRequest {
+    let metadata = std::fs::metadata(source).unwrap();
+    ThumbnailRequest::new(
+        source,
+        ThumbnailSourceMetadata {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        max_edge,
+    )
+}
+
+fn write_svg_image(path: &Path) {
+    write_sized_svg_image(path, 80, 40);
+}
+
+fn write_sized_svg_image(path: &Path, width: u32, height: u32) {
+    std::fs::write(
+        path,
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="{width}" height="{height}" fill="#3366cc"/></svg>"##
+        ),
+    )
+    .unwrap();
+}

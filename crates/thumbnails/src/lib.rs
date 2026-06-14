@@ -2,13 +2,15 @@
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
 use tokio::fs;
 
+mod svg;
+
 const CACHE_FORMAT_EXTENSION: &str = "png";
-const THUMBNAILER_VERSION: u8 = 2;
+const THUMBNAILER_VERSION: u8 = 3;
 const VIDEO_THUMBNAIL_SEEK_TIME: &str = "00:00:01";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +128,26 @@ pub enum ThumbnailError {
         #[source]
         source: image::ImageError,
     },
+    #[error("could not read SVG image {path:?}: {source}")]
+    ReadSvg {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("could not parse SVG image {path:?}: {source}")]
+    ParseSvg {
+        path: PathBuf,
+        #[source]
+        source: resvg::usvg::Error,
+    },
+    #[error("could not render SVG image {path:?}")]
+    RenderSvg { path: PathBuf },
+    #[error("could not write SVG thumbnail {path:?}: {source}")]
+    WriteSvgThumbnail {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("could not write thumbnail {path:?}: {source}")]
     WriteImage {
         path: PathBuf,
@@ -205,13 +227,34 @@ async fn load_or_generate_thumbnail_with_kind(
     request: ThumbnailRequest,
     media_kind: ThumbnailMediaKind,
 ) -> Result<CachedThumbnail, ThumbnailError> {
+    let started_at = Instant::now();
     let key = thumbnail_key(&request, media_kind);
     let output = cache_dir
         .as_ref()
         .join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION));
+    tracing::debug!(
+        target: "thumbnails",
+        source = ?request.source,
+        output = ?output,
+        key = key.as_str(),
+        media_kind = ?media_kind,
+        max_edge = request.max_edge,
+        "thumbnail requested"
+    );
 
     match cached_thumbnail_dimensions(output.clone()).await {
         Ok((width, height)) => {
+            tracing::debug!(
+                target: "thumbnails",
+                source = ?request.source,
+                output = ?output,
+                key = key.as_str(),
+                max_edge = request.max_edge,
+                width,
+                height,
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "thumbnail cache hit"
+            );
             return Ok(CachedThumbnail {
                 key,
                 source: request.source,
@@ -226,7 +269,26 @@ async fn load_or_generate_thumbnail_with_kind(
         }
     }
 
-    generate_cached_thumbnail(request, output, key, media_kind).await
+    let generated = generate_cached_thumbnail(request, output, key, media_kind).await;
+    match &generated {
+        Ok(thumbnail) => tracing::info!(
+            target: "thumbnails",
+            source = ?thumbnail.source,
+            output = ?thumbnail.output,
+            key = thumbnail.key.as_str(),
+            width = thumbnail.width,
+            height = thumbnail.height,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "thumbnail generated"
+        ),
+        Err(error) => tracing::warn!(
+            target: "thumbnails",
+            error = %error,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "thumbnail generation failed"
+        ),
+    }
+    generated
 }
 
 pub async fn generate_image_thumbnail(
@@ -246,6 +308,14 @@ pub async fn generate_image_thumbnail(
         })?;
     }
 
+    tracing::debug!(
+        target: "thumbnails",
+        source = ?source,
+        output = ?output,
+        max_edge = options.max_edge,
+        "generate image thumbnail requested"
+    );
+
     tokio::task::spawn_blocking(move || generate_image_thumbnail_blocking(source, output, options))
         .await
         .map_err(|source| ThumbnailError::Join(source.to_string()))?
@@ -253,12 +323,41 @@ pub async fn generate_image_thumbnail(
 
 pub async fn load_image_dimensions(source: impl AsRef<Path>) -> Result<(u32, u32), ThumbnailError> {
     let source = source.as_ref().to_path_buf();
-    tokio::task::spawn_blocking(move || load_image_dimensions_blocking(source))
+    let log_source = source.clone();
+    let started_at = Instant::now();
+    tracing::debug!(
+        target: "thumbnails",
+        source = ?log_source,
+        "image dimensions requested"
+    );
+    let dimensions = tokio::task::spawn_blocking(move || load_image_dimensions_blocking(source))
         .await
-        .map_err(|source| ThumbnailError::Join(source.to_string()))?
+        .map_err(|source| ThumbnailError::Join(source.to_string()))?;
+    match &dimensions {
+        Ok((width, height)) => tracing::debug!(
+            target: "thumbnails",
+            source = ?log_source,
+            width,
+            height,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "image dimensions loaded"
+        ),
+        Err(error) => tracing::warn!(
+            target: "thumbnails",
+            source = ?log_source,
+            error = %error,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "image dimensions failed"
+        ),
+    }
+    dimensions
 }
 
 fn load_image_dimensions_blocking(source: PathBuf) -> Result<(u32, u32), ThumbnailError> {
+    if is_svg_path(&source) {
+        return svg::load_svg_dimensions(&source);
+    }
+
     image::image_dimensions(&source).map_err(|source_error| ThumbnailError::ReadImage {
         path: source,
         source: source_error,
@@ -310,6 +409,29 @@ fn generate_cached_image_thumbnail_blocking(
     key: ThumbnailKey,
 ) -> Result<CachedThumbnail, ThumbnailError> {
     let source = request.source;
+    if is_svg_path(&source) {
+        let started_at = Instant::now();
+        tracing::debug!(
+            target: "thumbnails",
+            source = ?source,
+            output = ?temporary_output,
+            max_edge = request.max_edge,
+            "SVG thumbnail render started"
+        );
+        let (width, height) =
+            svg::render_svg_thumbnail(&source, &temporary_output, request.max_edge)?;
+        tracing::debug!(
+            target: "thumbnails",
+            source = ?source,
+            output = ?temporary_output,
+            width,
+            height,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "SVG thumbnail render finished"
+        );
+        return finish_cached_thumbnail(key, source, temporary_output, output, width, height);
+    }
+
     let image = image::ImageReader::open(&source)
         .map_err(|source_error| ThumbnailError::ReadImage {
             path: source.clone(),
@@ -383,6 +505,33 @@ fn generate_image_thumbnail_blocking(
     output: PathBuf,
     options: ThumbnailOptions,
 ) -> Result<Thumbnail, ThumbnailError> {
+    if is_svg_path(&source) {
+        let started_at = Instant::now();
+        tracing::debug!(
+            target: "thumbnails",
+            source = ?source,
+            output = ?output,
+            max_edge = options.max_edge,
+            "SVG direct thumbnail render started"
+        );
+        let (width, height) = svg::render_svg_thumbnail(&source, &output, options.max_edge)?;
+        tracing::debug!(
+            target: "thumbnails",
+            source = ?source,
+            output = ?output,
+            width,
+            height,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "SVG direct thumbnail render finished"
+        );
+        return Ok(Thumbnail {
+            source,
+            output,
+            width,
+            height,
+        });
+    }
+
     let image = image::ImageReader::open(&source)
         .map_err(|source_error| ThumbnailError::ReadImage {
             path: source.clone(),
@@ -517,6 +666,12 @@ fn thumbnail_media_kind_for_path(path: &Path) -> Option<ThumbnailMediaKind> {
     }
 }
 
+fn is_svg_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
 fn temporary_output_path(output: &Path) -> PathBuf {
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     let stem = output
@@ -592,79 +747,5 @@ fn update_system_time_hash(hash: &mut u64, time: Option<SystemTime>) {
             }
         },
         None => update_hash(hash, b"mtime-none"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn generate_image_thumbnail_writes_small_image() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.png");
-        let output = dir.path().join("cache/thumb.png");
-        let image = image::RgbImage::new(64, 32);
-        image.save(&source).unwrap();
-
-        let thumbnail =
-            generate_image_thumbnail(&source, &output, ThumbnailOptions { max_edge: 16 })
-                .await
-                .unwrap();
-
-        assert_eq!(thumbnail.source, source);
-        assert_eq!(thumbnail.output, output);
-        assert!(thumbnail.width <= 16);
-        assert!(thumbnail.height <= 16);
-        assert!(thumbnail.output.exists());
-    }
-
-    #[tokio::test]
-    async fn load_or_generate_image_thumbnail_reuses_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.png");
-        let cache_dir = dir.path().join("cache");
-        let image = image::RgbImage::new(64, 32);
-        image.save(&source).unwrap();
-        let metadata = std::fs::metadata(&source).unwrap();
-        let request = ThumbnailRequest::new(
-            &source,
-            ThumbnailSourceMetadata {
-                len: metadata.len(),
-                modified: metadata.modified().ok(),
-            },
-            16,
-        );
-
-        let first = load_or_generate_image_thumbnail(&cache_dir, request.clone())
-            .await
-            .unwrap();
-        let second = load_or_generate_image_thumbnail(&cache_dir, request)
-            .await
-            .unwrap();
-
-        assert!(!first.cache_hit);
-        assert!(second.cache_hit);
-        assert_eq!(first.key, second.key);
-        assert_eq!(first.output, second.output);
-    }
-
-    #[tokio::test]
-    async fn load_image_dimensions_reads_source_size() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.png");
-        let image = image::RgbImage::new(37, 19);
-        image.save(&source).unwrap();
-
-        let dimensions = load_image_dimensions(&source).await.unwrap();
-
-        assert_eq!(dimensions, (37, 19));
-    }
-
-    #[test]
-    fn supported_thumbnail_path_includes_videos() {
-        assert!(is_supported_thumbnail_path("clip.MP4"));
-        assert!(is_supported_video_path("movie.webm"));
-        assert!(!is_supported_thumbnail_path("notes.txt"));
     }
 }

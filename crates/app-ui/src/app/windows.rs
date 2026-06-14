@@ -598,6 +598,15 @@ impl FileBrowser {
                     self.pending_preview_resize = None;
                     self.preview_size = resized_size;
                 } else {
+                    tracing::debug!(
+                        target: "app_ui::preview",
+                        window = ?window,
+                        actual_width = resized_size.width,
+                        actual_height = resized_size.height,
+                        pending_width = pending_size.width,
+                        pending_height = pending_size.height,
+                        "preview resize still pending"
+                    );
                     return window::resize(
                         window,
                         Size::new(pending_size.width, pending_size.height),
@@ -606,6 +615,13 @@ impl FileBrowser {
             } else {
                 self.preview_size = resized_size;
             }
+            tracing::debug!(
+                target: "app_ui::preview",
+                window = ?window,
+                width = self.preview_size.width,
+                height = self.preview_size.height,
+                "preview window resized"
+            );
             return self.refresh_preview_thumbnail_for_size();
         }
         Task::none()

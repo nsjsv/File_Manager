@@ -7,8 +7,10 @@ license.workspace = true
 [dependencies]
 file-core = { path = "../file-core" }
 image.workspace = true
+resvg.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
