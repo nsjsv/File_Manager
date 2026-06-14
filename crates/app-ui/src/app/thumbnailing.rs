@@ -506,6 +506,7 @@ mod tests {
     use file_core::{EntryMetadata, FileKind};
 
     use super::*;
+    use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
     use crate::config::ui_thread_startup_config;
     use crate::model::{BrowserPaneLayout, BrowserTab, SplitAxis};
 
@@ -604,6 +605,37 @@ mod tests {
             height: 240,
             max_edge: 640,
         }));
+
+        let command = browser.refresh_preview_thumbnail_for_size();
+
+        assert_eq!(command.units(), 0);
+    }
+
+    #[test]
+    fn preview_thumbnail_refresh_skips_animated_image_preview() {
+        let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+        browser.preview_size = crate::model::PreviewSize {
+            width: 1400.0,
+            height: 1000.0,
+        };
+        browser.preview = Some(PreviewState::Ready(PreviewContent::AnimatedImage(
+            AnimatedImagePreview::new(
+                PathBuf::from("/workspace/loop.gif"),
+                vec![
+                    AnimatedImageFrame::new(
+                        iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+                        std::time::Duration::from_millis(20),
+                    ),
+                    AnimatedImageFrame::new(
+                        iced::widget::image::Handle::from_rgba(1, 1, vec![255, 0, 0, 255]),
+                        std::time::Duration::from_millis(20),
+                    ),
+                ],
+                1,
+                1,
+            )
+            .expect("animated image preview"),
+        )));
 
         let command = browser.refresh_preview_thumbnail_for_size();
 

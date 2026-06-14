@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use desktop_linux::{
-    open_path_with_terminal_emulator, open_terminal_at_directory, read_desktop_clipboard,
-    write_file_clipboard, FileClipboardSelection, TerminalEmulator,
+    open_path_with_application, open_path_with_terminal_emulator, open_terminal_at_directory,
+    open_with_applications, read_desktop_clipboard, write_file_clipboard, FileClipboardSelection,
+    OpenWithLaunchMode, TerminalEmulator,
 };
 use file_core::{
     available_transfer_target_path, build_file_search_index,
@@ -21,6 +22,7 @@ use file_core::{
 use file_operation_store::TaskQueueStore;
 use iced::Task;
 
+use crate::animated_image_preview::load_animated_image_preview;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::config;
 use crate::model::{
@@ -236,6 +238,13 @@ pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     })
 }
 
+pub(crate) fn animated_image_preview_command(path: PathBuf) -> Task<Message> {
+    let image_path = path.clone();
+    Task::perform(load_animated_image_preview(path), move |preview_outcome| {
+        Message::AnimatedImagePreviewLoaded(image_path.clone(), preview_outcome)
+    })
+}
+
 pub(crate) fn start_audio_preview_command(path: PathBuf) -> Task<Message> {
     let audio_path = path.clone();
     Task::perform(start_audio_preview(path), move |playback_outcome| {
@@ -305,13 +314,43 @@ pub(crate) fn open_file_command(
     path: PathBuf,
     terminal_emulator: TerminalEmulator,
 ) -> Task<Message> {
+    let opened_path = path.clone();
     Task::perform(
         async move {
             open_path_with_terminal_emulator(path, terminal_emulator)
                 .await
                 .map_err(|error| error.to_string())
         },
-        Message::OpenFileFinished,
+        move |result| Message::OpenFileFinished(opened_path.clone(), result),
+    )
+}
+
+pub(crate) fn open_with_applications_command(path: PathBuf) -> Task<Message> {
+    let requested_path = path.clone();
+    Task::perform(
+        async move {
+            open_with_applications(path)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        move |applications| {
+            Message::OpenWithApplicationsLoaded(requested_path.clone(), applications)
+        },
+    )
+}
+
+pub(crate) fn open_with_application_command(
+    path: PathBuf,
+    desktop_id: String,
+    launch_mode: OpenWithLaunchMode,
+) -> Task<Message> {
+    Task::perform(
+        async move {
+            open_path_with_application(path, desktop_id, launch_mode)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        Message::OpenWithApplicationFinished,
     )
 }
 

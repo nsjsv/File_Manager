@@ -271,6 +271,7 @@ impl FileBrowser {
 
     pub(super) fn open_settings(&mut self) -> Task<Message> {
         self.context_menu = None;
+        self.open_with = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
@@ -504,6 +505,11 @@ impl FileBrowser {
 
         if self.transfer_conflict.is_some() {
             self.transfer_conflict = None;
+            return Task::none();
+        }
+
+        if self.open_with.is_some() {
+            self.open_with = None;
             return Task::none();
         }
 

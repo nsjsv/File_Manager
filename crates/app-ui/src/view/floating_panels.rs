@@ -1,16 +1,23 @@
 use std::time::SystemTime;
 
-use iced::widget::{button, column, container, row, text, text_input, Button, Row, Space};
+use iced::widget::{
+    button, checkbox, column, container, row, scrollable, text, text_input, Button, Column, Row,
+    Space,
+};
 use iced::{Alignment, Element, Length};
 
-use crate::appearance::{context_menu_button_style, context_menu_style, error_notification_style};
+use crate::appearance::{
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
+    context_menu_style, error_notification_style,
+};
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
     BrowserPaneId, ContextMenuState, DestructiveActionConfirmation, FileContextMenuState, Message,
-    SidebarBookmarkContextMenuState, TransferConflictChoice, TransferConflictItem,
-    TransferConflictMetadata, TransferConflictState,
+    ScrollbarVisibility, SidebarBookmarkContextMenuState, TransferConflictChoice,
+    TransferConflictItem, TransferConflictMetadata, TransferConflictState,
 };
+use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
 use crate::typography::readable_text;
 
@@ -21,6 +28,10 @@ const ERROR_NOTIFICATION_MAX_CHARS: usize = 96;
 const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
 const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
 const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
+const OPEN_WITH_PANEL_WIDTH: f32 = 420.0;
+const OPEN_WITH_APPLICATION_LIST_HEIGHT: f32 = 240.0;
+const OPEN_WITH_PATH_MAX_CHARS: usize = 62;
+const OPEN_WITH_ERROR_MAX_CHARS: usize = 96;
 pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
     let message = format_middle_ellipsized_text(error, ERROR_NOTIFICATION_MAX_CHARS);
     let content = row![
@@ -189,6 +200,117 @@ pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<
         .into()
 }
 
+pub(super) fn open_with_panel(
+    state: &OpenWithState,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'static, Message> {
+    let path_label = format_middle_ellipsized_text(
+        state.path().to_string_lossy().as_ref(),
+        OPEN_WITH_PATH_MAX_CHARS,
+    );
+    let title = row![
+        themed_icon(IconSymbol::Monitor, IconTone::Normal, MENU_ICON_SIZE),
+        readable_text("Open With").size(16).width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    let mut content = column![title, readable_text(path_label).size(12)]
+        .spacing(10)
+        .width(Length::Fill);
+
+    if let Some(fallback_error) = state.fallback_error() {
+        content = content.push(
+            readable_text(format!(
+                "Default open failed: {}",
+                format_middle_ellipsized_text(fallback_error, OPEN_WITH_ERROR_MAX_CHARS)
+            ))
+            .size(12),
+        );
+    }
+
+    if let Some(mime_type) = state.mime_type() {
+        content = content.push(readable_text(mime_type.to_owned()).size(12));
+    }
+
+    match state {
+        OpenWithState::Loading { .. } => {
+            content = content.push(readable_text("Loading applications...").size(13));
+        }
+        OpenWithState::Ready { .. } => {
+            content = content
+                .push(open_with_application_list(state, scrollbar_visibility))
+                .push(
+                    checkbox(state.set_default_selected())
+                        .label("Set as default application")
+                        .on_toggle(Message::OpenWithDefaultApplicationToggled),
+                );
+        }
+    }
+
+    content = content.push(
+        row![
+            Space::new().width(Length::Fill),
+            button(readable_text("Cancel").size(12))
+                .on_press(Message::DismissFloating)
+                .padding([6, 10])
+                .style(context_menu_button_style()),
+        ]
+        .align_y(Alignment::Center),
+    );
+
+    container(content)
+        .padding(14)
+        .width(Length::Fixed(OPEN_WITH_PANEL_WIDTH))
+        .style(context_menu_style)
+        .into()
+}
+
+fn open_with_application_list(
+    state: &OpenWithState,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'static, Message> {
+    let mut applications = Column::new().spacing(4);
+    for application in state.applications() {
+        let label = if application.is_default {
+            format!("{} (default)", application.name)
+        } else {
+            application.name.clone()
+        };
+        applications = applications.push(
+            button(
+                row![
+                    themed_icon(IconSymbol::Monitor, IconTone::Normal, MENU_ICON_SIZE),
+                    column![
+                        readable_text(label).size(13).width(Length::Fill),
+                        readable_text(application.desktop_id.clone()).size(11),
+                    ]
+                    .spacing(2)
+                    .width(Length::Fill),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .on_press(Message::OpenWithApplicationSelected(
+                application.desktop_id.clone(),
+            ))
+            .padding([7, 8])
+            .width(Length::Fill)
+            .style(context_menu_button_style()),
+        );
+    }
+
+    scrollable(applications)
+        .direction(auto_hide_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
+        ))
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .height(Length::Fixed(OPEN_WITH_APPLICATION_LIST_HEIGHT))
+        .width(Length::Fill)
+        .into()
+}
+
 fn transfer_conflict_paths(conflict: &TransferConflictItem) -> Element<'_, Message> {
     let source = conflict.source.to_string_lossy();
     let target = conflict.target.to_string_lossy();
@@ -339,6 +461,11 @@ fn file_context_menu_panel(
                 Message::OpenDirectoryInNewTab(active_pane_id, path.clone()),
             ));
         }
+        menu_content = menu_content.push(menu_button(
+            IconSymbol::Monitor,
+            "Open With...",
+            Message::OpenWithRequested(path.clone()),
+        ));
         menu_content = menu_content.push(menu_button(
             IconSymbol::FileText,
             "Properties",

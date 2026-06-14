@@ -1,14 +1,15 @@
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 
 use thiserror::Error;
 use tokio::process::Command;
 
+use crate::desktop_entries::{desktop_entry_requires_terminal, read_desktop_entry_text};
+
 const XDG_OPEN: &str = "xdg-open";
 const XDG_MIME: &str = "xdg-mime";
-const DEFAULT_XDG_DATA_DIRS: &str = "/usr/local/share:/usr/share";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalEmulator {
@@ -218,7 +219,7 @@ pub async fn open_terminal_at_directory(
 async fn terminal_default_desktop_id(path: &Path) -> Option<String> {
     let mime_type = query_file_mime_type(path).await?;
     let desktop_id = query_default_desktop_id(&mime_type).await?;
-    let desktop_entry = read_default_desktop_entry(&desktop_id).await?;
+    let desktop_entry = read_desktop_entry_text(&desktop_id).await?;
     desktop_entry_requires_terminal(&desktop_entry).then_some(desktop_id)
 }
 
@@ -251,64 +252,6 @@ fn successful_command_output(output: std::process::Output) -> Option<String> {
 
     let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     (!value.is_empty()).then_some(value)
-}
-
-async fn read_default_desktop_entry(desktop_id: &str) -> Option<String> {
-    for path in desktop_entry_search_paths(desktop_id) {
-        if let Ok(content) = tokio::fs::read_to_string(path).await {
-            return Some(content);
-        }
-    }
-    None
-}
-
-fn desktop_entry_search_paths(desktop_id: &str) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
-    if let Some(data_home) = xdg_data_home() {
-        paths.push(data_home.join("applications").join(desktop_id));
-    }
-
-    let data_dirs = env::var_os("XDG_DATA_DIRS")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| OsString::from(DEFAULT_XDG_DATA_DIRS));
-    paths.extend(
-        env::split_paths(&data_dirs).map(|data_dir| data_dir.join("applications").join(desktop_id)),
-    );
-
-    paths
-}
-
-fn xdg_data_home() -> Option<PathBuf> {
-    env::var_os("XDG_DATA_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-}
-
-fn desktop_entry_requires_terminal(desktop_entry: &str) -> bool {
-    let mut in_desktop_entry_group = false;
-    for raw_line in desktop_entry.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            in_desktop_entry_group = line == "[Desktop Entry]";
-            continue;
-        }
-        if !in_desktop_entry_group {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() == "Terminal" {
-            return value.trim().eq_ignore_ascii_case("true");
-        }
-    }
-
-    false
 }
 
 async fn open_terminal_default_application(

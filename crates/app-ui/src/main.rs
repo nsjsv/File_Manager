@@ -1,4 +1,5 @@
 mod anchored_popup;
+mod animated_image_preview;
 mod app;
 mod appearance;
 mod audio_preview;
@@ -13,6 +14,7 @@ mod icons;
 mod list_view;
 mod measured_middle_ellipsized_text;
 mod model;
+mod open_with;
 mod operation_history;
 mod operation_queue;
 mod operation_queue_display;

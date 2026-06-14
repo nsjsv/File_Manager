@@ -148,6 +148,7 @@ dependencies = [
  "file-operation-store",
  "flate2",
  "iced",
+ "image",
  "pulldown-cmark",
  "rodio",
  "tar",

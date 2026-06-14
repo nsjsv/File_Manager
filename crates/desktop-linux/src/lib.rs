@@ -1,6 +1,8 @@
+mod desktop_entries;
 pub mod display_renderer;
 pub mod file_clipboard;
 pub mod open;
+pub mod open_with;
 pub mod storage_devices;
 
 pub use display_renderer::{
@@ -16,6 +18,10 @@ pub use file_clipboard::{
 pub use open::{
     open_path, open_path_with_terminal_emulator, open_terminal_at_directory, OpenError,
     TerminalEmulator, TERMINAL_EMULATOR_OPTIONS,
+};
+pub use open_with::{
+    open_path_with_application, open_with_applications, OpenWithApplication,
+    OpenWithApplicationList, OpenWithError, OpenWithLaunchMode,
 };
 pub use storage_devices::{
     eject_or_power_off_storage_device, load_storage_devices, mount_storage_device,

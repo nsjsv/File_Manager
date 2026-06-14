@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
-use desktop_linux::{DesktopClipboardContent, StorageDevice, StorageDeviceId, TerminalEmulator};
+use desktop_linux::{
+    DesktopClipboardContent, OpenWithApplicationList, StorageDevice, StorageDeviceId,
+    TerminalEmulator,
+};
 use file_core::{
     DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexOutcome, FileSearchMatch,
     FileSearchOutcome, TrashEntry, TrashRestoreEntry, TrashScan,
@@ -13,6 +16,7 @@ use iced::keyboard;
 use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Rectangle, Theme};
 
+use crate::animated_image_preview::AnimatedImagePreview;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
@@ -56,9 +60,15 @@ pub(crate) enum Message {
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
     Loaded(BrowserPaneId, Result<DirectoryScan, String>),
     TrashLoaded(BrowserPaneId, Result<TrashScan, String>),
-    OpenFileFinished(Result<(), String>),
+    OpenFileFinished(PathBuf, Result<(), String>),
+    OpenWithRequested(PathBuf),
+    OpenWithApplicationsLoaded(PathBuf, Result<OpenWithApplicationList, String>),
+    OpenWithDefaultApplicationToggled(bool),
+    OpenWithApplicationSelected(String),
+    OpenWithApplicationFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    AnimatedImagePreviewLoaded(PathBuf, Result<AnimatedImagePreview, String>),
     FilePropertiesLoaded(PathBuf, Result<FilePropertiesSnapshot, String>),
     FilePropertiesPermissionToggled(
         FilePropertiesPermissionClass,
@@ -70,6 +80,7 @@ pub(crate) enum Message {
     TextPreviewAction(text_editor::Action),
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
+    AnimatedImageFrameAdvanced(PathBuf),
     AudioPreviewPlaybackToggled,
     AudioPreviewStarted(PathBuf, Result<AudioPreviewRuntime, String>),
     AudioPreviewSeekRequested(f32),
@@ -886,6 +897,7 @@ pub(crate) enum PreviewContent {
         height: u32,
         max_edge: u32,
     },
+    AnimatedImage(AnimatedImagePreview),
     Audio {
         path: PathBuf,
         duration: Option<Duration>,

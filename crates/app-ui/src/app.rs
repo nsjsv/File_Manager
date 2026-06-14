@@ -3,9 +3,11 @@ mod column_scroll;
 mod events;
 mod file_operations;
 mod navigation;
+mod open_with;
 mod pane_drag;
 pub(crate) mod panes;
 mod paths;
+mod pointer_interactions;
 mod preview_state;
 mod properties;
 mod rendering_settings;
@@ -63,6 +65,7 @@ use crate::model::{
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState,
     TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
+use crate::open_with::OpenWithState;
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
 use crate::shortcuts::ShortcutCaptureState;
@@ -106,6 +109,7 @@ pub(crate) struct FileBrowser {
     pub(crate) thumbnail_cache: ThumbnailCache,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
+    pub(crate) open_with: Option<OpenWithState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
     pub(crate) sidebar_devices: SidebarDeviceState,
     pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
@@ -268,6 +272,7 @@ impl FileBrowser {
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
             column_viewports: HashMap::new(),
             context_menu: None,
+            open_with: None,
             sidebar_locations: Vec::new(),
             sidebar_devices: SidebarDeviceState::loading(),
             sidebar_bookmark_drop_slot: None,
@@ -415,6 +420,14 @@ impl FileBrowser {
                 .push(time::every(AUDIO_PREVIEW_TICK_INTERVAL).map(|_| Message::VideoPreviewTick));
         }
 
+        if let Some((path, delay)) = self.active_animated_image_preview_frame_delay() {
+            subscriptions.push(
+                time::every(delay)
+                    .with(path)
+                    .map(|(path, _)| Message::AnimatedImageFrameAdvanced(path)),
+            );
+        }
+
         if let Some((path, generation, position)) = self.active_video_preview_stream() {
             subscriptions.push(video_preview_subscription(path, generation, position));
         }
@@ -472,13 +485,25 @@ impl FileBrowser {
                 self.error = Some(error);
                 Task::none()
             }
-            Message::OpenFileFinished(Ok(())) => {
+            Message::OpenFileFinished(_, Ok(())) => {
                 self.error = None;
                 Task::none()
             }
-            Message::OpenFileFinished(Err(error)) => {
-                self.error = Some(error);
-                Task::none()
+            Message::OpenFileFinished(path, Err(error)) => {
+                self.request_open_with_after_default_open_failed(path, error)
+            }
+            Message::OpenWithRequested(path) => self.request_open_with_applications(path),
+            Message::OpenWithApplicationsLoaded(path, applications) => {
+                self.accept_open_with_applications(path, applications)
+            }
+            Message::OpenWithDefaultApplicationToggled(selected) => {
+                self.toggle_open_with_default_application(selected)
+            }
+            Message::OpenWithApplicationSelected(desktop_id) => {
+                self.select_open_with_application(desktop_id)
+            }
+            Message::OpenWithApplicationFinished(result) => {
+                self.accept_open_with_application_finished(result)
             }
             Message::OpenTerminalFinished(Ok(())) => {
                 self.error = None;
@@ -490,6 +515,9 @@ impl FileBrowser {
             }
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
+            }
+            Message::AnimatedImagePreviewLoaded(path, preview_outcome) => {
+                self.accept_animated_image_preview(path, preview_outcome)
             }
             Message::FilePropertiesLoaded(path, properties_outcome) => {
                 self.accept_file_properties(path, properties_outcome)
@@ -516,6 +544,7 @@ impl FileBrowser {
             Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
                 self.accept_image_preview_dimensions(path, dimensions_outcome)
             }
+            Message::AnimatedImageFrameAdvanced(path) => self.advance_animated_image_preview(path),
             Message::AudioPreviewPlaybackToggled => self.toggle_audio_preview_playback(),
             Message::AudioPreviewStarted(path, playback_outcome) => {
                 self.accept_audio_preview_started(path, playback_outcome)
@@ -559,6 +588,7 @@ impl FileBrowser {
             }
             Message::FileOperationIndicatorPressed => {
                 self.context_menu = None;
+                self.open_with = None;
                 if self.operation_queue.is_panel_open()
                     && self.operation_queue_panel_mode == OperationQueuePanelMode::InteractiveList
                 {

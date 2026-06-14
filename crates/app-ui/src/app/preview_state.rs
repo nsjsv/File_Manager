@@ -15,6 +15,7 @@ use crate::model::{
     VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
 
+mod animated_image;
 mod tree;
 
 impl FileBrowser {

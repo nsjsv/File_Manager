@@ -59,7 +59,7 @@ use crate::typography::readable_text;
 
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
-    transfer_conflict_panel,
+    open_with_panel, transfer_conflict_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
 use sidebar_panel::sidebar_view;
@@ -175,6 +175,12 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
                 browser.active_pane_id(),
             ),
             placement: FloatingPlacement::At(context_menu.position()),
+        });
+    } else if let Some(open_with) = &browser.open_with {
+        floating_input = BrowserFloatingInput::DismissibleBlocking;
+        floating.push(FloatingContent {
+            element: open_with_panel(open_with, browser.scrollbar_visibility),
+            placement: FloatingPlacement::Center,
         });
     }
 

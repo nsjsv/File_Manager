@@ -104,6 +104,14 @@ fn preview_panel<'a>(
             height,
             ..
         }) => return image_preview_panel(handle, *width, *height, size),
+        PreviewState::Ready(PreviewContent::AnimatedImage(preview)) => {
+            return image_preview_panel(
+                preview.current_frame_handle(),
+                preview.width(),
+                preview.height(),
+                size,
+            )
+        }
         PreviewState::Ready(PreviewContent::Audio {
             path,
             duration,

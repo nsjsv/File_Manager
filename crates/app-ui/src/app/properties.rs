@@ -25,6 +25,7 @@ impl FileBrowser {
 
     pub(super) fn open_file_properties(&mut self, path: PathBuf) -> Task<Message> {
         self.context_menu = None;
+        self.open_with = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
         self.sidebar_bookmark_drag = None;

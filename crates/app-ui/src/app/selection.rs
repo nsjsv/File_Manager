@@ -10,9 +10,11 @@ use super::{
     FileBrowser, PendingKeyboardColumnFocus, DOUBLE_CLICK_THRESHOLD,
     POINTER_DRAG_ACTIVATION_DISTANCE,
 };
+use crate::animated_image_preview::is_animated_image_preview_path;
 use crate::commands::{
-    image_preview_dimensions_command, load_expanded_directory_command, open_file_command,
-    open_terminal_command, preview_command, start_audio_preview_command,
+    animated_image_preview_command, image_preview_dimensions_command,
+    load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
+    start_audio_preview_command,
 };
 use crate::model::{
     trash_location_path, AudioPreviewPlayback, BrowserPaneId, BrowserViewMode, ColumnEntryBounds,
@@ -946,9 +948,18 @@ impl FileBrowser {
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
         let is_audio_preview = kind == FileKind::File && is_supported_audio_path(&path);
         let is_video_preview = kind == FileKind::File && is_supported_video_path(&path);
+        let is_animated_image_preview =
+            kind == FileKind::File && is_animated_image_preview_path(&path);
         let is_image_preview = kind == FileKind::File
             && thumbnails::is_supported_thumbnail_path(&path)
-            && !is_video_preview;
+            && !is_video_preview
+            && !is_animated_image_preview;
+        if is_animated_image_preview {
+            let close_window_command = self.close_preview_window();
+            self.preview = Some(PreviewState::Loading(path.clone()));
+            self.error = None;
+            return Task::batch([close_window_command, animated_image_preview_command(path)]);
+        }
         if is_image_preview {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));

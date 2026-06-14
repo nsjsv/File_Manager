@@ -26,6 +26,7 @@ impl FileBrowser {
         let root = self.search_root_for_scope(SearchScope::CurrentDirectory);
         let index_root = root.clone();
         self.context_menu = None;
+        self.open_with = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         let rename_command = self.commit_rename_if_active();
