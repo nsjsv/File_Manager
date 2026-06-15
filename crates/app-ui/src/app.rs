@@ -861,6 +861,9 @@ impl FileBrowser {
                 ])
             }
             Message::DismissFloating => self.dismiss_floating(),
+            Message::FileContextMenuExpansionChanged(expansion) => {
+                self.update_file_context_menu_expansion(expansion)
+            }
             Message::DestructiveActionConfirmed => self.confirm_destructive_action(),
             Message::DestructiveActionCanceled => self.cancel_destructive_action(),
             Message::AuxiliaryWindowCloseRequested(window) => self.close_auxiliary_window(window),
@@ -999,13 +1002,6 @@ impl FileBrowser {
                 self.activate_pane(pane_id);
                 self.start_column_resize_drag(column_index)
             }
-            Message::OpenDirectoryInNewTab(pane_id, path) => {
-                self.activate_pane(pane_id);
-                Task::batch([
-                    self.commit_rename_if_active(),
-                    self.open_directory_in_new_tab(path),
-                ])
-            }
             Message::OpenDirectoryFromMiddleClick(pane_id, path) => {
                 self.activate_pane(pane_id);
                 Task::batch([
@@ -1046,6 +1042,9 @@ impl FileBrowser {
                 self.commit_rename_if_active(),
                 self.navigate_to(path, NavigationMode::RecordHistory),
             ]),
+            Message::OpenPath(path) => {
+                Task::batch([self.commit_rename_if_active(), self.open_path(path)])
+            }
             Message::TrashOpened => Task::batch([
                 self.commit_rename_if_active(),
                 self.open_trash_view(NavigationMode::RecordHistory),

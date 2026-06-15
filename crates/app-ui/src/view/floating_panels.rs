@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 
 use iced::widget::{
-    button, checkbox, column, container, row, scrollable, text, text_input, Button, Column, Row,
-    Space,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, Button,
+    Column, Row, Space,
 };
 use iced::{Alignment, Element, Length};
 
@@ -13,9 +13,9 @@ use crate::appearance::{
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
-    BrowserPaneId, ContextMenuState, DestructiveActionConfirmation, FileContextMenuState, Message,
-    ScrollbarVisibility, SidebarBookmarkContextMenuState, TransferConflictChoice,
-    TransferConflictItem, TransferConflictMetadata, TransferConflictState,
+    BrowserPaneId, ContextMenuState, DestructiveActionConfirmation, FileContextMenuExpansion,
+    FileContextMenuState, Message, ScrollbarVisibility, SidebarBookmarkContextMenuState,
+    TransferConflictChoice, TransferConflictItem, TransferConflictMetadata, TransferConflictState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
@@ -32,6 +32,11 @@ const OPEN_WITH_PANEL_WIDTH: f32 = 420.0;
 const OPEN_WITH_APPLICATION_LIST_HEIGHT: f32 = 240.0;
 const OPEN_WITH_PATH_MAX_CHARS: usize = 62;
 const OPEN_WITH_ERROR_MAX_CHARS: usize = 96;
+const CONTEXT_MENU_WIDTH: f32 = 190.0;
+const CONTEXT_SUBMENU_WIDTH: f32 = 170.0;
+const CONTEXT_MENU_PADDING: f32 = 8.0;
+const CONTEXT_MENU_ITEM_SPACING: f32 = 4.0;
+const CONTEXT_MENU_ITEM_HEIGHT: f32 = 28.0;
 pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
     let message = format_middle_ellipsized_text(error, ERROR_NOTIFICATION_MAX_CHARS);
     let content = row![
@@ -416,13 +421,12 @@ pub(super) fn context_menu_panel(
 fn file_context_menu_panel(
     menu: &FileContextMenuState,
     is_trash_view: bool,
-    active_pane_id: BrowserPaneId,
+    _active_pane_id: BrowserPaneId,
 ) -> Element<'_, Message> {
     if is_trash_view {
         return trash_context_menu_panel(menu);
     }
 
-    let paste_button = menu_button(IconSymbol::Copy, "Paste", Message::PastePending);
     let terminal_directory = if menu.target_is_directory {
         menu.target
             .clone()
@@ -431,66 +435,143 @@ fn file_context_menu_panel(
         menu.paste_directory.clone()
     };
 
-    let mut menu_content = iced::widget::Column::new().spacing(4).padding(8);
-    menu_content = menu_content
-        .push(menu_button(
-            IconSymbol::Folder,
-            "New Folder",
-            Message::CreateDirectory(menu.paste_directory.clone()),
-        ))
-        .push(menu_button(
+    let mut menu_content = iced::widget::Column::new()
+        .spacing(CONTEXT_MENU_ITEM_SPACING)
+        .padding(CONTEXT_MENU_PADDING);
+    if let Some(path) = &menu.target {
+        menu_content = menu_content
+            .push(menu_item(
+                IconSymbol::Folder,
+                "Open",
+                Message::OpenPath(path.clone()),
+            ))
+            .push(menu_item(
+                IconSymbol::Monitor,
+                "Open with",
+                Message::OpenWithRequested(path.clone()),
+            ))
+            .push(menu_item(IconSymbol::Copy, "Copy", Message::CopySelected))
+            .push(menu_item(
+                IconSymbol::ArrowRight,
+                "Move",
+                Message::MoveSelected,
+            ))
+            .push(menu_item(IconSymbol::Copy, "Paste", Message::PastePending))
+            .push(menu_item(
+                IconSymbol::Pencil,
+                "Rename",
+                Message::BeginRename(path.clone()),
+            ));
+    } else {
+        menu_content =
+            menu_content.push(menu_item(IconSymbol::Copy, "Paste", Message::PastePending));
+    }
+    menu_content = menu_content.push(new_entry_menu_trigger()).push(menu_item(
+        IconSymbol::Terminal,
+        "Open Terminal Here",
+        Message::OpenTerminalHere(terminal_directory),
+    ));
+    if let Some(path) = &menu.target {
+        menu_content = menu_content
+            .push(menu_item(
+                IconSymbol::Trash,
+                "Move to Trash",
+                Message::TrashSelected,
+            ))
+            .push(menu_item(
+                IconSymbol::FileText,
+                "Properties",
+                Message::FilePropertiesRequested(path.clone()),
+            ));
+    }
+
+    let root_menu = container(menu_content)
+        .width(Length::Fixed(CONTEXT_MENU_WIDTH))
+        .style(context_menu_style);
+
+    let content = match menu.expansion {
+        FileContextMenuExpansion::None => Row::new().push(root_menu),
+        FileContextMenuExpansion::NewEntry => Row::new()
+            .spacing(4)
+            .push(root_menu)
+            .push(new_entry_submenu_slot(menu)),
+    };
+
+    container(content).width(Length::Shrink).into()
+}
+
+fn new_entry_submenu_slot(menu: &FileContextMenuState) -> Element<'_, Message> {
+    Column::new()
+        .push(Space::new().height(Length::Fixed(new_entry_trigger_top(menu))))
+        .push(new_entry_submenu(menu))
+        .into()
+}
+
+fn new_entry_trigger_top(menu: &FileContextMenuState) -> f32 {
+    let rows_before_new_entry = if menu.target.is_some() { 6.0 } else { 1.0 };
+    CONTEXT_MENU_PADDING
+        + rows_before_new_entry * (CONTEXT_MENU_ITEM_HEIGHT + CONTEXT_MENU_ITEM_SPACING)
+}
+
+fn new_entry_submenu(menu: &FileContextMenuState) -> Element<'_, Message> {
+    let content = Column::new()
+        .spacing(CONTEXT_MENU_ITEM_SPACING)
+        .padding(CONTEXT_MENU_PADDING)
+        .push(submenu_item(
             IconSymbol::File,
             "New File",
             Message::CreateEmptyFile(menu.paste_directory.clone()),
         ))
-        .push(menu_button(
-            IconSymbol::Terminal,
-            "Open Terminal Here",
-            Message::OpenTerminalHere(terminal_directory),
+        .push(submenu_item(
+            IconSymbol::Folder,
+            "New Folder",
+            Message::CreateDirectory(menu.paste_directory.clone()),
         ));
-    if let Some(path) = &menu.target {
-        menu_content = menu_content.push(menu_button(
-            IconSymbol::Pencil,
-            "Rename",
-            Message::BeginRename(path.clone()),
-        ));
-        if menu.target_is_directory {
-            menu_content = menu_content.push(menu_button(
-                IconSymbol::Folder,
-                "Open in New Tab",
-                Message::OpenDirectoryInNewTab(active_pane_id, path.clone()),
-            ));
-        }
-        menu_content = menu_content.push(menu_button(
-            IconSymbol::Monitor,
-            "Open With...",
-            Message::OpenWithRequested(path.clone()),
-        ));
-        menu_content = menu_content.push(menu_button(
-            IconSymbol::FileText,
-            "Properties",
-            Message::FilePropertiesRequested(path.clone()),
-        ));
-        menu_content = menu_content
-            .push(menu_button(IconSymbol::Copy, "Copy", Message::CopySelected))
-            .push(menu_button(
-                IconSymbol::ArrowRight,
-                "Move",
-                Message::MoveSelected,
-            ));
-    }
-    menu_content = menu_content.push(paste_button.width(Length::Fill));
-    if menu.target.is_some() {
-        menu_content = menu_content.push(menu_button(
-            IconSymbol::Trash,
-            "Move to Trash",
-            Message::TrashSelected,
-        ));
-    }
 
-    container(menu_content)
-        .width(Length::Fixed(190.0))
-        .style(context_menu_style)
+    mouse_area(
+        container(content)
+            .width(Length::Fixed(CONTEXT_SUBMENU_WIDTH))
+            .style(context_menu_style),
+    )
+    .on_enter(Message::FileContextMenuExpansionChanged(
+        FileContextMenuExpansion::NewEntry,
+    ))
+    .into()
+}
+
+fn new_entry_menu_trigger() -> Element<'static, Message> {
+    mouse_area(
+        button(menu_label_with_chevron(IconSymbol::File, "New..."))
+            .on_press(Message::FileContextMenuExpansionChanged(
+                FileContextMenuExpansion::NewEntry,
+            ))
+            .width(Length::Fill)
+            .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
+            .style(context_menu_button_style()),
+    )
+    .on_enter(Message::FileContextMenuExpansionChanged(
+        FileContextMenuExpansion::NewEntry,
+    ))
+    .into()
+}
+
+fn menu_item(icon: IconSymbol, label: &'static str, message: Message) -> Element<'static, Message> {
+    mouse_area(menu_button(icon, label, message))
+        .on_enter(Message::FileContextMenuExpansionChanged(
+            FileContextMenuExpansion::None,
+        ))
+        .into()
+}
+
+fn submenu_item(
+    icon: IconSymbol,
+    label: &'static str,
+    message: Message,
+) -> Element<'static, Message> {
+    mouse_area(menu_button(icon, label, message))
+        .on_enter(Message::FileContextMenuExpansionChanged(
+            FileContextMenuExpansion::NewEntry,
+        ))
         .into()
 }
 
@@ -543,14 +624,14 @@ fn trash_context_menu_panel(menu: &FileContextMenuState) -> Element<'_, Message>
                 Message::RestoreSelected,
             ))
             .push(menu_button(
-                IconSymbol::FileText,
-                "Properties",
-                Message::FilePropertiesRequested(path.clone()),
-            ))
-            .push(menu_button(
                 IconSymbol::Trash,
                 "Delete Permanently",
                 Message::TrashSelected,
+            ))
+            .push(menu_button(
+                IconSymbol::FileText,
+                "Properties",
+                Message::FilePropertiesRequested(path.clone()),
             ));
     }
     menu_content = menu_content.push(menu_button(
@@ -573,9 +654,21 @@ fn menu_button(
     button(menu_label(icon, label))
         .on_press(message)
         .width(Length::Fill)
+        .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
         .style(context_menu_button_style())
 }
 
 fn menu_label(icon: IconSymbol, label: &'static str) -> Row<'static, Message> {
     action_label(icon, label, MENU_ICON_SIZE).width(Length::Fill)
+}
+
+fn menu_label_with_chevron(icon: IconSymbol, label: &'static str) -> Row<'static, Message> {
+    row![
+        themed_icon(icon, IconTone::Normal, MENU_ICON_SIZE),
+        text(label).width(Length::Fill),
+        themed_icon(IconSymbol::ChevronRight, IconTone::Normal, MENU_ICON_SIZE),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .width(Length::Fill)
 }

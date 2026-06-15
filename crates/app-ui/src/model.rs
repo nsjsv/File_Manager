@@ -167,6 +167,7 @@ pub(crate) enum Message {
     ShortcutBindingReset(ShortcutBindingId),
     DragSelectionFinished,
     DismissFloating,
+    FileContextMenuExpansionChanged(FileContextMenuExpansion),
     DestructiveActionConfirmed,
     DestructiveActionCanceled,
     AuxiliaryWindowCloseRequested(window::Id),
@@ -216,7 +217,6 @@ pub(crate) enum Message {
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
     ListScrolled(BrowserPaneId, f32, f32),
     ColumnResizeStarted(BrowserPaneId, usize),
-    OpenDirectoryInNewTab(BrowserPaneId, PathBuf),
     OpenDirectoryFromMiddleClick(BrowserPaneId, PathBuf),
     OpenTrashInNewTab(BrowserPaneId),
     TabPressed(BrowserPaneId, usize),
@@ -227,6 +227,7 @@ pub(crate) enum Message {
     PaneForward(BrowserPaneId),
     PaneUp(BrowserPaneId),
     NavigateTo(PathBuf),
+    OpenPath(PathBuf),
     TrashOpened,
     Back,
     Forward,
@@ -1131,6 +1132,13 @@ pub(crate) struct FileContextMenuState {
     pub(crate) target_is_directory: bool,
     pub(crate) paste_directory: PathBuf,
     pub(crate) position: Point,
+    pub(crate) expansion: FileContextMenuExpansion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileContextMenuExpansion {
+    None,
+    NewEntry,
 }
 
 #[derive(Debug, Clone)]

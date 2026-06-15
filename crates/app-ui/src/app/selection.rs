@@ -18,10 +18,10 @@ use crate::commands::{
 };
 use crate::model::{
     trash_location_path, AudioPreviewPlayback, BrowserPaneId, BrowserViewMode, ColumnEntryBounds,
-    ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuState,
-    FileDragPhase, FileDragState, FileDragTarget, LastActivationClick, Message, NavigationMode,
-    PreviewState, PreviewWindowProfile, SelectionMarquee, SelectionMarqueePhase,
-    SelectionMarqueeSource, TransferConflictMode,
+    ContextMenuState, ExpandedDirectory, ExpandedDirectoryStatus, FileContextMenuExpansion,
+    FileContextMenuState, FileDragPhase, FileDragState, FileDragTarget, LastActivationClick,
+    Message, NavigationMode, PreviewState, PreviewWindowProfile, SelectionMarquee,
+    SelectionMarqueePhase, SelectionMarqueeSource, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::shortcuts::FileSelectionDirection;
@@ -299,6 +299,7 @@ impl FileBrowser {
             target_is_directory: self.entry_kind(&path) == Some(FileKind::Directory),
             paste_directory: self.entry_parent_directory(&path),
             position: self.cursor_position,
+            expansion: FileContextMenuExpansion::None,
         }));
         rename_command
     }
@@ -313,8 +314,19 @@ impl FileBrowser {
             target_is_directory: false,
             paste_directory: directory,
             position: self.cursor_position,
+            expansion: FileContextMenuExpansion::None,
         }));
         rename_command
+    }
+
+    pub(super) fn update_file_context_menu_expansion(
+        &mut self,
+        expansion: FileContextMenuExpansion,
+    ) -> Task<Message> {
+        if let Some(ContextMenuState::FileArea(menu)) = &mut self.context_menu {
+            menu.expansion = expansion;
+        }
+        Task::none()
     }
 
     pub(super) fn start_selection_marquee(&mut self) -> Task<Message> {
@@ -881,6 +893,11 @@ impl FileBrowser {
         }
 
         self.open_preview()
+    }
+
+    pub(super) fn open_path(&mut self, path: PathBuf) -> Task<Message> {
+        self.context_menu = None;
+        self.activate_path(path)
     }
 
     fn activate_path(&mut self, path: PathBuf) -> Task<Message> {
