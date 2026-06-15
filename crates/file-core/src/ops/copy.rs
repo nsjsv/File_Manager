@@ -36,7 +36,6 @@ pub enum TransferConflictStrategy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileOperationVerification {
-    Off,
     BasicMetadata,
     Strong,
 }
@@ -271,6 +270,8 @@ async fn copy_file_to_target(
             source,
         })?;
 
+    let mut source_content_hasher =
+        (verification == FileOperationVerification::Strong).then(blake3::Hasher::new);
     let mut bytes_done = 0;
     let bytes_total = metadata.len();
 
@@ -290,6 +291,9 @@ async fn copy_file_to_target(
             })?;
         if read == 0 {
             break;
+        }
+        if let Some(source_content_hasher) = &mut source_content_hasher {
+            source_content_hasher.update(&buffer[..read]);
         }
 
         writer
@@ -320,10 +324,8 @@ async fn copy_file_to_target(
             source,
         });
     }
-    drop(writer);
-
-    if verification != FileOperationVerification::Off {
-        if let Err(source) = fs::set_permissions(to, metadata.permissions()).await {
+    if verification == FileOperationVerification::Strong {
+        if let Err(source) = writer.sync_all().await {
             let _ = fs::remove_file(to).await;
             return Err(FileError::Copy {
                 from: from.to_path_buf(),
@@ -331,12 +333,24 @@ async fn copy_file_to_target(
                 source,
             });
         }
-        if let Err(error) =
-            verify_copied_file(from, to, metadata, controls, buffer, verification).await
-        {
-            let _ = fs::remove_file(to).await;
-            return Err(error);
-        }
+    }
+    drop(writer);
+
+    if let Err(source) = fs::set_permissions(to, metadata.permissions()).await {
+        let _ = fs::remove_file(to).await;
+        return Err(FileError::Copy {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        });
+    }
+    let source_content_hash =
+        source_content_hasher.map(|source_content_hasher| source_content_hasher.finalize());
+    if let Err(error) =
+        verify_copied_file(from, to, metadata, controls, buffer, source_content_hash).await
+    {
+        let _ = fs::remove_file(to).await;
+        return Err(error);
     }
 
     Ok(())
@@ -348,7 +362,7 @@ async fn verify_copied_file(
     source_metadata: &std::fs::Metadata,
     controls: &mut FileOperationControls,
     buffer: &mut [u8],
-    verification: FileOperationVerification,
+    expected_content_hash: Option<blake3::Hash>,
 ) -> Result<(), FileError> {
     controls.wait_until_running().await?;
     let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
@@ -377,75 +391,50 @@ async fn verify_copied_file(
             "target readonly flag differs from source after copy",
         ));
     }
-    if verification == FileOperationVerification::Strong {
-        verify_file_contents_match(from, to, controls, buffer).await?;
+    if let Some(expected_content_hash) = expected_content_hash {
+        let target_content_hash = copied_file_content_hash(from, to, controls, buffer).await?;
+        if target_content_hash != expected_content_hash {
+            return Err(copy_verification_error(
+                from,
+                to,
+                "target file content hash differs from source after copy",
+            ));
+        }
     }
     Ok(())
 }
 
-async fn verify_file_contents_match(
+async fn copied_file_content_hash(
     from: &Path,
     to: &Path,
     controls: &mut FileOperationControls,
-    source_buffer: &mut [u8],
-) -> Result<(), FileError> {
-    let mut source = fs::File::open(from)
-        .await
-        .map_err(|source| FileError::Copy {
-            from: from.to_path_buf(),
-            to: to.to_path_buf(),
-            source,
-        })?;
+    buffer: &mut [u8],
+) -> Result<blake3::Hash, FileError> {
     let mut target = fs::File::open(to).await.map_err(|source| FileError::Copy {
         from: from.to_path_buf(),
         to: to.to_path_buf(),
         source,
     })?;
-    let mut target_buffer = vec![0; source_buffer.len()];
+    let mut target_content_hasher = blake3::Hasher::new();
 
     loop {
         controls.wait_until_running().await?;
-        let source_read = source
-            .read(source_buffer)
-            .await
-            .map_err(|source| FileError::Copy {
-                from: from.to_path_buf(),
-                to: to.to_path_buf(),
-                source,
-            })?;
-        let target_read =
-            target
-                .read(&mut target_buffer)
-                .await
-                .map_err(|source| FileError::Copy {
-                    from: from.to_path_buf(),
-                    to: to.to_path_buf(),
-                    source,
-                })?;
-
-        if source_read != target_read
-            || source_buffer[..source_read] != target_buffer[..target_read]
-        {
-            return Err(copy_verification_error(
-                from,
-                to,
-                "target file contents differ from source after copy",
-            ));
+        let read = target.read(buffer).await.map_err(|source| FileError::Copy {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        })?;
+        if read == 0 {
+            return Ok(target_content_hasher.finalize());
         }
-        if source_read == 0 {
-            return Ok(());
-        }
+        target_content_hasher.update(&buffer[..read]);
     }
 }
 
 async fn verify_copied_directory(
     from: &Path,
     to: &Path,
-    verification: FileOperationVerification,
 ) -> Result<(), FileError> {
-    if verification == FileOperationVerification::Off {
-        return Ok(());
-    }
     let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
         from: from.to_path_buf(),
         to: to.to_path_buf(),
@@ -485,7 +474,7 @@ async fn copy_directory(
     }
 
     let created_root = ensure_copy_directory_target(from, to, conflict_strategy).await?;
-    if let Err(error) = verify_copied_directory(from, to, verification).await {
+    if let Err(error) = verify_copied_directory(from, to).await {
         if created_root {
             let _ = fs::remove_dir_all(to).await;
         }
@@ -570,7 +559,7 @@ async fn copy_directory(
                         return Err(error);
                     }
                     if let Err(error) =
-                        verify_copied_directory(&source_child, &target_child, verification).await
+                        verify_copied_directory(&source_child, &target_child).await
                     {
                         if created_root {
                             let _ = fs::remove_dir_all(to).await;
@@ -703,4 +692,50 @@ async fn remove_copy_target(
         to: to.to_path_buf(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn strong_verification_rejects_matching_size_hash_mismatch() {
+        let directory = tempdir().unwrap();
+        let source_path = directory.path().join("source.bin");
+        let target = directory.path().join("target.bin");
+        let source_contents = b"same length data";
+        let target_contents = b"same length DATA";
+
+        fs::write(&source_path, source_contents).await.unwrap();
+        fs::write(&target, target_contents).await.unwrap();
+
+        let source_metadata = fs::metadata(&source_path).await.unwrap();
+        let mut controls = FileOperationControls::running(CancellationToken::new());
+        let mut buffer = vec![0; COPY_BUFFER_SIZE];
+        let error = verify_copied_file(
+            &source_path,
+            &target,
+            &source_metadata,
+            &mut controls,
+            &mut buffer,
+            Some(blake3::hash(source_contents)),
+        )
+        .await
+        .unwrap_err();
+
+        match error {
+            FileError::Copy {
+                from,
+                to,
+                source,
+            } => {
+                assert_eq!(from, source_path);
+                assert_eq!(to, target);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }

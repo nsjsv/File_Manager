@@ -87,6 +87,27 @@ async fn copy_and_move_file_operations_update_filesystem() {
 }
 
 #[tokio::test]
+async fn strong_copy_verification_accepts_hash_matched_target() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.bin");
+    let copied = dir.path().join("copied.bin");
+    let mut contents = vec![0x5a; 1024 * 1024 + 17];
+    contents[1024 * 1024] = 0xa5;
+    fs::write(&source, &contents).unwrap();
+
+    copy_path_with_options(
+        &source,
+        &copied,
+        FileTransferOptions::running(tokio_util::sync::CancellationToken::new())
+            .with_verification(FileOperationVerification::Strong),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fs::read(&copied).unwrap(), contents);
+}
+
+#[tokio::test]
 async fn copy_conflict_replace_overwrites_existing_file() {
     let dir = tempdir().unwrap();
     let source = dir.path().join("source.txt");

@@ -10,8 +10,9 @@ use file_core::{
     file_search_index_exists, filter_hidden, is_transfer_target_available, move_path,
     move_path_with_options, rename_path, scan_directory, search_file_index, search_file_tree,
     sort_entries, watch_directory, DirectoryEntry, EntryMetadata, FileError, FileKind,
-    FileOperationControls, FileOperationRunState, FileSearchIndexOptions, FileSearchOptions,
-    FileTransferOptions, ScanOptions, SortDirection, SortField, TransferConflictCheck,
+    FileOperationControls, FileOperationRunState, FileOperationVerification,
+    FileSearchIndexOptions, FileSearchOptions, FileTransferOptions, ScanOptions, SortDirection,
+    SortField, TransferConflictCheck,
     TransferConflictStrategy,
 };
 use tempfile::tempdir;

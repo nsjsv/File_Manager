@@ -125,8 +125,7 @@ pub(crate) fn file_operation_verification_from_config_value(
     value: &str,
 ) -> Option<FileOperationVerification> {
     match value {
-        "off" => Some(FileOperationVerification::Off),
-        "basic_metadata" => Some(FileOperationVerification::BasicMetadata),
+        "off" | "basic_metadata" => Some(FileOperationVerification::BasicMetadata),
         "strong" => Some(FileOperationVerification::Strong),
         _ => None,
     }
@@ -136,7 +135,6 @@ pub(crate) fn file_operation_verification_config_value(
     verification: FileOperationVerification,
 ) -> &'static str {
     match verification {
-        FileOperationVerification::Off => "off",
         FileOperationVerification::BasicMetadata => "basic_metadata",
         FileOperationVerification::Strong => "strong",
     }
@@ -146,9 +144,21 @@ pub(crate) fn file_operation_verification_label(
     verification: FileOperationVerification,
 ) -> &'static str {
     match verification {
-        FileOperationVerification::Off => "Off",
         FileOperationVerification::BasicMetadata => "Basic + Metadata",
         FileOperationVerification::Strong => "Strong",
+    }
+}
+
+pub(crate) fn file_operation_verification_description(
+    verification: FileOperationVerification,
+) -> &'static str {
+    match verification {
+        FileOperationVerification::BasicMetadata => {
+            "Checks the copied target type, size, and key metadata after the transfer."
+        }
+        FileOperationVerification::Strong => {
+            "Includes Basic + Metadata, then compares copied file content hashes."
+        }
     }
 }
 
@@ -681,6 +691,36 @@ browser_view_mode = "list"
             FileOperationVerification::Strong
         );
         assert_eq!(parsed.browser_view_mode, BrowserViewMode::List);
+    }
+
+    #[test]
+    fn maps_removed_off_verification_to_basic_metadata() {
+        let parsed_toml = parse_toml_user_config(
+            "file_operation_verification = \"off\"\n",
+            default_user_config(),
+        );
+        let parsed_legacy =
+            parse_legacy_user_config("file_operation_verification=off\n", default_user_config());
+
+        assert_eq!(
+            parsed_toml.file_operation_verification,
+            FileOperationVerification::BasicMetadata
+        );
+        assert_eq!(
+            parsed_legacy.file_operation_verification,
+            FileOperationVerification::BasicMetadata
+        );
+    }
+
+    #[test]
+    fn serializes_basic_metadata_verification() {
+        let mut config = default_user_config();
+        config.file_operation_verification = FileOperationVerification::BasicMetadata;
+
+        let content = toml_user_config_content(&config).unwrap();
+
+        assert!(content.contains("file_operation_verification = \"basic_metadata\""));
+        assert!(!content.contains("file_operation_verification = \"off\""));
     }
 
     #[test]

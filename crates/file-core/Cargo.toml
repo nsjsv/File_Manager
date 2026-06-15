@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3 = "1.8.5"
 ignore = "0.4.25"
 notify.workspace = true
 nucleo.workspace = true
