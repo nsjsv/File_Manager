@@ -660,6 +660,7 @@ mod tests {
             current_dir: inactive_dir.clone(),
             is_trash_view: false,
             entries: vec![image_entry.clone()],
+            directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::new(),
             selected: None,
             selected_paths: HashSet::new(),

@@ -486,6 +486,7 @@ mod tests {
             current_dir,
             is_trash_view: false,
             entries,
+            directory_loading_placeholder_entries: &[],
             selected,
             selected_paths,
             deepest_open_column_directory,

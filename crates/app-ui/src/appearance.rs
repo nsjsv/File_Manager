@@ -163,11 +163,6 @@ pub(crate) fn text_preview_editor_style() -> fn(&Theme, text_editor::Status) -> 
     transparent_text_preview_editor_style
 }
 
-pub(crate) fn text_preview_line_number_style(
-) -> fn(&Theme, text_editor::Status) -> text_editor::Style {
-    transparent_text_preview_line_number_style
-}
-
 pub(crate) fn auto_hide_scrollbar_style(
     visibility: ScrollbarVisibility,
 ) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style + Clone {
@@ -745,19 +740,6 @@ fn transparent_text_preview_editor_style(
         } else {
             Color::from_rgba8(74, 137, 220, 0.25)
         },
-    }
-}
-
-fn transparent_text_preview_line_number_style(
-    theme: &Theme,
-    _status: text_editor::Status,
-) -> text_editor::Style {
-    text_editor::Style {
-        background: Background::Color(Color::from_rgba8(0, 0, 0, 0.0)),
-        border: Border::default(),
-        placeholder: muted_text_color(theme),
-        value: muted_text_color(theme),
-        selection: Color::from_rgba8(0, 0, 0, 0.0),
     }
 }
 

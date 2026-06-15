@@ -58,12 +58,13 @@ use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    BrowserViewMode, ContextMenuState, DestructiveActionConfirmation, ExpandedDirectory,
-    FileDragState, FilePropertiesState, Message, NavigationMode, OperationQueuePanelMode,
-    PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
-    ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee, SettingsCategory,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState,
-    TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    BrowserViewMode, ContextMenuState, DestructiveActionConfirmation,
+    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, FilePropertiesState,
+    Message, NavigationMode, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize,
+    PreviewState, PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState,
+    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
+    TransferConflictState, VideoPreviewPlayback,
 };
 use crate::open_with::OpenWithState;
 use crate::operation_history::FileOperationHistory;
@@ -88,6 +89,7 @@ pub(crate) struct FileBrowser {
     pub(crate) current_dir: PathBuf,
     pub(crate) is_trash_view: bool,
     pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
     pub(crate) trash_entries: Vec<TrashEntry>,
     pub(crate) selected: Option<PathBuf>,
     selected_paths: HashSet<PathBuf>,
@@ -98,6 +100,7 @@ pub(crate) struct FileBrowser {
     cursor_search_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
+    text_preview_generation: u64,
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
     pub(crate) video_preview: Option<VideoPreviewPlayback>,
     pub(crate) preview_size: PreviewSize,
@@ -229,6 +232,7 @@ impl FileBrowser {
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
             entries: Vec::new(),
+            directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::new(),
             selected: None,
             selected_paths: HashSet::new(),
@@ -251,6 +255,7 @@ impl FileBrowser {
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
             entries: Vec::new(),
+            directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::new(),
             selected: None,
             selected_paths: HashSet::new(),
@@ -261,6 +266,7 @@ impl FileBrowser {
             cursor_search_directory: None,
             preview: None,
             text_preview_document: None,
+            text_preview_generation: 0,
             audio_preview: None,
             video_preview: None,
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
@@ -469,8 +475,10 @@ impl FileBrowser {
             Message::Loaded(pane_id, Err(error)) => {
                 if pane_id == self.active_pane_id() {
                     self.is_loading = false;
+                    self.directory_loading_placeholder_entries.clear();
                 } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
                     pane.is_loading = false;
+                    pane.directory_loading_placeholder_entries.clear();
                 }
                 self.error = Some(error);
                 Task::none()
@@ -479,8 +487,10 @@ impl FileBrowser {
             Message::TrashLoaded(pane_id, Err(error)) => {
                 if pane_id == self.active_pane_id() {
                     self.is_loading = false;
+                    self.directory_loading_placeholder_entries.clear();
                 } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
                     pane.is_loading = false;
+                    pane.directory_loading_placeholder_entries.clear();
                 }
                 self.error = Some(error);
                 Task::none()
@@ -534,7 +544,21 @@ impl FileBrowser {
             Message::PreviewDirectoryChildrenLoaded(parent_path, children_outcome) => {
                 self.accept_preview_directory_children(parent_path, children_outcome)
             }
-            Message::TextPreviewAction(action) => self.handle_text_preview_action(action),
+            Message::TextPreviewAction {
+                action,
+                viewport_height,
+            } => self.handle_text_preview_action(action, viewport_height),
+            Message::TextPreviewChunkLoaded {
+                path,
+                generation,
+                start_offset,
+                outcome,
+            } => self.accept_text_preview_chunk(path, generation, start_offset, outcome),
+            Message::MarkdownPreviewScrolled {
+                offset_y,
+                viewport_height,
+                content_height,
+            } => self.handle_markdown_preview_scrolled(offset_y, viewport_height, content_height),
             Message::MarkdownPreviewModeSelected(mode) => {
                 if let Some(document) = self.text_preview_document.as_mut() {
                     document.select_markdown_preview_mode(mode);

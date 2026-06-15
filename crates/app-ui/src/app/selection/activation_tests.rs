@@ -29,6 +29,7 @@ fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
 fn browser_with_entries(paths: &[PathBuf]) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
+    browser.is_loading = false;
     browser.entries = paths
         .iter()
         .cloned()
@@ -163,6 +164,41 @@ fn list_double_click_activates_directory() {
 
     assert_eq!(browser.current_dir, directory);
     assert_eq!(browser.back_stack, vec![PathBuf::from("/workspace")]);
+}
+
+#[test]
+fn list_double_click_keeps_visible_placeholders_while_canonical_entries_load() {
+    let directory = PathBuf::from("/workspace/project");
+    let child = PathBuf::from("/workspace/project/main.rs");
+    let mut browser = browser_with_entries(&[directory.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.expanded_directories.insert(
+        directory.clone(),
+        loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
+    );
+    browser.select_path(child.clone());
+
+    drop(browser.handle_list_entry_clicked(directory.clone()));
+    drop(browser.handle_list_entry_clicked(directory.clone()));
+
+    assert_eq!(browser.current_dir, directory.clone());
+    assert!(browser.is_loading);
+    assert!(browser.entries.is_empty());
+    assert!(browser.expanded_directories.is_empty());
+    assert_eq!(browser.selected, None);
+    assert!(browser.selected_paths.is_empty());
+    assert_eq!(browser.directory_loading_placeholder_entries.len(), 2);
+    assert_eq!(
+        browser.directory_loading_placeholder_entries[0].entry.path,
+        directory
+    );
+    assert_eq!(browser.directory_loading_placeholder_entries[0].depth, 0);
+    assert_eq!(
+        browser.directory_loading_placeholder_entries[1].entry.path,
+        child
+    );
+    assert_eq!(browser.directory_loading_placeholder_entries[1].depth, 1);
 }
 
 #[test]

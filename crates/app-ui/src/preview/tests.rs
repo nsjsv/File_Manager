@@ -4,6 +4,7 @@ use tempfile::tempdir;
 use zip::write::SimpleFileOptions;
 
 use crate::model::{PreviewTreeDirectoryChildren, TextPreviewFormat};
+use crate::text_preview_loading::{PLAIN_TEXT_PREVIEW_LIMIT, PREVIEW_TEXT_LIMIT};
 
 use super::*;
 
@@ -142,7 +143,7 @@ async fn load_preview_renders_markdown_text_preview() {
 }
 
 #[tokio::test]
-async fn load_preview_reads_text_beyond_first_100_lines() {
+async fn load_preview_reads_full_plain_text_preview() {
     let temp_dir = tempdir().expect("temp dir");
     let text_path = temp_dir.path().join("large.txt");
     let content = numbered_line_range(0, 150);
@@ -152,53 +153,43 @@ async fn load_preview_reads_text_beyond_first_100_lines() {
         .await
         .expect("text preview");
 
-    let PreviewContent::Text { rendered, .. } = preview_content else {
+    let PreviewContent::Text {
+        rendered,
+        next_offset,
+        loaded_line_count,
+        line_limit_notice,
+        ..
+    } = preview_content
+    else {
         panic!("expected text preview");
     };
     assert_eq!(rendered, content);
+    assert_eq!(loaded_line_count, 151);
+    assert_eq!(next_offset, None);
+    assert_eq!(line_limit_notice, None);
 }
 
 #[tokio::test]
-async fn load_preview_reads_ten_thousand_numbered_lines() {
-    let temp_dir = tempdir().expect("temp dir");
-    let text_path = temp_dir.path().join("ten-thousand-lines.txt");
-    let content = numbered_padded_line_range(0, 10_000, 96);
-    std::fs::write(&text_path, &content).expect("write text file");
-
-    assert!(content.len() > 256 * 1024);
-
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
-        .await
-        .expect("text preview");
-
-    let PreviewContent::Text { rendered, .. } = preview_content else {
-        panic!("expected text preview");
-    };
-    assert_eq!(rendered, content);
-    assert!(rendered.contains("line 9999: "));
-}
-
-#[tokio::test]
-async fn load_preview_limits_long_text_line_bytes() {
+async fn load_preview_rejects_plain_text_over_one_mib() {
     let temp_dir = tempdir().expect("temp dir");
     let text_path = temp_dir.path().join("single-line.txt");
-    let content = "a".repeat(PREVIEW_TEXT_LIMIT + 32);
+    let content = "a".repeat(PLAIN_TEXT_PREVIEW_LIMIT + 1);
     std::fs::write(&text_path, content).expect("write text file");
 
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
+    let error = load_preview(text_path, FileKind::File, ScanOptions::default())
         .await
-        .expect("text preview");
+        .expect_err("plain text should be rejected");
 
-    let PreviewContent::Text { rendered, .. } = preview_content else {
-        panic!("expected text preview");
-    };
-    assert_eq!(rendered.len(), PREVIEW_TEXT_LIMIT);
+    assert_eq!(
+        error,
+        "Text preview is only available for files up to 1 MiB"
+    );
 }
 
 #[tokio::test]
-async fn load_preview_truncates_long_text_on_utf8_boundary() {
+async fn load_preview_truncates_long_markdown_on_utf8_boundary() {
     let temp_dir = tempdir().expect("temp dir");
-    let text_path = temp_dir.path().join("unicode.txt");
+    let text_path = temp_dir.path().join("unicode.md");
     let content = "€".repeat(PREVIEW_TEXT_LIMIT);
     std::fs::write(&text_path, content).expect("write text file");
 
@@ -209,7 +200,7 @@ async fn load_preview_truncates_long_text_on_utf8_boundary() {
     let PreviewContent::Text { rendered, .. } = preview_content else {
         panic!("expected text preview");
     };
-    assert_eq!(rendered.as_bytes().len(), PREVIEW_TEXT_LIMIT - 1);
+    assert_eq!(rendered.len(), PREVIEW_TEXT_LIMIT - 1);
     assert!(rendered.is_char_boundary(rendered.len()));
 }
 
@@ -248,15 +239,6 @@ fn numbered_line_range(start: usize, end: usize) -> String {
     let mut content = String::new();
     for index in start..end {
         content.push_str(&format!("line {index}\n"));
-    }
-    content
-}
-
-fn numbered_padded_line_range(start: usize, end: usize, padding: usize) -> String {
-    let filler = "x".repeat(padding);
-    let mut content = String::new();
-    for index in start..end {
-        content.push_str(&format!("line {index}: {filler}\n"));
     }
     content
 }

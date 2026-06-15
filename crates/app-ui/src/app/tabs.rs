@@ -273,6 +273,7 @@ impl FileBrowser {
         self.active_tab_id = tab.id;
         self.is_trash_view = tab.is_trash_view;
         self.entries = tab.entries;
+        self.directory_loading_placeholder_entries.clear();
         self.trash_entries = tab.trash_entries;
         self.selected = tab.selected;
         self.selected_paths = tab.selected_paths;
@@ -735,6 +736,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         current_dir: tab.directory.clone(),
         is_trash_view: tab.is_trash_view,
         entries: tab.entries.clone(),
+        directory_loading_placeholder_entries: Vec::new(),
         trash_entries: tab.trash_entries.clone(),
         selected: tab.selected.clone(),
         selected_paths: tab.selected_paths.clone(),
@@ -773,6 +775,7 @@ pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.current_dir = tab.directory.clone();
     pane.is_trash_view = tab.is_trash_view;
     pane.entries = tab.entries.clone();
+    pane.directory_loading_placeholder_entries.clear();
     pane.trash_entries = tab.trash_entries.clone();
     pane.selected = tab.selected.clone();
     pane.selected_paths = tab.selected_paths.clone();

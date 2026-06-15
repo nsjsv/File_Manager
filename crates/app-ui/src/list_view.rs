@@ -14,7 +14,7 @@ use crate::file_entry_view::{entry_thumbnail_or_icon, FileEntryIconTone, FileEnt
 use crate::formatting::{format_file_size, format_system_time};
 use crate::icons::rotated_chevron_right_view;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
-use crate::model::{ExpandedDirectoryStatus, Message};
+use crate::model::{DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus, Message};
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
 
@@ -41,7 +41,17 @@ pub(crate) fn list_browser_view<'a>(
     rows = rows.push(list_header());
 
     if pane.is_loading && pane.entries.is_empty() {
-        rows = rows.push(list_message("Loading..."));
+        if pane.directory_loading_placeholder_entries.is_empty() {
+            rows = rows.push(list_message("Loading..."));
+        } else {
+            for (row_index, placeholder) in pane
+                .directory_loading_placeholder_entries
+                .iter()
+                .enumerate()
+            {
+                rows = rows.push(list_placeholder_entry_row(browser, placeholder, row_index));
+            }
+        }
     } else if pane.entries.is_empty() {
         rows = rows.push(list_message(if pane.is_trash_view {
             "Trash is empty"
@@ -254,6 +264,57 @@ fn list_entry_row<'a>(
         ))
         .clip(true);
     track_column_entry_bounds(animated_row, pane.id, entry.path.clone())
+}
+
+fn list_placeholder_entry_row<'a>(
+    browser: &'a FileBrowser,
+    placeholder: &'a DirectoryLoadingPlaceholderEntry,
+    row_index: usize,
+) -> Element<'a, Message> {
+    let entry = &placeholder.entry;
+    let row_content = row![
+        list_placeholder_name_cell(browser, entry, placeholder.depth),
+        text_cell(modified_text(entry), LIST_MODIFIED_PORTION),
+        text_cell(size_text(entry), LIST_SIZE_PORTION),
+        text_cell(kind_text(entry), LIST_KIND_PORTION),
+    ]
+    .spacing(0)
+    .align_y(Alignment::Center)
+    .width(Length::Fill);
+
+    container(
+        container(row_content)
+            .padding(LIST_ROW_PADDING)
+            .height(Length::Fixed(LIST_ROW_HEIGHT))
+            .center_y(Length::Fixed(LIST_ROW_HEIGHT))
+            .width(Length::Fill)
+            .style(list_row_style(placeholder.depth, row_index)),
+    )
+    .height(Length::Fixed(
+        LIST_ROW_HEIGHT * placeholder.animation_progress.clamp(0.0, 1.0),
+    ))
+    .clip(true)
+    .into()
+}
+
+fn list_placeholder_name_cell<'a>(
+    browser: &'a FileBrowser,
+    entry: &DirectoryEntry,
+    depth: usize,
+) -> Element<'a, Message> {
+    row![
+        Space::new().width(Length::Fixed(depth as f32 * LIST_INDENT_WIDTH)),
+        Space::new().width(Length::Fixed(LIST_TOGGLE_WIDTH)),
+        entry_thumbnail_or_icon(browser, entry, FileEntryIconTone::Normal),
+        measured_middle_ellipsized_text(
+            entry.name().to_string_lossy().into_owned(),
+            LIST_ROW_TEXT_SIZE,
+        )
+    ]
+    .spacing(LIST_ROW_SPACING)
+    .align_y(Alignment::Center)
+    .width(Length::FillPortion(LIST_NAME_PORTION))
+    .into()
 }
 
 fn list_name_cell<'a>(

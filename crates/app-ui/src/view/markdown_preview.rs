@@ -3,7 +3,7 @@ use iced::{Alignment, Element, Font, Length};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::appearance::{auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction};
-use crate::model::{Message, ScrollbarVisibility};
+use crate::model::{Message, ScrollbarVisibility, TextPreviewLineLimitNotice};
 use crate::typography::readable_text;
 
 const MARKDOWN_BODY_TEXT_SIZE: u32 = 14;
@@ -15,6 +15,7 @@ const MARKDOWN_SCROLLBAR_WIDTH: f32 = 6.0;
 
 pub(super) fn markdown_preview_body(
     markdown: &str,
+    line_limit_notice: Option<TextPreviewLineLimitNotice>,
     scroll_height: f32,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'static, Message> {
@@ -30,6 +31,9 @@ pub(super) fn markdown_preview_body(
             content = content.push(markdown_block_view(block));
         }
     }
+    if let Some(notice) = line_limit_notice {
+        content = content.push(readable_text(notice.label()).size(12));
+    }
 
     scrollable(content)
         .direction(auto_hide_vertical_scrollbar_direction(
@@ -39,6 +43,16 @@ pub(super) fn markdown_preview_body(
         .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .height(Length::Fixed(scroll_height))
         .width(Length::Fill)
+        .on_scroll(|viewport| {
+            let offset = viewport.absolute_offset();
+            let bounds = viewport.bounds();
+            let content_bounds = viewport.content_bounds();
+            Message::MarkdownPreviewScrolled {
+                offset_y: offset.y,
+                viewport_height: bounds.height,
+                content_height: content_bounds.height,
+            }
+        })
         .into()
 }
 

@@ -8,16 +8,13 @@ use file_core::{
     is_supported_audio_path, is_supported_video_path, scan_directory, DirectoryEntry, FileKind,
     ScanOptions,
 };
-use tokio::io::AsyncReadExt;
 
 use crate::audio_preview::inspect_audio_preview_metadata;
 use crate::model::{PreviewContent, PreviewTreeDirectoryChildren, PreviewTreeEntry};
-use crate::text_preview::render_text_preview;
+use crate::text_preview_loading::load_initial_text_preview;
 
-pub(crate) const PREVIEW_TEXT_LIMIT: usize = 4 * 1024 * 1024;
 pub(crate) const PREVIEW_ARCHIVE_ENTRY_LIMIT: usize = 500;
 
-const TEXT_PREVIEW_READ_BLOCK_SIZE: usize = 8 * 1024;
 const SUPPORTED_ARCHIVE_FORMAT_MESSAGE: &str =
     "Archive preview supports .zip, .tar, .tar.gz, .tgz, .7z, and .rar files";
 const SEVEN_ZIP_COMMAND_NAMES: [&str; 3] = ["7z", "7zz", "7za"];
@@ -529,53 +526,7 @@ fn archive_path_segments(path: &str) -> Vec<&str> {
 }
 
 async fn load_text_preview(path: PathBuf) -> Result<PreviewContent, String> {
-    let mut file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|error| format!("could not open text preview: {error}"))?;
-    let file_len = file
-        .metadata()
-        .await
-        .map_err(|error| format!("could not inspect text preview: {error}"))?
-        .len();
-
-    let mut buffer = Vec::new();
-    let mut block = vec![0; TEXT_PREVIEW_READ_BLOCK_SIZE];
-
-    while buffer.len() < PREVIEW_TEXT_LIMIT {
-        let read_limit = block.len().min(PREVIEW_TEXT_LIMIT - buffer.len());
-        let read_count = file
-            .read(&mut block[..read_limit])
-            .await
-            .map_err(|error| format!("could not read text preview: {error}"))?;
-        if read_count == 0 {
-            break;
-        }
-
-        buffer.extend_from_slice(&block[..read_count]);
-    }
-
-    let reached_eof = buffer.len() as u64 >= file_len;
-    let valid_len = valid_utf8_prefix_len(&buffer, reached_eof)?;
-    buffer.truncate(valid_len);
-    let content = String::from_utf8(buffer)
-        .map_err(|_| "Preview is only available for UTF-8 text files".to_owned())?;
-    let (rendered, format) = render_text_preview(path.as_path(), &content);
-
-    Ok(PreviewContent::Text {
-        path,
-        rendered,
-        format,
-    })
-}
-
-fn valid_utf8_prefix_len(buffer: &[u8], reached_eof: bool) -> Result<usize, String> {
-    match std::str::from_utf8(buffer) {
-        Ok(_) => Ok(buffer.len()),
-        Err(error) if error.error_len().is_none() && !reached_eof && error.valid_up_to() > 0 => {
-            Ok(error.valid_up_to())
-        }
-        Err(_) => Err("Preview is only available for UTF-8 text files".to_owned()),
-    }
+    load_initial_text_preview(path).await
 }
 
 #[cfg(test)]

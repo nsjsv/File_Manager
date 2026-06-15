@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use iced::widget::{image, text_editor};
+use iced::widget::image;
 use iced::Task;
 
 use super::FileBrowser;
@@ -16,6 +16,7 @@ use crate::model::{
 };
 
 mod animated_image;
+mod text;
 mod tree;
 
 impl FileBrowser {
@@ -39,11 +40,22 @@ impl FileBrowser {
                         path,
                         rendered,
                         format,
+                        next_offset,
+                        loaded_line_count,
+                        line_limit_notice,
                     } => {
                         self.clear_audio_preview();
                         self.clear_video_preview();
-                        self.text_preview_document =
-                            Some(TextPreviewDocument::new(path.clone(), rendered, *format));
+                        self.text_preview_generation = self.text_preview_generation.wrapping_add(1);
+                        self.text_preview_document = Some(TextPreviewDocument::new_initial(
+                            path.clone(),
+                            rendered,
+                            *format,
+                            self.text_preview_generation,
+                            *next_offset,
+                            *loaded_line_count,
+                            *line_limit_notice,
+                        ));
                         Task::none()
                     }
                     PreviewContent::Audio { .. } => {
@@ -79,18 +91,6 @@ impl FileBrowser {
                 }
             }
         }
-    }
-
-    pub(super) fn handle_text_preview_action(
-        &mut self,
-        action: text_editor::Action,
-    ) -> Task<Message> {
-        let Some(document) = self.active_text_preview_document_mut() else {
-            return Task::none();
-        };
-
-        document.perform(action);
-        Task::none()
     }
 
     pub(super) fn accept_video_preview_frame(
@@ -622,13 +622,6 @@ impl FileBrowser {
         }
     }
 
-    fn active_text_preview_document_mut(&mut self) -> Option<&mut TextPreviewDocument> {
-        let path = active_text_preview_path(self.preview.as_ref())?;
-        self.text_preview_document
-            .as_mut()
-            .filter(|document| document.path() == path)
-    }
-
     fn loading_audio_preview_mut(&mut self, path: &Path) -> Option<&mut AudioPreviewPlayback> {
         if active_audio_preview_path(self.preview.as_ref()) != Some(path) {
             return None;
@@ -690,13 +683,6 @@ impl FileBrowser {
 
     fn active_video_preview_path_matches(&self, path: &Path) -> bool {
         active_video_preview_path(self.preview.as_ref()) == Some(path)
-    }
-}
-
-fn active_text_preview_path(preview: Option<&PreviewState>) -> Option<&Path> {
-    match preview? {
-        PreviewState::Ready(PreviewContent::Text { path, .. }) => Some(path.as_path()),
-        _ => None,
     }
 }
 

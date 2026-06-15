@@ -32,6 +32,7 @@ impl FileBrowser {
         self.path_input = path_text(&self.current_dir);
         self.sidebar_locations = vec![home_sidebar_location(&home)];
         self.entries.clear();
+        self.directory_loading_placeholder_entries.clear();
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.is_loading = true;

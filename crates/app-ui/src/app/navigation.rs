@@ -11,8 +11,9 @@ use crate::commands::{
     load_trash_command, path_suggestions_command,
 };
 use crate::model::{
-    trash_location_path, BrowserPaneId, ExpandedDirectory, ExpandedDirectoryStatus, Message,
-    NavigationMode, PathSuggestionDirection, PathSuggestionRequest, TRASH_LOCATION_LABEL,
+    trash_location_path, BrowserPaneId, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
+    ExpandedDirectoryStatus, Message, NavigationMode, PathSuggestionDirection,
+    PathSuggestionRequest, TRASH_LOCATION_LABEL,
 };
 use crate::startup_trace;
 use crate::view::path_input_id;
@@ -38,6 +39,7 @@ impl FileBrowser {
             pane.path_suggestions.clear();
             pane.path_suggestion_selection = None;
             pane.entries = scan.entries;
+            pane.directory_loading_placeholder_entries.clear();
             pane.is_loading = false;
             pane.sync_active_tab_state();
             return delayed_thumbnail_refresh_command(pane_id, pane.current_dir.clone());
@@ -52,6 +54,7 @@ impl FileBrowser {
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         self.entries = scan.entries;
+        self.directory_loading_placeholder_entries.clear();
         self.reveal_pending_search_match();
         self.is_loading = false;
         self.error = None;
@@ -87,6 +90,7 @@ impl FileBrowser {
                 .iter()
                 .map(|trash_entry| trash_entry.entry.clone())
                 .collect();
+            pane.directory_loading_placeholder_entries.clear();
             pane.deepest_open_column_directory = None;
             pane.expanded_directories.clear();
             pane.is_loading = false;
@@ -108,6 +112,7 @@ impl FileBrowser {
             .iter()
             .map(|trash_entry| trash_entry.entry.clone())
             .collect();
+        self.directory_loading_placeholder_entries.clear();
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
         self.is_loading = false;
@@ -118,6 +123,7 @@ impl FileBrowser {
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
         let pane_id = self.active_pane_id();
+        let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
         {
             self.back_stack.push(self.current_dir.clone());
@@ -129,6 +135,7 @@ impl FileBrowser {
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         self.entries.clear();
+        self.directory_loading_placeholder_entries = placeholder_entries;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
@@ -142,6 +149,7 @@ impl FileBrowser {
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
         let pane_id = self.active_pane_id();
+        let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view {
             self.back_stack.push(self.current_dir.clone());
             self.forward_stack.clear();
@@ -152,6 +160,7 @@ impl FileBrowser {
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         self.entries.clear();
+        self.directory_loading_placeholder_entries = placeholder_entries;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
@@ -169,6 +178,7 @@ impl FileBrowser {
             self.path_suggestions.clear();
             self.path_suggestion_selection = None;
             self.clear_transient_interaction_state();
+            self.directory_loading_placeholder_entries.clear();
             self.is_loading = true;
             self.error = None;
             self.deepest_open_column_directory = None;
@@ -180,6 +190,7 @@ impl FileBrowser {
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         self.clear_transient_interaction_state();
+        self.directory_loading_placeholder_entries.clear();
         self.is_loading = true;
         self.error = None;
 
@@ -214,6 +225,7 @@ impl FileBrowser {
 
         pane.path_suggestions.clear();
         pane.path_suggestion_selection = None;
+        pane.directory_loading_placeholder_entries.clear();
         pane.is_loading = true;
 
         if pane.is_trash_view {
@@ -636,6 +648,19 @@ impl FileBrowser {
             &self.current_dir,
             self.path_suggestion_generation,
         )
+    }
+
+    fn capture_directory_loading_placeholder_entries(
+        &self,
+    ) -> Vec<DirectoryLoadingPlaceholderEntry> {
+        crate::visible_entries::visible_entries(&self.entries, &self.expanded_directories)
+            .into_iter()
+            .map(|visible_entry| DirectoryLoadingPlaceholderEntry {
+                entry: visible_entry.entry.clone(),
+                depth: visible_entry.depth,
+                animation_progress: visible_entry.animation_progress,
+            })
+            .collect()
     }
 
     fn clear_selection_context(&mut self) {

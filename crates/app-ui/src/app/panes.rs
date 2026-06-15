@@ -7,8 +7,8 @@ use iced::Point;
 use super::tabs::{TabAnimationState, TabBarReveal};
 use super::FileBrowser;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode, ExpandedDirectory,
-    FileDragState, SplitRegion,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
+    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, SplitRegion,
 };
 
 const SPLIT_TARGET_MIN_CONTENT_WIDTH: f32 = 1.0;
@@ -19,6 +19,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) current_dir: &'a PathBuf,
     pub(crate) is_trash_view: bool,
     pub(crate) entries: &'a [DirectoryEntry],
+    pub(crate) directory_loading_placeholder_entries: &'a [DirectoryLoadingPlaceholderEntry],
     pub(crate) selected: Option<&'a PathBuf>,
     pub(crate) selected_paths: &'a HashSet<PathBuf>,
     pub(crate) deepest_open_column_directory: Option<&'a PathBuf>,
@@ -123,6 +124,7 @@ impl FileBrowser {
                 current_dir: &self.current_dir,
                 is_trash_view: self.is_trash_view,
                 entries: &self.entries,
+                directory_loading_placeholder_entries: &self.directory_loading_placeholder_entries,
                 selected: self.selected.as_ref(),
                 selected_paths: &self.selected_paths,
                 deepest_open_column_directory: self.deepest_open_column_directory.as_ref(),
@@ -149,6 +151,7 @@ impl FileBrowser {
             current_dir: &pane.current_dir,
             is_trash_view: pane.is_trash_view,
             entries: &pane.entries,
+            directory_loading_placeholder_entries: &pane.directory_loading_placeholder_entries,
             selected: pane.selected.as_ref(),
             selected_paths: &pane.selected_paths,
             deepest_open_column_directory: pane.deepest_open_column_directory.as_ref(),
@@ -279,6 +282,9 @@ impl FileBrowser {
             current_dir: self.current_dir.clone(),
             is_trash_view: self.is_trash_view,
             entries: self.entries.clone(),
+            directory_loading_placeholder_entries: self
+                .directory_loading_placeholder_entries
+                .clone(),
             trash_entries: self.trash_entries.clone(),
             selected: self.selected.clone(),
             selected_paths: self.selected_paths.clone(),
@@ -303,6 +309,7 @@ impl FileBrowser {
         self.current_dir = pane.current_dir;
         self.is_trash_view = pane.is_trash_view;
         self.entries = pane.entries;
+        self.directory_loading_placeholder_entries = pane.directory_loading_placeholder_entries;
         self.trash_entries = pane.trash_entries;
         self.selected = pane.selected;
         self.selected_paths = pane.selected_paths;

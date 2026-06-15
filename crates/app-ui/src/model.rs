@@ -30,7 +30,10 @@ pub(crate) use crate::startup_index_tree::{
     StartupIndexDirectoryChildren, StartupIndexEntrySelection, StartupIndexRootSeed,
     StartupIndexSetupState, StartupIndexTreeEntry,
 };
-pub(crate) use crate::text_preview::{MarkdownPreviewMode, TextPreviewDocument, TextPreviewFormat};
+pub(crate) use crate::text_preview::{
+    MarkdownPreviewMode, TextPreviewChunk, TextPreviewDocument, TextPreviewFormat,
+    TextPreviewLineLimitNotice,
+};
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
 #[derive(Debug, Clone)]
@@ -77,7 +80,21 @@ pub(crate) enum Message {
     FilePropertiesCategorySelected(FilePropertiesCategory),
     FilePropertiesPermissionsUpdated(PathBuf, Result<FilePropertiesPermissions, String>),
     PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
-    TextPreviewAction(text_editor::Action),
+    TextPreviewAction {
+        action: text_editor::Action,
+        viewport_height: f32,
+    },
+    TextPreviewChunkLoaded {
+        path: PathBuf,
+        generation: u64,
+        start_offset: u64,
+        outcome: Result<TextPreviewChunk, String>,
+    },
+    MarkdownPreviewScrolled {
+        offset_y: f32,
+        viewport_height: f32,
+        content_height: f32,
+    },
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
     AnimatedImageFrameAdvanced(PathBuf),
@@ -667,11 +684,19 @@ pub(crate) enum BrowserViewMode {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct DirectoryLoadingPlaceholderEntry {
+    pub(crate) entry: DirectoryEntry,
+    pub(crate) depth: usize,
+    pub(crate) animation_progress: f32,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct BrowserPane {
     pub(crate) id: BrowserPaneId,
     pub(crate) current_dir: PathBuf,
     pub(crate) is_trash_view: bool,
     pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
     pub(crate) trash_entries: Vec<TrashEntry>,
     pub(crate) selected: Option<PathBuf>,
     pub(crate) selected_paths: HashSet<PathBuf>,
@@ -886,6 +911,9 @@ pub(crate) enum PreviewContent {
         path: PathBuf,
         rendered: String,
         format: TextPreviewFormat,
+        next_offset: Option<u64>,
+        loaded_line_count: usize,
+        line_limit_notice: Option<TextPreviewLineLimitNotice>,
     },
     Archive {
         entries: Vec<PreviewTreeEntry>,

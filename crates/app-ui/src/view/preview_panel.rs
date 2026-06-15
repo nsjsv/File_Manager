@@ -87,10 +87,12 @@ fn preview_panel<'a>(
             path,
             rendered,
             format,
+            line_limit_notice,
             ..
         }) => text_preview_panel(
             rendered,
             *format,
+            *line_limit_notice,
             text_preview_document.filter(|document| document.path() == path.as_path()),
             scroll_height,
             scrollbar_visibility,
