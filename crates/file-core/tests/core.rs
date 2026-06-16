@@ -12,8 +12,7 @@ use file_core::{
     sort_entries, watch_directory, DirectoryEntry, EntryMetadata, FileError, FileKind,
     FileOperationControls, FileOperationRunState, FileOperationVerification,
     FileSearchIndexOptions, FileSearchOptions, FileTransferOptions, ScanOptions, SortDirection,
-    SortField, TransferConflictCheck,
-    TransferConflictStrategy,
+    SortField, TransferConflictCheck, TransferConflictStrategy,
 };
 use tempfile::tempdir;
 

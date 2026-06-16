@@ -3,9 +3,11 @@ use std::time::Duration;
 
 use iced::widget::{
     button, column, container, image, mouse_area, row, scrollable, slider, Button, Column, Space,
+    Stack,
 };
 use iced::{Alignment, Element, Length};
 
+use crate::animated_image_preview::AnimatedImagePreview;
 use crate::appearance::{
     app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
     navigation_icon_button_style, preview_window_panel_style,
@@ -44,6 +46,9 @@ const VIDEO_PROGRESS_SLIDER_PORTION: u16 = 3;
 const VIDEO_VOLUME_SLIDER_PORTION: u16 = 1;
 const VIDEO_CONTROL_SLIDER_GAP: f32 = 14.0;
 const VIDEO_VOLUME_ICON_GAP: f32 = 6.0;
+const ANIMATED_IMAGE_CONTROL_RESERVED_HEIGHT: f32 = 58.0;
+const ANIMATED_IMAGE_CONTROL_SIDE_PADDING: f32 = 28.0;
+const ANIMATED_IMAGE_MIN_CONTROL_WIDTH: f32 = 220.0;
 
 pub(crate) fn view_preview_window<'a>(
     preview: Option<&'a PreviewState>,
@@ -107,12 +112,7 @@ fn preview_panel<'a>(
             ..
         }) => return image_preview_panel(handle, *width, *height, size),
         PreviewState::Ready(PreviewContent::AnimatedImage(preview)) => {
-            return image_preview_panel(
-                preview.current_frame_handle(),
-                preview.width(),
-                preview.height(),
-                size,
-            )
+            return animated_image_preview_panel(preview, size)
         }
         PreviewState::Ready(PreviewContent::Audio {
             path,
@@ -313,22 +313,120 @@ fn image_preview_panel(
     size: PreviewSize,
 ) -> Element<'static, Message> {
     let (image_width, image_height) = image_preview_size(size, width, height);
-    container(
-        image::Image::new(handle.clone())
-            .width(Length::Fixed(image_width))
-            .height(Length::Fixed(image_height)),
+    container(preview_image_frame(handle, image_width, image_height))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
+fn animated_image_preview_panel(
+    preview: &AnimatedImagePreview,
+    size: PreviewSize,
+) -> Element<'static, Message> {
+    let (image_width, image_height) =
+        animated_image_preview_size(size, preview.width(), preview.height());
+    let mut frames = Stack::new()
+        .width(Length::Fixed(image_width))
+        .height(Length::Fixed(image_height));
+
+    if let Some(handle) = preview.previous_frame_handle() {
+        frames = frames.push(preview_image_frame(handle, image_width, image_height));
+    }
+
+    frames = frames.push(preview_image_frame(
+        preview.current_frame_handle(),
+        image_width,
+        image_height,
+    ));
+
+    let mut content = column![container(frames)
+        .width(Length::Fill)
+        .height(Length::Fixed(image_height))
+        .center_x(Length::Fill),]
+    .spacing(8)
+    .align_x(Alignment::Center);
+
+    if let Some(controls) = animated_image_controls(preview, size, image_width) {
+        content = content.push(controls);
+    }
+
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
+fn animated_image_controls(
+    preview: &AnimatedImagePreview,
+    size: PreviewSize,
+    image_width: f32,
+) -> Option<Element<'static, Message>> {
+    let duration = preview.playback_duration()?;
+
+    let width = animated_image_control_width(size, image_width);
+    let mut controls = Column::new()
+        .spacing(4)
+        .align_x(Alignment::Center)
+        .width(Length::Fixed(width));
+
+    let position = preview.playback_position().min(duration);
+    let duration_seconds = duration
+        .as_secs_f32()
+        .max(AUDIO_PROGRESS_SLIDER_STEP_SECONDS);
+    let position_seconds = position.as_secs_f32().min(duration_seconds);
+    controls = controls.push(
+        slider(
+            0.0..=duration_seconds,
+            position_seconds,
+            Message::AnimatedImageSeekRequested,
+        )
+        .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
+        .on_release(Message::AnimatedImageSeekCommitted)
+        .width(Length::Fixed(width)),
+    );
+    controls =
+        controls.push(readable_text(animated_image_position_text(position, duration)).size(12));
+
+    Some(controls.into())
+}
+
+fn animated_image_position_text(position: Duration, duration: Duration) -> String {
+    format!(
+        "{} / {}",
+        format_duration(position),
+        format_duration(duration)
     )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
+}
+
+fn preview_image_frame(
+    handle: &image::Handle,
+    width: f32,
+    height: f32,
+) -> image::Image<image::Handle> {
+    image::Image::new(handle.clone())
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(height))
 }
 
 fn image_preview_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
     let max_width = size.width.max(1.0);
     let max_height = size.height.max(1.0);
     scaled_media_size(max_width, max_height, width, height)
+}
+
+fn animated_image_preview_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
+    let max_width = size.width.max(1.0);
+    let max_height = (size.height - ANIMATED_IMAGE_CONTROL_RESERVED_HEIGHT).max(1.0);
+    scaled_media_size(max_width, max_height, width, height)
+}
+
+fn animated_image_control_width(size: PreviewSize, image_width: f32) -> f32 {
+    let available_width = (size.width - ANIMATED_IMAGE_CONTROL_SIDE_PADDING * 2.0).max(1.0);
+    available_width.min(image_width.max(ANIMATED_IMAGE_MIN_CONTROL_WIDTH))
 }
 
 fn audio_preview_panel(

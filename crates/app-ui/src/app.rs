@@ -40,6 +40,7 @@ use iced::keyboard;
 use iced::window;
 use iced::{time, Element, Point, Subscription, Task, Theme};
 
+use crate::animated_image_preview::animated_image_preview_subscription;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
@@ -100,6 +101,7 @@ pub(crate) struct FileBrowser {
     cursor_search_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
+    animated_image_preview_generation: u64,
     text_preview_generation: u64,
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
     pub(crate) video_preview: Option<VideoPreviewPlayback>,
@@ -266,6 +268,7 @@ impl FileBrowser {
             cursor_search_directory: None,
             preview: None,
             text_preview_document: None,
+            animated_image_preview_generation: 0,
             text_preview_generation: 0,
             audio_preview: None,
             video_preview: None,
@@ -426,12 +429,10 @@ impl FileBrowser {
                 .push(time::every(AUDIO_PREVIEW_TICK_INTERVAL).map(|_| Message::VideoPreviewTick));
         }
 
-        if let Some((path, delay)) = self.active_animated_image_preview_frame_delay() {
-            subscriptions.push(
-                time::every(delay)
-                    .with(path)
-                    .map(|(path, _)| Message::AnimatedImageFrameAdvanced(path)),
-            );
+        if let Some((path, generation, position)) = self.active_animated_image_preview_stream() {
+            subscriptions.push(animated_image_preview_subscription(
+                path, generation, position,
+            ));
         }
 
         if let Some((path, generation, position)) = self.active_video_preview_stream() {
@@ -526,8 +527,8 @@ impl FileBrowser {
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
             }
-            Message::AnimatedImagePreviewLoaded(path, preview_outcome) => {
-                self.accept_animated_image_preview(path, preview_outcome)
+            Message::AnimatedImagePreviewLoaded(path, generation, preview_outcome) => {
+                self.accept_animated_image_preview_loaded(path, generation, preview_outcome)
             }
             Message::FilePropertiesLoaded(path, properties_outcome) => {
                 self.accept_file_properties(path, properties_outcome)
@@ -568,7 +569,17 @@ impl FileBrowser {
             Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
                 self.accept_image_preview_dimensions(path, dimensions_outcome)
             }
-            Message::AnimatedImageFrameAdvanced(path) => self.advance_animated_image_preview(path),
+            Message::AnimatedImageFrameLoaded(frame) => self.accept_animated_image_frame(frame),
+            Message::AnimatedImagePreviewFinished(path, generation) => {
+                self.accept_animated_image_preview_finished(path, generation)
+            }
+            Message::AnimatedImagePreviewFailed(path, generation, error) => {
+                self.accept_animated_image_preview_error(path, generation, error)
+            }
+            Message::AnimatedImageSeekRequested(position) => {
+                self.seek_animated_image_preview(position)
+            }
+            Message::AnimatedImageSeekCommitted => self.commit_animated_image_preview_seek(),
             Message::AudioPreviewPlaybackToggled => self.toggle_audio_preview_playback(),
             Message::AudioPreviewStarted(path, playback_outcome) => {
                 self.accept_audio_preview_started(path, playback_outcome)

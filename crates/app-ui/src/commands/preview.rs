@@ -61,11 +61,14 @@ pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     })
 }
 
-pub(crate) fn animated_image_preview_command(path: PathBuf) -> Task<Message> {
+pub(crate) fn animated_image_preview_command(path: PathBuf, generation: u64) -> Task<Message> {
     let image_path = path.clone();
-    Task::perform(load_animated_image_preview(path), move |preview_outcome| {
-        Message::AnimatedImagePreviewLoaded(image_path.clone(), preview_outcome)
-    })
+    Task::perform(
+        load_animated_image_preview(path, generation),
+        move |preview_outcome| {
+            Message::AnimatedImagePreviewLoaded(image_path.clone(), generation, preview_outcome)
+        },
+    )
 }
 
 pub(crate) fn text_preview_chunk_command(request: TextPreviewChunkRequest) -> Task<Message> {

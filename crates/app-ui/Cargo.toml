@@ -11,6 +11,7 @@ dirs.workspace = true
 file-core = { path = "../file-core" }
 file-operation-store = { path = "../file-operation-store" }
 flate2 = "1.1.9"
+gif = "0.14.2"
 iced.workspace = true
 image.workspace = true
 pulldown-cmark = "0.13.4"

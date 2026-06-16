@@ -147,6 +147,7 @@ dependencies = [
  "file-core",
  "file-operation-store",
  "flate2",
+ "gif 0.14.2",
  "iced",
  "image",
  "pulldown-cmark",

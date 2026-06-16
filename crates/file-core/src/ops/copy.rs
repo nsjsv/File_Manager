@@ -419,11 +419,14 @@ async fn copied_file_content_hash(
 
     loop {
         controls.wait_until_running().await?;
-        let read = target.read(buffer).await.map_err(|source| FileError::Copy {
-            from: from.to_path_buf(),
-            to: to.to_path_buf(),
-            source,
-        })?;
+        let read = target
+            .read(buffer)
+            .await
+            .map_err(|source| FileError::Copy {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            })?;
         if read == 0 {
             return Ok(target_content_hasher.finalize());
         }
@@ -431,10 +434,7 @@ async fn copied_file_content_hash(
     }
 }
 
-async fn verify_copied_directory(
-    from: &Path,
-    to: &Path,
-) -> Result<(), FileError> {
+async fn verify_copied_directory(from: &Path, to: &Path) -> Result<(), FileError> {
     let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
         from: from.to_path_buf(),
         to: to.to_path_buf(),
@@ -558,8 +558,7 @@ async fn copy_directory(
                         }
                         return Err(error);
                     }
-                    if let Err(error) =
-                        verify_copied_directory(&source_child, &target_child).await
+                    if let Err(error) = verify_copied_directory(&source_child, &target_child).await
                     {
                         if created_root {
                             let _ = fs::remove_dir_all(to).await;
@@ -726,11 +725,7 @@ mod tests {
         .unwrap_err();
 
         match error {
-            FileError::Copy {
-                from,
-                to,
-                source,
-            } => {
+            FileError::Copy { from, to, source } => {
                 assert_eq!(from, source_path);
                 assert_eq!(to, target);
                 assert_eq!(source.kind(), io::ErrorKind::InvalidData);

@@ -16,7 +16,7 @@ use iced::keyboard;
 use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Rectangle, Theme};
 
-use crate::animated_image_preview::AnimatedImagePreview;
+use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
@@ -71,7 +71,7 @@ pub(crate) enum Message {
     OpenWithApplicationFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
-    AnimatedImagePreviewLoaded(PathBuf, Result<AnimatedImagePreview, String>),
+    AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
     FilePropertiesLoaded(PathBuf, Result<FilePropertiesSnapshot, String>),
     FilePropertiesPermissionToggled(
         FilePropertiesPermissionClass,
@@ -97,7 +97,11 @@ pub(crate) enum Message {
     },
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
     ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
-    AnimatedImageFrameAdvanced(PathBuf),
+    AnimatedImageFrameLoaded(AnimatedImageFrame),
+    AnimatedImagePreviewFinished(PathBuf, u64),
+    AnimatedImagePreviewFailed(PathBuf, u64, String),
+    AnimatedImageSeekRequested(f32),
+    AnimatedImageSeekCommitted,
     AudioPreviewPlaybackToggled,
     AudioPreviewStarted(PathBuf, Result<AudioPreviewRuntime, String>),
     AudioPreviewSeekRequested(f32),

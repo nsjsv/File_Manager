@@ -3,12 +3,31 @@ use std::time::Duration;
 
 use iced::Task;
 
-use crate::animated_image_preview::AnimatedImagePreview;
+use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::FileBrowser;
 use crate::model::{Message, PreviewContent, PreviewState};
 
 impl FileBrowser {
-    pub(in crate::app) fn accept_animated_image_preview(
+    pub(in crate::app) fn next_animated_image_preview_generation(&mut self) -> u64 {
+        self.animated_image_preview_generation =
+            self.animated_image_preview_generation.wrapping_add(1);
+        self.animated_image_preview_generation
+    }
+
+    pub(in crate::app) fn accept_animated_image_preview_loaded(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        preview_outcome: Result<AnimatedImagePreview, String>,
+    ) -> Task<Message> {
+        if generation != self.animated_image_preview_generation {
+            return Task::none();
+        }
+
+        self.accept_animated_image_preview_load_result(path, preview_outcome)
+    }
+
+    fn accept_animated_image_preview_load_result(
         &mut self,
         path: PathBuf,
         preview_outcome: Result<AnimatedImagePreview, String>,
@@ -41,33 +60,103 @@ impl FileBrowser {
         }
     }
 
-    pub(in crate::app) fn active_animated_image_preview_frame_delay(
+    pub(in crate::app) fn active_animated_image_preview_stream(
         &self,
-    ) -> Option<(PathBuf, Duration)> {
+    ) -> Option<(PathBuf, u64, Duration)> {
         let PreviewState::Ready(PreviewContent::AnimatedImage(preview)) = self.preview.as_ref()?
         else {
             return None;
         };
 
-        preview
-            .current_frame_delay()
-            .map(|delay| (preview.path().to_path_buf(), delay))
+        preview.is_playing().then(|| {
+            (
+                preview.path().to_path_buf(),
+                preview.generation(),
+                preview.stream_start_position(),
+            )
+        })
     }
 
-    pub(in crate::app) fn advance_animated_image_preview(
+    pub(in crate::app) fn accept_animated_image_frame(
         &mut self,
-        path: PathBuf,
+        frame: AnimatedImageFrame,
     ) -> Task<Message> {
         let Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) =
             self.preview.as_mut()
         else {
             return Task::none();
         };
-        if preview.path() != path.as_path() {
+        if preview.path() != frame.path.as_path() || preview.generation() != frame.generation {
             return Task::none();
         }
 
-        preview.advance_frame();
+        preview.accept_frame(frame);
+        Task::none()
+    }
+
+    pub(in crate::app) fn accept_animated_image_preview_finished(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+    ) -> Task<Message> {
+        let Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) =
+            self.preview.as_mut()
+        else {
+            return Task::none();
+        };
+        if preview.path() != path.as_path() || preview.generation() != generation {
+            return Task::none();
+        }
+
+        preview.finish();
+        Task::none()
+    }
+
+    pub(in crate::app) fn accept_animated_image_preview_error(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        error: String,
+    ) -> Task<Message> {
+        let Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) =
+            self.preview.as_ref()
+        else {
+            return Task::none();
+        };
+        if preview.path() != path.as_path() || preview.generation() != generation {
+            return Task::none();
+        }
+
+        self.preview = Some(PreviewState::Error(error));
+        self.open_image_preview_error_window()
+    }
+
+    pub(in crate::app) fn seek_animated_image_preview(
+        &mut self,
+        position_seconds: f32,
+    ) -> Task<Message> {
+        let Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) =
+            self.preview.as_mut()
+        else {
+            return Task::none();
+        };
+        let Some(duration) = preview.playback_duration() else {
+            return Task::none();
+        };
+
+        let position = Duration::from_secs_f32(position_seconds.max(0.0)).min(duration);
+        preview.seek_to_position(position);
+        Task::none()
+    }
+
+    pub(in crate::app) fn commit_animated_image_preview_seek(&mut self) -> Task<Message> {
+        let Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) =
+            self.preview.as_mut()
+        else {
+            return Task::none();
+        };
+
+        preview.commit_seek();
         Task::none()
     }
 }

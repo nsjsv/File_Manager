@@ -506,7 +506,9 @@ mod tests {
     use file_core::{EntryMetadata, FileKind};
 
     use super::*;
-    use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
+    use crate::animated_image_preview::{
+        AnimatedImageFrame, AnimatedImagePlayback, AnimatedImagePreview,
+    };
     use crate::config::ui_thread_startup_config;
     use crate::model::{BrowserPaneLayout, BrowserTab, SplitAxis};
 
@@ -618,21 +620,22 @@ mod tests {
             width: 1400.0,
             height: 1000.0,
         };
+        let animated_path = PathBuf::from("/workspace/loop.gif");
+        let first_frame = AnimatedImageFrame {
+            path: animated_path.clone(),
+            generation: 1,
+            position: std::time::Duration::ZERO,
+            handle: iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            width: 1,
+            height: 1,
+        };
         browser.preview = Some(PreviewState::Ready(PreviewContent::AnimatedImage(
             AnimatedImagePreview::new(
-                PathBuf::from("/workspace/loop.gif"),
-                vec![
-                    AnimatedImageFrame::new(
-                        iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
-                        std::time::Duration::from_millis(20),
-                    ),
-                    AnimatedImageFrame::new(
-                        iced::widget::image::Handle::from_rgba(1, 1, vec![255, 0, 0, 255]),
-                        std::time::Duration::from_millis(20),
-                    ),
-                ],
+                animated_path,
+                first_frame,
                 1,
-                1,
+                Some(std::time::Duration::from_millis(40)),
+                AnimatedImagePlayback::Animated,
             )
             .expect("animated image preview"),
         )));

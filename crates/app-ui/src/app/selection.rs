@@ -975,7 +975,11 @@ impl FileBrowser {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.error = None;
-            return Task::batch([close_window_command, animated_image_preview_command(path)]);
+            let generation = self.next_animated_image_preview_generation();
+            return Task::batch([
+                close_window_command,
+                animated_image_preview_command(path, generation),
+            ]);
         }
         if is_image_preview {
             let close_window_command = self.close_preview_window();
