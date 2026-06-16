@@ -10,26 +10,22 @@ const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
 const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
 const MIN_PREVIEW_WIDTH: f32 = 420.0;
 const MIN_PREVIEW_HEIGHT: f32 = 260.0;
-const MAX_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_PREVIEW_HEIGHT: f32 = 760.0;
 const DEFAULT_IMAGE_PREVIEW_WIDTH: f32 = 748.0;
 const DEFAULT_IMAGE_PREVIEW_HEIGHT: f32 = 636.0;
 const MIN_IMAGE_PREVIEW_WIDTH: f32 = 360.0;
 const MIN_IMAGE_PREVIEW_HEIGHT: f32 = 260.0;
-const MAX_IMAGE_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_IMAGE_PREVIEW_HEIGHT: f32 = 940.0;
+const IMAGE_PREVIEW_INITIAL_FIT_MAX_WIDTH: f32 = 1080.0;
+const IMAGE_PREVIEW_INITIAL_FIT_MAX_HEIGHT: f32 = 940.0;
 const DEFAULT_AUDIO_PREVIEW_WIDTH: f32 = 780.0;
 const DEFAULT_AUDIO_PREVIEW_HEIGHT: f32 = 168.0;
 const MIN_AUDIO_PREVIEW_WIDTH: f32 = 560.0;
 const MIN_AUDIO_PREVIEW_HEIGHT: f32 = 136.0;
-const MAX_AUDIO_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_AUDIO_PREVIEW_HEIGHT: f32 = 240.0;
 const DEFAULT_VIDEO_PREVIEW_WIDTH: f32 = 748.0;
 const DEFAULT_VIDEO_PREVIEW_HEIGHT: f32 = 589.0;
 const MIN_VIDEO_PREVIEW_WIDTH: f32 = 360.0;
 const MIN_VIDEO_PREVIEW_HEIGHT: f32 = 320.0;
-const MAX_VIDEO_PREVIEW_WIDTH: f32 = 1080.0;
-const MAX_VIDEO_PREVIEW_HEIGHT: f32 = 940.0;
+const VIDEO_PREVIEW_INITIAL_FIT_MAX_WIDTH: f32 = 1080.0;
+const VIDEO_PREVIEW_INITIAL_FIT_MAX_HEIGHT: f32 = 940.0;
 const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
 const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
 const MIN_SEARCH_WIDTH: f32 = 520.0;
@@ -96,13 +92,11 @@ fn properties_window_settings() -> window::Settings {
 }
 
 fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> window::Settings {
-    let size = clamp_preview_size(profile, size);
+    let size = clamp_preview_size_to_minimum(profile, size);
     let min_size = preview_min_size(profile);
-    let max_size = preview_max_size(profile);
     let mut settings = window::Settings {
         size: Size::new(size.width, size.height),
         min_size: Some(min_size),
-        max_size: Some(max_size),
         exit_on_close_request: false,
         ..window::Settings::default()
     };
@@ -170,12 +164,11 @@ fn rename_input_focus_check_command() -> Task<Message> {
     advanced_widget::operate(RenameInputFocusCheck::new(rename_input_id()))
 }
 
-fn clamp_preview_size(profile: PreviewWindowProfile, size: PreviewSize) -> PreviewSize {
+fn clamp_preview_size_to_minimum(profile: PreviewWindowProfile, size: PreviewSize) -> PreviewSize {
     let min_size = preview_min_size(profile);
-    let max_size = preview_max_size(profile);
     PreviewSize {
-        width: size.width.clamp(min_size.width, max_size.width),
-        height: size.height.clamp(min_size.height, max_size.height),
+        width: size.width.max(min_size.width),
+        height: size.height.max(min_size.height),
     }
 }
 
@@ -188,17 +181,22 @@ fn preview_min_size(profile: PreviewWindowProfile) -> Size {
     }
 }
 
-fn preview_max_size(profile: PreviewWindowProfile) -> Size {
-    match profile {
-        PreviewWindowProfile::Regular => Size::new(MAX_PREVIEW_WIDTH, MAX_PREVIEW_HEIGHT),
-        PreviewWindowProfile::Image => Size::new(MAX_IMAGE_PREVIEW_WIDTH, MAX_IMAGE_PREVIEW_HEIGHT),
-        PreviewWindowProfile::Audio => Size::new(MAX_AUDIO_PREVIEW_WIDTH, MAX_AUDIO_PREVIEW_HEIGHT),
-        PreviewWindowProfile::Video => Size::new(MAX_VIDEO_PREVIEW_WIDTH, MAX_VIDEO_PREVIEW_HEIGHT),
-    }
+fn image_preview_initial_fit_max_size() -> Size {
+    Size::new(
+        IMAGE_PREVIEW_INITIAL_FIT_MAX_WIDTH,
+        IMAGE_PREVIEW_INITIAL_FIT_MAX_HEIGHT,
+    )
+}
+
+fn video_preview_initial_fit_max_size() -> Size {
+    Size::new(
+        VIDEO_PREVIEW_INITIAL_FIT_MAX_WIDTH,
+        VIDEO_PREVIEW_INITIAL_FIT_MAX_HEIGHT,
+    )
 }
 
 fn image_preview_size_from_dimensions(width: u32, height: u32) -> PreviewSize {
-    let max_size = preview_max_size(PreviewWindowProfile::Image);
+    let max_size = image_preview_initial_fit_max_size();
     let image_width = width as f32;
     let image_height = height as f32;
     let scale = (max_size.width / image_width)
@@ -212,7 +210,7 @@ fn image_preview_size_from_dimensions(width: u32, height: u32) -> PreviewSize {
 }
 
 fn video_preview_size_from_frame(width: u32, height: u32) -> PreviewSize {
-    let max_size = preview_max_size(PreviewWindowProfile::Video);
+    let max_size = video_preview_initial_fit_max_size();
     let max_frame_height = (max_size.height - VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT).max(1.0);
     let frame_width = width as f32;
     let frame_height = height as f32;
@@ -336,7 +334,7 @@ impl FileBrowser {
     pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
         self.preview_window_profile = profile;
         self.preview_size = default_preview_size(profile);
-        let size = clamp_preview_size(profile, self.preview_size);
+        let size = clamp_preview_size_to_minimum(profile, self.preview_size);
         self.pending_preview_resize = Some(size);
         if let Some(window) = self.preview_window {
             self.focused_window = window;
@@ -387,7 +385,7 @@ impl FileBrowser {
         size: PreviewSize,
     ) -> Task<Message> {
         self.preview_window_profile = profile;
-        self.preview_size = clamp_preview_size(profile, size);
+        self.preview_size = clamp_preview_size_to_minimum(profile, size);
         self.pending_preview_resize = Some(self.preview_size);
 
         let close_command = if let Some(window) = self.preview_window.take() {
@@ -604,8 +602,10 @@ impl FileBrowser {
         }
 
         if self.preview_window == Some(window) {
-            let resized_size =
-                clamp_preview_size(self.preview_window_profile, PreviewSize { width, height });
+            let resized_size = clamp_preview_size_to_minimum(
+                self.preview_window_profile,
+                PreviewSize { width, height },
+            );
             if let Some(pending_size) = self.pending_preview_resize {
                 if preview_size_matches(resized_size, pending_size) {
                     self.pending_preview_resize = None;

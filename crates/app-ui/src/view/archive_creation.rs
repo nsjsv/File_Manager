@@ -30,7 +30,10 @@ pub(super) fn archive_creation_panel(state: &ArchiveCreationState) -> Element<'_
         .padding([6, 8])
         .size(14)
         .width(Length::Fill);
-    let validation_error = state.validation_error().map(str::to_owned).unwrap_or_default();
+    let validation_error = state
+        .validation_error()
+        .map(str::to_owned)
+        .unwrap_or_default();
 
     let content = column![
         title,
