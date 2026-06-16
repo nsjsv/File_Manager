@@ -319,7 +319,10 @@ impl FileBrowser {
     }
 
     pub(super) fn focus_active_path_input(&mut self) -> Task<Message> {
-        if self.destructive_action_confirmation.is_some() || self.transfer_conflict.is_some() {
+        if self.destructive_action_confirmation.is_some()
+            || self.transfer_conflict.is_some()
+            || self.archive_creation.is_some()
+        {
             return Task::none();
         }
 

@@ -74,6 +74,7 @@ impl FileBrowser {
             && self.transfer_conflict.is_none()
             && self.context_menu.is_none()
             && self.open_with.is_none()
+            && self.archive_creation.is_none()
             && self.settings_window != Some(self.focused_window)
             && self.properties_window != Some(self.focused_window)
             && self.renaming.is_none()

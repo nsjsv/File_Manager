@@ -1457,15 +1457,18 @@ name = "file-core"
 version = "0.0.7"
 dependencies = [
  "blake3",
+ "flate2",
  "ignore",
  "notify",
  "nucleo",
  "rusqlite",
+ "tar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "trash",
+ "zip",
 ]
 
 [[package]]

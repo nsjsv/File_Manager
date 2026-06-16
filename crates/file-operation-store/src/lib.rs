@@ -152,6 +152,23 @@ pub struct StoredTrashEntry {
     pub original_path: StoredPath,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredArchiveFormat {
+    Zip,
+    SevenZip,
+    TarGz,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredArchiveCompressionLevel {
+    Store,
+    Fast,
+    Balanced,
+    Maximum,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StoredOperation {
@@ -181,6 +198,13 @@ pub enum StoredOperation {
     Move {
         transfers: Vec<StoredTransfer>,
     },
+    CreateArchive {
+        sources: Vec<StoredPath>,
+        target: StoredPath,
+        format: StoredArchiveFormat,
+        compression_level: StoredArchiveCompressionLevel,
+        password_required: bool,
+    },
     SearchIndex {
         root: StoredPath,
         index_dir: StoredPath,
@@ -201,6 +225,7 @@ impl StoredOperation {
             Self::EmptyTrash => "empty_trash",
             Self::Copy { .. } => "copy",
             Self::Move { .. } => "move",
+            Self::CreateArchive { .. } => "create_archive",
             Self::SearchIndex { .. } => "search_index",
         }
     }

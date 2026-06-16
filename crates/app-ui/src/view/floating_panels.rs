@@ -6,6 +6,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
+use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
     context_menu_style, error_notification_style,
@@ -456,6 +457,11 @@ fn file_context_menu_panel(
                 "Move",
                 Message::MoveSelected,
             ))
+            .push(menu_item(
+                IconSymbol::FileArchive,
+                "Create Archive...",
+                Message::ArchiveCreation(ArchiveCreationMessage::OpenSelected),
+            ))
             .push(menu_item(IconSymbol::Copy, "Paste", Message::PastePending))
             .push(menu_item(
                 IconSymbol::Pencil,
@@ -508,7 +514,7 @@ fn new_entry_submenu_slot(menu: &FileContextMenuState) -> Element<'_, Message> {
 }
 
 fn new_entry_trigger_top(menu: &FileContextMenuState) -> f32 {
-    let rows_before_new_entry = if menu.target.is_some() { 6.0 } else { 1.0 };
+    let rows_before_new_entry = if menu.target.is_some() { 7.0 } else { 1.0 };
     CONTEXT_MENU_PADDING
         + rows_before_new_entry * (CONTEXT_MENU_ITEM_HEIGHT + CONTEXT_MENU_ITEM_SPACING)
 }

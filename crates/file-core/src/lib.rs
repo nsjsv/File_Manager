@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod entry;
 pub mod media;
 pub mod ops;
@@ -8,6 +9,10 @@ pub mod transfer_conflict;
 pub mod trash_bin;
 pub mod watch;
 
+pub use archive::{
+    create_archive_with_progress, ArchiveCompressionLevel, ArchiveCreationProgress,
+    ArchiveCreationRequest, ArchiveFormat, ArchivePassword,
+};
 pub use entry::{DirectoryEntry, EntryMetadata, FileKind};
 pub use media::{
     is_supported_audio_extension, is_supported_audio_path, is_supported_image_extension,

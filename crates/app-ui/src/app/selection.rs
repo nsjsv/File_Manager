@@ -1141,7 +1141,7 @@ impl FileBrowser {
         paths[start..=end].to_vec()
     }
 
-    fn selected_paths_for_operation(&self) -> Vec<PathBuf> {
+    pub(super) fn selected_paths_for_operation(&self) -> Vec<PathBuf> {
         let mut paths = self
             .visible_entry_paths()
             .into_iter()

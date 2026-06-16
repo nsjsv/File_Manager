@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use file_core::{
-    FileOperationControls, FileOperationRunState, FileOperationVerification,
-    TransferConflictStrategy, TrashRestoreEntry,
+    ArchiveCompressionLevel, ArchiveFormat, ArchivePassword, FileOperationControls,
+    FileOperationRunState, FileOperationVerification, TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
-    StoredOperation, StoredPath, StoredProgress, StoredTask, StoredTaskStatus, StoredTransfer,
-    StoredTrashEntry, TaskQueueStore,
+    StoredArchiveCompressionLevel, StoredArchiveFormat, StoredOperation, StoredPath,
+    StoredProgress, StoredTask, StoredTaskStatus, StoredTransfer, StoredTrashEntry, TaskQueueStore,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -47,6 +47,13 @@ pub(crate) enum QueuedFileOperation {
         transfers: Vec<QueuedTransfer>,
         verification: FileOperationVerification,
     },
+    CreateArchive {
+        sources: Vec<PathBuf>,
+        target: PathBuf,
+        format: ArchiveFormat,
+        compression_level: ArchiveCompressionLevel,
+        password: Option<ArchivePassword>,
+    },
     BuildSearchIndex {
         root: PathBuf,
         index_dir: PathBuf,
@@ -84,6 +91,7 @@ impl QueuedFileOperation {
             Self::EmptyTrash => "Empty Trash",
             Self::Copy { .. } => "Copy",
             Self::Move { .. } => "Move",
+            Self::CreateArchive { .. } => "Create Archive",
             Self::BuildSearchIndex { .. } => "Build Search Index",
         }
     }
@@ -97,7 +105,10 @@ impl QueuedFileOperation {
     }
 
     pub(crate) fn supports_pause(&self) -> bool {
-        !matches!(self, Self::BuildSearchIndex { .. })
+        !matches!(
+            self,
+            Self::BuildSearchIndex { .. } | Self::CreateArchive { .. }
+        )
     }
 
     fn to_stored(&self) -> StoredOperation {
@@ -130,6 +141,22 @@ impl QueuedFileOperation {
             },
             Self::Move { transfers, .. } => StoredOperation::Move {
                 transfers: stored_transfers(transfers),
+            },
+            Self::CreateArchive {
+                sources,
+                target,
+                format,
+                compression_level,
+                password,
+            } => StoredOperation::CreateArchive {
+                sources: sources
+                    .iter()
+                    .map(|path| StoredPath::from_path(path))
+                    .collect(),
+                target: StoredPath::from_path(target),
+                format: stored_archive_format(*format),
+                compression_level: stored_archive_compression_level(*compression_level),
+                password_required: password.is_some(),
             },
             Self::BuildSearchIndex {
                 root,
@@ -692,6 +719,25 @@ fn stored_trash_entries(entries: &[TrashRestoreEntry]) -> Vec<StoredTrashEntry> 
             original_path: StoredPath::from_path(&entry.original_path),
         })
         .collect()
+}
+
+fn stored_archive_format(format: ArchiveFormat) -> StoredArchiveFormat {
+    match format {
+        ArchiveFormat::Zip => StoredArchiveFormat::Zip,
+        ArchiveFormat::SevenZip => StoredArchiveFormat::SevenZip,
+        ArchiveFormat::TarGz => StoredArchiveFormat::TarGz,
+    }
+}
+
+fn stored_archive_compression_level(
+    compression_level: ArchiveCompressionLevel,
+) -> StoredArchiveCompressionLevel {
+    match compression_level {
+        ArchiveCompressionLevel::Store => StoredArchiveCompressionLevel::Store,
+        ArchiveCompressionLevel::Fast => StoredArchiveCompressionLevel::Fast,
+        ArchiveCompressionLevel::Balanced => StoredArchiveCompressionLevel::Balanced,
+        ArchiveCompressionLevel::Maximum => StoredArchiveCompressionLevel::Maximum,
+    }
 }
 
 fn storage_error(error: impl std::fmt::Display) -> String {

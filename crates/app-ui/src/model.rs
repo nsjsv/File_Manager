@@ -17,6 +17,7 @@ use iced::widget::{image, text_editor};
 use iced::{event, mouse, window, Point, Rectangle, Theme};
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
+use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
@@ -171,6 +172,7 @@ pub(crate) enum Message {
     ShortcutBindingReset(ShortcutBindingId),
     DragSelectionFinished,
     DismissFloating,
+    ArchiveCreation(ArchiveCreationMessage),
     FileContextMenuExpansionChanged(FileContextMenuExpansion),
     DestructiveActionConfirmed,
     DestructiveActionCanceled,

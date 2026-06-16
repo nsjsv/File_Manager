@@ -272,6 +272,7 @@ impl FileBrowser {
     pub(super) fn open_settings(&mut self) -> Task<Message> {
         self.context_menu = None;
         self.open_with = None;
+        self.archive_creation = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
@@ -508,6 +509,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.archive_creation.is_some() {
+            self.archive_creation = None;
+            return Task::none();
+        }
+
         if self.open_with.is_some() {
             self.open_with = None;
             return Task::none();
@@ -561,6 +567,7 @@ impl FileBrowser {
         let _ = self.operation_queue.cancel_all();
         self.search = None;
         self.properties = None;
+        self.archive_creation = None;
         self.clear_preview();
         self.pending_preview_resize = None;
 

@@ -1,3 +1,4 @@
+mod archive_creation;
 mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;
@@ -57,6 +58,7 @@ use crate::selection_marquee::selection_marquee_overlay;
 use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
+use archive_creation::archive_creation_panel;
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
     open_with_panel, transfer_conflict_panel,
@@ -165,6 +167,12 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating.push(FloatingContent {
             element: drag_preview,
             placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
+        });
+    } else if let Some(archive_creation) = &browser.archive_creation {
+        floating_input = BrowserFloatingInput::DismissibleBlocking;
+        floating.push(FloatingContent {
+            element: archive_creation_panel(archive_creation),
+            placement: FloatingPlacement::Center,
         });
     } else if let Some(context_menu) = &browser.context_menu {
         floating_input = BrowserFloatingInput::DismissibleBlocking;

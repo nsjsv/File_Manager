@@ -34,6 +34,8 @@ use crate::sidebar::{home_sidebar_location, save_gtk_bookmark_locations, sidebar
 use crate::startup_trace;
 use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
 
+mod archive_creation;
+pub(crate) use archive_creation::check_archive_target_command;
 mod preview;
 pub(crate) use preview::{
     animated_image_preview_command, image_preview_dimensions_command, preview_command,

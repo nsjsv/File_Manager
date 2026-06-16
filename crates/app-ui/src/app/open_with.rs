@@ -87,6 +87,7 @@ impl FileBrowser {
 
     fn prepare_open_with_floating_state(&mut self) {
         self.context_menu = None;
+        self.archive_creation = None;
         self.operation_queue.close_panel();
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;

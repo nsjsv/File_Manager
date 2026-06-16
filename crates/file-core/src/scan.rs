@@ -218,6 +218,8 @@ pub enum FileError {
     Watch { path: PathBuf, message: String },
     #[error("could not search {path:?}: {message}")]
     SearchIndex { path: PathBuf, message: String },
+    #[error("could not create archive {path:?}: {message}")]
+    Archive { path: PathBuf, message: String },
     #[error("invalid input for {path:?}: {message}")]
     InvalidInput { path: PathBuf, message: String },
     #[error("operation cancelled")]

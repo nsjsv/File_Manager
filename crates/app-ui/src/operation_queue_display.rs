@@ -42,6 +42,9 @@ impl QueuedFileOperation {
             Self::Copy { transfers, .. } | Self::Move { transfers, .. } => {
                 path_lines_from_transfers(transfers)
             }
+            Self::CreateArchive {
+                sources, target, ..
+            } => path_lines_from_archive(sources, target),
             Self::BuildSearchIndex {
                 root,
                 selected_paths,
@@ -99,6 +102,15 @@ fn path_lines_from_transfers(transfers: &[QueuedTransfer]) -> FileOperationPathL
             parent_path(&transfer.target),
             transfers.len(),
         ),
+    }
+}
+
+fn path_lines_from_archive(sources: &[PathBuf], target: &Path) -> FileOperationPathLines {
+    match sources {
+        [] => FileOperationPathLines::from_paths(target, target, parent_path(target), 1),
+        [source, ..] => {
+            FileOperationPathLines::from_paths(target, source, parent_path(target), sources.len())
+        }
     }
 }
 

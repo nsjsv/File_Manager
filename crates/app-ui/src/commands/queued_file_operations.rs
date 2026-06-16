@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use file_core::{
-    build_file_search_index_for_paths_with_progress, copy_path_with_options, create_directory,
-    create_empty_file, delete_trash_entry, empty_trash, move_path_with_options, rename_path,
-    restore_trash_entry, trash_path_with_restore_entry, CopyProgress, FileOperationControls,
-    FileOperationVerification, FileSearchIndexOptions, FileSearchIndexProgress,
-    FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
+    build_file_search_index_for_paths_with_progress, copy_path_with_options,
+    create_archive_with_progress, create_directory, create_empty_file, delete_trash_entry,
+    empty_trash, move_path_with_options, rename_path, restore_trash_entry,
+    trash_path_with_restore_entry, ArchiveCreationProgress, ArchiveCreationRequest, CopyProgress,
+    FileOperationControls, FileOperationVerification, FileSearchIndexOptions,
+    FileSearchIndexProgress, FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -118,6 +119,25 @@ async fn run_queued_file_operation(
             )
             .await
         }
+        QueuedFileOperation::CreateArchive {
+            sources,
+            target,
+            format,
+            compression_level,
+            password,
+        } => {
+            run_queued_create_archive(
+                sources,
+                target,
+                format,
+                compression_level,
+                password,
+                controls,
+                task_id,
+                output,
+            )
+            .await
+        }
         QueuedFileOperation::BuildSearchIndex {
             root,
             index_dir,
@@ -134,6 +154,64 @@ async fn run_queued_file_operation(
                 output,
             )
             .await
+        }
+    }
+}
+
+async fn run_queued_create_archive(
+    sources: Vec<PathBuf>,
+    target: PathBuf,
+    format: file_core::ArchiveFormat,
+    compression_level: file_core::ArchiveCompressionLevel,
+    password: Option<file_core::ArchivePassword>,
+    mut controls: FileOperationControls,
+    task_id: u64,
+    output: &mut IcedSender<Message>,
+) -> Result<FileOperationOutcome, String> {
+    send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
+    let cancel = controls.cancellation_token();
+    controls
+        .wait_until_running()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut archive = Box::pin(create_archive_with_progress(
+        ArchiveCreationRequest {
+            sources,
+            target,
+            format,
+            compression_level,
+            password,
+        },
+        cancel,
+        move |progress| {
+            let _ = progress_sender.send(progress);
+        },
+    ));
+    let mut progress_open = true;
+
+    loop {
+        tokio::select! {
+            progress = progress_receiver.recv(), if progress_open => {
+                match progress {
+                    Some(progress) => send_archive_progress(output, task_id, progress).await,
+                    None => progress_open = false,
+                }
+            }
+            outcome = &mut archive => {
+                outcome.map_err(|error| error.to_string())?;
+                send_file_operation_progress(
+                    output,
+                    task_id,
+                    FileOperationProgressUpdate::Items {
+                        completed: 1,
+                        total: 1,
+                    },
+                )
+                .await;
+                return Ok(FileOperationOutcome::NoHistory);
+            }
         }
     }
 }
@@ -578,6 +656,22 @@ async fn send_search_index_progress(
             .await;
         }
     }
+}
+
+async fn send_archive_progress(
+    output: &mut IcedSender<Message>,
+    task_id: u64,
+    progress: ArchiveCreationProgress,
+) {
+    send_file_operation_progress(
+        output,
+        task_id,
+        FileOperationProgressUpdate::Items {
+            completed: progress.completed_entries,
+            total: progress.total_entries,
+        },
+    )
+    .await;
 }
 
 async fn send_file_operation_progress(
