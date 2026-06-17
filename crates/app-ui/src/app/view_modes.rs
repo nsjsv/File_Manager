@@ -144,6 +144,7 @@ impl FileBrowser {
 
     fn collapse_list_directory(&mut self, path: PathBuf) -> Task<Message> {
         if let Some(expanded) = self.expanded_directories.get_mut(&path) {
+            Self::cancel_expanded_directory_load(expanded);
             expanded.is_collapsing = true;
             expanded.animation_progress = expanded.animation_progress.clamp(0.0, 1.0);
         }
@@ -160,19 +161,24 @@ impl FileBrowser {
             return self.schedule_thumbnail_refresh();
         }
 
-        self.expanded_directories.insert(
+        let mut expanded = ExpandedDirectory {
+            entries: Vec::new(),
+            status: ExpandedDirectoryStatus::Loading,
+            is_expanded: true,
+            is_collapsing: false,
+            animation_progress: 0.0,
+            load_generation: 0,
+            load_cancel: None,
+        };
+        let (request, cancellation) = Self::next_expanded_directory_load_request(
+            self.active_pane_id(),
             path.clone(),
-            ExpandedDirectory {
-                entries: Vec::new(),
-                status: ExpandedDirectoryStatus::Loading,
-                is_expanded: true,
-                is_collapsing: false,
-                animation_progress: 0.0,
-            },
+            &mut expanded,
         );
+        self.expanded_directories.insert(path, expanded);
         self.sync_active_tab_state();
         Task::batch([
-            load_expanded_directory_command(self.active_pane_id(), path, self.options.clone()),
+            load_expanded_directory_command(request, self.options.clone(), cancellation),
             self.schedule_thumbnail_refresh(),
         ])
     }

@@ -45,6 +45,15 @@ pub async fn search_file_tree(
     query: impl AsRef<str>,
     options: FileSearchOptions,
 ) -> Result<FileSearchOutcome, FileError> {
+    search_file_tree_with_cancel(root, query, options, CancellationToken::new()).await
+}
+
+pub async fn search_file_tree_with_cancel(
+    root: impl AsRef<Path>,
+    query: impl AsRef<str>,
+    options: FileSearchOptions,
+    cancel: CancellationToken,
+) -> Result<FileSearchOutcome, FileError> {
     let root = root.as_ref().to_path_buf();
     let query = query.as_ref().trim().to_owned();
     if query.is_empty() {
@@ -63,7 +72,7 @@ pub async fn search_file_tree(
                 exclude_patterns,
                 excluded_index_dir: None,
                 throttle: false,
-                cancel: None,
+                cancel: Some(cancel),
             },
         )?;
         let catalog = SearchCatalog::from_records(search_root, records, None);

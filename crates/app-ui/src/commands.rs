@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -16,17 +14,17 @@ use file_core::{
     available_transfer_target_path, build_file_search_index,
     check_transfer_conflicts as check_core_transfer_conflicts, clear_file_search_index_failures,
     create_file_with_contents, file_search_index_status, is_transfer_target_available,
-    remove_file_search_index, scan_directory, scan_trash, search_file_index, search_file_tree,
-    DirectoryScan, FileKind, FileSearchIndexMode, FileSearchIndexOptions, FileSearchOptions,
-    ScanOptions, TransferConflictCheck, TransferConflictItem, TrashScan,
+    remove_file_search_index, scan_trash, search_file_index, search_file_tree_with_cancel,
+    FileSearchIndexMode, FileSearchIndexOptions, FileSearchOptions, ScanOptions,
+    TransferConflictCheck, TransferConflictItem, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
 use iced::Task;
+use tokio_util::sync::CancellationToken;
 
 use crate::config;
 use crate::model::{
-    BrowserPaneId, FilePropertiesDirectoryContents, FilePropertiesPermissions,
-    FilePropertiesSnapshot, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
+    BrowserPaneId, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
     SearchRequest, SidebarLocation, StartupEnvironment, TransferConflictMode,
     TransferConflictState,
 };
@@ -39,6 +37,8 @@ mod archive_creation;
 pub(crate) use archive_creation::check_archive_target_command;
 mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
+mod directory_loading;
+pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
 mod preview;
 pub(crate) use preview::{
     animated_image_preview_command, image_preview_dimensions_command, preview_command,
@@ -46,6 +46,8 @@ pub(crate) use preview::{
     start_video_preview_audio_command, startup_index_directory_children_command,
     text_preview_chunk_command, video_preview_frame_command, video_preview_metadata_command,
 };
+mod properties;
+pub(crate) use properties::{file_properties_command, set_file_properties_permissions_command};
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
 mod sidebar_devices;
@@ -106,30 +108,9 @@ pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) ->
     )
 }
 
-pub(crate) fn load_directory_command(
-    pane_id: BrowserPaneId,
-    path: PathBuf,
-    options: ScanOptions,
-) -> Task<Message> {
-    Task::perform(load_directory(path, options), move |scan| {
-        Message::Loaded(pane_id, scan)
-    })
-}
-
 pub(crate) fn load_trash_command(pane_id: BrowserPaneId, options: ScanOptions) -> Task<Message> {
     Task::perform(load_trash(options), move |scan| {
         Message::TrashLoaded(pane_id, scan)
-    })
-}
-
-pub(crate) fn load_expanded_directory_command(
-    pane_id: BrowserPaneId,
-    path: PathBuf,
-    options: ScanOptions,
-) -> Task<Message> {
-    let expanded_path = path.clone();
-    Task::perform(load_directory(path, options), move |scan| {
-        Message::ExpandedDirectoryLoaded(pane_id, expanded_path.clone(), scan)
     })
 }
 
@@ -163,10 +144,11 @@ pub(crate) fn search_tree_command(
     request: SearchRequest,
     options: ScanOptions,
     exclude_patterns: Vec<String>,
+    cancellation: CancellationToken,
 ) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
-        load_search_tree_matches(request, options, exclude_patterns),
+        load_search_tree_matches(request, options, exclude_patterns, cancellation),
         move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
     )
 }
@@ -221,26 +203,6 @@ pub(crate) fn remove_search_index_command(
     Task::perform(
         remove_search_index(root, index_dir, options, exclude_patterns),
         move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
-    )
-}
-
-pub(crate) fn file_properties_command(path: PathBuf) -> Task<Message> {
-    let requested_path = path.clone();
-    Task::perform(load_file_properties(path), move |properties_outcome| {
-        Message::FilePropertiesLoaded(requested_path.clone(), properties_outcome)
-    })
-}
-
-pub(crate) fn set_file_properties_permissions_command(
-    path: PathBuf,
-    permissions: FilePropertiesPermissions,
-) -> Task<Message> {
-    let requested_path = path.clone();
-    Task::perform(
-        set_file_properties_permissions(path, permissions),
-        move |permissions_outcome| {
-            Message::FilePropertiesPermissionsUpdated(requested_path.clone(), permissions_outcome)
-        },
     )
 }
 
@@ -406,178 +368,8 @@ async fn check_transfer_conflicts(transfers: Vec<QueuedTransfer>) -> Vec<Transfe
     check_core_transfer_conflicts(conflict_checks).await
 }
 
-async fn load_directory(path: PathBuf, options: ScanOptions) -> Result<DirectoryScan, String> {
-    startup_trace::mark_once("initial_directory_scan_started");
-    let scan_outcome = scan_directory(path, options)
-        .await
-        .map_err(|error| error.to_string());
-    startup_trace::mark_once("initial_directory_scan_finished");
-    scan_outcome
-}
-
 async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
     scan_trash(options).await.map_err(|error| error.to_string())
-}
-
-async fn load_file_properties(path: PathBuf) -> Result<FilePropertiesSnapshot, String> {
-    tokio::task::spawn_blocking(move || read_file_properties(path))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-async fn set_file_properties_permissions(
-    path: PathBuf,
-    permissions: FilePropertiesPermissions,
-) -> Result<FilePropertiesPermissions, String> {
-    tokio::task::spawn_blocking(move || write_file_properties_permissions(path, permissions))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-fn read_file_properties(path: PathBuf) -> Result<FilePropertiesSnapshot, String> {
-    let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-    let file_type = metadata.file_type();
-    let kind = if file_type.is_dir() {
-        FileKind::Directory
-    } else if file_type.is_file() {
-        FileKind::File
-    } else if file_type.is_symlink() {
-        FileKind::Symlink
-    } else {
-        FileKind::Other
-    };
-    let type_label = if file_type.is_symlink() {
-        "Symbolic Link".to_owned()
-    } else if file_type.is_dir() {
-        "Folder".to_owned()
-    } else if file_type.is_file() {
-        "File".to_owned()
-    } else {
-        "Other".to_owned()
-    };
-    let name = path
-        .file_name()
-        .map(|name| name.to_os_string())
-        .unwrap_or_else(|| path.as_os_str().to_os_string());
-    let location = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/"));
-
-    let mut directory_contents = None;
-    let mut directory_contents_error = None;
-    if file_type.is_dir() {
-        match read_directory_properties_contents(&path) {
-            Ok(contents) => directory_contents = Some(contents),
-            Err(error) => directory_contents_error = Some(error),
-        }
-    }
-
-    let size_bytes = directory_contents
-        .as_ref()
-        .map(|contents| contents.total_size_bytes)
-        .unwrap_or_else(|| metadata.len());
-    let disk_size_bytes = directory_contents
-        .as_ref()
-        .map(|contents| contents.total_disk_size_bytes)
-        .unwrap_or_else(|| metadata_disk_size(&metadata));
-
-    Ok(FilePropertiesSnapshot {
-        name,
-        kind,
-        type_label,
-        location,
-        created: metadata.created().ok(),
-        modified: metadata.modified().ok(),
-        accessed: metadata.accessed().ok(),
-        size_bytes,
-        disk_size_bytes,
-        directory_contents,
-        directory_contents_error,
-        permissions: metadata_properties_permissions(&metadata, file_type.is_symlink()),
-    })
-}
-
-#[cfg(unix)]
-fn metadata_properties_permissions(
-    metadata: &std::fs::Metadata,
-    is_symlink: bool,
-) -> Option<FilePropertiesPermissions> {
-    (!is_symlink).then(|| FilePropertiesPermissions::from_mode(metadata.permissions().mode()))
-}
-
-#[cfg(not(unix))]
-fn metadata_properties_permissions(
-    _metadata: &std::fs::Metadata,
-    _is_symlink: bool,
-) -> Option<FilePropertiesPermissions> {
-    None
-}
-
-#[cfg(unix)]
-fn write_file_properties_permissions(
-    path: PathBuf,
-    permissions: FilePropertiesPermissions,
-) -> Result<FilePropertiesPermissions, String> {
-    let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-    if metadata.file_type().is_symlink() {
-        return Err("symbolic link permissions cannot be changed".to_owned());
-    }
-
-    let mut fs_permissions = metadata.permissions();
-    fs_permissions.set_mode(permissions.mode());
-    std::fs::set_permissions(&path, fs_permissions).map_err(|error| error.to_string())?;
-
-    let refreshed = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-    Ok(FilePropertiesPermissions::from_mode(
-        refreshed.permissions().mode(),
-    ))
-}
-
-#[cfg(not(unix))]
-fn write_file_properties_permissions(
-    _path: PathBuf,
-    _permissions: FilePropertiesPermissions,
-) -> Result<FilePropertiesPermissions, String> {
-    Err("permission editing is only available on Unix filesystems".to_owned())
-}
-
-fn read_directory_properties_contents(
-    path: &Path,
-) -> Result<FilePropertiesDirectoryContents, String> {
-    let mut contents = FilePropertiesDirectoryContents {
-        file_count: 0,
-        directory_count: 0,
-        total_size_bytes: 0,
-        total_disk_size_bytes: 0,
-    };
-
-    for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let file_type = entry.file_type().map_err(|error| error.to_string())?;
-        let metadata = entry.metadata().map_err(|error| error.to_string())?;
-        if file_type.is_dir() {
-            contents.directory_count += 1;
-        } else {
-            contents.file_count += 1;
-        }
-        contents.total_size_bytes = contents.total_size_bytes.saturating_add(metadata.len());
-        contents.total_disk_size_bytes = contents
-            .total_disk_size_bytes
-            .saturating_add(metadata_disk_size(&metadata));
-    }
-
-    Ok(contents)
-}
-
-#[cfg(unix)]
-fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
-    metadata.blocks().saturating_mul(512)
-}
-
-#[cfg(not(unix))]
-fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
-    metadata.len()
 }
 
 async fn load_startup_environment() -> StartupEnvironment {
@@ -736,8 +528,9 @@ async fn load_search_tree_matches(
     request: SearchRequest,
     options: ScanOptions,
     exclude_patterns: Vec<String>,
+    cancellation: CancellationToken,
 ) -> Result<file_core::FileSearchOutcome, String> {
-    search_file_tree(
+    search_file_tree_with_cancel(
         request.root,
         request.query,
         FileSearchOptions {
@@ -745,6 +538,7 @@ async fn load_search_tree_matches(
             exclude_patterns,
             limit: SEARCH_MATCH_LIMIT,
         },
+        cancellation,
     )
     .await
     .map_err(|error| error.to_string())

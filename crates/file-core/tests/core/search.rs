@@ -10,16 +10,9 @@ async fn search_file_tree_finds_nested_fuzzy_match() {
     )
     .unwrap();
 
-    let search = search_file_tree(
-        dir.path(),
-        "qsm",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
-    )
-    .await
-    .unwrap();
+    let search = search_file_tree(dir.path(), "qsm", search_options(true, 10))
+        .await
+        .unwrap();
 
     assert_eq!(search.matches.len(), 1);
     assert_eq!(
@@ -38,16 +31,9 @@ async fn search_file_tree_fuzzy_match_ignores_case() {
     )
     .unwrap();
 
-    let search = search_file_tree(
-        dir.path(),
-        "QSM",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
-    )
-    .await
-    .unwrap();
+    let search = search_file_tree(dir.path(), "QSM", search_options(true, 10))
+        .await
+        .unwrap();
 
     assert_eq!(search.matches.len(), 1);
     assert_eq!(
@@ -67,23 +53,14 @@ async fn file_search_index_finds_nested_fuzzy_match_from_disk() {
     )
     .unwrap();
 
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
     let search = search_file_index(
         index_dir.path(),
         dir.path(),
         "qsm",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -106,23 +83,14 @@ async fn file_search_index_fuzzy_match_ignores_case() {
     )
     .unwrap();
 
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
     let search = search_file_index(
         index_dir.path(),
         dir.path(),
         "QSM",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -144,24 +112,15 @@ async fn file_search_index_respects_gitignore_rules() {
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(dir.path().join("src/app.rs"), b"shown").unwrap();
 
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
 
     let ignored = search_file_index(
         index_dir.path(),
         dir.path(),
         "cache",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -169,10 +128,7 @@ async fn file_search_index_respects_gitignore_rules() {
         index_dir.path(),
         dir.path(),
         "app",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -191,26 +147,12 @@ async fn search_file_tree_respects_gitignore_rules() {
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(dir.path().join("src/app.rs"), b"shown").unwrap();
 
-    let ignored = search_file_tree(
-        dir.path(),
-        "cache",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
-    )
-    .await
-    .unwrap();
-    let shown = search_file_tree(
-        dir.path(),
-        "app",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
-    )
-    .await
-    .unwrap();
+    let ignored = search_file_tree(dir.path(), "cache", search_options(true, 10))
+        .await
+        .unwrap();
+    let shown = search_file_tree(dir.path(), "app", search_options(true, 10))
+        .await
+        .unwrap();
 
     assert!(ignored.matches.is_empty());
     assert_eq!(shown.matches.len(), 1);
@@ -231,23 +173,14 @@ async fn file_search_index_rebuild_invalidates_cached_catalog() {
     let index_dir = tempdir().unwrap();
     fs::write(dir.path().join("first-note.txt"), b"one").unwrap();
 
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
     let first = search_file_index(
         index_dir.path(),
         dir.path(),
         "first",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -255,24 +188,15 @@ async fn file_search_index_rebuild_invalidates_cached_catalog() {
 
     fs::remove_file(dir.path().join("first-note.txt")).unwrap();
     fs::write(dir.path().join("second-note.txt"), b"two").unwrap();
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
 
     let stale = search_file_index(
         index_dir.path(),
         dir.path(),
         "first",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -280,10 +204,7 @@ async fn file_search_index_rebuild_invalidates_cached_catalog() {
         index_dir.path(),
         dir.path(),
         "second",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -304,23 +225,14 @@ async fn file_search_index_respects_result_limit() {
         fs::write(dir.path().join(format!("note-{index:02}.txt")), b"note").unwrap();
     }
 
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
     let search = search_file_index(
         index_dir.path(),
         dir.path(),
         "note",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 5,
-        },
+        search_options(true, 5),
     )
     .await
     .unwrap();
@@ -336,19 +248,27 @@ async fn search_file_tree_respects_hidden_option() {
     let hidden_excluded = search_file_tree(dir.path(), "secret", FileSearchOptions::default())
         .await
         .unwrap();
-    let hidden_included = search_file_tree(
-        dir.path(),
-        "secret",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
-    )
-    .await
-    .unwrap();
+    let hidden_included = search_file_tree(dir.path(), "secret", search_options(true, 10))
+        .await
+        .unwrap();
 
     assert!(hidden_excluded.matches.is_empty());
     assert_eq!(hidden_included.matches.len(), 1);
+}
+
+#[tokio::test]
+async fn search_file_tree_with_cancel_returns_cancelled() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("note.txt"), b"note").unwrap();
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+
+    let error =
+        search_file_tree_with_cancel(dir.path(), "note", search_options(true, 10), cancellation)
+            .await
+            .unwrap_err();
+
+    assert!(matches!(error, FileError::Cancelled));
 }
 
 #[cfg(unix)]
@@ -359,16 +279,9 @@ async fn search_file_tree_preserves_non_utf8_match_path() {
     let path = dir.path().join(&name);
     fs::write(&path, b"bytes").unwrap();
 
-    let search = search_file_tree(
-        dir.path(),
-        "non",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
-    )
-    .await
-    .unwrap();
+    let search = search_file_tree(dir.path(), "non", search_options(true, 10))
+        .await
+        .unwrap();
 
     assert_eq!(search.matches.len(), 1);
     assert_eq!(search.matches[0].path, path);
@@ -384,23 +297,14 @@ async fn file_search_index_preserves_non_utf8_match_path() {
     let path = dir.path().join(&name);
     fs::write(&path, b"bytes").unwrap();
 
-    build_file_search_index(
-        dir.path(),
-        index_dir.path(),
-        FileSearchIndexOptions {
-            include_hidden: true,
-        },
-    )
-    .await
-    .unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
     let search = search_file_index(
         index_dir.path(),
         dir.path(),
         "non",
-        FileSearchOptions {
-            include_hidden: true,
-            limit: 10,
-        },
+        search_options(true, 10),
     )
     .await
     .unwrap();
@@ -408,4 +312,19 @@ async fn file_search_index_preserves_non_utf8_match_path() {
     assert_eq!(search.matches.len(), 1);
     assert_eq!(search.matches[0].path, path);
     assert_eq!(search.matches[0].name(), OsStr::new(&name));
+}
+
+fn search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
+    FileSearchOptions {
+        include_hidden,
+        limit,
+        ..FileSearchOptions::default()
+    }
+}
+
+fn index_options(include_hidden: bool) -> FileSearchIndexOptions {
+    FileSearchIndexOptions {
+        include_hidden,
+        ..FileSearchIndexOptions::default()
+    }
 }

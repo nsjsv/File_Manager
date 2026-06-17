@@ -33,6 +33,8 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         is_expanded: true,
         is_collapsing: false,
         animation_progress: 1.0,
+        load_generation: 0,
+        load_cancel: None,
     }
 }
 
@@ -57,6 +59,8 @@ fn pane_from_tab_for_test(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPan
         path_suggestions: Vec::new(),
         path_suggestion_selection: None,
         path_suggestion_generation: 0,
+        directory_load_generation: 0,
+        directory_load_cancel: None,
         back_stack: tab.back_stack.clone(),
         forward_stack: tab.forward_stack.clone(),
         is_loading: false,

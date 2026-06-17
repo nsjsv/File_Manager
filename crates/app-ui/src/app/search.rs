@@ -7,6 +7,7 @@ use file_core::{
 };
 use iced::widget::scrollable;
 use iced::Task;
+use tokio_util::sync::CancellationToken;
 
 use super::FileBrowser;
 use crate::commands::{search_command, search_index_command, search_tree_command};
@@ -44,6 +45,7 @@ impl FileBrowser {
             root,
             query: String::new(),
             request_generation: 0,
+            search_cancel: None,
             matches: Vec::new(),
             selected_match: None,
             is_loading: false,
@@ -68,6 +70,9 @@ impl FileBrowser {
         };
 
         search.request_generation = search.request_generation.wrapping_add(1);
+        if let Some(cancel) = search.search_cancel.take() {
+            cancel.cancel();
+        }
         search.query = query;
         search.matches.clear();
         search.selected_match = None;
@@ -104,6 +109,10 @@ impl FileBrowser {
 
         search.scope = next_scope;
         search.root = root.clone();
+        search.request_generation = search.request_generation.wrapping_add(1);
+        if let Some(cancel) = search.search_cancel.take() {
+            cancel.cancel();
+        }
         search.matches.clear();
         search.selected_match = None;
         search.skipped_count = 0;
@@ -127,6 +136,9 @@ impl FileBrowser {
         };
 
         state.is_loading = false;
+        if let Some(cancel) = state.search_cancel.take() {
+            cancel.cancel();
+        }
         match search {
             Ok(search) => {
                 state.matches = search.matches;
@@ -293,13 +305,20 @@ impl FileBrowser {
         if !file_search_index_exists(&index_dir) {
             let index_command = self.ensure_search_index(root);
             self.mark_active_search_loading();
+            let cancellation = self.replace_active_search_cancel_token();
             return Task::batch([
                 index_command,
-                search_tree_command(request, self.options.clone(), exclude_patterns),
+                search_tree_command(
+                    request,
+                    self.options.clone(),
+                    exclude_patterns,
+                    cancellation,
+                ),
             ]);
         }
 
         self.mark_active_search_loading();
+        self.clear_active_search_cancel_token();
         search_command(request, self.options.clone(), index_dir, exclude_patterns)
     }
 
@@ -392,6 +411,24 @@ impl FileBrowser {
         if let Some(search) = &mut self.search {
             search.is_loading = true;
             search.error = None;
+        }
+    }
+
+    fn replace_active_search_cancel_token(&mut self) -> CancellationToken {
+        let cancellation = CancellationToken::new();
+        if let Some(search) = &mut self.search {
+            if let Some(previous) = search.search_cancel.replace(cancellation.clone()) {
+                previous.cancel();
+            }
+        }
+        cancellation
+    }
+
+    fn clear_active_search_cancel_token(&mut self) {
+        if let Some(search) = &mut self.search {
+            if let Some(cancel) = search.search_cancel.take() {
+                cancel.cancel();
+            }
         }
     }
 
@@ -597,6 +634,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             query: "needle".to_owned(),
             request_generation,
+            search_cancel: None,
             matches: Vec::new(),
             selected_match: None,
             is_loading: false,

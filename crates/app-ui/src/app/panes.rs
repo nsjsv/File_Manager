@@ -10,6 +10,7 @@ use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
     DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, SplitRegion,
 };
+use crate::thumbnail_cache::ColumnViewport;
 
 const SPLIT_TARGET_MIN_CONTENT_WIDTH: f32 = 1.0;
 
@@ -25,6 +26,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) deepest_open_column_directory: Option<&'a PathBuf>,
     pub(crate) hovered_entry: Option<&'a PathBuf>,
     pub(crate) expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
+    pub(crate) column_viewports: &'a HashMap<PathBuf, ColumnViewport>,
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) tabs: &'a [BrowserTab],
     pub(crate) active_tab_id: usize,
@@ -130,6 +132,7 @@ impl FileBrowser {
                 deepest_open_column_directory: self.deepest_open_column_directory.as_ref(),
                 hovered_entry: self.hovered_entry.as_ref(),
                 expanded_directories: &self.expanded_directories,
+                column_viewports: &self.column_viewports,
                 view_mode: self.view_mode,
                 tabs: &self.tabs,
                 active_tab_id: self.active_tab_id,
@@ -157,6 +160,7 @@ impl FileBrowser {
             deepest_open_column_directory: pane.deepest_open_column_directory.as_ref(),
             hovered_entry: None,
             expanded_directories: &pane.expanded_directories,
+            column_viewports: &pane.column_viewports,
             view_mode: pane.view_mode,
             tabs: &pane.tabs,
             active_tab_id: pane.active_tab_id,
@@ -299,6 +303,8 @@ impl FileBrowser {
             path_suggestions: self.path_suggestions.clone(),
             path_suggestion_selection: self.path_suggestion_selection,
             path_suggestion_generation: self.path_suggestion_generation,
+            directory_load_generation: self.directory_load_generation,
+            directory_load_cancel: self.directory_load_cancel.clone(),
             back_stack: self.back_stack.clone(),
             forward_stack: self.forward_stack.clone(),
             is_loading: self.is_loading,
@@ -325,6 +331,8 @@ impl FileBrowser {
         self.path_suggestions = pane.path_suggestions;
         self.path_suggestion_selection = pane.path_suggestion_selection;
         self.path_suggestion_generation = pane.path_suggestion_generation;
+        self.directory_load_generation = pane.directory_load_generation;
+        self.directory_load_cancel = pane.directory_load_cancel;
         self.back_stack = pane.back_stack;
         self.forward_stack = pane.forward_stack;
         self.is_loading = pane.is_loading;

@@ -13,10 +13,10 @@ use crate::appearance::{
 use crate::formatting::{format_file_size, format_system_time};
 use crate::icons::file_entry_icon_symbol;
 use crate::model::{
-    FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesLoadState,
-    FilePropertiesPermissionAccess, FilePropertiesPermissionClass, FilePropertiesPermissionUpdate,
-    FilePropertiesPermissions, FilePropertiesSnapshot, FilePropertiesState, Message,
-    ScrollbarVisibility,
+    FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
+    FilePropertiesLoadState, FilePropertiesPermissionAccess, FilePropertiesPermissionClass,
+    FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesSnapshot,
+    FilePropertiesState, Message, ScrollbarVisibility,
 };
 use crate::typography::readable_text;
 
@@ -176,10 +176,21 @@ fn properties_information_detail(
             display_size(snapshot.disk_size_bytes),
         ));
 
-    if let Some(contents) = &snapshot.directory_contents {
-        details = details.push(property_row("Contents", display_contents(contents)));
-    } else if let Some(error) = &snapshot.directory_contents_error {
-        details = details.push(property_row("Contents", format!("Unavailable ({error})")));
+    match &snapshot.directory_contents {
+        FilePropertiesDirectoryContentsState::NotDirectory => {}
+        FilePropertiesDirectoryContentsState::Loading(contents) => {
+            let label = contents
+                .as_ref()
+                .map(display_contents)
+                .unwrap_or_else(|| "Calculating...".to_owned());
+            details = details.push(property_row("Contents", label));
+        }
+        FilePropertiesDirectoryContentsState::Loaded(contents) => {
+            details = details.push(property_row("Contents", display_contents(contents)));
+        }
+        FilePropertiesDirectoryContentsState::Failed(error) => {
+            details = details.push(property_row("Contents", format!("Unavailable ({error})")));
+        }
     }
 
     properties_detail_scroller(

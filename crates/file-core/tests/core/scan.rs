@@ -16,6 +16,74 @@ async fn scan_directory_reads_regular_entries() {
     assert_eq!(scan.entries[1].kind, FileKind::File);
 }
 
+#[tokio::test]
+async fn scan_directory_with_progress_reports_batches_and_final_sorted_scan() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("b.txt"), b"hello").unwrap();
+    fs::write(dir.path().join("a.txt"), b"hello").unwrap();
+
+    let mut batch_names = Vec::new();
+    let scan = scan_directory_with_progress(
+        dir.path(),
+        ScanOptions::default(),
+        tokio_util::sync::CancellationToken::new(),
+        |batch| batch_names.extend(names(&batch.entries)),
+    )
+    .await
+    .unwrap();
+
+    batch_names.sort();
+    assert_eq!(batch_names, vec!["a.txt", "b.txt"]);
+    assert_eq!(names(&scan.entries), vec!["a.txt", "b.txt"]);
+}
+
+#[tokio::test]
+async fn scan_directory_with_progress_emits_multiple_batches_matching_final_scan() {
+    let dir = tempdir().unwrap();
+    for index in 0..260 {
+        fs::write(dir.path().join(format!("file-{index:03}.txt")), b"hello").unwrap();
+    }
+
+    let mut batch_names = Vec::new();
+    let mut batch_count = 0usize;
+    let scan = scan_directory_with_progress(
+        dir.path(),
+        ScanOptions::default(),
+        tokio_util::sync::CancellationToken::new(),
+        |batch| {
+            batch_count += 1;
+            batch_names.extend(names(&batch.entries));
+        },
+    )
+    .await
+    .unwrap();
+    let baseline = scan_directory(dir.path(), ScanOptions::default())
+        .await
+        .unwrap();
+
+    batch_names.sort();
+    assert!(batch_count > 1);
+    assert_eq!(batch_names, names(&baseline.entries));
+    assert_eq!(names(&scan.entries), names(&baseline.entries));
+}
+
+#[tokio::test]
+async fn scan_directory_with_progress_respects_cancelled_token() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("a.txt"), b"hello").unwrap();
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+
+    let error =
+        scan_directory_with_progress(dir.path(), ScanOptions::default(), cancellation, |_| {
+            panic!("cancelled scan must not emit batches")
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, FileError::Cancelled));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn scan_directory_preserves_non_utf8_names() {

@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
 use iced::Task;
+use tokio_util::sync::CancellationToken;
 
 use super::FileBrowser;
 use crate::commands::{file_properties_command, set_file_properties_permissions_command};
 use crate::model::{
-    FilePropertiesCategory, FilePropertiesLoadState, FilePropertiesPermissionAccess,
-    FilePropertiesPermissionClass, FilePropertiesPermissionUpdate, FilePropertiesPermissions,
+    FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
+    FilePropertiesLoadState, FilePropertiesPermissionAccess, FilePropertiesPermissionClass,
+    FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesRequest,
     FilePropertiesSnapshot, FilePropertiesState, Message,
 };
 
@@ -35,31 +37,120 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
-        self.properties = Some(FilePropertiesState::loading(path.clone()));
+        let (request, cancellation) = self.next_file_properties_request(path);
+        self.properties = Some(FilePropertiesState::loading(
+            request.clone(),
+            cancellation.clone(),
+        ));
 
         Task::batch([
             self.commit_rename_if_active(),
             self.ensure_properties_window(),
-            file_properties_command(path),
+            file_properties_command(request, cancellation),
         ])
+    }
+
+    pub(super) fn clear_file_properties_state(&mut self) {
+        if let Some(properties) = self.properties.as_mut() {
+            properties.cancel_load();
+        }
+        self.properties = None;
+    }
+
+    fn next_file_properties_request(
+        &mut self,
+        path: PathBuf,
+    ) -> (FilePropertiesRequest, CancellationToken) {
+        if let Some(properties) = self.properties.as_mut() {
+            properties.cancel_load();
+        }
+        self.properties_load_generation = self.properties_load_generation.wrapping_add(1);
+        let cancellation = CancellationToken::new();
+        (
+            FilePropertiesRequest {
+                path,
+                generation: self.properties_load_generation,
+            },
+            cancellation,
+        )
     }
 
     pub(super) fn accept_file_properties(
         &mut self,
-        path: PathBuf,
+        request: FilePropertiesRequest,
         outcome: Result<FilePropertiesSnapshot, String>,
     ) -> Task<Message> {
         let Some(properties) = self.properties.as_mut() else {
             return Task::none();
         };
-        if properties.path != path {
+        if !file_properties_request_matches(properties, &request) {
             return Task::none();
         }
 
+        if outcome.as_ref().is_ok_and(|snapshot| {
+            !matches!(
+                snapshot.directory_contents,
+                FilePropertiesDirectoryContentsState::Loading(_)
+            )
+        }) {
+            properties.load_cancel = None;
+        }
         properties.load_state = match outcome {
             Ok(snapshot) => FilePropertiesLoadState::Loaded(snapshot),
-            Err(error) => FilePropertiesLoadState::Failed(error),
+            Err(error) => {
+                properties.load_cancel = None;
+                FilePropertiesLoadState::Failed(error)
+            }
         };
+        Task::none()
+    }
+
+    pub(super) fn accept_file_properties_directory_contents_progress(
+        &mut self,
+        request: FilePropertiesRequest,
+        contents: FilePropertiesDirectoryContents,
+    ) -> Task<Message> {
+        let Some(properties) = self.properties.as_mut() else {
+            return Task::none();
+        };
+        if !file_properties_request_matches(properties, &request) {
+            return Task::none();
+        }
+        let FilePropertiesLoadState::Loaded(snapshot) = &mut properties.load_state else {
+            return Task::none();
+        };
+        snapshot.size_bytes = contents.total_size_bytes;
+        snapshot.disk_size_bytes = contents.total_disk_size_bytes;
+        snapshot.directory_contents = FilePropertiesDirectoryContentsState::Loading(Some(contents));
+        Task::none()
+    }
+
+    pub(super) fn accept_file_properties_directory_contents(
+        &mut self,
+        request: FilePropertiesRequest,
+        outcome: Result<FilePropertiesDirectoryContents, String>,
+    ) -> Task<Message> {
+        let Some(properties) = self.properties.as_mut() else {
+            return Task::none();
+        };
+        if !file_properties_request_matches(properties, &request) {
+            return Task::none();
+        }
+        let FilePropertiesLoadState::Loaded(snapshot) = &mut properties.load_state else {
+            return Task::none();
+        };
+        properties.load_cancel = None;
+        match outcome {
+            Ok(contents) => {
+                snapshot.size_bytes = contents.total_size_bytes;
+                snapshot.disk_size_bytes = contents.total_disk_size_bytes;
+                snapshot.directory_contents =
+                    FilePropertiesDirectoryContentsState::Loaded(contents);
+            }
+            Err(error) => {
+                snapshot.directory_contents = FilePropertiesDirectoryContentsState::Failed(error);
+            }
+        }
         Task::none()
     }
 
@@ -127,6 +218,139 @@ impl FileBrowser {
             0 => self.selected.clone(),
             1 => self.selected_paths.iter().next().cloned(),
             _ => None,
+        }
+    }
+}
+
+fn file_properties_request_matches(
+    properties: &FilePropertiesState,
+    request: &FilePropertiesRequest,
+) -> bool {
+    properties.path == request.path && properties.load_generation == request.generation
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use file_core::FileKind;
+
+    use super::*;
+
+    #[test]
+    fn properties_directory_contents_rejects_stale_generation_for_same_path() {
+        let path = PathBuf::from("/workspace/project");
+        let mut browser = browser_with_loaded_directory_properties(path.clone(), 2);
+        let stale_request = FilePropertiesRequest {
+            path,
+            generation: 1,
+        };
+
+        let _command = browser.accept_file_properties_directory_contents(
+            stale_request,
+            Ok(directory_contents(9, 9, 9)),
+        );
+
+        let FilePropertiesLoadState::Loaded(snapshot) =
+            &browser.properties.as_ref().unwrap().load_state
+        else {
+            panic!("properties should remain loaded");
+        };
+        assert!(matches!(
+            snapshot.directory_contents,
+            FilePropertiesDirectoryContentsState::Loading(None)
+        ));
+        assert_eq!(snapshot.size_bytes, 0);
+    }
+
+    #[test]
+    fn properties_directory_contents_accepts_current_generation() {
+        let path = PathBuf::from("/workspace/project");
+        let mut browser = browser_with_loaded_directory_properties(path.clone(), 2);
+        let request = FilePropertiesRequest {
+            path,
+            generation: 2,
+        };
+
+        let _command = browser
+            .accept_file_properties_directory_contents(request, Ok(directory_contents(3, 2, 512)));
+
+        let FilePropertiesLoadState::Loaded(snapshot) =
+            &browser.properties.as_ref().unwrap().load_state
+        else {
+            panic!("properties should remain loaded");
+        };
+        assert_eq!(snapshot.size_bytes, 512);
+        assert!(matches!(
+            snapshot.directory_contents,
+            FilePropertiesDirectoryContentsState::Loaded(FilePropertiesDirectoryContents {
+                file_count: 3,
+                directory_count: 2,
+                ..
+            })
+        ));
+        assert!(browser.properties.as_ref().unwrap().load_cancel.is_none());
+    }
+
+    #[test]
+    fn opening_new_properties_cancels_previous_load() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        let old_cancel = CancellationToken::new();
+        browser.properties = Some(FilePropertiesState::loading(
+            FilePropertiesRequest {
+                path: PathBuf::from("/workspace/old"),
+                generation: 1,
+            },
+            old_cancel.clone(),
+        ));
+        browser.properties_load_generation = 1;
+
+        let (_request, _cancel) =
+            browser.next_file_properties_request(PathBuf::from("/workspace/new"));
+
+        assert!(old_cancel.is_cancelled());
+        assert_eq!(browser.properties_load_generation, 2);
+    }
+
+    fn browser_with_loaded_directory_properties(path: PathBuf, generation: u64) -> FileBrowser {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser.properties = Some(FilePropertiesState {
+            path: path.clone(),
+            load_state: FilePropertiesLoadState::Loaded(directory_snapshot(path)),
+            selected_category: FilePropertiesCategory::Information,
+            permission_update: FilePropertiesPermissionUpdate::Idle,
+            load_generation: generation,
+            load_cancel: Some(CancellationToken::new()),
+        });
+        browser
+    }
+
+    fn directory_snapshot(path: PathBuf) -> FilePropertiesSnapshot {
+        FilePropertiesSnapshot {
+            name: OsString::from("project"),
+            kind: FileKind::Directory,
+            type_label: "Folder".to_owned(),
+            location: path.parent().unwrap().to_path_buf(),
+            created: None,
+            modified: None,
+            accessed: None,
+            size_bytes: 0,
+            disk_size_bytes: 0,
+            directory_contents: FilePropertiesDirectoryContentsState::Loading(None),
+            permissions: None,
+        }
+    }
+
+    fn directory_contents(
+        file_count: usize,
+        directory_count: usize,
+        total_size_bytes: u64,
+    ) -> FilePropertiesDirectoryContents {
+        FilePropertiesDirectoryContents {
+            file_count,
+            directory_count,
+            total_size_bytes,
+            total_disk_size_bytes: total_size_bytes,
         }
     }
 }

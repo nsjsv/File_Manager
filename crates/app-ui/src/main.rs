@@ -36,6 +36,7 @@ mod thumbnail_cache;
 mod typography;
 mod video_preview;
 mod view;
+mod virtual_range;
 mod visible_entries;
 
 struct StartupRenderingVariable {

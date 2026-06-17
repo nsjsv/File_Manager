@@ -11,10 +11,11 @@ use crate::model::{
 };
 use crate::thumbnail_cache::{
     request_for_entry, ColumnViewport, ThumbnailHandleEntry, ThumbnailLoadOutcome,
-    ThumbnailPriority, ThumbnailPurpose, LIST_THUMBNAIL_EDGE, PREVIEW_THUMBNAIL_MAX_EDGE,
+    ThumbnailPriority, ThumbnailPurpose, ThumbnailScope, COLUMN_THUMBNAIL_EDGE,
+    LIST_THUMBNAIL_EDGE, PREVIEW_THUMBNAIL_MAX_EDGE,
 };
+use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
-const ESTIMATED_ROW_HEIGHT: f32 = 56.0;
 const OVERSCAN_ROWS: usize = 28;
 const INITIAL_THUMBNAIL_ROWS: usize = OVERSCAN_ROWS * 2 + 1;
 const PREVIEW_THUMBNAIL_MIN_EDGE: u32 = 512;
@@ -57,7 +58,7 @@ impl FileBrowser {
             };
             pane.column_viewports.insert(directory.clone(), viewport);
         }
-        self.schedule_directory_thumbnails_for_pane(
+        self.schedule_column_directory_thumbnails_for_pane(
             pane_id,
             &directory,
             ThumbnailPriority::Focused,
@@ -71,13 +72,19 @@ impl FileBrowser {
         offset_y: f32,
         height: f32,
     ) -> Task<Message> {
-        self.schedule_visible_list_thumbnail_range_for_pane(
-            pane_id,
-            Some(ColumnViewport {
-                offset_y: offset_y.max(0.0),
-                height: height.max(1.0),
-            }),
-        );
+        let viewport = ColumnViewport {
+            offset_y: offset_y.max(0.0),
+            height: height.max(1.0),
+        };
+        let Some(directory) = self.pane_view(pane_id).map(|pane| pane.current_dir.clone()) else {
+            return Task::none();
+        };
+        if pane_id == self.active_pane_id() {
+            self.column_viewports.insert(directory, viewport);
+        } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
+            pane.column_viewports.insert(directory, viewport);
+        }
+        self.schedule_visible_list_thumbnail_range_for_pane(pane_id, Some(viewport));
         self.pump_thumbnail_queue()
     }
 
@@ -271,7 +278,7 @@ impl FileBrowser {
             if let Some(entry) = self.entry_for_path(&path).cloned() {
                 self.thumbnail_cache.enqueue_entry(
                     &entry,
-                    LIST_THUMBNAIL_EDGE,
+                    self.active_entry_thumbnail_edge(),
                     ThumbnailPurpose::List,
                     ThumbnailPriority::Focused,
                 );
@@ -282,7 +289,7 @@ impl FileBrowser {
             if let Some(entry) = self.entry_for_path(&path).cloned() {
                 self.thumbnail_cache.enqueue_entry(
                     &entry,
-                    LIST_THUMBNAIL_EDGE,
+                    self.active_entry_thumbnail_edge(),
                     ThumbnailPurpose::List,
                     ThumbnailPriority::Focused,
                 );
@@ -313,7 +320,7 @@ impl FileBrowser {
             } else {
                 ThumbnailPriority::Visible
             };
-            self.schedule_directory_thumbnails_for_pane(pane_id, directory, priority);
+            self.schedule_column_directory_thumbnails_for_pane(pane_id, directory, priority);
         }
     }
 
@@ -329,32 +336,57 @@ impl FileBrowser {
         let Some(pane) = self.pane_view(pane_id) else {
             return;
         };
-        let entries =
-            crate::visible_entries::visible_entries(pane.entries, pane.expanded_directories);
-        let (start, end) = thumbnail_range_for_viewport(viewport, entries.len());
-        let requests = entries[start..end]
+        let directory = pane.current_dir.clone();
+        let total_rows =
+            crate::visible_entries::visible_entry_count(pane.entries, pane.expanded_directories);
+        let (start, end) =
+            thumbnail_range_for_row_height(viewport, total_rows, crate::list_view::LIST_ROW_HEIGHT);
+        let entries = crate::visible_entries::visible_entries_in_range(
+            pane.entries,
+            pane.expanded_directories,
+            start,
+            end,
+        );
+        let scope = thumbnail_scope_for_pane_directory(pane_id, &directory);
+        let requests = entries
             .iter()
             .filter_map(|visible_entry| request_for_entry(visible_entry.entry, LIST_THUMBNAIL_EDGE))
             .collect::<Vec<_>>();
+        let keep = requests
+            .iter()
+            .map(ThumbnailRequest::key)
+            .collect::<Vec<_>>();
+        self.thumbnail_cache.prune_scope_except(&scope, &keep);
         for request in requests {
-            self.thumbnail_cache.enqueue_request(
+            self.thumbnail_cache.enqueue_request_for_scope(
                 request,
                 ThumbnailPurpose::List,
                 ThumbnailPriority::Visible,
+                scope.clone(),
             );
         }
     }
 
-    fn schedule_directory_thumbnails_for_pane(
+    fn schedule_column_directory_thumbnails_for_pane(
         &mut self,
         pane_id: BrowserPaneId,
         directory: &Path,
         priority: ThumbnailPriority,
     ) {
         let requests = self.thumbnail_requests_for_pane_directory_range(pane_id, directory);
+        let scope = thumbnail_scope_for_pane_directory(pane_id, directory);
+        let keep = requests
+            .iter()
+            .map(ThumbnailRequest::key)
+            .collect::<Vec<_>>();
+        self.thumbnail_cache.prune_scope_except(&scope, &keep);
         for request in requests {
-            self.thumbnail_cache
-                .enqueue_request(request, ThumbnailPurpose::List, priority);
+            self.thumbnail_cache.enqueue_request_for_scope(
+                request,
+                ThumbnailPurpose::List,
+                priority,
+                scope.clone(),
+            );
         }
     }
 
@@ -374,7 +406,7 @@ impl FileBrowser {
             self.thumbnail_range_for_pane_directory(pane_id, directory, entries.len());
         entries[start..end]
             .iter()
-            .filter_map(|entry| request_for_entry(entry, LIST_THUMBNAIL_EDGE))
+            .filter_map(|entry| request_for_entry(entry, COLUMN_THUMBNAIL_EDGE))
             .collect()
     }
 
@@ -413,9 +445,10 @@ impl FileBrowser {
         directory: &Path,
         len: usize,
     ) -> (usize, usize) {
-        thumbnail_range_for_viewport(
+        thumbnail_range_for_row_height(
             self.column_viewport_for_pane_directory(pane_id, directory),
             len,
+            crate::three_column_view::COLUMN_ENTRY_HEIGHT,
         )
     }
 
@@ -456,6 +489,17 @@ impl FileBrowser {
             Some(PreviewState::Loading(loading_path)) if loading_path == path
         )
     }
+
+    fn active_entry_thumbnail_edge(&self) -> u32 {
+        if self
+            .pane_view(self.active_pane_id())
+            .is_some_and(|pane| pane.view_mode == BrowserViewMode::Columns)
+        {
+            COLUMN_THUMBNAIL_EDGE
+        } else {
+            LIST_THUMBNAIL_EDGE
+        }
+    }
 }
 
 fn rendered_column_directories_for_browser(
@@ -484,18 +528,30 @@ fn thumbnail_request_matches_pane(pane: &BrowserPane, request: &ThumbnailRequest
         .is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
 }
 
-fn thumbnail_range_for_viewport(viewport: Option<ColumnViewport>, len: usize) -> (usize, usize) {
-    let Some(viewport) = viewport else {
-        return (0, INITIAL_THUMBNAIL_ROWS.min(len));
-    };
-    let first_visible = (viewport.offset_y / ESTIMATED_ROW_HEIGHT).floor().max(0.0) as usize;
-    let visible_count = (viewport.height / ESTIMATED_ROW_HEIGHT).ceil().max(1.0) as usize;
-    let start = first_visible.saturating_sub(OVERSCAN_ROWS);
-    let end = first_visible
-        .saturating_add(visible_count)
-        .saturating_add(OVERSCAN_ROWS * 2)
-        .min(len);
-    (start, end)
+fn thumbnail_range_for_row_height(
+    viewport: Option<ColumnViewport>,
+    len: usize,
+    row_height: f32,
+) -> (usize, usize) {
+    let range = viewport
+        .map(|viewport| {
+            virtual_range_for_viewport(
+                len,
+                row_height,
+                viewport.offset_y,
+                viewport.height,
+                OVERSCAN_ROWS,
+            )
+        })
+        .unwrap_or_else(|| initial_virtual_range(len, row_height, INITIAL_THUMBNAIL_ROWS));
+    (range.start, range.end)
+}
+
+fn thumbnail_scope_for_pane_directory(pane_id: BrowserPaneId, directory: &Path) -> ThumbnailScope {
+    ThumbnailScope::PaneDirectory {
+        pane_id: pane_id.key(),
+        directory: directory.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
@@ -514,7 +570,7 @@ mod tests {
 
     #[test]
     fn missing_viewport_schedules_initial_thumbnail_rows() {
-        let range = thumbnail_range_for_viewport(None, 100);
+        let range = thumbnail_range_for_row_height(None, 100, crate::list_view::LIST_ROW_HEIGHT);
 
         assert_eq!(range, (0, INITIAL_THUMBNAIL_ROWS));
     }
@@ -522,13 +578,30 @@ mod tests {
     #[test]
     fn measured_viewport_schedules_visible_rows_with_overscan() {
         let viewport = ColumnViewport {
-            offset_y: ESTIMATED_ROW_HEIGHT * 40.0,
-            height: ESTIMATED_ROW_HEIGHT * 3.0,
+            offset_y: crate::list_view::LIST_ROW_HEIGHT * 40.0,
+            height: crate::list_view::LIST_ROW_HEIGHT * 3.0,
         };
 
-        let range = thumbnail_range_for_viewport(Some(viewport), 120);
+        let range =
+            thumbnail_range_for_row_height(Some(viewport), 120, crate::list_view::LIST_ROW_HEIGHT);
 
-        assert_eq!(range, (12, 99));
+        assert_eq!(range, (12, 71));
+    }
+
+    #[test]
+    fn column_thumbnail_range_uses_column_row_height() {
+        let viewport = ColumnViewport {
+            offset_y: crate::three_column_view::COLUMN_ENTRY_HEIGHT * 40.0,
+            height: crate::three_column_view::COLUMN_ENTRY_HEIGHT * 3.0,
+        };
+
+        let range = thumbnail_range_for_row_height(
+            Some(viewport),
+            120,
+            crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+        );
+
+        assert_eq!(range, (12, 71));
     }
 
     #[test]
@@ -576,7 +649,7 @@ mod tests {
             BrowserPaneId::PRIMARY,
             Some(ColumnViewport {
                 offset_y: 0.0,
-                height: ESTIMATED_ROW_HEIGHT * 3.0,
+                height: crate::list_view::LIST_ROW_HEIGHT * 3.0,
             }),
         );
 
@@ -675,7 +748,7 @@ mod tests {
                 inactive_dir.clone(),
                 ColumnViewport {
                     offset_y: 0.0,
-                    height: ESTIMATED_ROW_HEIGHT,
+                    height: crate::list_view::LIST_ROW_HEIGHT,
                 },
             )]),
             tabs: vec![tab.clone()],
@@ -684,6 +757,8 @@ mod tests {
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
             path_suggestion_generation: 0,
+            directory_load_generation: 0,
+            directory_load_cancel: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
             is_loading: false,

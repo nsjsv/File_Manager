@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use iced::Task;
 
@@ -12,131 +12,12 @@ use crate::model::{
     TRASH_LOCATION_LABEL,
 };
 
-const TAB_BAR_REVEAL_DURATION: Duration = Duration::from_millis(180);
-const TAB_BAR_HIDE_DURATION: Duration = Duration::from_millis(140);
-const TAB_INTRO_DURATION: Duration = Duration::from_millis(180);
-const TAB_CLOSE_DURATION: Duration = Duration::from_millis(150);
-const TAB_REORDER_DURATION: Duration = Duration::from_millis(160);
-const TAB_REORDER_HORIZONTAL_PADDING: f32 = 36.0;
-const TAB_REORDER_SPACING: f32 = 6.0;
-const TAB_REORDER_MIN_SLOT_WIDTH: f32 = 48.0;
-
+mod animation;
+pub(crate) use animation::{TabAnimationState, TabBarReveal};
+use animation::{TAB_REORDER_HORIZONTAL_PADDING, TAB_REORDER_MIN_SLOT_WIDTH, TAB_REORDER_SPACING};
 mod folder_middle_click_split;
 #[cfg(test)]
 mod view_mode_tests;
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum TabBarReveal {
-    Hidden,
-    Opening {
-        started_at: Instant,
-        initial_fraction: f32,
-    },
-    Visible,
-    Closing {
-        started_at: Instant,
-        initial_fraction: f32,
-    },
-}
-
-impl Default for TabBarReveal {
-    fn default() -> Self {
-        Self::Hidden
-    }
-}
-
-impl TabBarReveal {
-    fn is_animating(self) -> bool {
-        matches!(self, Self::Opening { .. } | Self::Closing { .. })
-    }
-
-    fn fraction(self) -> f32 {
-        match self {
-            Self::Hidden => 0.0,
-            Self::Visible => 1.0,
-            Self::Opening {
-                started_at,
-                initial_fraction,
-            } => {
-                let progress = animation_progress(started_at, TAB_BAR_REVEAL_DURATION);
-                initial_fraction + (1.0 - initial_fraction) * ease_out_cubic(progress)
-            }
-            Self::Closing {
-                started_at,
-                initial_fraction,
-            } => {
-                let progress = animation_progress(started_at, TAB_BAR_HIDE_DURATION);
-                initial_fraction * (1.0 - ease_out_cubic(progress))
-            }
-        }
-        .clamp(0.0, 1.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TabAnimationState {
-    intro_started_at: Option<Instant>,
-    close: Option<TabCloseAnimation>,
-    shift: Option<TabShiftAnimation>,
-}
-
-impl TabAnimationState {
-    pub(crate) fn width_fraction(self) -> f32 {
-        if let Some(close) = self.close {
-            let progress = ease_out_cubic(animation_progress(close.started_at, TAB_CLOSE_DURATION));
-            return (close.initial_fraction * (1.0 - progress)).clamp(0.0, 1.0);
-        }
-
-        self.intro_fraction()
-    }
-
-    fn intro_fraction(self) -> f32 {
-        let Some(started_at) = self.intro_started_at else {
-            return 1.0;
-        };
-        ease_out_cubic(animation_progress(started_at, TAB_INTRO_DURATION))
-    }
-
-    pub(crate) fn shift_offset(self) -> f32 {
-        let Some(shift) = self.shift else {
-            return 0.0;
-        };
-        let progress = ease_out_cubic(animation_progress(shift.started_at, TAB_REORDER_DURATION));
-        shift.initial_offset * (1.0 - progress)
-    }
-
-    fn is_animating(self) -> bool {
-        self.intro_started_at
-            .is_some_and(|started_at| animation_progress(started_at, TAB_INTRO_DURATION) < 1.0)
-            || self
-                .close
-                .is_some_and(|close| animation_progress(close.started_at, TAB_CLOSE_DURATION) < 1.0)
-            || self.shift.is_some_and(|shift| {
-                animation_progress(shift.started_at, TAB_REORDER_DURATION) < 1.0
-            })
-    }
-
-    fn is_closing(self) -> bool {
-        self.close.is_some()
-    }
-
-    fn close_is_finished(self) -> bool {
-        self.close
-            .is_some_and(|close| animation_progress(close.started_at, TAB_CLOSE_DURATION) >= 1.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TabCloseAnimation {
-    started_at: Instant,
-    initial_fraction: f32,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TabShiftAnimation {
-    started_at: Instant,
-    initial_offset: f32,
-}
 
 pub(crate) struct TabDragPreview<'a> {
     pub(crate) directory: &'a Path,
@@ -602,10 +483,7 @@ impl FileBrowser {
     }
 
     fn start_tab_intro_animation(&mut self, tab_id: usize) {
-        self.tab_animations
-            .entry(tab_id)
-            .or_default()
-            .intro_started_at = Some(Instant::now());
+        self.tab_animations.entry(tab_id).or_default().start_intro();
     }
 
     fn start_tab_close_animation(&mut self, tab_id: usize) {
@@ -614,24 +492,23 @@ impl FileBrowser {
             .get(&tab_id)
             .map(|animation| animation.width_fraction())
             .unwrap_or(1.0);
-        self.tab_animations.entry(tab_id).or_default().close = Some(TabCloseAnimation {
-            started_at: Instant::now(),
-            initial_fraction,
-        });
+        self.tab_animations
+            .entry(tab_id)
+            .or_default()
+            .start_close(initial_fraction);
     }
 
     fn start_tab_reorder_animations(&mut self, tab_ids: Vec<usize>, shift_offset: f32) {
-        let started_at = Instant::now();
         for tab_id in tab_ids {
             let current_offset = self
                 .tab_animations
                 .get(&tab_id)
                 .map(|animation| animation.shift_offset())
                 .unwrap_or(0.0);
-            self.tab_animations.entry(tab_id).or_default().shift = Some(TabShiftAnimation {
-                started_at,
-                initial_offset: current_offset + shift_offset,
-            });
+            self.tab_animations
+                .entry(tab_id)
+                .or_default()
+                .start_shift(current_offset + shift_offset);
         }
     }
 
@@ -751,6 +628,8 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         path_suggestions: Vec::new(),
         path_suggestion_selection: None,
         path_suggestion_generation: 0,
+        directory_load_generation: 0,
+        directory_load_cancel: None,
         back_stack: tab.back_stack.clone(),
         forward_stack: tab.forward_stack.clone(),
         is_loading: false,
@@ -798,13 +677,4 @@ fn path_input_for_tab(tab: &BrowserTab) -> String {
     } else {
         path_text(&tab.directory)
     }
-}
-
-fn animation_progress(started_at: Instant, duration: Duration) -> f32 {
-    (started_at.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
-}
-
-fn ease_out_cubic(progress: f32) -> f32 {
-    let progress = progress.clamp(0.0, 1.0);
-    1.0 - (1.0 - progress).powi(3)
 }

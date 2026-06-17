@@ -14,24 +14,30 @@ use crate::appearance::{
     column_resize_divider_style,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
-use crate::file_entry_presentation::selection_run_position_for_path;
-use crate::file_entry_view::{entry_thumbnail_or_icon, themed_icon, FileEntryVisualState};
+use crate::file_entry_presentation::SelectionRunPosition;
+use crate::file_entry_view::{
+    entry_thumbnail_or_icon, themed_icon, FileEntryIconDensity, FileEntryVisualState,
+};
 use crate::icons::IconSymbol;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{BrowserPaneId, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id};
+use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
-pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 3;
-pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 6.0;
+pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 4;
+pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 5.0;
 const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
-const CHEVRON_ICON_SIZE: f32 = 15.0;
-const COLUMN_CONTENT_SPACING: u32 = 4;
-const COLUMN_PADDING: [u16; 2] = [10, 8];
-const COLUMN_TITLE_TEXT_SIZE: u32 = 13;
-const COLUMN_ENTRY_TEXT_SIZE: u32 = 16;
-const COLUMN_ENTRY_SPACING: u32 = 8;
-const COLUMN_ENTRY_PADDING: [u16; 2] = [6, 8];
+const CHEVRON_ICON_SIZE: f32 = 11.0;
+const COLUMN_CONTENT_SPACING: u32 = 2;
+const COLUMN_PADDING: [u16; 2] = [5, 5];
+const COLUMN_TITLE_TEXT_SIZE: u32 = 12;
+const COLUMN_ENTRY_TEXT_SIZE: u32 = 13;
+pub(crate) const COLUMN_ENTRY_HEIGHT: f32 = 24.0;
+const COLUMN_OVERSCAN_ROWS: usize = 16;
+const COLUMN_INITIAL_ROWS: usize = COLUMN_OVERSCAN_ROWS * 2 + 1;
+const COLUMN_ENTRY_SPACING: u32 = 4;
+const COLUMN_ENTRY_PADDING: [u16; 2] = [1, 4];
 
 pub(crate) fn column_browser_view<'a>(
     browser: &'a FileBrowser,
@@ -107,15 +113,36 @@ fn directory_column<'a>(
     content = content.push(column_title(pane, directory));
     match column_content(pane, directory) {
         ColumnContent::Entries(entries) => {
-            for entry in entries {
+            let range = pane
+                .column_viewports
+                .get(directory)
+                .map(|viewport| {
+                    virtual_range_for_viewport(
+                        entries.len(),
+                        COLUMN_ENTRY_HEIGHT,
+                        viewport.offset_y,
+                        viewport.height,
+                        COLUMN_OVERSCAN_ROWS,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    initial_virtual_range(entries.len(), COLUMN_ENTRY_HEIGHT, COLUMN_INITIAL_ROWS)
+                });
+            content = content.push(vertical_spacer(range.before_height));
+            for entry_index in range.start..range.end {
+                let Some(entry) = entries.get(entry_index) else {
+                    break;
+                };
                 content = content.push(column_entry_row(
                     browser,
                     pane,
                     entries,
+                    entry_index,
                     entry,
                     active_child,
                 ));
             }
+            content = content.push(vertical_spacer(range.after_height));
         }
         ColumnContent::Loading => {
             content = content.push(column_message("Loading..."));
@@ -225,10 +252,15 @@ fn column_message(message: &'static str) -> Element<'static, Message> {
         .into()
 }
 
+fn vertical_spacer(height: f32) -> Element<'static, Message> {
+    Space::new().height(Length::Fixed(height.max(0.0))).into()
+}
+
 fn column_entry_row<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
     entries: &[DirectoryEntry],
+    entry_index: usize,
     entry: &DirectoryEntry,
     active_child: Option<&Path>,
 ) -> Element<'a, Message> {
@@ -261,7 +293,7 @@ fn column_entry_row<'a>(
         };
 
     let row_content = row![
-        entry_thumbnail_or_icon(browser, entry, icon_tone),
+        entry_thumbnail_or_icon(browser, entry, icon_tone, FileEntryIconDensity::Column),
         name,
         trailing
     ]
@@ -269,13 +301,11 @@ fn column_entry_row<'a>(
     .align_y(Alignment::Center);
     let row_container = container(row_content)
         .padding(COLUMN_ENTRY_PADDING)
+        .height(Length::Fixed(COLUMN_ENTRY_HEIGHT))
+        .center_y(Length::Fixed(COLUMN_ENTRY_HEIGHT))
         .width(Length::Fill);
-    let entry_paths = entries
-        .iter()
-        .map(|entry| entry.path.clone())
-        .collect::<Vec<_>>();
     let selection_run_position =
-        selection_run_position_for_path(&entry_paths, pane.selected_paths, &entry.path);
+        selection_run_position_for_entry_index(entries, entry_index, pane.selected_paths);
     let row_container = match visual_state.row_style_for_selection_run(selection_run_position) {
         Some(style) => row_container.style(style),
         None => row_container,
@@ -300,6 +330,28 @@ fn column_entry_row<'a>(
 
     let row_element: Element<'a, Message> = row_area.into();
     track_column_entry_bounds(row_element, pane.id, entry.path.clone())
+}
+
+fn selection_run_position_for_entry_index(
+    entries: &[DirectoryEntry],
+    index: usize,
+    selected_paths: &std::collections::HashSet<PathBuf>,
+) -> Option<SelectionRunPosition> {
+    let entry = entries.get(index)?;
+    if !selected_paths.contains(&entry.path) {
+        return None;
+    }
+    let previous_selected = index
+        .checked_sub(1)
+        .and_then(|previous| entries.get(previous))
+        .is_some_and(|previous| selected_paths.contains(&previous.path));
+    let next_selected = entries
+        .get(index + 1)
+        .is_some_and(|next| selected_paths.contains(&next.path));
+    Some(SelectionRunPosition::from_neighbors(
+        previous_selected,
+        next_selected,
+    ))
 }
 
 fn column_content<'a>(pane: BrowserPaneView<'a>, directory: &Path) -> ColumnContent<'a> {
@@ -384,9 +436,9 @@ fn append_column_directory_chain(
 fn column_title_padding() -> Padding {
     Padding {
         top: 0.0,
-        right: 7.0,
-        bottom: 6.0,
-        left: 7.0,
+        right: 5.0,
+        bottom: 4.0,
+        left: 5.0,
     }
 }
 
@@ -470,6 +522,8 @@ mod tests {
             is_expanded: true,
             is_collapsing: false,
             animation_progress: 1.0,
+            load_generation: 0,
+            load_cancel: None,
         }
     }
 
@@ -480,6 +534,7 @@ mod tests {
         selected_paths: &'a HashSet<PathBuf>,
         deepest_open_column_directory: Option<&'a PathBuf>,
         expanded_directories: &'a HashMap<PathBuf, crate::model::ExpandedDirectory>,
+        column_viewports: &'a HashMap<PathBuf, crate::thumbnail_cache::ColumnViewport>,
     ) -> BrowserPaneView<'a> {
         BrowserPaneView {
             id: BrowserPaneId::PRIMARY,
@@ -492,6 +547,7 @@ mod tests {
             deepest_open_column_directory,
             hovered_entry: None,
             expanded_directories,
+            column_viewports,
             view_mode: crate::model::BrowserViewMode::Columns,
             tabs: &[],
             active_tab_id: 0,
@@ -514,6 +570,7 @@ mod tests {
         let entries = vec![test_entry(directory.clone(), FileKind::Directory)];
         let selected_paths = HashSet::from([directory.clone()]);
         let expanded_directories = HashMap::new();
+        let column_viewports = HashMap::new();
         let pane = test_pane_view(
             &current_dir,
             &entries,
@@ -521,6 +578,7 @@ mod tests {
             &selected_paths,
             Some(&directory),
             &expanded_directories,
+            &column_viewports,
         );
 
         assert_eq!(
@@ -536,6 +594,7 @@ mod tests {
         let entries = vec![test_entry(directory.clone(), FileKind::Directory)];
         let selected_paths = HashSet::from([directory.clone()]);
         let expanded_directories = HashMap::new();
+        let column_viewports = HashMap::new();
         let pane = test_pane_view(
             &current_dir,
             &entries,
@@ -543,6 +602,7 @@ mod tests {
             &selected_paths,
             None,
             &expanded_directories,
+            &column_viewports,
         );
 
         assert_eq!(column_directories_for_pane(pane), vec![current_dir]);
@@ -559,6 +619,7 @@ mod tests {
         ];
         let selected_paths = HashSet::from([first, second.clone()]);
         let expanded_directories = HashMap::new();
+        let column_viewports = HashMap::new();
         let pane = test_pane_view(
             &current_dir,
             &entries,
@@ -566,6 +627,7 @@ mod tests {
             &selected_paths,
             None,
             &expanded_directories,
+            &column_viewports,
         );
 
         assert_eq!(column_directories_for_pane(pane), vec![current_dir]);
@@ -585,6 +647,7 @@ mod tests {
             open_directory.clone(),
             loaded_expanded_directory(Vec::new()),
         )]);
+        let column_viewports = HashMap::new();
         let pane = test_pane_view(
             &current_dir,
             &entries,
@@ -592,6 +655,7 @@ mod tests {
             &selected_paths,
             Some(&open_directory),
             &expanded_directories,
+            &column_viewports,
         );
 
         assert_eq!(

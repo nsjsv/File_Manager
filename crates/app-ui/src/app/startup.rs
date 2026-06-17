@@ -39,10 +39,16 @@ impl FileBrowser {
         self.error = None;
         self.sync_active_tab_state();
         let startup_index_setup_command = self.refresh_startup_index_setup_choices();
+        let directory_request = self.next_directory_load_request(home.clone());
+        let directory_cancellation = self.directory_load_cancellation(&directory_request);
 
         Task::batch([
             startup_index_setup_command,
-            load_directory_command(BrowserPaneId::PRIMARY, home.clone(), self.options.clone()),
+            load_directory_command(
+                directory_request,
+                self.options.clone(),
+                directory_cancellation,
+            ),
             sidebar_locations_command(home, configured_favorites),
             sidebar_devices_command(),
             operation_store_command(state_database_path),

@@ -6,8 +6,11 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use tokio::fs;
+use tokio_util::sync::CancellationToken;
 
 use crate::{sort_entries, DirectoryEntry, EntryMetadata, FileKind, SortDirection, SortField};
+
+const DIRECTORY_SCAN_BATCH_SIZE: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanOptions {
@@ -41,11 +44,30 @@ pub struct ScanWarning {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryScanBatch {
+    pub path: PathBuf,
+    pub entries: Vec<DirectoryEntry>,
+    pub skipped: Vec<ScanWarning>,
+}
+
 pub async fn scan_directory(
     path: impl AsRef<Path>,
     options: ScanOptions,
 ) -> Result<DirectoryScan, FileError> {
+    scan_directory_with_progress(path, options, CancellationToken::new(), |_| {}).await
+}
+
+pub async fn scan_directory_with_progress(
+    path: impl AsRef<Path>,
+    options: ScanOptions,
+    cancellation: CancellationToken,
+    mut on_batch: impl FnMut(DirectoryScanBatch),
+) -> Result<DirectoryScan, FileError> {
     let path = path.as_ref().to_path_buf();
+    if cancellation.is_cancelled() {
+        return Err(FileError::Cancelled);
+    }
     let mut reader = fs::read_dir(&path)
         .await
         .map_err(|source| FileError::ReadDirectory {
@@ -55,9 +77,15 @@ pub async fn scan_directory(
 
     let mut entries = Vec::new();
     let mut skipped = Vec::new();
+    let mut batch_entries = Vec::new();
+    let mut batch_skipped = Vec::new();
 
     loop {
-        let dir_entry = match reader.next_entry().await {
+        let next_entry = tokio::select! {
+            _ = cancellation.cancelled() => return Err(FileError::Cancelled),
+            next_entry = reader.next_entry() => next_entry,
+        };
+        let dir_entry = match next_entry {
             Ok(Some(dir_entry)) => dir_entry,
             Ok(None) => break,
             Err(source) => {
@@ -74,15 +102,32 @@ pub async fn scan_directory(
             continue;
         }
 
-        match entry_from_dir_entry(dir_entry, name, is_hidden).await {
-            Ok(entry) => entries.push(entry),
-            Err(FileError::Metadata { path, source }) => skipped.push(ScanWarning {
-                path,
-                message: source.to_string(),
-            }),
+        let entry_result = tokio::select! {
+            _ = cancellation.cancelled() => return Err(FileError::Cancelled),
+            entry_result = entry_from_dir_entry(dir_entry, name, is_hidden) => entry_result,
+        };
+        match entry_result {
+            Ok(entry) => {
+                entries.push(entry.clone());
+                batch_entries.push(entry);
+            }
+            Err(FileError::Metadata { path, source }) => {
+                let warning = ScanWarning {
+                    path,
+                    message: source.to_string(),
+                };
+                skipped.push(warning.clone());
+                batch_skipped.push(warning);
+            }
             Err(error) => return Err(error),
         }
+
+        if batch_entries.len() + batch_skipped.len() >= DIRECTORY_SCAN_BATCH_SIZE {
+            emit_directory_scan_batch(&path, &mut batch_entries, &mut batch_skipped, &mut on_batch);
+        }
     }
+
+    emit_directory_scan_batch(&path, &mut batch_entries, &mut batch_skipped, &mut on_batch);
 
     sort_entries(&mut entries, &options);
 
@@ -91,6 +136,23 @@ pub async fn scan_directory(
         entries,
         skipped,
     })
+}
+
+fn emit_directory_scan_batch(
+    path: &Path,
+    entries: &mut Vec<DirectoryEntry>,
+    skipped: &mut Vec<ScanWarning>,
+    on_batch: &mut impl FnMut(DirectoryScanBatch),
+) {
+    if entries.is_empty() && skipped.is_empty() {
+        return;
+    }
+
+    on_batch(DirectoryScanBatch {
+        path: path.to_path_buf(),
+        entries: std::mem::take(entries),
+        skipped: std::mem::take(skipped),
+    });
 }
 
 pub(crate) async fn entry_from_dir_entry(

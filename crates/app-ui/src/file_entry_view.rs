@@ -14,9 +14,41 @@ use crate::appearance::{
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::model::Message;
-use crate::thumbnail_cache::{LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE};
+use crate::thumbnail_cache::{
+    COLUMN_THUMBNAIL_EDGE, COLUMN_THUMBNAIL_SIZE, LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE,
+};
 
 pub(crate) const ENTRY_ICON_SIZE: f32 = 18.0;
+const COLUMN_ENTRY_ICON_SIZE: f32 = 16.0;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum FileEntryIconDensity {
+    List,
+    Column,
+}
+
+impl FileEntryIconDensity {
+    fn thumbnail_edge(self) -> u32 {
+        match self {
+            Self::List => LIST_THUMBNAIL_EDGE,
+            Self::Column => COLUMN_THUMBNAIL_EDGE,
+        }
+    }
+
+    fn thumbnail_size(self) -> f32 {
+        match self {
+            Self::List => LIST_THUMBNAIL_SIZE,
+            Self::Column => COLUMN_THUMBNAIL_SIZE,
+        }
+    }
+
+    fn icon_size(self) -> f32 {
+        match self {
+            Self::List => ENTRY_ICON_SIZE,
+            Self::Column => COLUMN_ENTRY_ICON_SIZE,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileEntryVisualState {
@@ -90,30 +122,33 @@ pub(crate) fn entry_thumbnail_or_icon<'a>(
     browser: &'a FileBrowser,
     entry: &DirectoryEntry,
     tone: FileEntryIconTone,
+    density: FileEntryIconDensity,
 ) -> Element<'a, Message> {
+    let thumbnail_edge = density.thumbnail_edge();
+    let thumbnail_size = density.thumbnail_size();
     if let Some(thumbnail) = browser
         .thumbnail_cache
-        .ready_for_entry(entry, LIST_THUMBNAIL_EDGE)
+        .ready_for_entry(entry, thumbnail_edge)
     {
         return container(
             image::Image::new(thumbnail.handle.clone())
-                .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
-                .height(Length::Fixed(LIST_THUMBNAIL_SIZE)),
+                .width(Length::Fixed(thumbnail_size))
+                .height(Length::Fixed(thumbnail_size)),
         )
-        .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .height(Length::Fixed(LIST_THUMBNAIL_SIZE))
+        .width(Length::Fixed(thumbnail_size))
+        .height(Length::Fixed(thumbnail_size))
         .into();
     }
 
     if !thumbnails::is_supported_thumbnail_path(&entry.path) {
-        return entry_icon(entry, tone).into();
+        return entry_icon(entry, tone, density).into();
     }
 
-    container(entry_icon(entry, tone))
-        .width(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .height(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .center_x(Length::Fixed(LIST_THUMBNAIL_SIZE))
-        .center_y(Length::Fixed(LIST_THUMBNAIL_SIZE))
+    container(entry_icon(entry, tone, density))
+        .width(Length::Fixed(thumbnail_size))
+        .height(Length::Fixed(thumbnail_size))
+        .center_x(Length::Fixed(thumbnail_size))
+        .center_y(Length::Fixed(thumbnail_size))
         .into()
 }
 
@@ -125,7 +160,11 @@ pub(crate) fn themed_icon(
     symbol.view(size).style(icon_tone_style(tone))
 }
 
-fn entry_icon(entry: &DirectoryEntry, tone: FileEntryIconTone) -> Svg<'static, Theme> {
+fn entry_icon(
+    entry: &DirectoryEntry,
+    tone: FileEntryIconTone,
+    density: FileEntryIconDensity,
+) -> Svg<'static, Theme> {
     let symbol = if entry.kind == FileKind::Symlink && entry.is_broken_symlink {
         IconSymbol::TriangleAlert
     } else {
@@ -136,7 +175,7 @@ fn entry_icon(entry: &DirectoryEntry, tone: FileEntryIconTone) -> Svg<'static, T
         (IconSymbol::TriangleAlert, _) => FileEntryIconTone::Warning,
         _ => tone,
     };
-    themed_icon(symbol, tone, ENTRY_ICON_SIZE)
+    themed_icon(symbol, tone, density.icon_size())
 }
 
 fn icon_tone_style(

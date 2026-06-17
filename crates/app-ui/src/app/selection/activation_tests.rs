@@ -7,7 +7,8 @@ use iced::{keyboard, Point};
 use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
-    BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryStatus, FileDragPhase,
+    BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryLoadRequest,
+    ExpandedDirectoryStatus, FileDragPhase,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -45,6 +46,8 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         is_expanded: true,
         is_collapsing: false,
         animation_progress: 1.0,
+        load_generation: 0,
+        load_cancel: None,
     }
 }
 
@@ -138,6 +141,8 @@ fn list_single_click_selects_directory_without_expanding_or_opening_column() {
             is_expanded: false,
             is_collapsing: false,
             animation_progress: 0.0,
+            load_generation: 0,
+            load_cancel: None,
         },
     );
 
@@ -288,10 +293,18 @@ fn right_arrow_focuses_first_child_after_directory_loads() {
 
     assert_eq!(browser.selected, Some(parent.clone()));
     assert!(browser.pending_keyboard_column_focus.is_some());
+    let load_generation = browser
+        .expanded_directories
+        .get(&parent)
+        .map(|expanded| expanded.load_generation)
+        .unwrap_or_default();
 
     drop(browser.accept_expanded_directory(
-        BrowserPaneId::PRIMARY,
-        parent.clone(),
+        ExpandedDirectoryLoadRequest {
+            pane_id: BrowserPaneId::PRIMARY,
+            path: parent.clone(),
+            generation: load_generation,
+        },
         Ok(DirectoryScan {
             path: parent.clone(),
             entries: vec![test_entry(child.clone(), FileKind::File)],
@@ -346,6 +359,8 @@ fn list_right_arrow_expands_then_focuses_first_child() {
             is_expanded: false,
             is_collapsing: false,
             animation_progress: 0.0,
+            load_generation: 0,
+            load_cancel: None,
         },
     );
     browser.select_path(parent.clone());

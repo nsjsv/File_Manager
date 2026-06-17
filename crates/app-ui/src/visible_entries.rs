@@ -16,11 +16,42 @@ pub(crate) fn visible_entries<'a>(
     entries: &'a [DirectoryEntry],
     expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
 ) -> Vec<VisibleEntry<'a>> {
-    let mut visible_entries = Vec::new();
-    for entry in entries {
-        push_visible_entry(entry, 0, expanded_directories, &mut visible_entries);
+    visible_entries_in_range(entries, expanded_directories, 0, usize::MAX)
+}
+
+pub(crate) fn visible_entries_in_range<'a>(
+    entries: &'a [DirectoryEntry],
+    expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
+    start: usize,
+    end: usize,
+) -> Vec<VisibleEntry<'a>> {
+    if start >= end {
+        return Vec::new();
     }
-    visible_entries
+
+    let mut cursor = VisibleEntryRangeCursor {
+        next_index: 0,
+        start,
+        end,
+        rows: Vec::new(),
+    };
+    for entry in entries {
+        push_visible_entry_in_range(entry, 0, 1.0, expanded_directories, &mut cursor);
+        if cursor.next_index >= end {
+            break;
+        }
+    }
+    cursor.rows
+}
+
+pub(crate) fn visible_entry_count(
+    entries: &[DirectoryEntry],
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+) -> usize {
+    entries
+        .iter()
+        .map(|entry| visible_entry_subtree_count(entry, expanded_directories))
+        .sum()
 }
 
 pub(crate) fn visible_entry_paths(
@@ -63,32 +94,37 @@ pub(crate) fn entry_is_visible(
     entries: &[DirectoryEntry],
     expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
 ) -> bool {
-    visible_entries(entries, expanded_directories)
+    entries
         .iter()
-        .any(|visible_entry| visible_entry.entry.path == path)
+        .any(|entry| visible_subtree_contains(path, entry, expanded_directories))
 }
 
-fn push_visible_entry<'a>(
-    entry: &'a DirectoryEntry,
-    depth: usize,
-    expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
-    visible_entries: &mut Vec<VisibleEntry<'a>>,
-) {
-    push_visible_entry_with_progress(entry, depth, 1.0, expanded_directories, visible_entries);
+struct VisibleEntryRangeCursor<'a> {
+    next_index: usize,
+    start: usize,
+    end: usize,
+    rows: Vec<VisibleEntry<'a>>,
 }
 
-fn push_visible_entry_with_progress<'a>(
+fn push_visible_entry_in_range<'a>(
     entry: &'a DirectoryEntry,
     depth: usize,
     animation_progress: f32,
     expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
-    visible_entries: &mut Vec<VisibleEntry<'a>>,
+    cursor: &mut VisibleEntryRangeCursor<'a>,
 ) {
-    visible_entries.push(VisibleEntry {
-        entry,
-        depth,
-        animation_progress,
-    });
+    if cursor.next_index >= cursor.start && cursor.next_index < cursor.end {
+        cursor.rows.push(VisibleEntry {
+            entry,
+            depth,
+            animation_progress,
+        });
+    }
+    cursor.next_index = cursor.next_index.saturating_add(1);
+    if cursor.next_index >= cursor.end {
+        return;
+    }
+
     let Some(expanded) = expanded_directories
         .get(&entry.path)
         .filter(|expanded| expanded.is_expanded || expanded.is_collapsing)
@@ -98,15 +134,60 @@ fn push_visible_entry_with_progress<'a>(
     if matches!(expanded.status, ExpandedDirectoryStatus::Loaded) {
         let child_progress = animation_progress * expanded.animation_progress.clamp(0.0, 1.0);
         for child in &expanded.entries {
-            push_visible_entry_with_progress(
+            push_visible_entry_in_range(
                 child,
                 depth + 1,
                 child_progress,
                 expanded_directories,
-                visible_entries,
+                cursor,
             );
+            if cursor.next_index >= cursor.end {
+                break;
+            }
         }
     }
+}
+
+fn visible_entry_subtree_count(
+    entry: &DirectoryEntry,
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+) -> usize {
+    let Some(expanded) = expanded_directories
+        .get(&entry.path)
+        .filter(|expanded| expanded.is_expanded || expanded.is_collapsing)
+    else {
+        return 1;
+    };
+    if matches!(expanded.status, ExpandedDirectoryStatus::Loaded) {
+        1 + expanded
+            .entries
+            .iter()
+            .map(|child| visible_entry_subtree_count(child, expanded_directories))
+            .sum::<usize>()
+    } else {
+        1
+    }
+}
+
+fn visible_subtree_contains(
+    path: &Path,
+    entry: &DirectoryEntry,
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+) -> bool {
+    if entry.path == path {
+        return true;
+    }
+    let Some(expanded) = expanded_directories
+        .get(&entry.path)
+        .filter(|expanded| expanded.is_expanded || expanded.is_collapsing)
+    else {
+        return false;
+    };
+    matches!(expanded.status, ExpandedDirectoryStatus::Loaded)
+        && expanded
+            .entries
+            .iter()
+            .any(|child| visible_subtree_contains(path, child, expanded_directories))
 }
 
 fn push_selectable_entry_path(
@@ -159,6 +240,8 @@ mod tests {
             is_expanded,
             is_collapsing: false,
             animation_progress: 1.0,
+            load_generation: 0,
+            load_cancel: None,
         }
     }
 
@@ -239,6 +322,8 @@ mod tests {
                 is_expanded: false,
                 is_collapsing: false,
                 animation_progress: 1.0,
+                load_generation: 0,
+                load_cancel: None,
             },
         )]);
 
@@ -263,6 +348,8 @@ mod tests {
                 is_expanded: true,
                 is_collapsing: false,
                 animation_progress: 1.0,
+                load_generation: 0,
+                load_cancel: None,
             },
         )]);
 
@@ -285,6 +372,8 @@ mod tests {
                 is_expanded: true,
                 is_collapsing: false,
                 animation_progress: 1.0,
+                load_generation: 0,
+                load_cancel: None,
             },
         )]);
 
@@ -307,6 +396,8 @@ mod tests {
                 is_expanded: true,
                 is_collapsing: true,
                 animation_progress: 0.5,
+                load_generation: 0,
+                load_cancel: None,
             },
         )]);
 

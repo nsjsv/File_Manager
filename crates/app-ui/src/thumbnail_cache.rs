@@ -8,6 +8,8 @@ use thumbnails::{CachedThumbnail, ThumbnailKey, ThumbnailRequest, ThumbnailSourc
 
 pub(crate) const LIST_THUMBNAIL_EDGE: u32 = 96;
 pub(crate) const LIST_THUMBNAIL_SIZE: f32 = 42.0;
+pub(crate) const COLUMN_THUMBNAIL_EDGE: u32 = 48;
+pub(crate) const COLUMN_THUMBNAIL_SIZE: f32 = 18.0;
 pub(crate) const PREVIEW_THUMBNAIL_MAX_EDGE: u32 = 2048;
 
 const MAX_READY_THUMBNAILS: usize = 1200;
@@ -34,6 +36,7 @@ pub(crate) struct ThumbnailWork {
     pub(crate) request: ThumbnailRequest,
     pub(crate) purpose: ThumbnailPurpose,
     pub(crate) priority: ThumbnailPriority,
+    pub(crate) scope: Option<ThumbnailScope>,
 }
 
 impl ThumbnailWork {
@@ -60,6 +63,11 @@ pub(crate) struct ThumbnailHandleEntry {
 pub(crate) struct ColumnViewport {
     pub(crate) offset_y: f32,
     pub(crate) height: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ThumbnailScope {
+    PaneDirectory { pane_id: u64, directory: PathBuf },
 }
 
 #[derive(Debug)]
@@ -122,6 +130,33 @@ impl ThumbnailCache {
         purpose: ThumbnailPurpose,
         priority: ThumbnailPriority,
     ) {
+        self.enqueue_request_with_scope(request, purpose, priority, None);
+    }
+
+    pub(crate) fn enqueue_request_for_scope(
+        &mut self,
+        request: ThumbnailRequest,
+        purpose: ThumbnailPurpose,
+        priority: ThumbnailPriority,
+        scope: ThumbnailScope,
+    ) {
+        self.enqueue_request_with_scope(request, purpose, priority, Some(scope));
+    }
+
+    pub(crate) fn prune_scope_except(&mut self, scope: &ThumbnailScope, keep: &[ThumbnailKey]) {
+        self.queued.retain(|key, work| {
+            work.scope.as_ref() != Some(scope) || keep.iter().any(|keep_key| keep_key == key)
+        });
+        self.queue_order.retain(|key| self.queued.contains_key(key));
+    }
+
+    fn enqueue_request_with_scope(
+        &mut self,
+        request: ThumbnailRequest,
+        purpose: ThumbnailPurpose,
+        priority: ThumbnailPriority,
+        scope: Option<ThumbnailScope>,
+    ) {
         let key = request.key();
         if !self.thumbnail_can_be_queued(&key) {
             return;
@@ -131,10 +166,13 @@ impl ThumbnailCache {
             request,
             purpose,
             priority,
+            scope,
         };
         if let Some(existing) = self.queued.get_mut(&key) {
             if existing.priority < priority {
                 *existing = work;
+            } else if existing.scope.is_none() {
+                existing.scope = work.scope;
             }
             return;
         }
@@ -382,5 +420,46 @@ mod tests {
         );
 
         assert!(cache.take_next_batch().is_empty());
+    }
+
+    #[test]
+    fn pruning_scope_removes_only_stale_queued_work() {
+        let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
+        let scope = ThumbnailScope::PaneDirectory {
+            pane_id: 1,
+            directory: PathBuf::from("/workspace"),
+        };
+        let kept_request = thumbnail_request("kept.png", 1);
+        let stale_request = thumbnail_request("stale.png", 2);
+        let preview_request = thumbnail_request("preview.png", 3);
+
+        cache.enqueue_request_for_scope(
+            kept_request.clone(),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Visible,
+            scope.clone(),
+        );
+        cache.enqueue_request_for_scope(
+            stale_request,
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Visible,
+            scope.clone(),
+        );
+        cache.enqueue_request(
+            preview_request.clone(),
+            ThumbnailPurpose::Preview,
+            ThumbnailPriority::Preview,
+        );
+
+        cache.prune_scope_except(&scope, &[kept_request.key()]);
+
+        let batch = cache.take_next_batch();
+        let sources = batch
+            .into_iter()
+            .map(|work| work.request.source)
+            .collect::<Vec<_>>();
+        assert!(sources.contains(&kept_request.source));
+        assert!(sources.contains(&preview_request.source));
+        assert!(!sources.contains(&PathBuf::from("stale.png")));
     }
 }

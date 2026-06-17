@@ -9,19 +9,24 @@ use crate::appearance::{
     list_header_style, list_panel_style, list_row_style,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
-use crate::file_entry_presentation::selection_run_position;
-use crate::file_entry_view::{entry_thumbnail_or_icon, FileEntryIconTone, FileEntryVisualState};
+use crate::file_entry_presentation::SelectionRunPosition;
+use crate::file_entry_view::{
+    entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryIconTone, FileEntryVisualState,
+};
 use crate::formatting::{format_file_size, format_system_time};
 use crate::icons::rotated_chevron_right_view;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus, Message};
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
+use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 const LIST_ROW_TEXT_SIZE: u32 = 15;
 const LIST_HEADER_TEXT_SIZE: u32 = 12;
 const LIST_CONTENT_PADDING: [u16; 2] = [4, 6];
-const LIST_ROW_HEIGHT: f32 = 46.0;
+pub(crate) const LIST_ROW_HEIGHT: f32 = 46.0;
+const LIST_OVERSCAN_ROWS: usize = 16;
+const LIST_INITIAL_ROWS: usize = LIST_OVERSCAN_ROWS * 2 + 1;
 const LIST_ROW_PADDING: [u16; 2] = [0, 8];
 const LIST_HEADER_PADDING: [u16; 2] = [4, 8];
 const LIST_ROW_SPACING: u32 = 6;
@@ -59,13 +64,39 @@ pub(crate) fn list_browser_view<'a>(
             "No items"
         }));
     } else {
-        let visible_entries =
-            crate::visible_entries::visible_entries(pane.entries, pane.expanded_directories);
-        let visible_paths = visible_entries
-            .iter()
-            .map(|visible_entry| visible_entry.entry.path.clone())
-            .collect::<Vec<_>>();
-        for (row_index, visible_entry) in visible_entries.iter().enumerate() {
+        let total_rows =
+            crate::visible_entries::visible_entry_count(pane.entries, pane.expanded_directories);
+        let range = pane
+            .column_viewports
+            .get(pane.current_dir)
+            .map(|viewport| {
+                virtual_range_for_viewport(
+                    total_rows,
+                    LIST_ROW_HEIGHT,
+                    viewport.offset_y,
+                    viewport.height,
+                    LIST_OVERSCAN_ROWS,
+                )
+            })
+            .unwrap_or_else(|| {
+                initial_virtual_range(total_rows, LIST_ROW_HEIGHT, LIST_INITIAL_ROWS)
+            });
+        rows = rows.push(vertical_spacer(range.before_height));
+
+        let entries_with_neighbors = crate::visible_entries::visible_entries_in_range(
+            pane.entries,
+            pane.expanded_directories,
+            range.start.saturating_sub(1),
+            range.end.saturating_add(1),
+        );
+        let neighbor_offset = usize::from(range.start > 0);
+        let rendered_count = range.end.saturating_sub(range.start);
+        for local_index in 0..rendered_count {
+            let entry_index = local_index + neighbor_offset;
+            let Some(visible_entry) = entries_with_neighbors.get(entry_index) else {
+                break;
+            };
+            let row_index = range.start + local_index;
             rows = rows.push(list_entry_row(
                 browser,
                 pane,
@@ -73,7 +104,11 @@ pub(crate) fn list_browser_view<'a>(
                 visible_entry.depth,
                 row_index,
                 visible_entry.animation_progress,
-                selection_run_position(&visible_paths, pane.selected_paths, row_index),
+                selection_run_position_for_visible_neighbors(
+                    &entries_with_neighbors,
+                    entry_index,
+                    pane.selected_paths,
+                ),
             ));
             if let Some(status_row) = list_directory_status_for_entry(
                 pane,
@@ -84,6 +119,7 @@ pub(crate) fn list_browser_view<'a>(
                 rows = rows.push(status_row);
             }
         }
+        rows = rows.push(vertical_spacer(range.after_height));
     }
 
     let list_scroll = scrollable(rows)
@@ -119,6 +155,32 @@ pub(crate) fn list_browser_view<'a>(
     .on_enter(Message::ColumnBrowserCursorEntered(pane.id))
     .on_exit(Message::ColumnBrowserCursorExited(pane.id))
     .into()
+}
+
+fn selection_run_position_for_visible_neighbors(
+    entries: &[crate::visible_entries::VisibleEntry<'_>],
+    index: usize,
+    selected_paths: &std::collections::HashSet<std::path::PathBuf>,
+) -> Option<SelectionRunPosition> {
+    let entry = entries.get(index)?;
+    if !selected_paths.contains(&entry.entry.path) {
+        return None;
+    }
+    let previous_selected = index
+        .checked_sub(1)
+        .and_then(|previous| entries.get(previous))
+        .is_some_and(|previous| selected_paths.contains(&previous.entry.path));
+    let next_selected = entries
+        .get(index + 1)
+        .is_some_and(|next| selected_paths.contains(&next.entry.path));
+    Some(SelectionRunPosition::from_neighbors(
+        previous_selected,
+        next_selected,
+    ))
+}
+
+fn vertical_spacer(height: f32) -> Element<'static, Message> {
+    Space::new().height(Length::Fixed(height.max(0.0))).into()
 }
 
 fn list_directory_status_for_entry<'a>(
@@ -305,7 +367,12 @@ fn list_placeholder_name_cell<'a>(
     row![
         Space::new().width(Length::Fixed(depth as f32 * LIST_INDENT_WIDTH)),
         Space::new().width(Length::Fixed(LIST_TOGGLE_WIDTH)),
-        entry_thumbnail_or_icon(browser, entry, FileEntryIconTone::Normal),
+        entry_thumbnail_or_icon(
+            browser,
+            entry,
+            FileEntryIconTone::Normal,
+            FileEntryIconDensity::List,
+        ),
         measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),
             LIST_ROW_TEXT_SIZE,
@@ -343,7 +410,7 @@ fn list_name_cell<'a>(
     row![
         indent,
         toggle,
-        entry_thumbnail_or_icon(browser, entry, icon_tone),
+        entry_thumbnail_or_icon(browser, entry, icon_tone, FileEntryIconDensity::List),
         name
     ]
     .spacing(LIST_ROW_SPACING)

@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use desktop_linux::{
     DesktopClipboardContent, OpenWithApplicationList, StorageDevice, StorageDeviceId,
     TerminalEmulator,
 };
 use file_core::{
-    DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexMode, FileSearchIndexOutcome,
-    FileSearchIndexStatus, FileSearchMatch, FileSearchOutcome, TrashEntry, TrashRestoreEntry,
-    TrashScan,
+    DirectoryEntry, DirectoryScan, DirectoryScanBatch, FileSearchIndexMode, FileSearchIndexOutcome,
+    FileSearchIndexStatus, FileSearchMatch, FileSearchOutcome, TrashRestoreEntry, TrashScan,
 };
 use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
-use iced::widget::{image, text_editor};
+use iced::widget::text_editor;
 use iced::{event, mouse, window, Point, Rectangle, Theme};
+use tokio_util::sync::CancellationToken;
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
@@ -26,7 +25,7 @@ use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::ShortcutBindingId;
 use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
-use crate::thumbnail_cache::{ColumnViewport, ThumbnailLoadOutcome};
+use crate::thumbnail_cache::ThumbnailLoadOutcome;
 use file_core::FileOperationVerification;
 
 pub(crate) use crate::startup_index_tree::{
@@ -38,6 +37,26 @@ pub(crate) use crate::text_preview::{
     TextPreviewLineLimitNotice,
 };
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
+
+mod browser_panes;
+pub(crate) use browser_panes::{
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
+    DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, SplitAxis, SplitRegion,
+};
+mod properties;
+pub(crate) use properties::{
+    FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
+    FilePropertiesLoadState, FilePropertiesPermissionAccess, FilePropertiesPermissionClass,
+    FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesRequest,
+    FilePropertiesSnapshot, FilePropertiesState,
+};
+mod preview;
+pub(crate) use preview::{
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, PreviewContent, PreviewSize, PreviewState,
+    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowProfile, VideoPreviewFrame,
+    VideoPreviewPlayback, VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedOperationStore {
@@ -64,7 +83,8 @@ pub(crate) enum Message {
         Result<Option<PathBuf>, String>,
     ),
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
-    Loaded(BrowserPaneId, Result<DirectoryScan, String>),
+    DirectoryLoadBatch(DirectoryLoadRequest, DirectoryScanBatch),
+    Loaded(DirectoryLoadRequest, Result<DirectoryScan, String>),
     TrashLoaded(BrowserPaneId, Result<TrashScan, String>),
     OpenFileFinished(PathBuf, Result<(), String>),
     OpenWithRequested(PathBuf),
@@ -75,7 +95,15 @@ pub(crate) enum Message {
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
-    FilePropertiesLoaded(PathBuf, Result<FilePropertiesSnapshot, String>),
+    FilePropertiesLoaded(
+        FilePropertiesRequest,
+        Result<FilePropertiesSnapshot, String>,
+    ),
+    FilePropertiesDirectoryContentsUpdated(FilePropertiesRequest, FilePropertiesDirectoryContents),
+    FilePropertiesDirectoryContentsLoaded(
+        FilePropertiesRequest,
+        Result<FilePropertiesDirectoryContents, String>,
+    ),
     FilePropertiesPermissionToggled(
         FilePropertiesPermissionClass,
         FilePropertiesPermissionAccess,
@@ -220,7 +248,8 @@ pub(crate) enum Message {
     StartupIndexDirectoryChildrenLoaded(u64, PathBuf, Result<Vec<DirectoryEntry>, String>),
     StartupIndexAccepted,
     StartupIndexSkipped,
-    ExpandedDirectoryLoaded(BrowserPaneId, PathBuf, Result<DirectoryScan, String>),
+    ExpandedDirectoryLoadBatch(ExpandedDirectoryLoadRequest, DirectoryScanBatch),
+    ExpandedDirectoryLoaded(ExpandedDirectoryLoadRequest, Result<DirectoryScan, String>),
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
@@ -293,219 +322,6 @@ pub(crate) enum Message {
 pub(crate) enum PendingOperation {
     Copy(Vec<PathBuf>),
     Move(Vec<PathBuf>),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FilePropertiesState {
-    pub(crate) path: PathBuf,
-    pub(crate) load_state: FilePropertiesLoadState,
-    pub(crate) selected_category: FilePropertiesCategory,
-    pub(crate) permission_update: FilePropertiesPermissionUpdate,
-}
-
-impl FilePropertiesState {
-    pub(crate) fn loading(path: PathBuf) -> Self {
-        Self {
-            path,
-            load_state: FilePropertiesLoadState::Loading,
-            selected_category: FilePropertiesCategory::Information,
-            permission_update: FilePropertiesPermissionUpdate::Idle,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FilePropertiesCategory {
-    Information,
-    Permissions,
-}
-
-impl FilePropertiesCategory {
-    pub(crate) const ALL: [Self; 2] = [Self::Information, Self::Permissions];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Information => "File Information",
-            Self::Permissions => "Permissions",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum FilePropertiesLoadState {
-    Loading,
-    Loaded(FilePropertiesSnapshot),
-    Failed(String),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FilePropertiesSnapshot {
-    pub(crate) name: OsString,
-    pub(crate) kind: FileKind,
-    pub(crate) type_label: String,
-    pub(crate) location: PathBuf,
-    pub(crate) created: Option<SystemTime>,
-    pub(crate) modified: Option<SystemTime>,
-    pub(crate) accessed: Option<SystemTime>,
-    pub(crate) size_bytes: u64,
-    pub(crate) disk_size_bytes: u64,
-    pub(crate) directory_contents: Option<FilePropertiesDirectoryContents>,
-    pub(crate) directory_contents_error: Option<String>,
-    pub(crate) permissions: Option<FilePropertiesPermissions>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FilePropertiesPermissions {
-    mode: u32,
-}
-
-impl FilePropertiesPermissions {
-    const DISPLAY_MODE_MASK: u32 = 0o7777;
-
-    pub(crate) fn from_mode(mode: u32) -> Self {
-        Self {
-            mode: mode & Self::DISPLAY_MODE_MASK,
-        }
-    }
-
-    pub(crate) fn mode(self) -> u32 {
-        self.mode
-    }
-
-    pub(crate) fn contains(
-        self,
-        class: FilePropertiesPermissionClass,
-        access: FilePropertiesPermissionAccess,
-    ) -> bool {
-        self.mode & permission_mask(class, access) != 0
-    }
-
-    pub(crate) fn toggled(
-        self,
-        class: FilePropertiesPermissionClass,
-        access: FilePropertiesPermissionAccess,
-    ) -> Self {
-        let mask = permission_mask(class, access);
-        let mode = if self.mode & mask == 0 {
-            self.mode | mask
-        } else {
-            self.mode & !mask
-        };
-        Self::from_mode(mode)
-    }
-
-    pub(crate) fn octal_string(self) -> String {
-        format!("{:04o}", self.mode)
-    }
-
-    pub(crate) fn symbolic_string(self) -> String {
-        [
-            (FilePropertiesPermissionClass::Owner, 'r', 'w', 'x'),
-            (FilePropertiesPermissionClass::Group, 'r', 'w', 'x'),
-            (FilePropertiesPermissionClass::Others, 'r', 'w', 'x'),
-        ]
-        .into_iter()
-        .flat_map(|(class, read, write, execute)| {
-            [
-                permission_char(self, class, FilePropertiesPermissionAccess::Read, read),
-                permission_char(self, class, FilePropertiesPermissionAccess::Write, write),
-                permission_char(
-                    self,
-                    class,
-                    FilePropertiesPermissionAccess::Execute,
-                    execute,
-                ),
-            ]
-        })
-        .collect()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FilePropertiesPermissionClass {
-    Owner,
-    Group,
-    Others,
-}
-
-impl FilePropertiesPermissionClass {
-    pub(crate) const ALL: [Self; 3] = [Self::Owner, Self::Group, Self::Others];
-
-    fn shift(self) -> u32 {
-        match self {
-            Self::Owner => 6,
-            Self::Group => 3,
-            Self::Others => 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FilePropertiesPermissionAccess {
-    Read,
-    Write,
-    Execute,
-}
-
-impl FilePropertiesPermissionAccess {
-    pub(crate) const ALL: [Self; 3] = [Self::Read, Self::Write, Self::Execute];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Read => "Read",
-            Self::Write => "Write",
-            Self::Execute => "Execute",
-        }
-    }
-
-    fn bit(self) -> u32 {
-        match self {
-            Self::Read => 0o4,
-            Self::Write => 0o2,
-            Self::Execute => 0o1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FilePropertiesPermissionUpdate {
-    Idle,
-    Saving(FilePropertiesPermissions),
-    Failed(String),
-}
-
-impl FilePropertiesPermissionUpdate {
-    pub(crate) fn is_saving(&self) -> bool {
-        matches!(self, Self::Saving(_))
-    }
-}
-
-fn permission_mask(
-    class: FilePropertiesPermissionClass,
-    access: FilePropertiesPermissionAccess,
-) -> u32 {
-    access.bit() << class.shift()
-}
-
-fn permission_char(
-    permissions: FilePropertiesPermissions,
-    class: FilePropertiesPermissionClass,
-    access: FilePropertiesPermissionAccess,
-    enabled_char: char,
-) -> char {
-    if permissions.contains(class, access) {
-        enabled_char
-    } else {
-        '-'
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FilePropertiesDirectoryContents {
-    pub(crate) file_count: usize,
-    pub(crate) directory_count: usize,
-    pub(crate) total_size_bytes: u64,
-    pub(crate) total_disk_size_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -614,210 +430,6 @@ pub(crate) struct StartupEnvironment {
     pub(crate) state_database_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct BrowserPaneId(pub(crate) u64);
-
-impl BrowserPaneId {
-    pub(crate) const PRIMARY: Self = Self(0);
-
-    pub(crate) fn key(self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SplitAxis {
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SplitRegion {
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
-impl SplitRegion {
-    pub(crate) fn axis(self) -> SplitAxis {
-        match self {
-            Self::Left | Self::Right => SplitAxis::Horizontal,
-            Self::Top | Self::Bottom => SplitAxis::Vertical,
-        }
-    }
-
-    pub(crate) fn places_dragged_first(self) -> bool {
-        matches!(self, Self::Left | Self::Top)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrowserPaneLayout {
-    Single {
-        active: BrowserPaneId,
-    },
-    Split {
-        axis: SplitAxis,
-        first: BrowserPaneId,
-        second: BrowserPaneId,
-        active: BrowserPaneId,
-    },
-}
-
-impl BrowserPaneLayout {
-    pub(crate) fn active(self) -> BrowserPaneId {
-        match self {
-            Self::Single { active } | Self::Split { active, .. } => active,
-        }
-    }
-
-    pub(crate) fn visible_pane_ids(self) -> Vec<BrowserPaneId> {
-        match self {
-            Self::Single { active } => vec![active],
-            Self::Split { first, second, .. } => vec![first, second],
-        }
-    }
-
-    pub(crate) fn with_active(self, next_active: BrowserPaneId) -> Self {
-        match self {
-            Self::Single { .. } => Self::Single {
-                active: next_active,
-            },
-            Self::Split {
-                axis,
-                first,
-                second,
-                ..
-            } => Self::Split {
-                axis,
-                first,
-                second,
-                active: next_active,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrowserViewMode {
-    Columns,
-    List,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DirectoryLoadingPlaceholderEntry {
-    pub(crate) entry: DirectoryEntry,
-    pub(crate) depth: usize,
-    pub(crate) animation_progress: f32,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct BrowserPane {
-    pub(crate) id: BrowserPaneId,
-    pub(crate) current_dir: PathBuf,
-    pub(crate) is_trash_view: bool,
-    pub(crate) entries: Vec<DirectoryEntry>,
-    pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
-    pub(crate) trash_entries: Vec<TrashEntry>,
-    pub(crate) selected: Option<PathBuf>,
-    pub(crate) selected_paths: HashSet<PathBuf>,
-    pub(crate) selection_anchor: Option<PathBuf>,
-    pub(crate) deepest_open_column_directory: Option<PathBuf>,
-    pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
-    pub(crate) view_mode: BrowserViewMode,
-    pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
-    pub(crate) tabs: Vec<BrowserTab>,
-    pub(crate) active_tab_id: usize,
-    pub(crate) path_input: String,
-    pub(crate) path_suggestions: Vec<PathBuf>,
-    pub(crate) path_suggestion_selection: Option<usize>,
-    pub(crate) path_suggestion_generation: u64,
-    pub(crate) back_stack: Vec<PathBuf>,
-    pub(crate) forward_stack: Vec<PathBuf>,
-    pub(crate) is_loading: bool,
-}
-
-impl BrowserPane {
-    pub(crate) fn sync_active_tab_state(&mut self) {
-        let Some(tab) = self
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.id == self.active_tab_id)
-        else {
-            return;
-        };
-
-        tab.directory = self.current_dir.clone();
-        tab.is_trash_view = self.is_trash_view;
-        tab.entries = self.entries.clone();
-        tab.trash_entries = self.trash_entries.clone();
-        tab.selected = self.selected.clone();
-        tab.selected_paths = self.selected_paths.clone();
-        tab.selection_anchor = self.selection_anchor.clone();
-        tab.deepest_open_column_directory = self.deepest_open_column_directory.clone();
-        tab.expanded_directories = self.expanded_directories.clone();
-        tab.view_mode = self.view_mode;
-        tab.back_stack = self.back_stack.clone();
-        tab.forward_stack = self.forward_stack.clone();
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct BrowserTab {
-    pub(crate) id: usize,
-    pub(crate) directory: PathBuf,
-    pub(crate) is_trash_view: bool,
-    pub(crate) entries: Vec<DirectoryEntry>,
-    pub(crate) trash_entries: Vec<TrashEntry>,
-    pub(crate) selected: Option<PathBuf>,
-    pub(crate) selected_paths: HashSet<PathBuf>,
-    pub(crate) selection_anchor: Option<PathBuf>,
-    pub(crate) deepest_open_column_directory: Option<PathBuf>,
-    pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
-    pub(crate) view_mode: BrowserViewMode,
-    pub(crate) back_stack: Vec<PathBuf>,
-    pub(crate) forward_stack: Vec<PathBuf>,
-}
-
-impl BrowserTab {
-    pub(crate) fn directory(id: usize, directory: PathBuf) -> Self {
-        Self {
-            id,
-            directory,
-            is_trash_view: false,
-            entries: Vec::new(),
-            trash_entries: Vec::new(),
-            selected: None,
-            selected_paths: HashSet::new(),
-            selection_anchor: None,
-            deepest_open_column_directory: None,
-            expanded_directories: HashMap::new(),
-            view_mode: BrowserViewMode::Columns,
-            back_stack: Vec::new(),
-            forward_stack: Vec::new(),
-        }
-    }
-
-    pub(crate) fn trash(id: usize) -> Self {
-        Self {
-            id,
-            directory: trash_location_path(),
-            is_trash_view: true,
-            entries: Vec::new(),
-            trash_entries: Vec::new(),
-            selected: None,
-            selected_paths: HashSet::new(),
-            selection_anchor: None,
-            deepest_open_column_directory: None,
-            expanded_directories: HashMap::new(),
-            view_mode: BrowserViewMode::Columns,
-            back_stack: Vec::new(),
-            forward_stack: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabDragMode {
     Reorder,
@@ -915,211 +527,6 @@ pub(crate) enum FileDragPhase {
 pub(crate) struct LastActivationClick {
     pub(crate) path: PathBuf,
     pub(crate) at: Instant,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum PreviewState {
-    Loading(PathBuf),
-    Ready(PreviewContent),
-    Error(String),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum PreviewContent {
-    Directory {
-        entries: Vec<PreviewTreeEntry>,
-    },
-    Text {
-        path: PathBuf,
-        rendered: String,
-        format: TextPreviewFormat,
-        next_offset: Option<u64>,
-        loaded_line_count: usize,
-        line_limit_notice: Option<TextPreviewLineLimitNotice>,
-    },
-    Archive {
-        entries: Vec<PreviewTreeEntry>,
-    },
-    Image {
-        path: PathBuf,
-        handle: image::Handle,
-        width: u32,
-        height: u32,
-        max_edge: u32,
-    },
-    AnimatedImage(AnimatedImagePreview),
-    Audio {
-        path: PathBuf,
-        duration: Option<Duration>,
-        len: u64,
-    },
-    Video {
-        path: PathBuf,
-        frame: Option<image::Handle>,
-        width: u32,
-        height: u32,
-        duration: Option<Duration>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AudioPreviewPlayback {
-    pub(crate) path: PathBuf,
-    pub(crate) runtime: Option<AudioPreviewRuntime>,
-    pub(crate) status: AudioPreviewPlaybackStatus,
-    pub(crate) position: Duration,
-    pub(crate) volume: f32,
-    pub(crate) error: Option<String>,
-}
-
-impl AudioPreviewPlayback {
-    pub(crate) fn loading(path: PathBuf) -> Self {
-        Self {
-            path,
-            runtime: None,
-            status: AudioPreviewPlaybackStatus::Loading,
-            position: Duration::ZERO,
-            volume: 1.0,
-            error: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AudioPreviewPlaybackStatus {
-    Loading,
-    Playing,
-    Paused,
-    Stopped,
-    Finished,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct VideoPreviewPlayback {
-    pub(crate) path: PathBuf,
-    pub(crate) audio_runtime: Option<AudioPreviewRuntime>,
-    pub(crate) status: VideoPreviewPlaybackStatus,
-    pub(crate) position: Duration,
-    // Subscription 的身份必须固定；播放进度 tick 只更新 position，不能重建 ffmpeg 流。
-    pub(crate) stream_start_position: Duration,
-    pub(crate) duration: Option<Duration>,
-    pub(crate) volume: f32,
-    pub(crate) generation: u64,
-    pub(crate) seek_completion: Option<VideoPreviewSeekCompletion>,
-    pub(crate) seek_frame_in_flight: Option<Duration>,
-    pub(crate) pending_seek_frame: Option<Duration>,
-    pub(crate) started_at: Option<Instant>,
-    pub(crate) error: Option<String>,
-}
-
-impl VideoPreviewPlayback {
-    pub(crate) fn playing(path: PathBuf, duration: Option<Duration>) -> Self {
-        Self {
-            path,
-            audio_runtime: None,
-            status: VideoPreviewPlaybackStatus::Playing,
-            position: Duration::ZERO,
-            stream_start_position: Duration::ZERO,
-            duration,
-            volume: 1.0,
-            generation: 1,
-            seek_completion: None,
-            seek_frame_in_flight: None,
-            pending_seek_frame: None,
-            started_at: Some(Instant::now()),
-            error: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VideoPreviewSeekCompletion {
-    ResumePlayback,
-    StayPaused,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VideoPreviewPlaybackStatus {
-    Playing,
-    Paused,
-    Finished,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct VideoPreviewFrame {
-    pub(crate) path: PathBuf,
-    pub(crate) generation: u64,
-    pub(crate) position: Duration,
-    pub(crate) handle: image::Handle,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PreviewSize {
-    pub(crate) width: f32,
-    pub(crate) height: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PreviewWindowProfile {
-    Regular,
-    Image,
-    Audio,
-    Video,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PreviewTreeEntry {
-    pub(crate) id: usize,
-    pub(crate) name: String,
-    pub(crate) kind: FileKind,
-    pub(crate) depth: usize,
-    pub(crate) parent: Option<usize>,
-    pub(crate) filesystem_path: Option<PathBuf>,
-    pub(crate) directory_children: Option<PreviewTreeDirectoryChildren>,
-    pub(crate) is_expanded: bool,
-    pub(crate) toggle_rotation_progress: f32,
-}
-
-impl PreviewTreeEntry {
-    pub(crate) fn from_directory_entry(
-        id: usize,
-        entry: DirectoryEntry,
-        depth: usize,
-        parent: Option<usize>,
-    ) -> Self {
-        let kind = entry.kind;
-        Self {
-            id,
-            name: entry.name().to_string_lossy().into_owned(),
-            kind,
-            depth,
-            parent,
-            filesystem_path: Some(entry.path),
-            directory_children: preview_tree_directory_children(kind),
-            is_expanded: false,
-            toggle_rotation_progress: 0.0,
-        }
-    }
-
-    pub(crate) fn is_directory(&self) -> bool {
-        self.kind == FileKind::Directory
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PreviewTreeDirectoryChildren {
-    Pending,
-    Loading,
-    Loaded,
-    Error(String),
-}
-
-fn preview_tree_directory_children(kind: FileKind) -> Option<PreviewTreeDirectoryChildren> {
-    (kind == FileKind::Directory).then_some(PreviewTreeDirectoryChildren::Pending)
 }
 
 #[derive(Debug, Clone)]
@@ -1307,6 +714,7 @@ pub(crate) struct SearchState {
     pub(crate) root: PathBuf,
     pub(crate) query: String,
     pub(crate) request_generation: u64,
+    pub(crate) search_cancel: Option<CancellationToken>,
     pub(crate) matches: Vec<FileSearchMatch>,
     pub(crate) selected_match: Option<usize>,
     pub(crate) is_loading: bool,
@@ -1348,20 +756,4 @@ impl SearchIndexRuntime {
             exclude_pattern_inputs: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ExpandedDirectory {
-    pub(crate) entries: Vec<DirectoryEntry>,
-    pub(crate) status: ExpandedDirectoryStatus,
-    pub(crate) is_expanded: bool,
-    pub(crate) is_collapsing: bool,
-    pub(crate) animation_progress: f32,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum ExpandedDirectoryStatus {
-    Loading,
-    Loaded,
-    Error,
 }

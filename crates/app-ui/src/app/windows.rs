@@ -257,7 +257,7 @@ impl FileBrowser {
     }
 
     pub(super) fn close_search_window(&mut self) -> Task<Message> {
-        self.search = None;
+        self.clear_search_state();
         let Some(window) = self.search_window.take() else {
             return Task::none();
         };
@@ -323,7 +323,7 @@ impl FileBrowser {
     }
 
     pub(super) fn close_properties_window(&mut self) -> Task<Message> {
-        self.properties = None;
+        self.clear_file_properties_state();
         let Some(window) = self.properties_window.take() else {
             return Task::none();
         };
@@ -570,8 +570,8 @@ impl FileBrowser {
     fn close_all_windows(&mut self) -> Task<Message> {
         self.is_shutting_down = true;
         let _ = self.operation_queue.cancel_all();
-        self.search = None;
-        self.properties = None;
+        self.clear_search_state();
+        self.clear_file_properties_state();
         self.archive_creation = None;
         self.archive_extraction = None;
         self.clear_preview();
@@ -595,6 +595,15 @@ impl FileBrowser {
         commands.push(iced::exit());
 
         Task::batch(commands)
+    }
+
+    fn clear_search_state(&mut self) {
+        if let Some(search) = &mut self.search {
+            if let Some(cancel) = search.search_cancel.take() {
+                cancel.cancel();
+            }
+        }
+        self.search = None;
     }
 
     pub(super) fn handle_auxiliary_window_resized(
@@ -656,14 +665,14 @@ mod tests {
     const FLOAT_TOLERANCE: f32 = 0.01;
 
     fn clamped_image_size(width: u32, height: u32) -> PreviewSize {
-        clamp_preview_size(
+        clamp_preview_size_to_minimum(
             PreviewWindowProfile::Image,
             image_preview_size_from_dimensions(width, height),
         )
     }
 
     fn clamped_video_size(width: u32, height: u32) -> PreviewSize {
-        clamp_preview_size(
+        clamp_preview_size_to_minimum(
             PreviewWindowProfile::Video,
             video_preview_size_from_frame(width, height),
         )
@@ -679,7 +688,7 @@ mod tests {
     #[test]
     fn image_preview_size_fits_large_landscape_to_max_width() {
         let size = clamped_image_size(3_000, 1_000);
-        let max_size = preview_max_size(PreviewWindowProfile::Image);
+        let max_size = image_preview_initial_fit_max_size();
 
         assert_close(size.width, max_size.width);
         assert!(size.height < max_size.height);
@@ -689,7 +698,7 @@ mod tests {
     #[test]
     fn image_preview_size_fits_large_portrait_to_max_height() {
         let size = clamped_image_size(1_000, 2_000);
-        let max_size = preview_max_size(PreviewWindowProfile::Image);
+        let max_size = image_preview_initial_fit_max_size();
 
         assert!(size.width < max_size.width);
         assert_close(size.height, max_size.height);
@@ -732,7 +741,7 @@ mod tests {
     #[test]
     fn video_preview_size_fits_large_portrait_frame_to_max_height() {
         let size = clamped_video_size(720, 1280);
-        let max_size = preview_max_size(PreviewWindowProfile::Video);
+        let max_size = video_preview_initial_fit_max_size();
         let frame_height = size.height - VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT;
 
         assert!(size.width < max_size.width);
