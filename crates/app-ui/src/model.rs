@@ -18,6 +18,7 @@ use iced::{event, mouse, window, Point, Rectangle, Theme};
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
+use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UserConfig};
 use crate::operation_history::FileOperationOutcome;
@@ -173,6 +174,7 @@ pub(crate) enum Message {
     DragSelectionFinished,
     DismissFloating,
     ArchiveCreation(ArchiveCreationMessage),
+    ArchiveExtraction(ArchiveExtractionMessage),
     FileContextMenuExpansionChanged(FileContextMenuExpansion),
     DestructiveActionConfirmed,
     DestructiveActionCanceled,

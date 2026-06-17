@@ -75,7 +75,7 @@ impl ArchivePassword {
         (!password.is_empty()).then_some(Self(password))
     }
 
-    fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

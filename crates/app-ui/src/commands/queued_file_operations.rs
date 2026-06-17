@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use file_core::{
     build_file_search_index_for_paths_with_progress, copy_path_with_options,
     create_archive_with_progress, create_directory, create_empty_file, delete_trash_entry,
-    empty_trash, move_path_with_options, rename_path, restore_trash_entry,
-    trash_path_with_restore_entry, ArchiveCreationProgress, ArchiveCreationRequest, CopyProgress,
-    FileOperationControls, FileOperationVerification, FileSearchIndexOptions,
-    FileSearchIndexProgress, FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
+    empty_trash, extract_archive, move_path_with_options, rename_path, restore_trash_entry,
+    trash_path_with_restore_entry, ArchiveCreationProgress, ArchiveCreationRequest,
+    ArchiveExtractionRequest, CopyProgress, FileOperationControls, FileOperationVerification,
+    FileSearchIndexOptions, FileSearchIndexProgress, FileTransferOptions, TransferConflictStrategy,
+    TrashRestoreEntry,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -138,6 +139,9 @@ async fn run_queued_file_operation(
             )
             .await
         }
+        QueuedFileOperation::ExtractArchive { request } => {
+            run_queued_extract_archive(request, controls, task_id, output).await
+        }
         QueuedFileOperation::BuildSearchIndex {
             root,
             index_dir,
@@ -156,6 +160,34 @@ async fn run_queued_file_operation(
             .await
         }
     }
+}
+
+async fn run_queued_extract_archive(
+    request: ArchiveExtractionRequest,
+    mut controls: FileOperationControls,
+    task_id: u64,
+    output: &mut IcedSender<Message>,
+) -> Result<FileOperationOutcome, String> {
+    send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
+    let cancel = controls.cancellation_token();
+    controls
+        .wait_until_running()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    extract_archive(request, cancel)
+        .await
+        .map_err(|error| error.to_string())?;
+    send_file_operation_progress(
+        output,
+        task_id,
+        FileOperationProgressUpdate::Items {
+            completed: 1,
+            total: 1,
+        },
+    )
+    .await;
+    Ok(FileOperationOutcome::NoHistory)
 }
 
 async fn run_queued_create_archive(

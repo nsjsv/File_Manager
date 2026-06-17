@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use file_core::{is_supported_audio_path, is_supported_video_path, FileKind};
+use file_core::{
+    is_supported_archive_path, is_supported_audio_path, is_supported_video_path, FileKind,
+};
 use iced::Task;
 
 use super::paths::{self, PasteTargetMode};
@@ -907,6 +909,9 @@ impl FileBrowser {
 
         match self.entry_kind(&path) {
             Some(FileKind::Directory) => self.navigate_to(path, NavigationMode::RecordHistory),
+            Some(_) | None if is_supported_archive_path(&path) => {
+                self.request_archive_extraction(path)
+            }
             Some(_) | None => open_file_command(path, self.terminal_emulator),
         }
     }

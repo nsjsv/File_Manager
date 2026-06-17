@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use file_core::{
-    ArchiveCompressionLevel, ArchiveFormat, ArchivePassword, FileOperationControls,
-    FileOperationRunState, FileOperationVerification, TransferConflictStrategy, TrashRestoreEntry,
+    ArchiveCompressionLevel, ArchiveExtractionRequest, ArchiveFormat, ArchivePassword,
+    FileOperationControls, FileOperationRunState, FileOperationVerification,
+    TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
     StoredArchiveCompressionLevel, StoredArchiveFormat, StoredOperation, StoredPath,
@@ -54,6 +55,9 @@ pub(crate) enum QueuedFileOperation {
         compression_level: ArchiveCompressionLevel,
         password: Option<ArchivePassword>,
     },
+    ExtractArchive {
+        request: ArchiveExtractionRequest,
+    },
     BuildSearchIndex {
         root: PathBuf,
         index_dir: PathBuf,
@@ -92,6 +96,7 @@ impl QueuedFileOperation {
             Self::Copy { .. } => "Copy",
             Self::Move { .. } => "Move",
             Self::CreateArchive { .. } => "Create Archive",
+            Self::ExtractArchive { .. } => "Extract Archive",
             Self::BuildSearchIndex { .. } => "Build Search Index",
         }
     }
@@ -107,7 +112,9 @@ impl QueuedFileOperation {
     pub(crate) fn supports_pause(&self) -> bool {
         !matches!(
             self,
-            Self::BuildSearchIndex { .. } | Self::CreateArchive { .. }
+            Self::BuildSearchIndex { .. }
+                | Self::CreateArchive { .. }
+                | Self::ExtractArchive { .. }
         )
     }
 
@@ -157,6 +164,11 @@ impl QueuedFileOperation {
                 format: stored_archive_format(*format),
                 compression_level: stored_archive_compression_level(*compression_level),
                 password_required: password.is_some(),
+            },
+            Self::ExtractArchive { request } => StoredOperation::ExtractArchive {
+                archive: StoredPath::from_path(&request.archive),
+                destination: StoredPath::from_path(&request.destination),
+                password_required: request.password.is_some(),
             },
             Self::BuildSearchIndex {
                 root,

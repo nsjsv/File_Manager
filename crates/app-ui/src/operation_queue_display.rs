@@ -45,6 +45,9 @@ impl QueuedFileOperation {
             Self::CreateArchive {
                 sources, target, ..
             } => path_lines_from_archive(sources, target),
+            Self::ExtractArchive { request } => {
+                path_lines_from_extracted_archive(&request.archive, &request.destination)
+            }
             Self::BuildSearchIndex {
                 root,
                 selected_paths,
@@ -112,6 +115,10 @@ fn path_lines_from_archive(sources: &[PathBuf], target: &Path) -> FileOperationP
             FileOperationPathLines::from_paths(target, source, parent_path(target), sources.len())
         }
     }
+}
+
+fn path_lines_from_extracted_archive(archive: &Path, destination: &Path) -> FileOperationPathLines {
+    FileOperationPathLines::from_paths(destination, archive, parent_path(destination), 1)
 }
 
 fn path_lines_from_trash_originals(entries: &[TrashRestoreEntry]) -> FileOperationPathLines {

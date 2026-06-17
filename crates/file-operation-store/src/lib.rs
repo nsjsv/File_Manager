@@ -205,6 +205,11 @@ pub enum StoredOperation {
         compression_level: StoredArchiveCompressionLevel,
         password_required: bool,
     },
+    ExtractArchive {
+        archive: StoredPath,
+        destination: StoredPath,
+        password_required: bool,
+    },
     SearchIndex {
         root: StoredPath,
         index_dir: StoredPath,
@@ -226,6 +231,7 @@ impl StoredOperation {
             Self::Copy { .. } => "copy",
             Self::Move { .. } => "move",
             Self::CreateArchive { .. } => "create_archive",
+            Self::ExtractArchive { .. } => "extract_archive",
             Self::SearchIndex { .. } => "search_index",
         }
     }

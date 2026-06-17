@@ -27,6 +27,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.open_with = None;
         self.archive_creation = None;
+        self.archive_extraction = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
         self.sidebar_bookmark_drag = None;

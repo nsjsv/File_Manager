@@ -35,6 +35,39 @@ async fn create_zip_archive_preserves_selected_tree() {
 }
 
 #[tokio::test]
+async fn single_file_zip_round_trip_extracts_file_into_default_directory() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("note.txt");
+    fs::write(&source, b"hello").unwrap();
+    let target = dir.path().join("note.zip");
+
+    create_archive_with_progress(
+        ArchiveCreationRequest {
+            sources: vec![source],
+            target: target.clone(),
+            format: ArchiveFormat::Zip,
+            compression_level: ArchiveCompressionLevel::Balanced,
+            password: None,
+        },
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    let request = ArchiveExtractionRequest::from_archive_path(target, None).unwrap();
+    let destination = extract_archive(request.clone(), tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(destination, request.destination);
+    assert_eq!(
+        fs::read(request.destination.join("note.txt")).unwrap(),
+        b"hello"
+    );
+}
+
+#[tokio::test]
 async fn create_tar_gz_archive_preserves_selected_file() {
     let dir = tempdir().unwrap();
     let source = dir.path().join("note.txt");

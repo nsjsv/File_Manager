@@ -1,0 +1,145 @@
+use iced::widget::{button, column, container, row, text_input, Column, Space};
+use iced::{Alignment, Element, Length};
+
+use crate::app::archive_extraction::{ArchiveExtractionMessage, ArchiveExtractionState};
+use crate::app::archive_password::ArchivePasswordDraft;
+use crate::appearance::{context_menu_button_style, context_menu_style};
+use crate::formatting::format_middle_ellipsized_text;
+use crate::icons::IconSymbol;
+use crate::model::Message;
+use crate::typography::readable_text;
+
+use super::{themed_icon, IconTone, MENU_ICON_SIZE};
+
+const ARCHIVE_EXTRACTION_PANEL_WIDTH: f32 = 500.0;
+const ARCHIVE_PATH_MAX_CHARS: usize = 72;
+
+pub(super) fn archive_extraction_panel(state: &ArchiveExtractionState) -> Element<'_, Message> {
+    let title = row![
+        themed_icon(IconSymbol::FileArchive, IconTone::Normal, MENU_ICON_SIZE),
+        readable_text("Extract Archive")
+            .size(16)
+            .width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    let validation_error = state
+        .validation_error()
+        .map(str::to_owned)
+        .unwrap_or_default();
+
+    let content = if state.is_waiting_for_password() || state.is_checking_password() {
+        column![
+            title,
+            readable_text(archive_summary(state)).size(12),
+            readable_text(destination_summary(state)).size(12),
+            readable_text(status_text(state)).size(13),
+            archive_password_input(state),
+            readable_text(validation_error).size(12),
+            archive_extraction_actions(state),
+        ]
+    } else {
+        column![
+            title,
+            readable_text(archive_summary(state)).size(12),
+            readable_text(destination_summary(state)).size(12),
+            readable_text(status_text(state)).size(13),
+            readable_text(validation_error).size(12),
+            archive_extraction_actions(state),
+        ]
+    }
+    .spacing(10)
+    .width(Length::Fill);
+
+    container(content)
+        .padding(14)
+        .width(Length::Fixed(ARCHIVE_EXTRACTION_PANEL_WIDTH))
+        .style(context_menu_style)
+        .into()
+}
+
+fn archive_password_input(state: &ArchiveExtractionState) -> Element<'_, Message> {
+    let mut password_input = text_input("Password", state.password().as_str())
+        .secure(true)
+        .padding([6, 8])
+        .size(14)
+        .width(Length::Fill);
+    if state.is_waiting_for_password() {
+        password_input = password_input
+            .on_input(|password| {
+                Message::ArchiveExtraction(ArchiveExtractionMessage::PasswordChanged(
+                    ArchivePasswordDraft::new(password),
+                ))
+            })
+            .on_submit(Message::ArchiveExtraction(
+                ArchiveExtractionMessage::Submitted,
+            ));
+    }
+
+    Column::new()
+        .spacing(4)
+        .push(readable_text("Password").size(12))
+        .push(password_input)
+        .into()
+}
+
+fn archive_extraction_actions(state: &ArchiveExtractionState) -> Element<'_, Message> {
+    let extract_label = if state.is_checking_password() {
+        "Checking..."
+    } else if state.is_inspecting() {
+        "Checking"
+    } else {
+        "Extract"
+    };
+    let mut extract_button = button(readable_text(extract_label).size(12))
+        .padding([6, 10])
+        .style(context_menu_button_style());
+    if state.is_waiting_for_password() && state.can_submit_password() {
+        extract_button = extract_button.on_press(Message::ArchiveExtraction(
+            ArchiveExtractionMessage::Submitted,
+        ));
+    }
+
+    row![
+        Space::new().width(Length::Fill),
+        button(readable_text("Cancel").size(12))
+            .on_press(Message::DismissFloating)
+            .padding([6, 10])
+            .style(context_menu_button_style()),
+        extract_button,
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn archive_summary(state: &ArchiveExtractionState) -> String {
+    format!(
+        "Archive: {}",
+        format_middle_ellipsized_text(
+            state.request().archive.to_string_lossy().as_ref(),
+            ARCHIVE_PATH_MAX_CHARS,
+        )
+    )
+}
+
+fn destination_summary(state: &ArchiveExtractionState) -> String {
+    format!(
+        "Destination: {}",
+        format_middle_ellipsized_text(
+            state.request().destination.to_string_lossy().as_ref(),
+            ARCHIVE_PATH_MAX_CHARS,
+        )
+    )
+}
+
+fn status_text(state: &ArchiveExtractionState) -> &'static str {
+    if state.is_checking_password() {
+        "Checking password..."
+    } else if state.is_waiting_for_password() {
+        "Enter the archive password to continue."
+    } else {
+        "Checking archive..."
+    }
+}

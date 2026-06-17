@@ -271,6 +271,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.open_with = None;
         self.archive_creation = None;
+        self.archive_extraction = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
@@ -512,6 +513,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.archive_extraction.is_some() {
+            self.archive_extraction = None;
+            return Task::none();
+        }
+
         if self.open_with.is_some() {
             self.open_with = None;
             return Task::none();
@@ -566,6 +572,7 @@ impl FileBrowser {
         self.search = None;
         self.properties = None;
         self.archive_creation = None;
+        self.archive_extraction = None;
         self.clear_preview();
         self.pending_preview_resize = None;
 

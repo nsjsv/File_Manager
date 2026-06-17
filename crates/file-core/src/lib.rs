@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod archive_extraction;
 pub mod entry;
 pub mod media;
 pub mod ops;
@@ -12,6 +13,10 @@ pub mod watch;
 pub use archive::{
     create_archive_with_progress, ArchiveCompressionLevel, ArchiveCreationProgress,
     ArchiveCreationRequest, ArchiveFormat, ArchivePassword,
+};
+pub use archive_extraction::{
+    archive_extraction_format_for_path, extract_archive, inspect_archive_extraction,
+    is_supported_archive_path, ArchiveExtractionFormat, ArchiveExtractionRequest,
 };
 pub use entry::{DirectoryEntry, EntryMetadata, FileKind};
 pub use media::{

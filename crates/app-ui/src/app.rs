@@ -1,4 +1,6 @@
 pub(crate) mod archive_creation;
+pub(crate) mod archive_extraction;
+pub(crate) mod archive_password;
 mod column_resize;
 mod column_scroll;
 mod events;
@@ -43,6 +45,7 @@ use iced::{time, Element, Point, Subscription, Task, Theme};
 
 use crate::animated_image_preview::animated_image_preview_subscription;
 use crate::app::archive_creation::ArchiveCreationState;
+use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
@@ -118,6 +121,7 @@ pub(crate) struct FileBrowser {
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) open_with: Option<OpenWithState>,
     pub(crate) archive_creation: Option<ArchiveCreationState>,
+    pub(crate) archive_extraction: Option<ArchiveExtractionState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
     pub(crate) sidebar_devices: SidebarDeviceState,
     pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
@@ -286,6 +290,7 @@ impl FileBrowser {
             context_menu: None,
             open_with: None,
             archive_creation: None,
+            archive_extraction: None,
             sidebar_locations: Vec::new(),
             sidebar_devices: SidebarDeviceState::loading(),
             sidebar_bookmark_drop_slot: None,
@@ -877,6 +882,7 @@ impl FileBrowser {
             }
             Message::DismissFloating => self.dismiss_floating(),
             Message::ArchiveCreation(message) => self.handle_archive_creation_message(message),
+            Message::ArchiveExtraction(message) => self.handle_archive_extraction_message(message),
             Message::FileContextMenuExpansionChanged(expansion) => {
                 self.update_file_context_menu_expansion(expansion)
             }

@@ -28,6 +28,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.open_with = None;
         self.archive_creation = None;
+        self.archive_extraction = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         let rename_command = self.commit_rename_if_active();

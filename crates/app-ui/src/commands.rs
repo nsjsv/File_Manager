@@ -36,6 +36,8 @@ use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
 
 mod archive_creation;
 pub(crate) use archive_creation::check_archive_target_command;
+mod archive_extraction;
+pub(crate) use archive_extraction::inspect_archive_extraction_command;
 mod preview;
 pub(crate) use preview::{
     animated_image_preview_command, image_preview_dimensions_command, preview_command,

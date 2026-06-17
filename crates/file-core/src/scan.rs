@@ -220,6 +220,10 @@ pub enum FileError {
     SearchIndex { path: PathBuf, message: String },
     #[error("could not create archive {path:?}: {message}")]
     Archive { path: PathBuf, message: String },
+    #[error("archive {path:?} requires a password")]
+    ArchivePasswordRequired { path: PathBuf },
+    #[error("archive {path:?} password is incorrect")]
+    ArchiveInvalidPassword { path: PathBuf },
     #[error("invalid input for {path:?}: {message}")]
     InvalidInput { path: PathBuf, message: String },
     #[error("operation cancelled")]

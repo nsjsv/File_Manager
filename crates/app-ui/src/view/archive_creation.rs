@@ -3,8 +3,9 @@ use iced::{Alignment, Element, Length};
 
 use crate::app::archive_creation::{
     archive_compression_level_label, archive_format_label, ArchiveCreationMessage,
-    ArchiveCreationState, ArchivePasswordDraft, ARCHIVE_COMPRESSION_LEVELS, ARCHIVE_FORMATS,
+    ArchiveCreationState, ARCHIVE_COMPRESSION_LEVELS, ARCHIVE_FORMATS,
 };
+use crate::app::archive_password::ArchivePasswordDraft;
 use crate::appearance::{context_menu_button_style, context_menu_style};
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;

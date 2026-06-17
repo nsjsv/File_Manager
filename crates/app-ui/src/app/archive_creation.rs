@@ -1,9 +1,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use file_core::{ArchiveCompressionLevel, ArchiveFormat, ArchivePassword};
+use file_core::{ArchiveCompressionLevel, ArchiveFormat, ArchivePassword, FileKind};
 use iced::Task;
 
+use super::archive_password::ArchivePasswordDraft;
 use super::FileBrowser;
 use crate::commands::check_archive_target_command;
 use crate::model::Message;
@@ -24,33 +25,6 @@ pub(crate) const ARCHIVE_COMPRESSION_LEVELS: [ArchiveCompressionLevel; 4] = [
 const DEFAULT_ARCHIVE_NAME: &str = "Archive";
 
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct ArchivePasswordDraft(String);
-
-impl ArchivePasswordDraft {
-    pub(crate) fn new(password: String) -> Self {
-        Self(password)
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    fn to_archive_password(&self) -> Option<ArchivePassword> {
-        ArchivePassword::new(self.0.clone())
-    }
-}
-
-impl fmt::Debug for ArchivePasswordDraft {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.is_empty() {
-            formatter.write_str("ArchivePasswordDraft(<empty>)")
-        } else {
-            formatter.write_str("ArchivePasswordDraft(<redacted>)")
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ArchiveCreationState {
     sources: Vec<PathBuf>,
     target_directory: PathBuf,
@@ -63,8 +37,12 @@ pub(crate) struct ArchiveCreationState {
 }
 
 impl ArchiveCreationState {
-    fn new(sources: Vec<PathBuf>, target_directory: PathBuf) -> Self {
-        let file_name = default_archive_name(&sources);
+    fn new(
+        sources: Vec<PathBuf>,
+        target_directory: PathBuf,
+        single_source_kind: Option<FileKind>,
+    ) -> Self {
+        let file_name = default_archive_name(&sources, single_source_kind);
         Self {
             sources,
             target_directory,
@@ -259,8 +237,13 @@ impl FileBrowser {
         }
 
         let target_directory = archive_target_directory(&sources, &self.current_dir);
+        let single_source_kind = match sources.as_slice() {
+            [source] => self.entry_kind(source),
+            _ => None,
+        };
         self.context_menu = None;
         self.open_with = None;
+        self.archive_extraction = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
         self.file_drag = None;
@@ -269,7 +252,11 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
-        self.archive_creation = Some(ArchiveCreationState::new(sources, target_directory));
+        self.archive_creation = Some(ArchiveCreationState::new(
+            sources,
+            target_directory,
+            single_source_kind,
+        ));
         Task::none()
     }
 
@@ -366,8 +353,17 @@ fn archive_target_directory(sources: &[PathBuf], current_dir: &Path) -> PathBuf 
         .unwrap_or_else(|| current_dir.to_path_buf())
 }
 
-fn default_archive_name(sources: &[PathBuf]) -> String {
+fn default_archive_name(sources: &[PathBuf], single_source_kind: Option<FileKind>) -> String {
     if let [source] = sources {
+        if single_source_kind == Some(FileKind::File) {
+            if let Some(stem) = source
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+            {
+                return stem.to_owned();
+            }
+        }
         source
             .file_name()
             .and_then(|name| name.to_str())
@@ -376,5 +372,30 @@ fn default_archive_name(sources: &[PathBuf]) -> String {
             .to_owned()
     } else {
         DEFAULT_ARCHIVE_NAME.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_file_default_archive_name_uses_file_stem() {
+        let sources = [PathBuf::from("/home/yuanming/test/2291443ff6b5e0ea.png")];
+
+        assert_eq!(
+            default_archive_name(&sources, Some(FileKind::File)),
+            "2291443ff6b5e0ea"
+        );
+    }
+
+    #[test]
+    fn single_directory_default_archive_name_keeps_directory_name() {
+        let sources = [PathBuf::from("/home/yuanming/test/photos.v1")];
+
+        assert_eq!(
+            default_archive_name(&sources, Some(FileKind::Directory)),
+            "photos.v1"
+        );
     }
 }
