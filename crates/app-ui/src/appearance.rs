@@ -383,9 +383,9 @@ pub(crate) fn column_resize_divider_style(theme: &Theme) -> container::Appearanc
 pub(crate) fn sidebar_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(27, 34, 46, 0.82)
+            Color::from_rgba8(27, 34, 46, 0.92)
         } else {
-            Color::from_rgba8(255, 255, 255, 0.76)
+            Color::from_rgba8(255, 255, 255, 0.90)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {

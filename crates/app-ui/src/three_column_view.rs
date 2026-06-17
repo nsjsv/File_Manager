@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space};
-use iced::{Alignment, Element, Length, Padding};
+use iced::{Alignment, Element, Length};
 
 use crate::app::panes::BrowserPaneView;
 use crate::app::FileBrowser;
@@ -22,7 +22,6 @@ use crate::icons::IconSymbol;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, ExpandedDirectoryStatus, Message, ScrollbarRegion, SplitAxis,
-    TRASH_LOCATION_LABEL,
 };
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id, translated_with_width_overflow};
@@ -34,7 +33,6 @@ const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 const CHEVRON_ICON_SIZE: f32 = 11.0;
 const COLUMN_CONTENT_SPACING: u32 = 2;
 const COLUMN_PADDING: [u16; 2] = [5, 5];
-const COLUMN_TITLE_TEXT_SIZE: u32 = 12;
 const COLUMN_ENTRY_TEXT_SIZE: u32 = 13;
 pub(crate) const COLUMN_ENTRY_HEIGHT: f32 = 24.0;
 const COLUMN_OVERSCAN_ROWS: usize = 16;
@@ -162,7 +160,6 @@ fn directory_column<'a>(
         .padding(COLUMN_PADDING)
         .width(Length::Fill);
 
-    content = content.push(column_title(pane, directory));
     match column_content(pane, directory) {
         ColumnContent::Entries(entries) => {
             let range = pane
@@ -293,25 +290,6 @@ fn column_resize_divider(pane_id: BrowserPaneId, column_index: usize) -> Element
         .on_release(Message::DragSelectionFinished)
         .interaction(iced::mouse::Interaction::ResizingHorizontally)
         .into()
-}
-
-fn column_title(pane: BrowserPaneView<'_>, directory: &Path) -> Element<'static, Message> {
-    let title = if pane.is_trash_view && directory == pane.current_dir.as_path() {
-        TRASH_LOCATION_LABEL.to_owned()
-    } else {
-        directory
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| directory.to_string_lossy().into_owned())
-    };
-    container(measured_middle_ellipsized_text(
-        title,
-        COLUMN_TITLE_TEXT_SIZE,
-    ))
-    .padding(column_title_padding())
-    .width(Length::Fill)
-    .into()
 }
 
 fn column_message(message: &'static str) -> Element<'static, Message> {
@@ -500,15 +478,6 @@ fn append_column_directory_chain(
     }
     ancestors.reverse();
     directories.extend(ancestors);
-}
-
-fn column_title_padding() -> Padding {
-    Padding {
-        top: 0.0,
-        right: 5.0,
-        bottom: 4.0,
-        left: 5.0,
-    }
 }
 
 fn active_child_for_column(
