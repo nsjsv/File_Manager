@@ -10,8 +10,8 @@ use file_core::{
     empty_trash, extract_archive, move_path_with_options, rename_path, restore_trash_entry,
     trash_path_with_restore_entry, ArchiveCreationProgress, ArchiveCreationRequest,
     ArchiveExtractionRequest, CopyProgress, FileOperationControls, FileOperationVerification,
-    FileSearchIndexOptions, FileSearchIndexProgress, FileTransferOptions, TransferConflictStrategy,
-    TrashRestoreEntry,
+    FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexProgress, FileTransferOptions,
+    TransferConflictStrategy, TrashRestoreEntry,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -147,12 +147,16 @@ async fn run_queued_file_operation(
             index_dir,
             selected_paths,
             include_hidden,
+            exclude_patterns,
+            mode,
         } => {
             run_queued_search_index(
                 root,
                 index_dir,
                 selected_paths,
                 include_hidden,
+                exclude_patterns,
+                mode,
                 controls,
                 task_id,
                 output,
@@ -253,6 +257,8 @@ async fn run_queued_search_index(
     index_dir: PathBuf,
     selected_paths: Vec<PathBuf>,
     include_hidden: bool,
+    exclude_patterns: Vec<String>,
+    mode: FileSearchIndexMode,
     mut controls: FileOperationControls,
     task_id: u64,
     output: &mut IcedSender<Message>,
@@ -269,7 +275,11 @@ async fn run_queued_search_index(
         root,
         index_dir,
         selected_paths,
-        FileSearchIndexOptions { include_hidden },
+        FileSearchIndexOptions {
+            include_hidden,
+            exclude_patterns,
+            mode,
+        },
         cancel,
         move |progress| {
             let _ = progress_sender.send(progress);

@@ -12,6 +12,7 @@ use crate::typography::readable_text;
 
 use super::file_operation_verification_settings::file_operation_verification_options;
 use super::rendering_settings::rendering_gpu_preference_button;
+use super::search_index_settings::search_index_settings_content;
 use super::shortcut_settings::shortcut_settings_section;
 use super::toggle_switch::switch_control;
 
@@ -68,6 +69,7 @@ fn settings_category_button(
 fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
     match browser.selected_settings_category {
         SettingsCategory::General => general_settings_detail(browser),
+        SettingsCategory::SearchIndex => search_index_settings_detail(browser),
         SettingsCategory::FileOperations => file_operation_settings_detail(browser),
         SettingsCategory::Rendering => rendering_settings_detail(browser),
         SettingsCategory::Shortcuts => shortcut_settings_detail(browser),
@@ -85,6 +87,13 @@ fn general_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
         ]
         .spacing(10)
         .width(Length::Fill),
+        browser.scrollbar_visibility,
+    )
+}
+
+fn search_index_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
+    settings_detail_scroller(
+        search_index_settings_content(browser),
         browser.scrollbar_visibility,
     )
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{fs as std_fs, thread};
 
-use ignore::WalkBuilder;
+use ignore::{gitignore::Gitignore, gitignore::GitignoreBuilder, WalkBuilder};
 use tokio_util::sync::CancellationToken;
 
 use super::catalog::SearchCatalogRecord;
@@ -15,6 +15,7 @@ const INDEX_THROTTLE_SLEEP: Duration = Duration::from_millis(2);
 
 pub(crate) struct SearchCrawlOptions {
     pub(crate) include_hidden: bool,
+    pub(crate) exclude_patterns: Vec<String>,
     pub(crate) excluded_index_dir: Option<PathBuf>,
     pub(crate) throttle: bool,
     pub(crate) cancel: Option<CancellationToken>,
@@ -46,7 +47,7 @@ pub(crate) fn crawl_search_records(
     let mut skipped = Vec::new();
     let mut records = Vec::new();
 
-    for result in search_walk_builder(root, options).build() {
+    for result in search_walk_builder(root, root, options).build() {
         options.ensure_not_cancelled()?;
         let dir_entry = match result {
             Ok(dir_entry) => dir_entry,
@@ -100,6 +101,7 @@ pub(crate) fn crawl_selected_search_records_with_progress(
     let mut records = Vec::new();
     let mut seen_keys = HashSet::new();
     let selected_paths = non_nested_selected_paths(selected_paths);
+    let custom_excludes = custom_exclude_matcher(catalog_root, &options.exclude_patterns);
 
     for (index, selected_path) in selected_paths.into_iter().enumerate() {
         options.ensure_not_cancelled()?;
@@ -121,6 +123,15 @@ pub(crate) fn crawl_selected_search_records_with_progress(
         };
 
         let kind = file_kind_from_metadata(&metadata);
+        if path_matches_custom_excludes(
+            custom_excludes.as_ref(),
+            catalog_root,
+            &selected_path,
+            kind == FileKind::Directory,
+        ) {
+            progress(index + 1, records.len());
+            continue;
+        }
         if selected_path != catalog_root {
             push_unique_record(
                 SearchCatalogRecord::from_path(catalog_root, selected_path.clone(), kind),
@@ -153,7 +164,7 @@ fn crawl_selected_directory_children(
     skipped: &mut Vec<ScanWarning>,
     seen_keys: &mut HashSet<String>,
 ) -> Result<(), FileError> {
-    for result in search_walk_builder(selected_path, options).build() {
+    for result in search_walk_builder(selected_path, catalog_root, options).build() {
         options.ensure_not_cancelled()?;
         let dir_entry = match result {
             Ok(dir_entry) => dir_entry,
@@ -190,12 +201,18 @@ fn crawl_selected_directory_children(
     Ok(())
 }
 
-fn search_walk_builder(root: &Path, options: &SearchCrawlOptions) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root);
+fn search_walk_builder(
+    walk_root: &Path,
+    catalog_root: &Path,
+    options: &SearchCrawlOptions,
+) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(walk_root);
     let excluded_index_dir = options.excluded_index_dir.clone();
     let excluded_pending_index_dir = excluded_index_dir
         .as_ref()
         .map(|index_dir| index_dir.with_extension("building"));
+    let custom_excludes = custom_exclude_matcher(catalog_root, &options.exclude_patterns);
+    let catalog_root = catalog_root.to_path_buf();
 
     builder
         .hidden(!options.include_hidden)
@@ -208,14 +225,53 @@ fn search_walk_builder(root: &Path, options: &SearchCrawlOptions) -> WalkBuilder
         .follow_links(false)
         .filter_entry(move |entry| {
             let path = entry.path();
+            let is_dir = entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_dir());
             !excluded_index_dir
                 .as_ref()
                 .is_some_and(|index_dir| path.starts_with(index_dir))
                 && !excluded_pending_index_dir
                     .as_ref()
                     .is_some_and(|index_dir| path.starts_with(index_dir))
+                && !path_matches_custom_excludes(
+                    custom_excludes.as_ref(),
+                    &catalog_root,
+                    path,
+                    is_dir,
+                )
         });
     builder
+}
+
+fn custom_exclude_matcher(root: &Path, patterns: &[String]) -> Option<Gitignore> {
+    let mut builder = GitignoreBuilder::new(root);
+    let mut added = false;
+    for pattern in patterns
+        .iter()
+        .map(|pattern| pattern.trim())
+        .filter(|pattern| !pattern.is_empty())
+    {
+        if builder.add_line(None, pattern).is_ok() {
+            added = true;
+        }
+    }
+    added.then(|| builder.build().ok()).flatten()
+}
+
+fn path_matches_custom_excludes(
+    matcher: Option<&Gitignore>,
+    root: &Path,
+    path: &Path,
+    is_dir: bool,
+) -> bool {
+    let Some(matcher) = matcher else {
+        return false;
+    };
+    if !path.starts_with(root) {
+        return false;
+    }
+    matcher.matched(path, is_dir).is_ignore()
 }
 
 fn file_kind_from_metadata(metadata: &std_fs::Metadata) -> FileKind {

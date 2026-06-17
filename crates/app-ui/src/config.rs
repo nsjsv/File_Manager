@@ -18,6 +18,7 @@ const CONFIG_FILE_NAME: &str = "config.toml";
 const LEGACY_CONFIG_FILE_NAME: &str = "config.txt";
 const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
 const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
+const SEARCH_INDEX_EXCLUDE_PATTERNS_KEY: &str = "search_index_exclude_patterns";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
 const STARTUP_INDEX_PROMPT_KEY: &str = "startup_index_prompt";
@@ -180,6 +181,7 @@ pub(crate) fn browser_view_mode_config_value(view_mode: BrowserViewMode) -> &'st
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
+    pub(crate) search_index_exclude_patterns: Vec<String>,
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) show_hidden_files: bool,
     pub(crate) startup_index_prompt: StartupIndexPromptStatus,
@@ -239,6 +241,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         .join(APP_DIR_NAME);
     UserConfig {
         search_index_dir: cache_base.join("search-index"),
+        search_index_exclude_patterns: Vec::new(),
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         show_hidden_files: false,
         startup_index_prompt: StartupIndexPromptStatus::Pending,
@@ -256,6 +259,7 @@ pub(crate) fn default_user_config() -> UserConfig {
 pub(crate) fn ui_thread_startup_config() -> UserConfig {
     UserConfig {
         search_index_dir: PathBuf::new(),
+        search_index_exclude_patterns: Vec::new(),
         thumbnail_cache_dir: PathBuf::new(),
         show_hidden_files: false,
         startup_index_prompt: StartupIndexPromptStatus::Pending,
@@ -268,6 +272,30 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         browser_view_mode: BrowserViewMode::Columns,
         shortcuts: ShortcutConfig::defaults(),
     }
+}
+
+pub(crate) fn normalize_search_index_exclude_patterns(patterns: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for pattern in patterns
+        .into_iter()
+        .map(|pattern| pattern.trim().to_owned())
+    {
+        if !pattern.is_empty() && !normalized.contains(&pattern) {
+            normalized.push(pattern);
+        }
+    }
+    normalized
+}
+
+pub(crate) fn parse_search_index_exclude_patterns_text(value: &str) -> Vec<String> {
+    normalize_search_index_exclude_patterns(
+        value
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|pattern| !pattern.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
 }
 
 pub(crate) fn normalize_column_width(width: f32) -> f32 {
@@ -317,6 +345,9 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     let mut config = default;
     if let Some(value) = toml_string(&document, SEARCH_INDEX_DIR_KEY) {
         config.search_index_dir = PathBuf::from(value);
+    }
+    if let Some(patterns) = toml_string_array(&document, SEARCH_INDEX_EXCLUDE_PATTERNS_KEY) {
+        config.search_index_exclude_patterns = normalize_search_index_exclude_patterns(patterns);
     }
     if let Some(value) = toml_string(&document, THUMBNAIL_CACHE_DIR_KEY) {
         config.thumbnail_cache_dir = PathBuf::from(value);
@@ -377,6 +408,17 @@ fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+fn toml_string_array(document: &toml::Table, key: &str) -> Option<Vec<String>> {
+    let values = document.get(key)?.as_array()?;
+    Some(
+        values
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
+}
+
 fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
     let mut config = default;
     for line in content.lines().map(str::trim) {
@@ -392,6 +434,10 @@ fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
         }
         match key.trim() {
             SEARCH_INDEX_DIR_KEY => config.search_index_dir = PathBuf::from(value),
+            SEARCH_INDEX_EXCLUDE_PATTERNS_KEY => {
+                config.search_index_exclude_patterns =
+                    parse_search_index_exclude_patterns_text(value);
+            }
             THUMBNAIL_CACHE_DIR_KEY => config.thumbnail_cache_dir = PathBuf::from(value),
             SHOW_HIDDEN_FILES_KEY => match value {
                 "true" => config.show_hidden_files = true,
@@ -457,6 +503,17 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
     document.insert(
         SEARCH_INDEX_DIR_KEY.to_string(),
         toml::Value::String(config.search_index_dir.to_string_lossy().into_owned()),
+    );
+    document.insert(
+        SEARCH_INDEX_EXCLUDE_PATTERNS_KEY.to_string(),
+        toml::Value::Array(
+            config
+                .search_index_exclude_patterns
+                .iter()
+                .cloned()
+                .map(toml::Value::String)
+                .collect(),
+        ),
     );
     document.insert(
         THUMBNAIL_CACHE_DIR_KEY.to_string(),

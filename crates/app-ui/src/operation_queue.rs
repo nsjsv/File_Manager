@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use file_core::{
     ArchiveCompressionLevel, ArchiveExtractionRequest, ArchiveFormat, ArchivePassword,
-    FileOperationControls, FileOperationRunState, FileOperationVerification,
+    FileOperationControls, FileOperationRunState, FileOperationVerification, FileSearchIndexMode,
     TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
     StoredArchiveCompressionLevel, StoredArchiveFormat, StoredOperation, StoredPath,
-    StoredProgress, StoredTask, StoredTaskStatus, StoredTransfer, StoredTrashEntry, TaskQueueStore,
+    StoredProgress, StoredSearchIndexMode, StoredTask, StoredTaskStatus, StoredTransfer,
+    StoredTrashEntry, TaskQueueStore,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -63,6 +64,8 @@ pub(crate) enum QueuedFileOperation {
         index_dir: PathBuf,
         selected_paths: Vec<PathBuf>,
         include_hidden: bool,
+        exclude_patterns: Vec<String>,
+        mode: FileSearchIndexMode,
     },
 }
 
@@ -175,6 +178,8 @@ impl QueuedFileOperation {
                 index_dir,
                 selected_paths,
                 include_hidden,
+                exclude_patterns,
+                mode,
             } => StoredOperation::SearchIndex {
                 root: StoredPath::from_path(root),
                 index_dir: StoredPath::from_path(index_dir),
@@ -183,6 +188,8 @@ impl QueuedFileOperation {
                     .map(|path| StoredPath::from_path(path))
                     .collect(),
                 include_hidden: *include_hidden,
+                exclude_patterns: exclude_patterns.clone(),
+                mode: stored_search_index_mode(*mode),
             },
         }
     }
@@ -194,6 +201,8 @@ impl QueuedFileOperation {
                 index_dir,
                 selected_paths,
                 include_hidden,
+                exclude_patterns,
+                mode,
             } => Some(Self::BuildSearchIndex {
                 root: root.to_path_buf(),
                 index_dir: index_dir.to_path_buf(),
@@ -202,9 +211,25 @@ impl QueuedFileOperation {
                     .map(|path| path.to_path_buf())
                     .collect(),
                 include_hidden,
+                exclude_patterns,
+                mode: file_search_index_mode_from_stored(mode),
             }),
             _ => None,
         }
+    }
+}
+
+fn stored_search_index_mode(mode: FileSearchIndexMode) -> StoredSearchIndexMode {
+    match mode {
+        FileSearchIndexMode::FullRebuild => StoredSearchIndexMode::FullRebuild,
+        FileSearchIndexMode::Incremental => StoredSearchIndexMode::Incremental,
+    }
+}
+
+fn file_search_index_mode_from_stored(mode: StoredSearchIndexMode) -> FileSearchIndexMode {
+    match mode {
+        StoredSearchIndexMode::FullRebuild => FileSearchIndexMode::FullRebuild,
+        StoredSearchIndexMode::Incremental => FileSearchIndexMode::Incremental,
     }
 }
 

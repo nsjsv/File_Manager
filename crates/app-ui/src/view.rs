@@ -6,6 +6,7 @@ mod markdown_preview;
 mod preview_panel;
 mod properties_window;
 mod rendering_settings;
+mod search_index_settings;
 mod search_panel;
 mod settings_window;
 mod shortcut_settings;

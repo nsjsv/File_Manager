@@ -145,5 +145,6 @@ impl FileBrowser {
         self.options.include_hidden = user_config.show_hidden_files;
         self.view_mode = user_config.browser_view_mode;
         self.user_config = user_config;
+        self.sync_search_index_exclude_inputs_from_config();
     }
 }

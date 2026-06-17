@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use file_core::{DirectoryEntry, ScanOptions};
+use file_core::{DirectoryEntry, FileSearchIndexMode, ScanOptions};
 use iced::Task;
 
 use super::FileBrowser;
@@ -144,6 +144,7 @@ impl FileBrowser {
         };
         let index_scan_options = startup_index_scan_options(&self.options, &setup);
         let include_hidden = index_scan_options.include_hidden;
+        let exclude_patterns = self.user_config.search_index_exclude_patterns.clone();
         let index_requests = setup.selected_index_requests();
         self.mark_startup_index_prompt_completed();
 
@@ -162,6 +163,8 @@ impl FileBrowser {
                         index_dir,
                         selected_paths: request.selected_paths,
                         include_hidden,
+                        exclude_patterns: exclude_patterns.clone(),
+                        mode: FileSearchIndexMode::FullRebuild,
                     })
             {
                 self.error = Some(error);

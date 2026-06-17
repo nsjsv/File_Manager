@@ -17,6 +17,7 @@ mod rendering_settings;
 mod runtime;
 mod scrollbar;
 mod search;
+mod search_index_settings;
 mod selection;
 mod shortcuts;
 mod sidebar_bookmarks;
@@ -951,6 +952,25 @@ impl FileBrowser {
                 self.accept_search_matches(request, search)
             }
             Message::SearchIndexBuilt(root, outcome) => self.accept_search_index(root, outcome),
+            Message::SearchIndexStatusLoaded(root, outcome) => {
+                self.accept_search_index_status(root, outcome)
+            }
+            Message::SearchIndexStatusRefreshRequested => self.refresh_search_index_statuses(),
+            Message::SearchIndexManualBuildRequested(root, mode) => {
+                self.request_search_index_manual_build(root, mode)
+            }
+            Message::SearchIndexRemoveRequested(root) => self.request_search_index_removal(root),
+            Message::SearchIndexFailuresClearRequested(root) => {
+                self.request_search_index_failures_clear(root)
+            }
+            Message::SearchIndexExcludePatternChanged(index, pattern) => {
+                self.update_search_index_exclude_pattern(index, pattern)
+            }
+            Message::SearchIndexExcludePatternAdded => self.add_search_index_exclude_pattern(),
+            Message::SearchIndexExcludePatternRemoved(index) => {
+                self.remove_search_index_exclude_pattern(index)
+            }
+            Message::SearchIndexExcludePatternsSaved => self.save_search_index_exclude_patterns(),
             Message::SearchMatchSelected(path) => self.activate_search_match(path),
             Message::SearchActivated => self.activate_selected_search_match(),
             Message::StartupIndexHiddenContentVisibilityToggled => {
@@ -979,10 +999,7 @@ impl FileBrowser {
             }
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::SettingsOpened => self.open_settings(),
-            Message::SettingsCategorySelected(category) => {
-                self.selected_settings_category = category;
-                Task::none()
-            }
+            Message::SettingsCategorySelected(category) => self.select_settings_category(category),
             Message::ShowHiddenFilesToggled => self.toggle_show_hidden_files(),
             Message::FileOperationVerificationSelected(verification) => {
                 self.user_config.file_operation_verification = verification;

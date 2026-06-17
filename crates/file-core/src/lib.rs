@@ -33,8 +33,10 @@ pub use ops::{
 pub use scan::{scan_directory, DirectoryScan, FileError, ScanOptions, ScanWarning};
 pub use search::{
     build_file_search_index, build_file_search_index_for_paths,
-    build_file_search_index_for_paths_with_progress, file_search_index_exists, search_file_index,
-    search_file_tree, FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchIndexProgress,
+    build_file_search_index_for_paths_with_progress, clear_file_search_index_failures,
+    file_search_index_exists, file_search_index_status, remove_file_search_index,
+    search_file_index, search_file_tree, FileSearchIndexFailure, FileSearchIndexMode,
+    FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchIndexProgress, FileSearchIndexStatus,
     FileSearchMatch, FileSearchOptions, FileSearchOutcome,
 };
 pub use sort::{

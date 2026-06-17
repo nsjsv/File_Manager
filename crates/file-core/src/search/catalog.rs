@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use nucleo::Utf32String;
 
@@ -28,6 +29,8 @@ pub(crate) struct SearchCatalogRecord {
     pub(crate) name_utf32: Utf32String,
     pub(crate) path_utf32: Utf32String,
     pub(crate) storage_key: String,
+    pub(crate) mtime_ms: Option<i64>,
+    pub(crate) size_bytes: Option<u64>,
 }
 
 impl SearchCatalog {
@@ -86,6 +89,20 @@ impl SearchCatalog {
 
 impl SearchCatalogRecord {
     pub(crate) fn from_path(root: &Path, path: PathBuf, kind: FileKind) -> Self {
+        let (mtime_ms, size_bytes) = std::fs::symlink_metadata(&path)
+            .ok()
+            .map(|metadata| (metadata_mtime_ms(&metadata), Some(metadata.len())))
+            .unwrap_or((None, None));
+        Self::from_path_with_index_metadata(root, path, kind, mtime_ms, size_bytes)
+    }
+
+    pub(crate) fn from_path_with_index_metadata(
+        root: &Path,
+        path: PathBuf,
+        kind: FileKind,
+        mtime_ms: Option<i64>,
+        size_bytes: Option<u64>,
+    ) -> Self {
         let relative_path = path
             .strip_prefix(root)
             .map(Path::to_path_buf)
@@ -113,6 +130,8 @@ impl SearchCatalogRecord {
             name_utf32,
             path_utf32,
             storage_key,
+            mtime_ms,
+            size_bytes,
         }
     }
 
@@ -136,6 +155,15 @@ impl SearchCatalogRecord {
         let combined = format!("{}\n{}", self.normalized_name, self.normalized_path);
         unique_trigrams(&combined)
     }
+}
+
+fn metadata_mtime_ms(metadata: &std::fs::Metadata) -> Option<i64> {
+    let modified = metadata.modified().ok()?;
+    let millis = match modified.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis().min(i64::MAX as u128) as i64,
+        Err(error) => -(error.duration().as_millis().min(i64::MAX as u128) as i64),
+    };
+    Some(millis)
 }
 
 pub(crate) fn normalize_search_text(text: &str) -> String {

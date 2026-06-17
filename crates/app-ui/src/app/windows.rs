@@ -282,6 +282,7 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         Task::batch([
             self.commit_rename_if_active(),
+            self.prepare_search_index_settings_if_selected(),
             self.ensure_settings_window(),
         ])
     }

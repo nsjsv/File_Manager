@@ -14,10 +14,11 @@ use desktop_linux::{
 };
 use file_core::{
     available_transfer_target_path, build_file_search_index,
-    check_transfer_conflicts as check_core_transfer_conflicts, create_file_with_contents,
-    is_transfer_target_available, scan_directory, scan_trash, search_file_index, search_file_tree,
-    DirectoryScan, FileKind, FileSearchIndexOptions, FileSearchOptions, ScanOptions,
-    TransferConflictCheck, TransferConflictItem, TrashScan,
+    check_transfer_conflicts as check_core_transfer_conflicts, clear_file_search_index_failures,
+    create_file_with_contents, file_search_index_status, is_transfer_target_available,
+    remove_file_search_index, scan_directory, scan_trash, search_file_index, search_file_tree,
+    DirectoryScan, FileKind, FileSearchIndexMode, FileSearchIndexOptions, FileSearchOptions,
+    ScanOptions, TransferConflictCheck, TransferConflictItem, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
 use iced::Task;
@@ -149,30 +150,77 @@ pub(crate) fn search_command(
     request: SearchRequest,
     options: ScanOptions,
     index_dir: PathBuf,
+    exclude_patterns: Vec<String>,
 ) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
-        load_search_matches(request, options, index_dir),
+        load_search_matches(request, options, index_dir, exclude_patterns),
         move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
     )
 }
 
-pub(crate) fn search_tree_command(request: SearchRequest, options: ScanOptions) -> Task<Message> {
+pub(crate) fn search_tree_command(
+    request: SearchRequest,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Task<Message> {
     let issued_request = request.clone();
-    Task::perform(load_search_tree_matches(request, options), move |search| {
-        Message::SearchMatchesLoaded(issued_request.clone(), search)
-    })
+    Task::perform(
+        load_search_tree_matches(request, options, exclude_patterns),
+        move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
+    )
 }
 
 pub(crate) fn search_index_command(
     root: PathBuf,
     index_dir: PathBuf,
     options: ScanOptions,
+    exclude_patterns: Vec<String>,
+    mode: FileSearchIndexMode,
 ) -> Task<Message> {
     let issued_root = root.clone();
     Task::perform(
-        build_search_index(root, index_dir, options),
+        build_search_index(root, index_dir, options, exclude_patterns, mode),
         move |outcome| Message::SearchIndexBuilt(issued_root.clone(), outcome),
+    )
+}
+
+pub(crate) fn search_index_status_command(
+    root: PathBuf,
+    index_dir: PathBuf,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Task<Message> {
+    let issued_root = root.clone();
+    Task::perform(
+        load_search_index_status(root, index_dir, options, exclude_patterns),
+        move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
+    )
+}
+
+pub(crate) fn clear_search_index_failures_command(
+    root: PathBuf,
+    index_dir: PathBuf,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Task<Message> {
+    let issued_root = root.clone();
+    Task::perform(
+        clear_search_index_failures(root, index_dir, options, exclude_patterns),
+        move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
+    )
+}
+
+pub(crate) fn remove_search_index_command(
+    root: PathBuf,
+    index_dir: PathBuf,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Task<Message> {
+    let issued_root = root.clone();
+    Task::perform(
+        remove_search_index(root, index_dir, options, exclude_patterns),
+        move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
     )
 }
 
@@ -668,6 +716,7 @@ async fn load_search_matches(
     request: SearchRequest,
     options: ScanOptions,
     index_dir: PathBuf,
+    exclude_patterns: Vec<String>,
 ) -> Result<file_core::FileSearchOutcome, String> {
     search_file_index(
         index_dir,
@@ -675,6 +724,7 @@ async fn load_search_matches(
         request.query,
         FileSearchOptions {
             include_hidden: options.include_hidden,
+            exclude_patterns,
             limit: SEARCH_MATCH_LIMIT,
         },
     )
@@ -685,12 +735,14 @@ async fn load_search_matches(
 async fn load_search_tree_matches(
     request: SearchRequest,
     options: ScanOptions,
+    exclude_patterns: Vec<String>,
 ) -> Result<file_core::FileSearchOutcome, String> {
     search_file_tree(
         request.root,
         request.query,
         FileSearchOptions {
             include_hidden: options.include_hidden,
+            exclude_patterns,
             limit: SEARCH_MATCH_LIMIT,
         },
     )
@@ -702,16 +754,63 @@ async fn build_search_index(
     root: PathBuf,
     index_dir: PathBuf,
     options: ScanOptions,
+    exclude_patterns: Vec<String>,
+    mode: FileSearchIndexMode,
 ) -> Result<file_core::FileSearchIndexOutcome, String> {
     build_file_search_index(
         root,
         index_dir,
         FileSearchIndexOptions {
             include_hidden: options.include_hidden,
+            exclude_patterns,
+            mode,
         },
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+async fn load_search_index_status(
+    root: PathBuf,
+    index_dir: PathBuf,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Result<file_core::FileSearchIndexStatus, String> {
+    file_search_index_status(
+        index_dir,
+        root,
+        FileSearchIndexOptions {
+            include_hidden: options.include_hidden,
+            exclude_patterns,
+            mode: FileSearchIndexMode::FullRebuild,
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+async fn clear_search_index_failures(
+    root: PathBuf,
+    index_dir: PathBuf,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Result<file_core::FileSearchIndexStatus, String> {
+    clear_file_search_index_failures(&index_dir)
+        .await
+        .map_err(|error| error.to_string())?;
+    load_search_index_status(root, index_dir, options, exclude_patterns).await
+}
+
+async fn remove_search_index(
+    root: PathBuf,
+    index_dir: PathBuf,
+    options: ScanOptions,
+    exclude_patterns: Vec<String>,
+) -> Result<file_core::FileSearchIndexStatus, String> {
+    remove_file_search_index(&index_dir)
+        .await
+        .map_err(|error| error.to_string())?;
+    load_search_index_status(root, index_dir, options, exclude_patterns).await
 }
 
 async fn load_path_suggestions(input: String, current_dir: PathBuf) -> Vec<PathBuf> {

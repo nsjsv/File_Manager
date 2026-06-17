@@ -8,8 +8,9 @@ use desktop_linux::{
     TerminalEmulator,
 };
 use file_core::{
-    DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexOutcome, FileSearchMatch,
-    FileSearchOutcome, TrashEntry, TrashRestoreEntry, TrashScan,
+    DirectoryEntry, DirectoryScan, FileKind, FileSearchIndexMode, FileSearchIndexOutcome,
+    FileSearchIndexStatus, FileSearchMatch, FileSearchOutcome, TrashEntry, TrashRestoreEntry,
+    TrashScan,
 };
 use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
@@ -201,6 +202,15 @@ pub(crate) enum Message {
     SearchFocusRequested,
     SearchMatchesLoaded(SearchRequest, Result<FileSearchOutcome, String>),
     SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
+    SearchIndexStatusLoaded(PathBuf, Result<FileSearchIndexStatus, String>),
+    SearchIndexStatusRefreshRequested,
+    SearchIndexManualBuildRequested(PathBuf, FileSearchIndexMode),
+    SearchIndexRemoveRequested(PathBuf),
+    SearchIndexFailuresClearRequested(PathBuf),
+    SearchIndexExcludePatternChanged(usize, String),
+    SearchIndexExcludePatternAdded,
+    SearchIndexExcludePatternRemoved(usize),
+    SearchIndexExcludePatternsSaved,
     SearchMatchSelected(PathBuf),
     SearchActivated,
     StartupIndexHiddenContentVisibilityToggled,
@@ -513,14 +523,16 @@ pub(crate) enum OperationQueuePanelMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsCategory {
     General,
+    SearchIndex,
     FileOperations,
     Rendering,
     Shortcuts,
 }
 
 impl SettingsCategory {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::General,
+        Self::SearchIndex,
         Self::FileOperations,
         Self::Rendering,
         Self::Shortcuts,
@@ -529,6 +541,7 @@ impl SettingsCategory {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::SearchIndex => "Search Index",
             Self::FileOperations => "File Operations",
             Self::Rendering => "Rendering",
             Self::Shortcuts => "Shortcuts",
@@ -1319,6 +1332,9 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) base_dir: PathBuf,
     pub(crate) indexing_roots: HashSet<PathBuf>,
     pub(crate) errors: HashMap<PathBuf, String>,
+    pub(crate) statuses: HashMap<PathBuf, FileSearchIndexStatus>,
+    pub(crate) status_loading_roots: HashSet<PathBuf>,
+    pub(crate) exclude_pattern_inputs: Vec<String>,
 }
 
 impl SearchIndexRuntime {
@@ -1327,6 +1343,9 @@ impl SearchIndexRuntime {
             base_dir,
             indexing_roots: HashSet::new(),
             errors: HashMap::new(),
+            statuses: HashMap::new(),
+            status_loading_roots: HashSet::new(),
+            exclude_pattern_inputs: Vec::new(),
         }
     }
 }

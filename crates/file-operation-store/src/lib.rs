@@ -169,6 +169,19 @@ pub enum StoredArchiveCompressionLevel {
     Maximum,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredSearchIndexMode {
+    FullRebuild,
+    Incremental,
+}
+
+impl Default for StoredSearchIndexMode {
+    fn default() -> Self {
+        Self::FullRebuild
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StoredOperation {
@@ -215,6 +228,10 @@ pub enum StoredOperation {
         index_dir: StoredPath,
         selected_paths: Vec<StoredPath>,
         include_hidden: bool,
+        #[serde(default)]
+        exclude_patterns: Vec<String>,
+        #[serde(default)]
+        mode: StoredSearchIndexMode,
     },
 }
 

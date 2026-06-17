@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use file_core::{file_search_index_exists, FileKind, FileSearchIndexOutcome, FileSearchOutcome};
+use file_core::{
+    file_search_index_exists, FileKind, FileSearchIndexMode, FileSearchIndexOutcome,
+    FileSearchOutcome,
+};
 use iced::widget::scrollable;
 use iced::Task;
 
@@ -151,14 +154,21 @@ impl FileBrowser {
         match outcome {
             Ok(outcome) => {
                 self.search_index.errors.remove(&root);
+                let mut reload_search = false;
                 if let Some(search) = self.active_search_mut_for_root(&root) {
                     search.is_indexing = false;
                     search.index_error = None;
                     if search.matches.is_empty() {
                         search.skipped_count = outcome.skipped.len();
                     }
-                    return self.load_search_matches();
+                    reload_search = true;
                 }
+                let status_command = self.refresh_search_index_status_for_root(root.clone());
+                return if reload_search {
+                    Task::batch([self.load_search_matches(), status_command])
+                } else {
+                    status_command
+                };
             }
             Err(error) => {
                 let message = format!("Failed to build search index: {error}");
@@ -277,6 +287,7 @@ impl FileBrowser {
 
         let root = request.root.clone();
         let index_dir = self.search_index_dir_for_root(&root);
+        let exclude_patterns = self.user_config.search_index_exclude_patterns.clone();
         self.sync_active_search_index_status_for_root(&root);
 
         if !file_search_index_exists(&index_dir) {
@@ -284,12 +295,12 @@ impl FileBrowser {
             self.mark_active_search_loading();
             return Task::batch([
                 index_command,
-                search_tree_command(request, self.options.clone()),
+                search_tree_command(request, self.options.clone(), exclude_patterns),
             ]);
         }
 
         self.mark_active_search_loading();
-        search_command(request, self.options.clone(), index_dir)
+        search_command(request, self.options.clone(), index_dir, exclude_patterns)
     }
 
     fn search_root_for_scope(&self, scope: SearchScope) -> PathBuf {
@@ -325,7 +336,13 @@ impl FileBrowser {
         self.search_index.indexing_roots.insert(root.clone());
         self.search_index.errors.remove(&root);
         self.sync_active_search_index_status();
-        search_index_command(root, index_dir, self.options.clone())
+        search_index_command(
+            root,
+            index_dir,
+            self.options.clone(),
+            self.user_config.search_index_exclude_patterns.clone(),
+            FileSearchIndexMode::FullRebuild,
+        )
     }
 
     fn sync_active_search_index_status(&mut self) {
@@ -355,7 +372,7 @@ impl FileBrowser {
         )
     }
 
-    fn active_search_mut_for_root(&mut self, root: &Path) -> Option<&mut SearchState> {
+    pub(super) fn active_search_mut_for_root(&mut self, root: &Path) -> Option<&mut SearchState> {
         self.search
             .as_mut()
             .filter(|search| search.root.as_path() == root)
