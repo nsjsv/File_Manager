@@ -180,4 +180,12 @@ mod tests {
 
         assert_close(width, config::MIN_COLUMN_WIDTH);
     }
+
+    #[test]
+    fn column_browser_content_width_excludes_sidebar_slot() {
+        let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
+        let width = column_browser_content_width_for_window(900.0, 180.0);
+
+        assert_close(width, 900.0 - 180.0 - divider_width);
+    }
 }

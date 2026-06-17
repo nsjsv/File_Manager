@@ -1,7 +1,7 @@
 use iced::widget::{
     button, column, container, mouse_area, row, scrollable, text, Column, Row, Space,
 };
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::FileBrowser;
 use crate::appearance::{
@@ -13,8 +13,8 @@ use crate::config;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
-    trash_location_path, Message, SidebarBookmarkDropSlot, SidebarLocation, SidebarLocationKind,
-    TRASH_LOCATION_LABEL,
+    trash_location_path, Message, ScrollbarRegion, SidebarBookmarkDropSlot, SidebarLocation,
+    SidebarLocationKind, TRASH_LOCATION_LABEL,
 };
 use crate::sidebar_devices::SidebarDeviceEntry;
 use crate::typography::readable_text;
@@ -25,6 +25,9 @@ const SIDEBAR_LABEL_REFERENCE_MAX_CHARS: usize = 22;
 const SIDEBAR_LABEL_MIN_CHARS: usize = 14;
 const SIDEBAR_LABEL_MAX_CHARS: usize = 44;
 const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
+const SIDEBAR_FLOATING_MARGIN_LEFT: f32 = 10.0;
+const SIDEBAR_FLOATING_MARGIN_RIGHT: f32 = 4.0;
+const SIDEBAR_FLOATING_MARGIN_VERTICAL: f32 = 10.0;
 const SIDEBAR_ITEM_VERTICAL_PADDING: f32 = 12.0;
 const SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT: f32 = MENU_ICON_SIZE + SIDEBAR_ITEM_VERTICAL_PADDING;
 
@@ -87,13 +90,16 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
 
     sidebar = append_sidebar_devices(sidebar, browser);
 
+    let scrollbar_region = ScrollbarRegion::Sidebar;
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let sidebar_scroller = scrollable(sidebar)
         .direction(auto_hide_vertical_scrollbar_direction(
-            browser.scrollbar_visibility,
+            scrollbar_visibility,
             6.0,
         ))
-        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
-        .height(Length::Fill);
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .height(Length::Fill)
+        .on_scroll(|_| Message::SidebarScrolled);
     let sidebar_content_panel = container(sidebar_scroller)
         .width(Length::Fill)
         .height(Length::Fill);
@@ -107,15 +113,33 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         sidebar_content_panel.into()
     };
 
+    let sidebar_panel = container(sidebar_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(sidebar_style);
+
+    let sidebar_panel = container(sidebar_panel)
+        .padding(sidebar_floating_panel_margin())
+        .width(Length::Fill)
+        .height(Length::Fill);
+
     container(
-        row![sidebar_content, sidebar_resize_handle()]
+        row![sidebar_panel, sidebar_resize_handle()]
             .width(Length::Fill)
             .height(Length::Fill),
     )
     .width(Length::Fixed(browser.sidebar_width))
     .height(Length::Fill)
-    .style(sidebar_style)
     .into()
+}
+
+fn sidebar_floating_panel_margin() -> Padding {
+    Padding {
+        top: SIDEBAR_FLOATING_MARGIN_VERTICAL,
+        right: SIDEBAR_FLOATING_MARGIN_RIGHT,
+        bottom: SIDEBAR_FLOATING_MARGIN_VERTICAL,
+        left: SIDEBAR_FLOATING_MARGIN_LEFT,
+    }
 }
 
 fn append_sidebar_devices<'a>(
@@ -438,7 +462,11 @@ fn sidebar_device_detail(device: &SidebarDeviceEntry, pending: bool) -> String {
 }
 
 fn sidebar_label_max_chars(sidebar_width: f32) -> usize {
-    let content_width = (sidebar_width - SIDEBAR_RESIZE_HANDLE_WIDTH).max(1.0);
+    let content_width = (sidebar_width
+        - SIDEBAR_RESIZE_HANDLE_WIDTH
+        - SIDEBAR_FLOATING_MARGIN_LEFT
+        - SIDEBAR_FLOATING_MARGIN_RIGHT)
+        .max(1.0);
     let scaled_chars =
         SIDEBAR_LABEL_REFERENCE_MAX_CHARS as f32 * content_width / config::DEFAULT_SIDEBAR_WIDTH;
     (scaled_chars.round() as usize).clamp(SIDEBAR_LABEL_MIN_CHARS, SIDEBAR_LABEL_MAX_CHARS)

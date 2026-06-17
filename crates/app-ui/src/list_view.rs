@@ -16,7 +16,9 @@ use crate::file_entry_view::{
 use crate::formatting::{format_file_size, format_system_time};
 use crate::icons::rotated_chevron_right_view;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
-use crate::model::{DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus, Message};
+use crate::model::{
+    DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus, Message, ScrollbarRegion,
+};
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
@@ -122,12 +124,14 @@ pub(crate) fn list_browser_view<'a>(
         rows = rows.push(vertical_spacer(range.after_height));
     }
 
+    let scrollbar_region = ScrollbarRegion::PaneList(pane.id);
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let list_scroll = scrollable(rows)
         .direction(auto_hide_vertical_scrollbar_direction(
-            browser.scrollbar_visibility,
+            scrollbar_visibility,
             8.0,
         ))
-        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .width(Length::Fill)
         .height(Length::Fill)
         .on_scroll(move |viewport| {

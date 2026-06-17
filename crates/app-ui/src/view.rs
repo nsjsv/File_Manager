@@ -23,12 +23,13 @@ pub(crate) use search_panel::{
     SEARCH_RESULTS_PADDING, SEARCH_RESULT_ROW_HEIGHT, SEARCH_RESULT_ROW_SPACING,
 };
 pub(crate) use settings_window::view_settings_window;
+pub(crate) use tab_motion::translated_with_width_overflow;
 
 use std::path::Path;
 
 use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{
-    button, container, mouse_area, row, text_input, Button, Column, Row, Space, Svg,
+    button, container, mouse_area, opaque, row, stack, text_input, Button, Column, Row, Space, Svg,
 };
 use iced::{Alignment, Element, Length, Point, Theme};
 
@@ -49,8 +50,8 @@ use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::list_view::list_browser_view;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, Message, OperationQueuePanelMode, SplitAxis,
-    TRASH_LOCATION_LABEL,
+    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, Message, OperationQueuePanelMode,
+    ScrollbarRegion, SplitAxis, TRASH_LOCATION_LABEL,
 };
 use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
@@ -134,22 +135,33 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 }
 
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
-    let content = row![
-        sidebar_view(browser),
-        container(panes_view(browser))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(app_content_style),
-    ]
+    let pane_layer: Element<'_, Message> = container(
+        row![
+            Space::new().width(Length::Fixed(browser.sidebar_width)),
+            container(panes_view(browser))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
+    )
     .width(Length::Fill)
-    .height(Length::Fill);
+    .height(Length::Fill)
+    .style(app_content_style)
+    .into();
+    let content = stack([pane_layer, opaque(sidebar_view(browser))])
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     let mut floating = Vec::new();
     let mut floating_input = BrowserFloatingInput::Plain;
     if let Some(startup_index_setup) = &browser.startup_index_setup {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
-            element: startup_index_setup_panel(startup_index_setup, browser.scrollbar_visibility),
+            element: startup_index_setup_panel(
+                startup_index_setup,
+                browser.scrollbar_visibility_for(&ScrollbarRegion::StartupIndexSetup),
+            ),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(confirmation) = &browser.destructive_action_confirmation {
@@ -196,7 +208,10 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     } else if let Some(open_with) = &browser.open_with {
         floating_input = BrowserFloatingInput::DismissibleBlocking;
         floating.push(FloatingContent {
-            element: open_with_panel(open_with, browser.scrollbar_visibility),
+            element: open_with_panel(
+                open_with,
+                browser.scrollbar_visibility_for(&ScrollbarRegion::OpenWithApplications),
+            ),
             placement: FloatingPlacement::Center,
         });
     }
@@ -261,7 +276,10 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         };
         floating_input = floating_input.with_additional_panel(queue_dismissal);
         floating.push(FloatingContent {
-            element: operation_queue_panel(&browser.operation_queue, browser.scrollbar_visibility),
+            element: operation_queue_panel(
+                &browser.operation_queue,
+                browser.scrollbar_visibility_for(&ScrollbarRegion::OperationQueue),
+            ),
             placement: FloatingPlacement::BottomLeft {
                 left: browser.sidebar_width + 12.0,
                 bottom: OPERATION_QUEUE_PANEL_BOTTOM,

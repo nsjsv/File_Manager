@@ -5,7 +5,7 @@ use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
 };
-use crate::model::Message;
+use crate::model::{Message, ScrollbarRegion};
 use crate::shortcuts::{ShortcutBinding, ShortcutCaptureState};
 use crate::typography::readable_text;
 
@@ -31,15 +31,17 @@ pub(super) fn shortcut_settings_section(browser: &FileBrowser) -> Element<'_, Me
         section = section.push(shortcut_capture_feedback(capture));
     }
 
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::ShortcutSettings);
     section = section.push(
         scrollable(shortcut_rows)
             .direction(auto_hide_vertical_scrollbar_direction(
-                browser.scrollbar_visibility,
+                scrollbar_visibility,
                 6.0,
             ))
-            .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+            .style(auto_hide_scrollbar_style(scrollbar_visibility))
             .height(Length::Fixed(SHORTCUT_LIST_HEIGHT))
-            .width(Length::Fill),
+            .width(Length::Fill)
+            .on_scroll(|_| Message::ShortcutSettingsScrolled),
     );
 
     section.into()

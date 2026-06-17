@@ -1,7 +1,7 @@
 use iced::Task;
 
 use super::{search, FileBrowser};
-use crate::model::{Message, NavigationMode, OperationQueuePanelMode};
+use crate::model::{Message, NavigationMode, OperationQueuePanelMode, ScrollbarRegion};
 
 impl FileBrowser {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
@@ -138,7 +138,10 @@ impl FileBrowser {
                 offset_y,
                 viewport_height,
                 content_height,
-            } => self.handle_markdown_preview_scrolled(offset_y, viewport_height, content_height),
+            } => Task::batch([
+                self.show_scrollbars_temporarily(ScrollbarRegion::MarkdownPreview),
+                self.handle_markdown_preview_scrolled(offset_y, viewport_height, content_height),
+            ]),
             Message::MarkdownPreviewModeSelected(mode) => {
                 if let Some(document) = self.text_preview_document.as_mut() {
                     document.select_markdown_preview_mode(mode);
@@ -586,14 +589,9 @@ impl FileBrowser {
                 self.select_rendering_gpu_preference(preference)
             }
             Message::RendererRestartNoticeDismissed => self.dismiss_renderer_restart_notice(),
-            Message::CapturedWheelScrolled(delta) => Task::batch([
-                self.show_scrollbars_temporarily(),
-                self.handle_column_browser_wheel_scrolled(delta),
-            ]),
-            Message::ScrollbarAutoHideElapsed(generation) => {
-                if generation == self.scrollbar_auto_hide_generation {
-                    self.start_scrollbar_hide();
-                }
+            Message::CapturedWheelScrolled(delta) => self.handle_captured_wheel_scrolled(delta),
+            Message::ScrollbarAutoHideElapsed(region, generation) => {
+                self.start_scrollbar_hide(region, generation);
                 Task::none()
             }
             Message::WindowChromeAnimationTick => Task::batch([
@@ -603,12 +601,45 @@ impl FileBrowser {
                 self.advance_list_directory_animations(),
                 self.advance_sidebar_bookmark_motion(),
             ]),
-            Message::ColumnScrolled(pane_id, directory, offset_y, height) => {
-                self.handle_column_scrolled(pane_id, directory, offset_y, height)
+            Message::SidebarScrolled => self.show_scrollbars_temporarily(ScrollbarRegion::Sidebar),
+            Message::SearchResultsScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::SearchResults)
             }
-            Message::ListScrolled(pane_id, offset_y, height) => {
-                self.handle_list_scrolled(pane_id, offset_y, height)
+            Message::SettingsScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::Settings)
             }
+            Message::ShortcutSettingsScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::ShortcutSettings)
+            }
+            Message::PropertiesScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::Properties)
+            }
+            Message::StartupIndexSetupScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::StartupIndexSetup)
+            }
+            Message::OpenWithApplicationsScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::OpenWithApplications)
+            }
+            Message::OperationQueueScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::OperationQueue)
+            }
+            Message::PreviewDirectoryScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::PreviewDirectory)
+            }
+            Message::PreviewArchiveScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::PreviewArchive)
+            }
+            Message::ColumnScrolled(pane_id, directory, offset_y, height) => Task::batch([
+                self.show_scrollbars_temporarily(ScrollbarRegion::Column {
+                    pane_id,
+                    directory: directory.clone(),
+                }),
+                self.handle_column_scrolled(pane_id, directory, offset_y, height),
+            ]),
+            Message::ListScrolled(pane_id, offset_y, height) => Task::batch([
+                self.show_scrollbars_temporarily(ScrollbarRegion::PaneList(pane_id)),
+                self.handle_list_scrolled(pane_id, offset_y, height),
+            ]),
             Message::ColumnResizeStarted(pane_id, column_index) => {
                 self.activate_pane(pane_id);
                 self.start_column_resize_drag(column_index)

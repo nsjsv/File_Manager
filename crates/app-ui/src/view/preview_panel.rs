@@ -56,7 +56,9 @@ pub(crate) fn view_preview_window<'a>(
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
-    scrollbar_visibility: ScrollbarVisibility,
+    directory_scrollbar_visibility: ScrollbarVisibility,
+    archive_scrollbar_visibility: ScrollbarVisibility,
+    markdown_scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     preview
         .map(|preview| {
@@ -66,7 +68,9 @@ pub(crate) fn view_preview_window<'a>(
                 size,
                 audio_preview,
                 video_preview,
-                scrollbar_visibility,
+                directory_scrollbar_visibility,
+                archive_scrollbar_visibility,
+                markdown_scrollbar_visibility,
             )
         })
         .unwrap_or_else(|| {
@@ -80,13 +84,15 @@ fn preview_panel<'a>(
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
-    scrollbar_visibility: ScrollbarVisibility,
+    directory_scrollbar_visibility: ScrollbarVisibility,
+    archive_scrollbar_visibility: ScrollbarVisibility,
+    markdown_scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
     let panel = match preview {
         PreviewState::Loading(_) => column![readable_text("Loading preview...").size(14)],
         PreviewState::Ready(PreviewContent::Directory { entries, .. }) => {
-            directory_preview_panel(entries, scroll_height, scrollbar_visibility)
+            directory_preview_panel(entries, scroll_height, directory_scrollbar_visibility)
         }
         PreviewState::Ready(PreviewContent::Text {
             path,
@@ -100,10 +106,10 @@ fn preview_panel<'a>(
             *line_limit_notice,
             text_preview_document.filter(|document| document.path() == path.as_path()),
             scroll_height,
-            scrollbar_visibility,
+            markdown_scrollbar_visibility,
         ),
         PreviewState::Ready(PreviewContent::Archive { entries, .. }) => {
-            archive_preview_panel(entries, scroll_height, scrollbar_visibility)
+            archive_preview_panel(entries, scroll_height, archive_scrollbar_visibility)
         }
         PreviewState::Ready(PreviewContent::Image {
             handle,
@@ -170,7 +176,8 @@ fn directory_preview_panel(
     column![scrollable(listing)
         .direction(preview_scroll_direction(scrollbar_visibility))
         .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .height(Length::Fixed(scroll_height)),]
+        .height(Length::Fixed(scroll_height))
+        .on_scroll(|_| Message::PreviewDirectoryScrolled),]
 }
 
 fn archive_preview_panel(
@@ -183,7 +190,8 @@ fn archive_preview_panel(
     column![scrollable(listing)
         .direction(preview_scroll_direction(scrollbar_visibility))
         .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .height(Length::Fixed(scroll_height)),]
+        .height(Length::Fixed(scroll_height))
+        .on_scroll(|_| Message::PreviewArchiveScrolled),]
 }
 
 fn preview_tree_listing(

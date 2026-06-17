@@ -76,7 +76,8 @@ pub(crate) fn operation_queue_panel(
                 6.0,
             ))
             .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(TASK_LIST_MAX_HEIGHT)),
+            .height(Length::Fixed(TASK_LIST_MAX_HEIGHT))
+            .on_scroll(|_| Message::OperationQueueScrolled),
     ]
     .spacing(10);
 

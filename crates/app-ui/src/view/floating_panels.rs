@@ -314,6 +314,7 @@ fn open_with_application_list(
         .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .height(Length::Fixed(OPEN_WITH_APPLICATION_LIST_HEIGHT))
         .width(Length::Fill)
+        .on_scroll(|_| Message::OpenWithApplicationsScrolled)
         .into()
 }
 

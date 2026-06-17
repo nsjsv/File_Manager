@@ -7,7 +7,7 @@ use crate::appearance::{
     app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
     context_menu_button_style, context_menu_style, selected_sidebar_item_style,
 };
-use crate::model::{Message, ScrollbarVisibility, SettingsCategory};
+use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
 use crate::typography::readable_text;
 
 use super::file_operation_verification_settings::file_operation_verification_options;
@@ -67,16 +67,24 @@ fn settings_category_button(
 }
 
 fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::Settings);
     match browser.selected_settings_category {
-        SettingsCategory::General => general_settings_detail(browser),
-        SettingsCategory::SearchIndex => search_index_settings_detail(browser),
-        SettingsCategory::FileOperations => file_operation_settings_detail(browser),
-        SettingsCategory::Rendering => rendering_settings_detail(browser),
-        SettingsCategory::Shortcuts => shortcut_settings_detail(browser),
+        SettingsCategory::General => general_settings_detail(browser, scrollbar_visibility),
+        SettingsCategory::SearchIndex => {
+            search_index_settings_detail(browser, scrollbar_visibility)
+        }
+        SettingsCategory::FileOperations => {
+            file_operation_settings_detail(browser, scrollbar_visibility)
+        }
+        SettingsCategory::Rendering => rendering_settings_detail(browser, scrollbar_visibility),
+        SettingsCategory::Shortcuts => shortcut_settings_detail(browser, scrollbar_visibility),
     }
 }
 
-fn general_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
+fn general_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
             readable_text("General").size(20),
@@ -87,18 +95,21 @@ fn general_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
         ]
         .spacing(10)
         .width(Length::Fill),
-        browser.scrollbar_visibility,
+        scrollbar_visibility,
     )
 }
 
-fn search_index_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
-    settings_detail_scroller(
-        search_index_settings_content(browser),
-        browser.scrollbar_visibility,
-    )
+fn search_index_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
+    settings_detail_scroller(search_index_settings_content(browser), scrollbar_visibility)
 }
 
-fn file_operation_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
+fn file_operation_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
             readable_text("File Operations").size(20),
@@ -107,11 +118,14 @@ fn file_operation_settings_detail(browser: &FileBrowser) -> Element<'_, Message>
         ]
         .spacing(10)
         .width(Length::Fill),
-        browser.scrollbar_visibility,
+        scrollbar_visibility,
     )
 }
 
-fn rendering_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
+fn rendering_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
             readable_text("Rendering").size(20),
@@ -119,11 +133,14 @@ fn rendering_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
         ]
         .spacing(10)
         .width(Length::Fill),
-        browser.scrollbar_visibility,
+        scrollbar_visibility,
     )
 }
 
-fn shortcut_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
+fn shortcut_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
             readable_text("Shortcuts").size(20),
@@ -131,7 +148,7 @@ fn shortcut_settings_detail(browser: &FileBrowser) -> Element<'_, Message> {
         ]
         .spacing(10)
         .width(Length::Fill),
-        browser.scrollbar_visibility,
+        scrollbar_visibility,
     )
 }
 
@@ -145,7 +162,8 @@ fn settings_detail_scroller<'a>(
             scrollbar_visibility,
             6.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility));
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .on_scroll(|_| Message::SettingsScrolled);
 
     container(scroller)
         .width(Length::Fill)

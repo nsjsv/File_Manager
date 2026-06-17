@@ -1,5 +1,5 @@
 use iced::widget::{button, scrollable, svg, text_editor};
-use iced::{Background, Border, Color, Theme};
+use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
 mod container {
     pub use iced::widget::container::*;
@@ -308,28 +308,13 @@ pub(crate) fn error_notification_style(theme: &Theme) -> container::Appearance {
 
 pub(crate) fn column_browser_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(18, 24, 34)
-        } else {
-            Color::from_rgb8(250, 252, 255)
-        })),
         text_color: Some(base_text_color(theme)),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            ..Border::default()
-        },
         ..container::Appearance::default()
     }
 }
 
 pub(crate) fn column_panel_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(21, 28, 39, 0.92)
-        } else {
-            Color::from_rgba8(255, 255, 255, 0.78)
-        })),
         text_color: Some(base_text_color(theme)),
         ..container::Appearance::default()
     }
@@ -337,17 +322,7 @@ pub(crate) fn column_panel_style(theme: &Theme) -> container::Appearance {
 
 pub(crate) fn list_panel_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(18, 24, 34)
-        } else {
-            Color::from_rgb8(250, 252, 255)
-        })),
         text_color: Some(base_text_color(theme)),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            ..Border::default()
-        },
         ..container::Appearance::default()
     }
 }
@@ -408,15 +383,28 @@ pub(crate) fn column_resize_divider_style(theme: &Theme) -> container::Appearanc
 pub(crate) fn sidebar_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(22, 29, 40)
+            Color::from_rgba8(27, 34, 46, 0.82)
         } else {
-            Color::from_rgb8(238, 241, 246)
+            Color::from_rgba8(255, 255, 255, 0.76)
         })),
         text_color: Some(base_text_color(theme)),
         border: Border {
-            color: subtle_border_color(theme),
+            color: if is_dark_theme(theme) {
+                Color::from_rgba8(98, 112, 134, 0.38)
+            } else {
+                Color::from_rgba8(255, 255, 255, 0.72)
+            },
             width: 1.0,
-            ..Border::default()
+            radius: 18.0.into(),
+        },
+        shadow: Shadow {
+            color: if is_dark_theme(theme) {
+                Color::from_rgba8(0, 0, 0, 0.34)
+            } else {
+                Color::from_rgba8(36, 48, 70, 0.16)
+            },
+            offset: Vector::new(0.0, 10.0),
+            blur_radius: 22.0,
         },
         ..container::Appearance::default()
     }

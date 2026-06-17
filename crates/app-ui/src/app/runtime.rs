@@ -75,12 +75,15 @@ pub(super) fn operation_queue_auto_hide_command(generation: u64) -> Task<Message
     )
 }
 
-pub(super) fn scrollbar_auto_hide_command(generation: u64) -> Task<Message> {
+pub(super) fn scrollbar_auto_hide_command(
+    region: crate::model::ScrollbarRegion,
+    generation: u64,
+) -> Task<Message> {
     Task::perform(
         async move {
             tokio::time::sleep(SCROLLBAR_AUTO_HIDE_DURATION).await;
-            generation
+            (region, generation)
         },
-        Message::ScrollbarAutoHideElapsed,
+        |(region, generation)| Message::ScrollbarAutoHideElapsed(region, generation),
     )
 }

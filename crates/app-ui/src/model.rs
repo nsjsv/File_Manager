@@ -58,6 +58,27 @@ pub(crate) use preview::{
     VideoPreviewPlayback, VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ScrollbarRegion {
+    Sidebar,
+    PaneList(BrowserPaneId),
+    ColumnBrowser(BrowserPaneId),
+    Column {
+        pane_id: BrowserPaneId,
+        directory: PathBuf,
+    },
+    SearchResults,
+    Settings,
+    ShortcutSettings,
+    Properties,
+    StartupIndexSetup,
+    OpenWithApplications,
+    OperationQueue,
+    PreviewDirectory,
+    PreviewArchive,
+    MarkdownPreview,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedOperationStore {
     pub(crate) task_queue_store: TaskQueueStore,
@@ -259,8 +280,18 @@ pub(crate) enum Message {
     RenderingGpuPreferenceSelected(RenderingGpuPreference),
     RendererRestartNoticeDismissed,
     CapturedWheelScrolled(mouse::ScrollDelta),
-    ScrollbarAutoHideElapsed(u64),
+    ScrollbarAutoHideElapsed(ScrollbarRegion, u64),
     WindowChromeAnimationTick,
+    SidebarScrolled,
+    SearchResultsScrolled,
+    SettingsScrolled,
+    ShortcutSettingsScrolled,
+    PropertiesScrolled,
+    StartupIndexSetupScrolled,
+    OpenWithApplicationsScrolled,
+    OperationQueueScrolled,
+    PreviewDirectoryScrolled,
+    PreviewArchiveScrolled,
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
     ListScrolled(BrowserPaneId, f32, f32),
     ColumnResizeStarted(BrowserPaneId, usize),

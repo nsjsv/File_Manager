@@ -128,6 +128,7 @@ fn search_results_panel(
         ))
         .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .height(Length::Fixed(SEARCH_RESULTS_HEIGHT))
+        .on_scroll(|_| Message::SearchResultsScrolled)
         .into()
 }
 

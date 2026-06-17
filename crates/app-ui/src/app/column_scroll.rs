@@ -108,19 +108,19 @@ impl FileBrowser {
     pub(super) fn handle_column_browser_wheel_scrolled(
         &self,
         delta: mouse::ScrollDelta,
-    ) -> Task<Message> {
+    ) -> Option<Task<Message>> {
         if !self.is_cursor_over_column_browser {
-            return Task::none();
+            return None;
         }
 
         let Some(delta_x) = self.column_browser_horizontal_wheel_delta(delta) else {
-            return Task::none();
+            return None;
         };
 
-        advanced_widget::operate(ColumnBrowserScrollBy::new(
+        Some(advanced_widget::operate(ColumnBrowserScrollBy::new(
             column_browser_scroll_id(self.active_pane_id()),
             delta_x,
-        ))
+        )))
     }
 
     fn column_browser_horizontal_wheel_delta(&self, delta: mouse::ScrollDelta) -> Option<f32> {
@@ -163,7 +163,8 @@ impl FileBrowser {
 }
 
 fn focused_column_scroll_start_index(column_index: usize) -> usize {
-    column_index.saturating_sub(DEFAULT_VISIBLE_COLUMN_COUNT / 2)
+    let focused_slot = DEFAULT_VISIBLE_COLUMN_COUNT.saturating_sub(1) / 2;
+    column_index.saturating_sub(focused_slot)
 }
 
 #[cfg(test)]

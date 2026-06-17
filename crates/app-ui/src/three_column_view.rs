@@ -20,9 +20,12 @@ use crate::file_entry_view::{
 };
 use crate::icons::IconSymbol;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
-use crate::model::{BrowserPaneId, ExpandedDirectoryStatus, Message, TRASH_LOCATION_LABEL};
+use crate::model::{
+    BrowserPaneId, BrowserPaneLayout, ExpandedDirectoryStatus, Message, ScrollbarRegion, SplitAxis,
+    TRASH_LOCATION_LABEL,
+};
 use crate::typography::readable_text;
-use crate::view::{column_browser_scroll_id, rename_input_id};
+use crate::view::{column_browser_scroll_id, rename_input_id, translated_with_width_overflow};
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 4;
@@ -45,7 +48,15 @@ pub(crate) fn column_browser_view<'a>(
 ) -> Element<'a, Message> {
     let rendered_directories = column_directories_for_pane(pane);
     let visible_column_count = rendered_directories.len().max(DEFAULT_VISIBLE_COLUMN_COUNT);
+    let sidebar_underlay_width = sidebar_underlay_width_for_pane(browser, pane.id);
     let mut columns = Row::new().spacing(0).height(Length::Fill);
+    if sidebar_underlay_width > f32::EPSILON {
+        columns = columns.push(
+            Space::new()
+                .width(Length::Fixed(sidebar_underlay_width))
+                .height(Length::Fill),
+        );
+    }
 
     for index in 0..visible_column_count {
         if let Some(directory) = rendered_directories.get(index) {
@@ -67,16 +78,28 @@ pub(crate) fn column_browser_view<'a>(
         }
     }
 
+    let scrollbar_region = ScrollbarRegion::ColumnBrowser(pane.id);
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let column_content: Element<'_, Message> = scrollable(columns)
         .id(column_browser_scroll_id(pane.id))
         .direction(auto_hide_horizontal_scrollbar_direction(
-            browser.scrollbar_visibility,
+            scrollbar_visibility,
             8.0,
         ))
-        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .width(Length::Fill)
         .height(Length::Fill)
         .into();
+    let column_content = if sidebar_underlay_width > f32::EPSILON {
+        translated_with_width_overflow(
+            column_content,
+            -sidebar_underlay_width,
+            0.0,
+            sidebar_underlay_width,
+        )
+    } else {
+        column_content
+    };
 
     mouse_area(
         container(column_content)
@@ -96,6 +119,31 @@ pub(crate) fn column_browser_view<'a>(
     .on_enter(Message::ColumnBrowserCursorEntered(pane.id))
     .on_exit(Message::ColumnBrowserCursorExited(pane.id))
     .into()
+}
+
+fn sidebar_underlay_width_for_pane(browser: &FileBrowser, pane_id: BrowserPaneId) -> f32 {
+    if pane_starts_at_sidebar_edge(browser.pane_layout, pane_id) {
+        browser.sidebar_width
+    } else {
+        0.0
+    }
+}
+
+fn pane_starts_at_sidebar_edge(layout: BrowserPaneLayout, pane_id: BrowserPaneId) -> bool {
+    match layout {
+        BrowserPaneLayout::Single { active } => active == pane_id,
+        BrowserPaneLayout::Split {
+            axis: SplitAxis::Horizontal,
+            first,
+            ..
+        } => first == pane_id,
+        BrowserPaneLayout::Split {
+            axis: SplitAxis::Vertical,
+            first,
+            second,
+            ..
+        } => first == pane_id || second == pane_id,
+    }
 }
 
 fn directory_column<'a>(
@@ -157,15 +205,20 @@ fn directory_column<'a>(
         }
     }
 
+    let scrollbar_region = ScrollbarRegion::Column {
+        pane_id: pane.id,
+        directory: directory.to_path_buf(),
+    };
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let scroll_directory = directory.to_path_buf();
     let column_scroll = scrollable(content)
         .id(column_scroll_id(pane.id, directory))
         .direction(auto_hide_vertical_scrollbar_direction(
-            browser.scrollbar_visibility,
+            scrollbar_visibility,
             8.0,
         ))
         .height(Length::Fill)
-        .style(auto_hide_scrollbar_style(browser.scrollbar_visibility))
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
         .on_scroll(move |viewport| {
             let offset = viewport.absolute_offset();
             let bounds = viewport.bounds();
@@ -561,6 +614,44 @@ mod tests {
             file_drag: None,
             tab_bar_reveal_fraction: 0.0,
         }
+    }
+
+    #[test]
+    fn sidebar_underlay_only_applies_to_panes_touching_sidebar_edge() {
+        let first = BrowserPaneId(1);
+        let second = BrowserPaneId(2);
+
+        assert!(pane_starts_at_sidebar_edge(
+            BrowserPaneLayout::Single { active: first },
+            first,
+        ));
+        assert!(pane_starts_at_sidebar_edge(
+            BrowserPaneLayout::Split {
+                axis: SplitAxis::Horizontal,
+                first,
+                second,
+                active: first,
+            },
+            first,
+        ));
+        assert!(!pane_starts_at_sidebar_edge(
+            BrowserPaneLayout::Split {
+                axis: SplitAxis::Horizontal,
+                first,
+                second,
+                active: second,
+            },
+            second,
+        ));
+        assert!(pane_starts_at_sidebar_edge(
+            BrowserPaneLayout::Split {
+                axis: SplitAxis::Vertical,
+                first,
+                second,
+                active: second,
+            },
+            second,
+        ));
     }
 
     #[test]

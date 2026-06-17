@@ -73,7 +73,8 @@ pub(super) fn startup_index_setup_panel(
                 6.0,
             ))
             .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(STARTUP_INDEX_TREE_HEIGHT)),
+            .height(Length::Fixed(STARTUP_INDEX_TREE_HEIGHT))
+            .on_scroll(|_| Message::StartupIndexSetupScrolled),
         actions,
     ]
     .spacing(12)

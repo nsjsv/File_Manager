@@ -55,7 +55,7 @@ use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command,
     sidebar_device_refresh_subscription, system_theme_command,
 };
-use crate::app::scrollbar::{ScrollbarAnimation, SCROLLBAR_ANIMATION_INTERVAL};
+use crate::app::scrollbar::{ScrollbarRegionState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
 use crate::app::sidebar_resize::SidebarResizeDrag;
 use crate::app::tabs::{TabAnimationState, TabBarReveal};
@@ -70,7 +70,7 @@ use crate::model::{
     BrowserViewMode, ContextMenuState, DestructiveActionConfirmation,
     DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, FilePropertiesState,
     Message, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarVisibility, SearchIndexRuntime, SearchState, SelectionMarquee,
+    PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchState, SelectionMarquee,
     SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupIndexSetupState, TabDragState, TextPreviewDocument, TransferConflictState,
     VideoPreviewPlayback,
@@ -192,9 +192,7 @@ pub(crate) struct FileBrowser {
     operation_history: FileOperationHistory,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
-    pub(crate) scrollbar_visibility: ScrollbarVisibility,
-    scrollbar_auto_hide_generation: u64,
-    scrollbar_animation: Option<ScrollbarAnimation>,
+    scrollbar_regions: HashMap<ScrollbarRegion, ScrollbarRegionState>,
     pending_search_reveal: Option<PathBuf>,
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
@@ -368,9 +366,7 @@ impl FileBrowser {
             operation_history: FileOperationHistory::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
-            scrollbar_visibility: ScrollbarVisibility::Hidden,
-            scrollbar_auto_hide_generation: 0,
-            scrollbar_animation: None,
+            scrollbar_regions: HashMap::new(),
             pending_search_reveal: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
@@ -468,11 +464,17 @@ impl FileBrowser {
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.search_window == Some(window) {
-            view_search_window(self.search.as_ref(), self.scrollbar_visibility)
+            view_search_window(
+                self.search.as_ref(),
+                self.scrollbar_visibility_for(&ScrollbarRegion::SearchResults),
+            )
         } else if self.settings_window == Some(window) {
             view_settings_window(self)
         } else if self.properties_window == Some(window) {
-            view_properties_window(self.properties.as_ref(), self.scrollbar_visibility)
+            view_properties_window(
+                self.properties.as_ref(),
+                self.scrollbar_visibility_for(&ScrollbarRegion::Properties),
+            )
         } else if self.preview_window == Some(window) {
             view_preview_window(
                 self.preview.as_ref(),
@@ -480,7 +482,9 @@ impl FileBrowser {
                 self.preview_size,
                 self.audio_preview.as_ref(),
                 self.video_preview.as_ref(),
-                self.scrollbar_visibility,
+                self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDirectory),
+                self.scrollbar_visibility_for(&ScrollbarRegion::PreviewArchive),
+                self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
             )
         } else {
             if !self.is_loading {

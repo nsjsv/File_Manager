@@ -257,7 +257,8 @@ fn properties_detail_scroller<'a>(
             scrollbar_visibility,
             6.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility));
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .on_scroll(|_| Message::PropertiesScrolled);
 
     container(scrollable)
         .width(Length::Fill)
