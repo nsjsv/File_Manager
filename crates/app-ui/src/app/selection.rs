@@ -283,6 +283,17 @@ impl FileBrowser {
         rename_command
     }
 
+    pub(super) fn handle_column_placeholder_pressed(&mut self) -> Task<Message> {
+        let rename_command = self.commit_rename_if_active();
+        self.clear_preview();
+        self.context_menu = None;
+        self.drag_selection_anchor = None;
+        self.selection_marquee = None;
+        self.file_drag = None;
+
+        rename_command
+    }
+
     pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.select_context_menu_target(path.clone());

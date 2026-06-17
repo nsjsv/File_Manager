@@ -70,7 +70,11 @@ pub(crate) fn column_browser_view<'a>(
                 active_child.as_deref(),
             ));
         } else {
-            columns = columns.push(empty_column(browser.column_width(index)));
+            columns = columns.push(empty_column(
+                pane.id,
+                pane.current_dir.clone(),
+                browser.column_width(index),
+            ));
         }
 
         if index + 1 < visible_column_count {
@@ -251,12 +255,24 @@ fn directory_column<'a>(
         .into()
 }
 
-fn empty_column(width: f32) -> Element<'static, Message> {
-    container(Space::new().height(Length::Fill))
-        .width(Length::Fixed(width))
-        .height(Length::Fill)
-        .style(column_panel_style)
-        .into()
+fn empty_column(
+    pane_id: BrowserPaneId,
+    fallback_directory: PathBuf,
+    width: f32,
+) -> Element<'static, Message> {
+    mouse_area(
+        container(Space::new().height(Length::Fill))
+            .width(Length::Fixed(width))
+            .height(Length::Fill)
+            .style(column_panel_style),
+    )
+    .on_press(Message::ColumnPlaceholderPressed(pane_id))
+    .on_release(Message::DropTargetReleased(
+        pane_id,
+        fallback_directory.clone(),
+    ))
+    .on_right_press(Message::BlankAreaRightClicked(pane_id, fallback_directory))
+    .into()
 }
 
 fn column_resize_divider(pane_id: BrowserPaneId, column_index: usize) -> Element<'static, Message> {

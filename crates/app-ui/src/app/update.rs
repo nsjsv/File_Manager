@@ -273,6 +273,13 @@ impl FileBrowser {
                 }
                 self.start_column_blank_selection_marquee(path)
             }
+            Message::ColumnPlaceholderPressed(pane_id) => {
+                self.activate_pane(pane_id);
+                if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
+                    return Task::none();
+                }
+                self.handle_column_placeholder_pressed()
+            }
             Message::EntryReleased(pane_id, path) => {
                 let releasing_file_drag = self.file_drag.is_some();
                 let release_directory = releasing_file_drag

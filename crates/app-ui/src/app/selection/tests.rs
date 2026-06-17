@@ -267,6 +267,42 @@ fn clicking_child_column_blank_preserves_open_column_context() {
 }
 
 #[test]
+fn clicking_column_placeholder_preserves_open_columns_and_selection() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let current_dir = PathBuf::from("/workspace");
+    let child_directory = current_dir.join("project");
+    browser.current_dir = current_dir;
+    browser.entries = vec![test_entry(child_directory.clone(), FileKind::Directory)];
+    browser.deepest_open_column_directory = Some(child_directory.clone());
+    browser.selected = Some(child_directory.clone());
+    browser.selected_paths = HashSet::from([child_directory.clone()]);
+    browser.selection_anchor = Some(child_directory.clone());
+    browser.path_input = crate::app::paths::path_text(&child_directory);
+
+    let command = browser.handle_column_placeholder_pressed();
+    drop(command);
+
+    assert_eq!(
+        browser.deepest_open_column_directory.as_ref(),
+        Some(&child_directory)
+    );
+    assert_eq!(browser.selected.as_ref(), Some(&child_directory));
+    assert_eq!(
+        browser.selected_paths,
+        HashSet::from([child_directory.clone()])
+    );
+    assert_eq!(browser.selection_anchor.as_ref(), Some(&child_directory));
+    assert_eq!(
+        crate::three_column_view::column_directories(&browser),
+        vec![browser.current_dir.clone(), child_directory.clone()]
+    );
+    assert_eq!(
+        browser.path_input,
+        crate::app::paths::path_text(&child_directory)
+    );
+}
+
+#[test]
 fn pressing_current_column_blank_clears_selection_before_release() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let current_dir = PathBuf::from("/workspace");

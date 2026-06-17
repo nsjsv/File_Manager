@@ -185,6 +185,7 @@ pub(crate) enum Message {
     ListEntryClicked(BrowserPaneId, PathBuf),
     ColumnEntryClicked(BrowserPaneId, PathBuf),
     ColumnBlankClicked(BrowserPaneId, PathBuf),
+    ColumnPlaceholderPressed(BrowserPaneId),
     EntryReleased(BrowserPaneId, PathBuf),
     EntryRightClicked(BrowserPaneId, PathBuf),
     EntryHovered(BrowserPaneId, PathBuf),
