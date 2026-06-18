@@ -13,10 +13,15 @@ use crate::model::{
 };
 use crate::sidebar::sidebar_favorite_configs;
 
+#[cfg(test)]
+mod tests;
+
 const SIDEBAR_HEADER_HEIGHT: f32 = 24.0;
 const SIDEBAR_LOCATION_ROW_HEIGHT: f32 = 32.8;
 const SIDEBAR_ROW_SPACING: f32 = 6.0;
+const SIDEBAR_SECTION_LABEL_HEIGHT: f32 = 20.0;
 const SIDEBAR_VERTICAL_PADDING: f32 = 24.0;
+const SIDEBAR_BOOKMARK_INSERT_EDGE_HEIGHT: f32 = 8.0;
 const SIDEBAR_BOOKMARK_MOTION_DURATION: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Clone, Copy)]
@@ -74,46 +79,31 @@ impl FileBrowser {
             return self.clear_sidebar_bookmark_drop_slot();
         }
 
-        let slot = if position.y <= self.sidebar_bookmark_drop_slot_midpoint() {
-            SidebarBookmarkDropSlot::Top
-        } else {
-            SidebarBookmarkDropSlot::Bottom
-        };
-        if self.sidebar_bookmark_drop_slot != Some(slot) {
-            self.clear_sidebar_bookmark_drop_target();
+        match self.sidebar_bookmark_pointer_target(position.y) {
+            SidebarBookmarkPointerTarget::Insert(slot) => {
+                self.hovered_sidebar = None;
+                self.cursor_paste_directory = None;
+                self.sidebar_bookmark_drop_slot = Some(slot);
+                if let Some(file_drag) = &mut self.file_drag {
+                    file_drag.target = Some(FileDragTarget::SidebarBookmarkSlot(slot));
+                }
+            }
+            SidebarBookmarkPointerTarget::Directory(path) => {
+                self.sidebar_bookmark_drop_slot = None;
+                self.hovered_sidebar = Some(path.clone());
+                self.set_file_drag_target(path);
+            }
+            SidebarBookmarkPointerTarget::None => {
+                self.sidebar_bookmark_drop_slot = None;
+                self.clear_file_drag_target();
+            }
         }
-        self.sidebar_bookmark_drop_slot = Some(slot);
         Task::none()
     }
 
     pub(super) fn clear_sidebar_bookmark_drop_slot(&mut self) -> Task<Message> {
         self.sidebar_bookmark_drop_slot = None;
         self.clear_sidebar_bookmark_drop_target();
-        Task::none()
-    }
-
-    pub(super) fn handle_sidebar_bookmark_drop_slot_hovered(
-        &mut self,
-        slot: SidebarBookmarkDropSlot,
-    ) -> Task<Message> {
-        self.sidebar_bookmark_drop_slot = Some(slot);
-        if self.can_drop_sidebar_bookmark() {
-            if let Some(file_drag) = &mut self.file_drag {
-                file_drag.target = Some(FileDragTarget::SidebarBookmarkSlot(slot));
-            }
-        }
-        Task::none()
-    }
-
-    pub(super) fn handle_sidebar_bookmark_drop_slot_cleared(
-        &mut self,
-        slot: SidebarBookmarkDropSlot,
-    ) -> Task<Message> {
-        if let Some(file_drag) = &mut self.file_drag {
-            if file_drag.target == Some(FileDragTarget::SidebarBookmarkSlot(slot)) {
-                file_drag.target = None;
-            }
-        }
         Task::none()
     }
 
@@ -139,8 +129,9 @@ impl FileBrowser {
             kind: SidebarLocationKind::Bookmark,
         };
         match slot {
-            SidebarBookmarkDropSlot::Top => favorites.insert(0, location),
-            SidebarBookmarkDropSlot::Bottom => favorites.push(location),
+            SidebarBookmarkDropSlot::Insert { index } => {
+                favorites.insert(index.min(favorites.len()), location)
+            }
         }
         self.replace_sidebar_favorites(favorites);
         self.save_sidebar_favorites()
@@ -261,6 +252,10 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_sidebar_bookmark_entered(&mut self, path: PathBuf) -> Task<Message> {
+        if self.file_drag.is_some() {
+            return Task::none();
+        }
+
         if self
             .sidebar_bookmark_drag
             .as_ref()
@@ -430,22 +425,83 @@ impl FileBrowser {
         }
     }
 
-    fn sidebar_bookmark_drop_slot_midpoint(&self) -> f32 {
-        let row_count = self.sidebar_locations.len() as f32 + 1.0;
-        let child_count = row_count + 1.0;
-        let spacing_height = (child_count - 1.0).max(0.0) * SIDEBAR_ROW_SPACING;
-        let content_height = SIDEBAR_HEADER_HEIGHT
-            + row_count * SIDEBAR_LOCATION_ROW_HEIGHT
-            + spacing_height
-            + SIDEBAR_VERTICAL_PADDING;
-
-        content_height.min(self.main_window_height) / 2.0
-    }
-
     fn sidebar_favorite_exists(&self, path: &PathBuf) -> bool {
         self.sidebar_locations
             .iter()
             .any(|location| location.kind.is_user_favorite() && location.path == *path)
+    }
+
+    fn sidebar_bookmark_pointer_target(&self, position_y: f32) -> SidebarBookmarkPointerTarget {
+        let favorites = self.sidebar_favorite_locations();
+        let first_row_top = self.sidebar_favorite_first_row_top();
+        sidebar_bookmark_pointer_target(position_y, first_row_top, &favorites)
+    }
+
+    fn sidebar_favorite_first_row_top(&self) -> f32 {
+        let fixed_location_count = self
+            .sidebar_locations
+            .iter()
+            .filter(|location| !location.kind.is_user_favorite())
+            .count()
+            + 1;
+        SIDEBAR_VERTICAL_PADDING / 2.0
+            + SIDEBAR_HEADER_HEIGHT
+            + SIDEBAR_ROW_SPACING
+            + fixed_location_count as f32 * sidebar_bookmark_motion_stride()
+            + SIDEBAR_SECTION_LABEL_HEIGHT
+            + SIDEBAR_ROW_SPACING
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SidebarBookmarkPointerTarget {
+    Insert(SidebarBookmarkDropSlot),
+    Directory(PathBuf),
+    None,
+}
+
+fn sidebar_bookmark_pointer_target(
+    position_y: f32,
+    first_row_top: f32,
+    favorites: &[SidebarLocation],
+) -> SidebarBookmarkPointerTarget {
+    if favorites.is_empty() {
+        return if position_y >= first_row_top - SIDEBAR_ROW_SPACING {
+            SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert { index: 0 })
+        } else {
+            SidebarBookmarkPointerTarget::None
+        };
+    }
+
+    for (index, location) in favorites.iter().enumerate() {
+        let row_top = first_row_top + index as f32 * sidebar_bookmark_motion_stride();
+        let row_bottom = row_top + SIDEBAR_LOCATION_ROW_HEIGHT;
+        let row_area_top = row_top - SIDEBAR_ROW_SPACING / 2.0;
+        let row_area_bottom = row_bottom + SIDEBAR_ROW_SPACING / 2.0;
+        if position_y < row_area_top || position_y > row_area_bottom {
+            continue;
+        }
+
+        if position_y <= row_top + SIDEBAR_BOOKMARK_INSERT_EDGE_HEIGHT {
+            return SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert { index });
+        }
+        if position_y >= row_bottom - SIDEBAR_BOOKMARK_INSERT_EDGE_HEIGHT {
+            return SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert {
+                index: index + 1,
+            });
+        }
+        return SidebarBookmarkPointerTarget::Directory(location.path.clone());
+    }
+
+    let last_row_bottom = first_row_top
+        + favorites.len().saturating_sub(1) as f32 * sidebar_bookmark_motion_stride()
+        + SIDEBAR_LOCATION_ROW_HEIGHT;
+    if position_y > last_row_bottom {
+        SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert {
+            index: favorites.len(),
+        })
+    } else {
+        SidebarBookmarkPointerTarget::None
     }
 }
 

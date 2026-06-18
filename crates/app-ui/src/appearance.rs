@@ -504,11 +504,10 @@ pub(crate) fn sidebar_bookmark_drop_slot_style(theme: &Theme) -> container::Appe
         Color::from_rgb8(74, 137, 220)
     };
     container::Appearance {
-        background: Some(Background::Color(Color { a: 0.10, ..accent })),
+        background: Some(Background::Color(accent)),
         border: Border {
-            color: accent,
-            width: 1.0,
-            radius: 6.0.into(),
+            radius: 1.0.into(),
+            ..Border::default()
         },
         ..container::Appearance::default()
     }

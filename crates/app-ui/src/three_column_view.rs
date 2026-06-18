@@ -19,6 +19,7 @@ use crate::file_entry_view::{
     entry_thumbnail_or_icon, themed_icon, FileEntryIconDensity, FileEntryVisualState,
 };
 use crate::icons::IconSymbol;
+use crate::input_blocking_space::input_blocking_space;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, ExpandedDirectoryStatus, Message, ScrollbarRegion, SplitAxis,
@@ -79,6 +80,12 @@ pub(crate) fn column_browser_view<'a>(
             columns = columns.push(column_resize_divider(pane.id, index));
         }
     }
+    let scroll_spacer_width = end_scroll_spacer_width(rendered_directories.len(), |index| {
+        browser.column_width(index)
+    });
+    if scroll_spacer_width > f32::EPSILON {
+        columns = columns.push(end_scroll_spacer(scroll_spacer_width));
+    }
 
     let scrollbar_region = ScrollbarRegion::ColumnBrowser(pane.id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
@@ -123,7 +130,10 @@ pub(crate) fn column_browser_view<'a>(
     .into()
 }
 
-fn sidebar_underlay_width_for_pane(browser: &FileBrowser, pane_id: BrowserPaneId) -> f32 {
+pub(crate) fn sidebar_underlay_width_for_pane(
+    browser: &FileBrowser,
+    pane_id: BrowserPaneId,
+) -> f32 {
     if pane_starts_at_sidebar_edge(browser.pane_layout, pane_id) {
         browser.sidebar_width
     } else {
@@ -270,6 +280,23 @@ fn empty_column(
     ))
     .on_right_press(Message::BlankAreaRightClicked(pane_id, fallback_directory))
     .into()
+}
+
+fn end_scroll_spacer(width: f32) -> Element<'static, Message> {
+    input_blocking_space(Length::Fixed(width), Length::Fill)
+}
+
+fn end_scroll_spacer_width(
+    real_column_count: usize,
+    column_width_at: impl Fn(usize) -> f32,
+) -> f32 {
+    if real_column_count < DEFAULT_VISIBLE_COLUMN_COUNT {
+        return 0.0;
+    }
+
+    (real_column_count..real_column_count + DEFAULT_VISIBLE_COLUMN_COUNT - 1)
+        .map(|index| column_width_at(index) + COLUMN_RESIZE_DIVIDER_WIDTH)
+        .sum()
 }
 
 fn column_resize_divider(pane_id: BrowserPaneId, column_index: usize) -> Element<'static, Message> {
@@ -439,7 +466,7 @@ pub(crate) fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<Path
     }
 
     if let Some(drag) = pane.file_drag {
-        if !drag.column_directories_snapshot.is_empty() {
+        if drag.is_dragging() && !drag.column_directories_snapshot.is_empty() {
             return drag.column_directories_snapshot.clone();
         }
     }
@@ -737,6 +764,33 @@ mod tests {
         assert_eq!(
             column_directories_for_pane(pane),
             vec![current_dir, open_directory]
+        );
+    }
+
+    #[test]
+    fn end_scroll_spacer_width_keeps_default_placeholders_and_terminal_scroll() {
+        let column_width = 180.0;
+        let divider_count = (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
+        let expected_spacer = divider_count * (column_width + COLUMN_RESIZE_DIVIDER_WIDTH);
+
+        for real_column_count in [1, DEFAULT_VISIBLE_COLUMN_COUNT - 1] {
+            assert_eq!(
+                end_scroll_spacer_width(real_column_count, |_| column_width),
+                0.0
+            );
+        }
+        for real_column_count in [DEFAULT_VISIBLE_COLUMN_COUNT, 5] {
+            assert_eq!(
+                end_scroll_spacer_width(real_column_count, |_| column_width),
+                expected_spacer
+            );
+        }
+
+        let viewport_width = DEFAULT_VISIBLE_COLUMN_COUNT as f32 * column_width
+            + divider_count * COLUMN_RESIZE_DIVIDER_WIDTH;
+        assert_eq!(
+            viewport_width + expected_spacer - viewport_width,
+            expected_spacer
         );
     }
 }

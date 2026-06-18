@@ -380,12 +380,6 @@ impl FileBrowser {
                 self.update_sidebar_bookmark_drop_slot(position)
             }
             Message::SidebarPointerExited => self.clear_sidebar_bookmark_drop_slot(),
-            Message::SidebarBookmarkDropSlotHovered(slot) => {
-                self.handle_sidebar_bookmark_drop_slot_hovered(slot)
-            }
-            Message::SidebarBookmarkDropSlotCleared(slot) => {
-                self.handle_sidebar_bookmark_drop_slot_cleared(slot)
-            }
             Message::SidebarBookmarkPressed(path) => self.start_sidebar_bookmark_drag(path),
             Message::SidebarBookmarkRightClicked(path) => {
                 self.handle_sidebar_bookmark_right_clicked(path)

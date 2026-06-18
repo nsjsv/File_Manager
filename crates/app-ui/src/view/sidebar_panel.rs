@@ -1,5 +1,5 @@
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, Column, Row, Space,
+    button, column, container, mouse_area, row, scrollable, stack, text, Column, Row, Space,
 };
 use iced::{Alignment, Element, Length, Padding};
 
@@ -28,8 +28,7 @@ const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 const SIDEBAR_FLOATING_MARGIN_LEFT: f32 = 10.0;
 const SIDEBAR_FLOATING_MARGIN_RIGHT: f32 = 4.0;
 const SIDEBAR_FLOATING_MARGIN_VERTICAL: f32 = 10.0;
-const SIDEBAR_ITEM_VERTICAL_PADDING: f32 = 12.0;
-const SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT: f32 = MENU_ICON_SIZE + SIDEBAR_ITEM_VERTICAL_PADDING;
+const SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT: f32 = 3.0;
 
 pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     let sidebar_header = row![
@@ -65,26 +64,8 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     if can_drop_bookmark || !favorite_locations.is_empty() {
         sidebar = sidebar.push(sidebar_section_label("Favorites"));
 
-        if can_drop_bookmark
-            && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Top)
-        {
-            sidebar = sidebar.push(sidebar_bookmark_drop_slot(
-                browser,
-                SidebarBookmarkDropSlot::Top,
-            ));
-        }
-
-        for location in favorite_locations {
-            sidebar = sidebar.push(sidebar_location_item(browser, location));
-        }
-
-        if can_drop_bookmark
-            && browser.sidebar_bookmark_drop_slot == Some(SidebarBookmarkDropSlot::Bottom)
-        {
-            sidebar = sidebar.push(sidebar_bookmark_drop_slot(
-                browser,
-                SidebarBookmarkDropSlot::Bottom,
-            ));
+        for (index, location) in favorite_locations.iter().enumerate() {
+            sidebar = sidebar.push(sidebar_location_item_with_index(browser, location, index));
         }
     }
 
@@ -185,6 +166,22 @@ fn sidebar_location_item<'a>(
     browser: &'a FileBrowser,
     location: &'a SidebarLocation,
 ) -> Element<'a, Message> {
+    sidebar_location_item_content(browser, location, None)
+}
+
+fn sidebar_location_item_with_index<'a>(
+    browser: &'a FileBrowser,
+    location: &'a SidebarLocation,
+    favorite_index: usize,
+) -> Element<'a, Message> {
+    sidebar_location_item_content(browser, location, Some(favorite_index))
+}
+
+fn sidebar_location_item_content<'a>(
+    browser: &'a FileBrowser,
+    location: &'a SidebarLocation,
+    favorite_index: Option<usize>,
+) -> Element<'a, Message> {
     let presentation = sidebar_presentation(browser, location);
     let tone = if presentation.is_selected() {
         IconTone::Selected
@@ -206,7 +203,12 @@ fn sidebar_location_item<'a>(
         SidebarPresentation::Normal => item_container,
     };
 
-    let is_favorite = location.kind.is_user_favorite();
+    let is_favorite = favorite_index.is_some();
+    let item_container = if let Some(favorite_index) = favorite_index {
+        sidebar_bookmark_drop_overlay(browser, item_container, favorite_index)
+    } else {
+        item_container.into()
+    };
     let item_content: Element<'a, Message> = if is_favorite {
         tab_motion::translated(
             item_container,
@@ -233,7 +235,7 @@ fn sidebar_location_item<'a>(
         } else {
             Message::NavigateTo(location.path.clone())
         })
-        .on_release(if is_favorite {
+        .on_release(if is_favorite && browser.file_drag.is_none() {
             Message::SidebarBookmarkReleased
         } else {
             Message::DragSelectionFinished
@@ -246,6 +248,43 @@ fn sidebar_location_item<'a>(
     };
 
     item.into()
+}
+
+fn sidebar_bookmark_drop_overlay<'a>(
+    browser: &FileBrowser,
+    item_container: iced::widget::Container<'a, Message>,
+    favorite_index: usize,
+) -> Element<'a, Message> {
+    let Some(slot) = browser.sidebar_bookmark_drop_slot else {
+        return item_container.into();
+    };
+
+    let SidebarBookmarkDropSlot::Insert { index } = slot;
+    let line_alignment = if index == 0 && favorite_index == 0 {
+        SidebarBookmarkDropLineAlignment::Top
+    } else if index > 0 && index == favorite_index + 1 {
+        SidebarBookmarkDropLineAlignment::Bottom
+    } else {
+        return item_container.into();
+    };
+
+    let line = container(Space::new().height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT)))
+        .height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT))
+        .width(Length::Fill)
+        .style(sidebar_bookmark_drop_slot_style);
+    let aligned_line = match line_alignment {
+        SidebarBookmarkDropLineAlignment::Top => container(line).align_top(Length::Fill),
+        SidebarBookmarkDropLineAlignment::Bottom => container(line).align_bottom(Length::Fill),
+    };
+
+    stack([item_container.into(), aligned_line.into()])
+        .width(Length::Fill)
+        .into()
+}
+
+enum SidebarBookmarkDropLineAlignment {
+    Top,
+    Bottom,
 }
 
 fn sidebar_device_item<'a>(
@@ -337,27 +376,6 @@ fn sidebar_message_row(message: &'static str) -> Element<'static, Message> {
     container(readable_text(message).size(12))
         .padding([4, 8])
         .width(Length::Fill)
-        .into()
-}
-
-fn sidebar_bookmark_drop_slot(
-    browser: &FileBrowser,
-    slot: SidebarBookmarkDropSlot,
-) -> Element<'_, Message> {
-    let is_active = browser.sidebar_bookmark_drop_slot == Some(slot);
-    let content = container(Space::new().height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT)))
-        .height(Length::Fixed(SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT))
-        .width(Length::Fill);
-    let content = if is_active {
-        content.style(sidebar_bookmark_drop_slot_style)
-    } else {
-        content
-    };
-
-    mouse_area(content)
-        .on_enter(Message::SidebarBookmarkDropSlotHovered(slot))
-        .on_exit(Message::SidebarBookmarkDropSlotCleared(slot))
-        .on_release(Message::DragSelectionFinished)
         .into()
 }
 

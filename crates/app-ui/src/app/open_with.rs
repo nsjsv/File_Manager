@@ -167,7 +167,7 @@ mod tests {
             phase: FileDragPhase::Dragging,
             order_changed: false,
         });
-        browser.sidebar_bookmark_drop_slot = Some(SidebarBookmarkDropSlot::Top);
+        browser.sidebar_bookmark_drop_slot = Some(SidebarBookmarkDropSlot::Insert { index: 0 });
 
         let _ = browser.request_open_with_applications(path);
 

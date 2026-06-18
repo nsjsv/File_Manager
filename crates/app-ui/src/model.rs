@@ -199,8 +199,6 @@ pub(crate) enum Message {
     SidebarHoverCleared(PathBuf),
     SidebarPointerMoved(Point),
     SidebarPointerExited,
-    SidebarBookmarkDropSlotHovered(SidebarBookmarkDropSlot),
-    SidebarBookmarkDropSlotCleared(SidebarBookmarkDropSlot),
     SidebarBookmarkPressed(PathBuf),
     SidebarBookmarkRightClicked(PathBuf),
     SidebarBookmarkEntered(PathBuf),
@@ -530,8 +528,7 @@ pub(crate) enum FileDragTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidebarBookmarkDropSlot {
-    Top,
-    Bottom,
+    Insert { index: usize },
 }
 
 #[derive(Debug, Clone)]
