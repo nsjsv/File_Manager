@@ -46,6 +46,10 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
 
     let actions = row![
         Space::new().width(Length::Fill),
+        button(readable_text("Restart").size(12))
+            .on_press(Message::RendererRestartRequested)
+            .padding([6, 10])
+            .style(context_menu_button_style()),
         button(readable_text("OK").size(12))
             .on_press(Message::RendererRestartNoticeDismissed)
             .padding([6, 10])
@@ -57,10 +61,8 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
     container(
         column![
             title,
-            readable_text(
-                "Rendering GPU preference changes will take effect after restarting File Manager."
-            )
-            .size(13),
+            readable_text("Rendering GPU preference changes require restarting File Manager.")
+                .size(13),
             actions,
         ]
         .spacing(12)

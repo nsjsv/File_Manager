@@ -30,6 +30,7 @@ use crate::model::{
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::sidebar::{home_sidebar_location, save_gtk_bookmark_locations, sidebar_locations};
+use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
 use crate::startup_trace;
 use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
 
@@ -374,16 +375,26 @@ async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
 
 async fn load_startup_environment() -> StartupEnvironment {
     startup_trace::mark_once("startup_environment_started");
-    tokio::task::spawn_blocking(|| StartupEnvironment {
-        home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
-        user_config: config::load_user_config(),
-        state_database_path: config::default_state_database_path(),
+    tokio::task::spawn_blocking(|| {
+        let user_config = config::load_user_config();
+        let rendering_environment_status = StartupRenderingEnvironmentStatus::for_loaded_config(
+            user_config.rendering_gpu_preference,
+        );
+        StartupEnvironment {
+            home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            user_config,
+            state_database_path: config::default_state_database_path(),
+            rendering_environment_status,
+        }
     })
     .await
     .unwrap_or_else(|_| StartupEnvironment {
         home: PathBuf::from("/"),
         user_config: config::ui_thread_startup_config(),
         state_database_path: PathBuf::new(),
+        rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
+            StartupRenderingEnvironment::fast_default(),
+        ),
     })
 }
 

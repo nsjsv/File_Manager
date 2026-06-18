@@ -24,8 +24,13 @@ impl FileBrowser {
         startup_trace::mark_once("startup_environment_loaded");
         let home = startup_environment.home;
         let state_database_path = startup_environment.state_database_path;
+        let rendering_environment_status = startup_environment.rendering_environment_status;
 
         self.apply_loaded_user_config(startup_environment.user_config);
+        self.pending_renderer_restart_environment = rendering_environment_status
+            .restart_required
+            .then_some(rendering_environment_status.environment);
+        self.renderer_restart_notice_visible = self.pending_renderer_restart_environment.is_some();
         let configured_favorites = self.user_config.sidebar_favorites.clone();
         self.current_dir = home.clone();
         self.is_trash_view = false;
@@ -152,5 +157,34 @@ impl FileBrowser {
         self.view_mode = user_config.browser_view_mode;
         self.user_config = user_config;
         self.sync_search_index_exclude_inputs_from_config();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::app::FileBrowser;
+    use crate::config;
+    use crate::model::StartupEnvironment;
+    use crate::startup_rendering::{
+        StartupRenderingEnvironment, StartupRenderingEnvironmentStatus,
+    };
+
+    #[test]
+    fn loaded_startup_environment_keeps_renderer_notice_hidden_when_env_matches() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+
+        drop(browser.accept_startup_environment(StartupEnvironment {
+            home: PathBuf::from("/home/user"),
+            user_config: config::default_user_config(),
+            state_database_path: PathBuf::from("/tmp/state.sqlite"),
+            rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
+                StartupRenderingEnvironment::fast_default(),
+            ),
+        }));
+
+        assert!(!browser.renderer_restart_notice_visible);
+        assert!(browser.pending_renderer_restart_environment.is_none());
     }
 }

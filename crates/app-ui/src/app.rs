@@ -161,6 +161,8 @@ pub(crate) struct FileBrowser {
     user_config: config::UserConfig,
     pub(crate) rendering_gpu_preference: config::RenderingGpuPreference,
     pub(crate) renderer_restart_notice_visible: bool,
+    pub(super) pending_renderer_restart_environment:
+        Option<crate::startup_rendering::StartupRenderingEnvironment>,
     pub(crate) path_input: String,
     pub(crate) path_suggestions: Vec<PathBuf>,
     pub(crate) path_suggestion_selection: Option<usize>,
@@ -335,6 +337,7 @@ impl FileBrowser {
             user_config: user_config.clone(),
             rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
+            pending_renderer_restart_environment: None,
             path_input: String::new(),
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
@@ -487,6 +490,7 @@ impl FileBrowser {
                 self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
             )
         } else {
+            startup_trace::mark_once("first_main_window_view");
             if !self.is_loading {
                 startup_trace::mark_once("first_browser_view_after_initial_load");
             }

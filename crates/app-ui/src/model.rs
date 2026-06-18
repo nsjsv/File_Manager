@@ -25,6 +25,7 @@ use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::ShortcutBindingId;
 use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
+use crate::startup_rendering::StartupRenderingEnvironmentStatus;
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
 use file_core::FileOperationVerification;
 
@@ -277,6 +278,7 @@ pub(crate) enum Message {
     FileOperationVerificationSelected(FileOperationVerification),
     TerminalEmulatorSelected(TerminalEmulator),
     RenderingGpuPreferenceSelected(RenderingGpuPreference),
+    RendererRestartRequested,
     RendererRestartNoticeDismissed,
     CapturedWheelScrolled(mouse::ScrollDelta),
     ScrollbarAutoHideElapsed(ScrollbarRegion, u64),
@@ -458,6 +460,7 @@ pub(crate) struct StartupEnvironment {
     pub(crate) home: PathBuf,
     pub(crate) user_config: UserConfig,
     pub(crate) state_database_path: PathBuf,
+    pub(crate) rendering_environment_status: StartupRenderingEnvironmentStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

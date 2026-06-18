@@ -9,6 +9,7 @@ use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode, ExpandedDirectory,
     ExpandedDirectoryStatus, SplitAxis, StartupEnvironment,
 };
+use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
 use crate::thumbnail_cache::ColumnViewport;
 
 fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
@@ -94,6 +95,9 @@ fn loaded_user_config_updates_startup_view_mode() {
         home: PathBuf::from("/home/user"),
         user_config,
         state_database_path: PathBuf::from("/tmp/state.sqlite"),
+        rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
+            StartupRenderingEnvironment::fast_default(),
+        ),
     }));
 
     assert_eq!(browser.view_mode, BrowserViewMode::List);

@@ -589,6 +589,7 @@ impl FileBrowser {
             Message::RenderingGpuPreferenceSelected(preference) => {
                 self.select_rendering_gpu_preference(preference)
             }
+            Message::RendererRestartRequested => self.restart_with_selected_renderer(),
             Message::RendererRestartNoticeDismissed => self.dismiss_renderer_restart_notice(),
             Message::CapturedWheelScrolled(delta) => self.handle_captured_wheel_scrolled(delta),
             Message::ScrollbarAutoHideElapsed(region, generation) => {
