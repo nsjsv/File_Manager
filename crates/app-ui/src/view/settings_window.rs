@@ -1,5 +1,7 @@
+use std::fmt;
+
 use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
-use iced::widget::{button, column, container, row, scrollable, Button, Column, Space};
+use iced::widget::{button, column, container, pick_list, row, scrollable, Button, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::app::FileBrowser;
@@ -17,6 +19,15 @@ use super::shortcut_settings::shortcut_settings_section;
 use super::toggle_switch::switch_control;
 
 const SETTINGS_CATEGORY_WIDTH: f32 = 196.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalEmulatorPickOption(TerminalEmulator);
+
+impl fmt::Display for TerminalEmulatorPickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0.label())
+    }
+}
 
 pub(crate) fn view_settings_window(browser: &FileBrowser) -> Element<'_, Message> {
     let categories = settings_category_sidebar(browser.selected_settings_category);
@@ -172,11 +183,21 @@ fn settings_detail_scroller<'a>(
 }
 
 fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Message> {
-    let mut options = Column::new().spacing(4);
-    for terminal_emulator in TERMINAL_EMULATOR_OPTIONS {
-        options = options.push(terminal_emulator_button(*terminal_emulator, selected));
-    }
-    options.into()
+    let options = TERMINAL_EMULATOR_OPTIONS
+        .iter()
+        .copied()
+        .map(TerminalEmulatorPickOption)
+        .collect::<Vec<_>>();
+
+    pick_list(
+        options,
+        Some(TerminalEmulatorPickOption(selected)),
+        |selected| Message::TerminalEmulatorSelected(selected.0),
+    )
+    .width(Length::Fill)
+    .text_size(12)
+    .padding([5, 8])
+    .into()
 }
 
 fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Message> {
@@ -197,25 +218,6 @@ fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Mess
 
     button(container(label).padding([5, 8]).width(Length::Fill))
         .on_press(Message::ShowHiddenFilesToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn terminal_emulator_button(
-    terminal_emulator: TerminalEmulator,
-    selected_emulator: TerminalEmulator,
-) -> Button<'static, Message> {
-    let label = container(readable_text(terminal_emulator.label()).size(12))
-        .padding([5, 8])
-        .width(Length::Fill);
-    let label = if terminal_emulator == selected_emulator {
-        label.style(selected_sidebar_item_style)
-    } else {
-        label
-    };
-
-    button(label)
-        .on_press(Message::TerminalEmulatorSelected(terminal_emulator))
         .width(Length::Fill)
         .style(context_menu_button_style())
 }
