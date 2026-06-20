@@ -7,8 +7,9 @@ use ignore::{gitignore::Gitignore, gitignore::GitignoreBuilder, WalkBuilder};
 use tokio_util::sync::CancellationToken;
 
 use super::catalog::SearchCatalogRecord;
-use crate::scan::is_hidden_name;
-use crate::{FileError, FileKind, ScanWarning};
+use super::types::DirectoryErrorPolicy;
+use crate::IndexError;
+use file_core::{FileKind, ScanWarning};
 
 const INDEX_THROTTLE_EVERY: usize = 128;
 const INDEX_THROTTLE_SLEEP: Duration = Duration::from_millis(2);
@@ -16,19 +17,20 @@ const INDEX_THROTTLE_SLEEP: Duration = Duration::from_millis(2);
 pub(crate) struct SearchCrawlOptions {
     pub(crate) include_hidden: bool,
     pub(crate) exclude_patterns: Vec<String>,
+    pub(crate) directory_error_policy: DirectoryErrorPolicy,
     pub(crate) excluded_index_dir: Option<PathBuf>,
     pub(crate) throttle: bool,
     pub(crate) cancel: Option<CancellationToken>,
 }
 
 impl SearchCrawlOptions {
-    fn ensure_not_cancelled(&self) -> Result<(), FileError> {
+    fn ensure_not_cancelled(&self) -> Result<(), IndexError> {
         if self
             .cancel
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
         {
-            Err(FileError::Cancelled)
+            Err(IndexError::Cancelled)
         } else {
             Ok(())
         }
@@ -38,21 +40,29 @@ impl SearchCrawlOptions {
 pub(crate) fn crawl_search_records(
     root: &Path,
     options: &SearchCrawlOptions,
-) -> Result<(Vec<SearchCatalogRecord>, Vec<ScanWarning>), FileError> {
-    std_fs::read_dir(root).map_err(|source| FileError::ReadDirectory {
+) -> Result<(Vec<SearchCatalogRecord>, Vec<ScanWarning>), IndexError> {
+    std_fs::read_dir(root).map_err(|source| IndexError::ReadDirectory {
         path: root.to_path_buf(),
         source,
     })?;
 
     let mut skipped = Vec::new();
     let mut records = Vec::new();
+    let mut skipped_roots = Vec::new();
 
     for result in search_walk_builder(root, root, options).build() {
         options.ensure_not_cancelled()?;
         let dir_entry = match result {
             Ok(dir_entry) => dir_entry,
             Err(error) => {
-                skipped.push(ignore_error_warning(root, error));
+                record_walk_error(
+                    root,
+                    error,
+                    options,
+                    &mut records,
+                    &mut skipped,
+                    &mut skipped_roots,
+                )?;
                 continue;
             }
         };
@@ -61,6 +71,12 @@ pub(crate) fn crawl_search_records(
         }
 
         let path = dir_entry.into_path();
+        if skipped_roots
+            .iter()
+            .any(|skipped| path.starts_with(skipped))
+        {
+            continue;
+        }
         let metadata = match std_fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(source) => {
@@ -91,8 +107,8 @@ pub(crate) fn crawl_selected_search_records_with_progress(
     selected_paths: &[PathBuf],
     options: &SearchCrawlOptions,
     mut progress: impl FnMut(usize, usize),
-) -> Result<(Vec<SearchCatalogRecord>, Vec<ScanWarning>), FileError> {
-    std_fs::read_dir(catalog_root).map_err(|source| FileError::ReadDirectory {
+) -> Result<(Vec<SearchCatalogRecord>, Vec<ScanWarning>), IndexError> {
+    std_fs::read_dir(catalog_root).map_err(|source| IndexError::ReadDirectory {
         path: catalog_root.to_path_buf(),
         source,
     })?;
@@ -163,13 +179,21 @@ fn crawl_selected_directory_children(
     records: &mut Vec<SearchCatalogRecord>,
     skipped: &mut Vec<ScanWarning>,
     seen_keys: &mut HashSet<String>,
-) -> Result<(), FileError> {
+) -> Result<(), IndexError> {
+    let mut skipped_roots = Vec::new();
     for result in search_walk_builder(selected_path, catalog_root, options).build() {
         options.ensure_not_cancelled()?;
         let dir_entry = match result {
             Ok(dir_entry) => dir_entry,
             Err(error) => {
-                skipped.push(ignore_error_warning(selected_path, error));
+                record_walk_error(
+                    selected_path,
+                    error,
+                    options,
+                    records,
+                    skipped,
+                    &mut skipped_roots,
+                )?;
                 continue;
             }
         };
@@ -178,6 +202,12 @@ fn crawl_selected_directory_children(
         }
 
         let path = dir_entry.into_path();
+        if skipped_roots
+            .iter()
+            .any(|skipped| path.starts_with(skipped))
+        {
+            continue;
+        }
         let metadata = match std_fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(source) => {
@@ -297,8 +327,46 @@ fn push_unique_record(
     }
 }
 
+fn record_walk_error(
+    fallback_root: &Path,
+    error: ignore::Error,
+    options: &SearchCrawlOptions,
+    records: &mut Vec<SearchCatalogRecord>,
+    skipped: &mut Vec<ScanWarning>,
+    skipped_roots: &mut Vec<PathBuf>,
+) -> Result<(), IndexError> {
+    let error_path = ignore_error_path(&error)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| fallback_root.to_path_buf());
+    if options.directory_error_policy == DirectoryErrorPolicy::Abort {
+        return Err(IndexError::ReadDirectory {
+            path: error_path,
+            source: ignore_error_io(error),
+        });
+    }
+
+    records.retain(|record| !record.path.starts_with(&error_path));
+    if !skipped_roots
+        .iter()
+        .any(|skipped| error_path.starts_with(skipped))
+    {
+        skipped_roots.push(error_path.clone());
+    }
+    if !skipped.iter().any(|warning| warning.path == error_path) {
+        skipped.push(ScanWarning {
+            path: error_path,
+            message: error.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn selected_path_is_hidden(path: &Path) -> bool {
     path.file_name().is_some_and(is_hidden_name)
+}
+
+fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
+    name.as_encoded_bytes().starts_with(b".")
 }
 
 fn non_nested_selected_paths(selected_paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -323,16 +391,6 @@ fn non_nested_selected_paths(selected_paths: &[PathBuf]) -> Vec<PathBuf> {
     reduced
 }
 
-fn ignore_error_warning(root: &Path, error: ignore::Error) -> ScanWarning {
-    let path = ignore_error_path(&error)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| root.to_path_buf());
-    ScanWarning {
-        path,
-        message: error.to_string(),
-    }
-}
-
 fn ignore_error_path(error: &ignore::Error) -> Option<&Path> {
     match error {
         ignore::Error::Partial(errors) => errors.iter().find_map(ignore_error_path),
@@ -343,4 +401,10 @@ fn ignore_error_path(error: &ignore::Error) -> Option<&Path> {
         ignore::Error::Loop { child, .. } => Some(child),
         _ => None,
     }
+}
+
+fn ignore_error_io(error: ignore::Error) -> std::io::Error {
+    error
+        .into_io_error()
+        .unwrap_or_else(|| std::io::Error::other("search index walk failed"))
 }

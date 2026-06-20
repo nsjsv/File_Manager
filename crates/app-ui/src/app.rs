@@ -18,7 +18,9 @@ mod rendering_settings;
 mod runtime;
 mod scrollbar;
 mod search;
-mod search_index_settings;
+mod search_backend_mode;
+pub(crate) mod search_index_settings;
+mod search_messages;
 mod selection;
 mod shortcuts;
 mod sidebar_bookmarks;
@@ -63,6 +65,7 @@ use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
     MAIN_WINDOW_INITIAL_WIDTH,
 };
+use crate::commands::search_index_maintenance_subscription;
 use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
@@ -70,10 +73,10 @@ use crate::model::{
     BrowserViewMode, ContextMenuState, DestructiveActionConfirmation,
     DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, FilePropertiesState,
     Message, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchState, SelectionMarquee,
-    SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
-    StartupIndexSetupState, TabDragState, TextPreviewDocument, TransferConflictState,
-    VideoPreviewPlayback,
+    PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState,
+    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
+    TransferConflictState, VideoPreviewPlayback,
 };
 use crate::open_with::OpenWithState;
 use crate::operation_history::FileOperationHistory;
@@ -140,6 +143,7 @@ pub(crate) struct FileBrowser {
     pub(crate) transfer_conflict: Option<TransferConflictState>,
     pub(crate) destructive_action_confirmation: Option<DestructiveActionConfirmation>,
     pub(crate) search: Option<SearchState>,
+    pub(crate) search_mode_prompt: Option<SearchModePromptState>,
     pub(crate) startup_index_setup: Option<StartupIndexSetupState>,
     search_window: Option<window::Id>,
     settings_window: Option<window::Id>,
@@ -314,6 +318,7 @@ impl FileBrowser {
             transfer_conflict: None,
             destructive_action_confirmation: None,
             search: None,
+            search_mode_prompt: None,
             startup_index_setup: None,
             search_window: None,
             settings_window: None,
@@ -342,7 +347,7 @@ impl FileBrowser {
             path_suggestions: Vec::new(),
             path_suggestion_selection: None,
             path_suggestion_generation: 0,
-            column_width_overrides: user_config.legacy_column_width_overrides.clone(),
+            column_width_overrides: HashMap::new(),
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             selected_settings_category: SettingsCategory::General,
@@ -412,6 +417,17 @@ impl FileBrowser {
             subscriptions.push(file_operation_subscription(operation));
         }
 
+        if self.user_config.search_mode == config::SearchBackendMode::Indexed
+            && self.search_index.has_active_profile_roots()
+            && !self.search_index.maintenance_paused
+        {
+            subscriptions.push(search_index_maintenance_subscription(
+                self.search_index.profile_id.clone(),
+                self.user_config.clone(),
+                self.search_index.service_generation,
+            ));
+        }
+
         if self.preview_tree_animation_is_active() {
             subscriptions.push(
                 time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
@@ -469,6 +485,7 @@ impl FileBrowser {
         if self.search_window == Some(window) {
             view_search_window(
                 self.search.as_ref(),
+                self.user_config.search_mode,
                 self.scrollbar_visibility_for(&ScrollbarRegion::SearchResults),
             )
         } else if self.settings_window == Some(window) {
@@ -489,12 +506,17 @@ impl FileBrowser {
                 self.scrollbar_visibility_for(&ScrollbarRegion::PreviewArchive),
                 self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
             )
-        } else {
+        } else if window == self.main_window {
             startup_trace::mark_once("first_main_window_view");
             if !self.is_loading {
                 startup_trace::mark_once("first_browser_view_after_initial_load");
             }
             view_browser(self)
+        } else {
+            iced::widget::container(iced::widget::text("Closing window..."))
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .into()
         }
     }
 }

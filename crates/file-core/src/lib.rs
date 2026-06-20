@@ -4,7 +4,6 @@ pub mod entry;
 pub mod media;
 pub mod ops;
 pub mod scan;
-pub mod search;
 pub mod sort;
 pub mod transfer_conflict;
 pub mod trash_bin;
@@ -33,14 +32,6 @@ pub use ops::{
 pub use scan::{
     scan_directory, scan_directory_with_progress, DirectoryScan, DirectoryScanBatch, FileError,
     ScanOptions, ScanWarning,
-};
-pub use search::{
-    build_file_search_index, build_file_search_index_for_paths,
-    build_file_search_index_for_paths_with_progress, clear_file_search_index_failures,
-    file_search_index_exists, file_search_index_status, remove_file_search_index,
-    search_file_index, search_file_tree, search_file_tree_with_cancel, FileSearchIndexFailure,
-    FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchIndexProgress,
-    FileSearchIndexStatus, FileSearchMatch, FileSearchOptions, FileSearchOutcome,
 };
 pub use sort::{
     apply_entry_options, compare_entries, filter_hidden, sort_entries, SortDirection, SortField,

@@ -61,14 +61,27 @@ pub(crate) fn file_properties_command(
 }
 
 pub(crate) fn set_file_properties_permissions_command(
-    path: PathBuf,
+    request: FilePropertiesRequest,
     permissions: FilePropertiesPermissions,
 ) -> Task<Message> {
-    let requested_path = path.clone();
+    let path = request.path.clone();
     Task::perform(
         set_file_properties_permissions(path, permissions),
         move |permissions_outcome| {
-            Message::FilePropertiesPermissionsUpdated(requested_path.clone(), permissions_outcome)
+            Message::FilePropertiesPermissionsUpdated(request.clone(), permissions_outcome)
+        },
+    )
+}
+
+pub(crate) fn apply_file_properties_permissions_to_enclosed_items_command(
+    request: FilePropertiesRequest,
+    permissions: FilePropertiesPermissions,
+) -> Task<Message> {
+    let path = request.path.clone();
+    Task::perform(
+        apply_file_properties_permissions_to_enclosed_items(path, permissions),
+        move |permissions_outcome| {
+            Message::FilePropertiesEnclosedPermissionsUpdated(request.clone(), permissions_outcome)
         },
     )
 }
@@ -86,6 +99,17 @@ async fn set_file_properties_permissions(
     tokio::task::spawn_blocking(move || write_file_properties_permissions(path, permissions))
         .await
         .map_err(|error| error.to_string())?
+}
+
+async fn apply_file_properties_permissions_to_enclosed_items(
+    path: PathBuf,
+    permissions: FilePropertiesPermissions,
+) -> Result<FilePropertiesPermissions, String> {
+    tokio::task::spawn_blocking(move || {
+        write_file_properties_permissions_to_enclosed_items(path, permissions)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn read_file_properties(path: PathBuf) -> Result<FilePropertiesSnapshot, String> {
@@ -212,8 +236,72 @@ fn write_file_properties_permissions(
     ))
 }
 
+#[cfg(unix)]
+fn write_file_properties_permissions_to_enclosed_items(
+    path: PathBuf,
+    permissions: FilePropertiesPermissions,
+) -> Result<FilePropertiesPermissions, String> {
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("could not inspect {:?}: {error}", path))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "could not apply permissions to enclosed items for {:?}: symbolic links are not directories",
+            path
+        ));
+    }
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "could not apply permissions to enclosed items for {:?}: item is not a folder",
+            path
+        ));
+    }
+
+    write_permissions_postorder(&path, permissions)?;
+    let refreshed = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("could not refresh permissions for {:?}: {error}", path))?;
+    Ok(FilePropertiesPermissions::from_mode(
+        refreshed.permissions().mode(),
+    ))
+}
+
+#[cfg(unix)]
+fn write_permissions_postorder(
+    path: &Path,
+    permissions: FilePropertiesPermissions,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect {:?}: {error}", path))?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Ok(());
+    }
+
+    if file_type.is_dir() {
+        for entry in std::fs::read_dir(path)
+            .map_err(|error| format!("could not list folder {:?}: {error}", path))?
+        {
+            let entry = entry
+                .map_err(|error| format!("could not read entry in folder {:?}: {error}", path))?;
+            write_permissions_postorder(&entry.path(), permissions)?;
+        }
+    }
+
+    let mut fs_permissions = metadata.permissions();
+    fs_permissions.set_mode(permissions.mode());
+    std::fs::set_permissions(path, fs_permissions)
+        .map_err(|error| format!("could not set permissions for {:?}: {error}", path))
+}
+
 #[cfg(not(unix))]
 fn write_file_properties_permissions(
+    _path: PathBuf,
+    _permissions: FilePropertiesPermissions,
+) -> Result<FilePropertiesPermissions, String> {
+    Err("permission editing is only available on Unix filesystems".to_owned())
+}
+
+#[cfg(not(unix))]
+fn write_file_properties_permissions_to_enclosed_items(
     _path: PathBuf,
     _permissions: FilePropertiesPermissions,
 ) -> Result<FilePropertiesPermissions, String> {
@@ -277,4 +365,113 @@ fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
 #[cfg(not(unix))]
 fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
     metadata.len()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::path::Path;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn recursive_permissions_apply_to_root_directories_and_files() {
+        let temp = tempdir().expect("create temp dir");
+        let root = temp.path().join("root");
+        let child_dir = root.join("child");
+        let file = child_dir.join("file.txt");
+        fs::create_dir(&root).expect("create root");
+        fs::create_dir(&child_dir).expect("create child");
+        fs::write(&file, "content").expect("write file");
+
+        write_file_properties_permissions_to_enclosed_items(
+            root.clone(),
+            FilePropertiesPermissions::from_mode(0o755),
+        )
+        .expect("apply recursive permissions");
+
+        assert_mode(&root, 0o755);
+        assert_mode(&child_dir, 0o755);
+        assert_mode(&file, 0o755);
+    }
+
+    #[test]
+    fn recursive_permissions_skip_symlinks_and_do_not_follow_targets() {
+        let temp = tempdir().expect("create temp dir");
+        let root = temp.path().join("root");
+        let target = temp.path().join("target.txt");
+        let link = root.join("target-link");
+        fs::create_dir(&root).expect("create root");
+        fs::write(&target, "target").expect("write target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("set target mode");
+        symlink(&target, &link).expect("create symlink");
+
+        write_file_properties_permissions_to_enclosed_items(
+            root.clone(),
+            FilePropertiesPermissions::from_mode(0o644),
+        )
+        .expect("apply recursive permissions");
+
+        assert_mode(&root, 0o644);
+        assert_mode(&target, 0o600);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("restore root permissions");
+        assert!(fs::symlink_metadata(&link)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn recursive_permissions_use_postorder_when_directory_execute_is_removed() {
+        let temp = tempdir().expect("create temp dir");
+        let root = temp.path().join("root");
+        let child_dir = root.join("child");
+        let file = child_dir.join("file.txt");
+        fs::create_dir(&root).expect("create root");
+        fs::create_dir(&child_dir).expect("create child");
+        fs::write(&file, "content").expect("write file");
+
+        write_file_properties_permissions_to_enclosed_items(
+            root.clone(),
+            FilePropertiesPermissions::from_mode(0o600),
+        )
+        .expect("apply recursive permissions");
+
+        assert_mode(&root, 0o600);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("restore root permissions");
+        assert_mode(&child_dir, 0o600);
+        fs::set_permissions(&child_dir, fs::Permissions::from_mode(0o700))
+            .expect("restore child permissions");
+        assert_mode(&file, 0o600);
+    }
+
+    #[test]
+    fn recursive_permissions_reject_non_directories() {
+        let temp = tempdir().expect("create temp dir");
+        let file = temp.path().join("file.txt");
+        fs::write(&file, "content").expect("write file");
+
+        let error = write_file_properties_permissions_to_enclosed_items(
+            file.clone(),
+            FilePropertiesPermissions::from_mode(0o644),
+        )
+        .expect_err("file recursive permissions should fail");
+
+        assert!(error.contains("item is not a folder"));
+        assert!(error.contains(file.to_string_lossy().as_ref()));
+    }
+
+    fn assert_mode(path: &Path, expected_mode: u32) {
+        let mode = fs::symlink_metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(mode, expected_mode, "unexpected mode for {:?}", path);
+    }
 }

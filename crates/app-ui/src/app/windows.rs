@@ -3,7 +3,7 @@ use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
 use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
-use crate::model::{Message, PreviewSize, PreviewWindowProfile};
+use crate::model::{Message, PreviewSize, PreviewWindowProfile, SettingsCategory};
 use crate::view::{path_input_id, rename_input_id};
 
 const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
@@ -467,6 +467,15 @@ impl FileBrowser {
         button: mouse::Button,
         status: event::Status,
     ) -> Task<Message> {
+        if self.settings_window == Some(window) {
+            return match (button, status, self.selected_settings_category) {
+                (mouse::Button::Left, event::Status::Ignored, SettingsCategory::SearchIndex) => {
+                    self.commit_search_index_path_rule_editor()
+                }
+                _ => Task::none(),
+            };
+        }
+
         if window != self.main_window {
             return Task::none();
         }

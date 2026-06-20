@@ -204,13 +204,29 @@ impl FilePropertiesPermissionAccess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FilePropertiesPermissionUpdate {
     Idle,
-    Saving(FilePropertiesPermissions),
+    SavingCurrentItem {
+        permissions: FilePropertiesPermissions,
+    },
+    ApplyingToEnclosedItems {
+        permissions: FilePropertiesPermissions,
+    },
     Failed(String),
 }
 
 impl FilePropertiesPermissionUpdate {
-    pub(crate) fn is_saving(&self) -> bool {
-        matches!(self, Self::Saving(_))
+    pub(crate) fn is_in_progress(&self) -> bool {
+        matches!(
+            self,
+            Self::SavingCurrentItem { .. } | Self::ApplyingToEnclosedItems { .. }
+        )
+    }
+
+    pub(crate) fn pending_permissions(&self) -> Option<FilePropertiesPermissions> {
+        match self {
+            Self::SavingCurrentItem { permissions }
+            | Self::ApplyingToEnclosedItems { permissions } => Some(*permissions),
+            Self::Idle | Self::Failed(_) => None,
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use iced::Task;
 
-use super::{search, FileBrowser};
+use super::FileBrowser;
 use crate::model::{Message, NavigationMode, OperationQueuePanelMode, ScrollbarRegion};
 
 impl FileBrowser {
@@ -118,8 +118,14 @@ impl FileBrowser {
             Message::FilePropertiesPermissionToggled(class, access) => {
                 self.toggle_file_properties_permission(class, access)
             }
-            Message::FilePropertiesPermissionsUpdated(path, permissions_outcome) => {
-                self.accept_file_properties_permissions(path, permissions_outcome)
+            Message::FilePropertiesApplyPermissionsToEnclosedItems => {
+                self.apply_file_properties_permissions_to_enclosed_items()
+            }
+            Message::FilePropertiesPermissionsUpdated(request, permissions_outcome) => {
+                self.accept_file_properties_permissions(request, permissions_outcome)
+            }
+            Message::FilePropertiesEnclosedPermissionsUpdated(request, permissions_outcome) => {
+                self.accept_file_properties_enclosed_permissions(request, permissions_outcome)
             }
             Message::PreviewDirectoryChildrenLoaded(parent_path, children_outcome) => {
                 self.accept_preview_directory_children(parent_path, children_outcome)
@@ -512,40 +518,40 @@ impl FileBrowser {
                 self.error = Some(format!("Failed to save sidebar favorites: {error}"));
                 Task::none()
             }
-            Message::SearchInputChanged(query) => self.update_search_query(query),
-            Message::SearchInputStabilized(request) => self.load_stable_search_matches(request),
-            Message::SearchFocusRequested => {
-                if self.search.is_some() {
-                    search::focus_search_input_command()
-                } else {
-                    Task::none()
-                }
-            }
-            Message::SearchMatchesLoaded(request, search) => {
-                self.accept_search_matches(request, search)
-            }
-            Message::SearchIndexBuilt(root, outcome) => self.accept_search_index(root, outcome),
-            Message::SearchIndexStatusLoaded(root, outcome) => {
-                self.accept_search_index_status(root, outcome)
-            }
-            Message::SearchIndexStatusRefreshRequested => self.refresh_search_index_statuses(),
-            Message::SearchIndexManualBuildRequested(root, mode) => {
-                self.request_search_index_manual_build(root, mode)
-            }
-            Message::SearchIndexRemoveRequested(root) => self.request_search_index_removal(root),
-            Message::SearchIndexFailuresClearRequested(root) => {
-                self.request_search_index_failures_clear(root)
-            }
-            Message::SearchIndexExcludePatternChanged(index, pattern) => {
-                self.update_search_index_exclude_pattern(index, pattern)
-            }
-            Message::SearchIndexExcludePatternAdded => self.add_search_index_exclude_pattern(),
-            Message::SearchIndexExcludePatternRemoved(index) => {
-                self.remove_search_index_exclude_pattern(index)
-            }
-            Message::SearchIndexExcludePatternsSaved => self.save_search_index_exclude_patterns(),
-            Message::SearchMatchSelected(path) => self.activate_search_match(path),
-            Message::SearchActivated => self.activate_selected_search_match(),
+            Message::SearchInputChanged(_)
+            | Message::SearchModeSelected(_)
+            | Message::SearchInputStabilized(_)
+            | Message::SearchFocusRequested
+            | Message::SearchMatchesLoaded(_, _)
+            | Message::SearchIndexBuilt(_, _)
+            | Message::SearchIndexStatusLoaded(_, _)
+            | Message::SearchIndexProfileLoaded(_)
+            | Message::SearchIndexProfileSaved(_)
+            | Message::SearchIndexProfileDeleted(_)
+            | Message::SearchIndexMaintenanceEvent(_, _)
+            | Message::SearchIndexMaintenanceUpdated(_, _)
+            | Message::SearchIndexStatusRefreshRequested
+            | Message::SearchIndexManualBuildRequested(_, _)
+            | Message::SearchIndexRemoveRequested(_)
+            | Message::SearchIndexProfileDeleteRequested
+            | Message::SearchIndexMaintenancePauseToggled
+            | Message::SearchIndexFailuresClearRequested(_)
+            | Message::SearchIndexPathRuleSelected(_)
+            | Message::SearchIndexPathRuleKindChanged(_, _)
+            | Message::SearchIndexPathRuleKindSelected(_)
+            | Message::SearchIndexPathRuleInputChanged(_)
+            | Message::SearchIndexPathRuleEditorCommitted
+            | Message::SearchIndexPathRuleAdded
+            | Message::SearchIndexPathRuleRemoved
+            | Message::SearchIndexPathRuleUpdated
+            | Message::SearchIndexDirectoryErrorPolicySelected(_)
+            | Message::SearchIndexContentEnabledToggled(_)
+            | Message::SearchIndexMediaEnabledToggled(_)
+            | Message::SearchBackendModeSelected(_)
+            | Message::SearchModePromptSimpleSelected
+            | Message::SearchModePromptIndexedSelected
+            | Message::SearchMatchSelected(_)
+            | Message::SearchActivated => self.handle_search_message(message),
             Message::StartupIndexHiddenContentVisibilityToggled => {
                 self.toggle_startup_index_hidden_content_visibility()
             }

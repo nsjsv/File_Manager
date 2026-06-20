@@ -14,6 +14,9 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod tests;
+
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS task_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,9 +35,7 @@ CREATE TABLE IF NOT EXISTS ui_column_view_preferences (
 );
 "#;
 
-const LEGACY_COLUMN_WIDTH_PREFERENCE_KEY: &str = "column_width";
 const COLUMN_WIDTH_PREFERENCE_PREFIX: &str = "column_width.";
-const LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE: &str = "ui_column_width_overrides";
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -225,11 +226,8 @@ pub enum StoredOperation {
     },
     SearchIndex {
         root: StoredPath,
-        index_dir: StoredPath,
+        index_base_dir: StoredPath,
         selected_paths: Vec<StoredPath>,
-        include_hidden: bool,
-        #[serde(default)]
-        exclude_patterns: Vec<String>,
         #[serde(default)]
         mode: StoredSearchIndexMode,
     },
@@ -349,7 +347,6 @@ impl TaskQueueStore {
         }
         let connection = self.connection()?;
         connection.execute_batch(SCHEMA_SQL)?;
-        migrate_legacy_column_widths(&connection)?;
         Ok(())
     }
 
@@ -393,8 +390,22 @@ impl TaskQueueStore {
              ORDER BY id ASC",
         )?;
         let rows = statement.query_map([], task_row_from_sql)?;
-        rows.map(|row| row.map_err(StoreError::from).and_then(StoredTask::try_from))
-            .collect()
+        let mut tasks = Vec::new();
+        let mut invalid_task_ids = Vec::new();
+        for row in rows {
+            let task_row = row?;
+            let id = task_row.id;
+            match StoredTask::try_from(task_row) {
+                Ok(task) => tasks.push(task),
+                Err(StoreError::Json(_)) => invalid_task_ids.push(id),
+                Err(error) => return Err(error),
+            }
+        }
+        drop(statement);
+        for id in invalid_task_ids {
+            connection.execute("DELETE FROM task_queue WHERE id = ?1", params![id])?;
+        }
+        Ok(tasks)
     }
 
     pub fn update_status(&self, id: u64, status: StoredTaskStatus) -> StoreResult<()> {
@@ -472,14 +483,7 @@ impl TaskQueueStore {
     }
 
     pub fn read_column_widths(&self) -> StoreResult<HashMap<usize, f64>> {
-        let connection = self.connection()?;
-        let mut widths = read_indexed_column_widths(&connection)?;
-        if widths.is_empty() {
-            if let Some(width) = read_legacy_stored_column_width(&connection)? {
-                widths.insert(0, width);
-            }
-        }
-        Ok(widths)
+        read_indexed_column_widths(&self.connection()?)
     }
 
     pub fn replace_column_widths(&self, widths: HashMap<usize, f64>) -> StoreResult<()> {
@@ -487,8 +491,8 @@ impl TaskQueueStore {
         let indexed_pattern = format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}%");
         connection.execute(
             "DELETE FROM ui_column_view_preferences
-             WHERE preference_key LIKE ?1 OR preference_key = ?2",
-            params![indexed_pattern, LEGACY_COLUMN_WIDTH_PREFERENCE_KEY],
+             WHERE preference_key LIKE ?1",
+            params![indexed_pattern],
         )?;
 
         let mut widths = widths
@@ -574,22 +578,6 @@ fn sqlite_id_to_u64(id: i64) -> StoreResult<u64> {
     u64::try_from(id).map_err(|_| StoreError::InvalidTaskId(id))
 }
 
-fn migrate_legacy_column_widths(connection: &Connection) -> StoreResult<()> {
-    if !read_indexed_column_widths(connection)?.is_empty() {
-        return Ok(());
-    }
-
-    let legacy_widths = read_legacy_column_widths(connection)?;
-    for (column_index, width) in legacy_widths {
-        connection.execute(
-            "INSERT INTO ui_column_view_preferences (preference_key, value_real)
-             VALUES (?1, ?2)",
-            params![column_width_preference_key(column_index), width],
-        )?;
-    }
-    Ok(())
-}
-
 fn read_indexed_column_widths(connection: &Connection) -> StoreResult<HashMap<usize, f64>> {
     let indexed_pattern = format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}%");
     let mut statement = connection.prepare(
@@ -618,57 +606,8 @@ fn read_indexed_column_widths(connection: &Connection) -> StoreResult<HashMap<us
     Ok(widths)
 }
 
-fn read_legacy_stored_column_width(connection: &Connection) -> StoreResult<Option<f64>> {
-    let width = connection
-        .query_row(
-            "SELECT value_real
-             FROM ui_column_view_preferences
-             WHERE preference_key = ?1",
-            params![LEGACY_COLUMN_WIDTH_PREFERENCE_KEY],
-            |row| row.get::<_, f64>(0),
-        )
-        .optional()?;
-    Ok(width.filter(|value| value.is_finite()))
-}
-
-fn read_legacy_column_widths(connection: &Connection) -> StoreResult<HashMap<usize, f64>> {
-    if !sqlite_table_exists(connection, LEGACY_COLUMN_WIDTH_OVERRIDES_TABLE)? {
-        return Ok(HashMap::new());
-    }
-
-    let mut statement = connection.prepare(
-        "SELECT column_index, width
-         FROM ui_column_width_overrides
-         ORDER BY column_index ASC",
-    )?;
-    let rows = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)))?;
-
-    let mut widths = HashMap::new();
-    for row in rows {
-        let (column_index, width) = row?;
-        let Ok(column_index) = usize::try_from(column_index) else {
-            continue;
-        };
-        if width.is_finite() {
-            widths.insert(column_index, width);
-        }
-    }
-    Ok(widths)
-}
-
 fn column_width_preference_key(column_index: usize) -> String {
     format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}{column_index}")
-}
-
-fn sqlite_table_exists(connection: &Connection, table_name: &str) -> StoreResult<bool> {
-    let table_count = connection.query_row(
-        "SELECT COUNT(*)
-         FROM sqlite_master
-         WHERE type = 'table' AND name = ?1",
-        params![table_name],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(table_count > 0)
 }
 
 fn current_time_ms() -> i64 {
@@ -677,276 +616,4 @@ fn current_time_ms() -> i64 {
         .unwrap_or_default()
         .as_millis();
     i64::try_from(millis).unwrap_or(i64::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStrExt;
-
-    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
-
-    fn test_root() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "file-operation-store-test-{}-{}-{}",
-            std::process::id(),
-            current_time_ms(),
-            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
-        ))
-    }
-
-    fn test_store() -> (TaskQueueStore, PathBuf) {
-        let root = test_root();
-        let store = TaskQueueStore::new(root.join("state.sqlite")).unwrap();
-        (store, root)
-    }
-
-    #[test]
-    fn insert_read_update_and_delete_task() {
-        let (store, root) = test_store();
-        let operation = StoredOperation::Copy {
-            transfers: vec![StoredTransfer {
-                source: StoredPath::from_path(Path::new("/tmp/source")),
-                target: StoredPath::from_path(Path::new("/tmp/target")),
-            }],
-        };
-
-        let id = store.insert_task(&operation).unwrap();
-        let task = store.read_task(id).unwrap().unwrap();
-        assert_eq!(task.id, id);
-        assert_eq!(task.operation, operation);
-        assert_eq!(task.status, StoredTaskStatus::Pending);
-        assert_eq!(task.progress, StoredProgress::pending());
-        assert_eq!(task.error, None);
-
-        store.update_status(id, StoredTaskStatus::Running).unwrap();
-        store
-            .update_progress(id, StoredProgress::with_fraction(0.5))
-            .unwrap();
-        store.update_error(id, Some("boom")).unwrap();
-
-        let updated = store.read_task(id).unwrap().unwrap();
-        assert_eq!(updated.status, StoredTaskStatus::Running);
-        assert_eq!(updated.progress, StoredProgress::with_fraction(0.5));
-        assert_eq!(updated.error.as_deref(), Some("boom"));
-
-        store
-            .update_task_state(
-                id,
-                StoredTaskStatus::Completed,
-                StoredProgress::with_fraction(1.0),
-                None,
-            )
-            .unwrap();
-        let completed = store.read_task(id).unwrap().unwrap();
-        assert_eq!(completed.status, StoredTaskStatus::Completed);
-        assert_eq!(completed.progress, StoredProgress::with_fraction(1.0));
-        assert_eq!(completed.error, None);
-
-        store.delete_task(id).unwrap();
-        assert!(store.read_task(id).unwrap().is_none());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn marks_unfinished_tasks_failed_without_touching_failed_rows() {
-        let (store, root) = test_store();
-        let operation = StoredOperation::CreateDirectory {
-            parent: StoredPath::from_path(Path::new("/tmp")),
-        };
-        let pending_id = store.insert_task(&operation).unwrap();
-        let failed_id = store.insert_task(&operation).unwrap();
-        store
-            .update_status(failed_id, StoredTaskStatus::Failed)
-            .unwrap();
-        store.update_error(failed_id, Some("old error")).unwrap();
-        let completed_id = store.insert_task(&operation).unwrap();
-        store
-            .update_status(completed_id, StoredTaskStatus::Completed)
-            .unwrap();
-        let canceled_id = store.insert_task(&operation).unwrap();
-        store
-            .update_status(canceled_id, StoredTaskStatus::Canceled)
-            .unwrap();
-
-        store
-            .mark_unfinished_tasks_failed("recovered after restart")
-            .unwrap();
-
-        let recovered = store.read_task(pending_id).unwrap().unwrap();
-        assert_eq!(recovered.status, StoredTaskStatus::Failed);
-        assert_eq!(recovered.error.as_deref(), Some("recovered after restart"));
-
-        let already_failed = store.read_task(failed_id).unwrap().unwrap();
-        assert_eq!(already_failed.status, StoredTaskStatus::Failed);
-        assert_eq!(already_failed.error.as_deref(), Some("old error"));
-        let completed = store.read_task(completed_id).unwrap().unwrap();
-        assert_eq!(completed.status, StoredTaskStatus::Completed);
-        let canceled = store.read_task(canceled_id).unwrap().unwrap();
-        assert_eq!(canceled.status, StoredTaskStatus::Canceled);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn clear_tasks_removes_all_rows() {
-        let (store, root) = test_store();
-        let operation = StoredOperation::CreateDirectory {
-            parent: StoredPath::from_path(Path::new("/tmp")),
-        };
-        store.insert_task(&operation).unwrap();
-        store.insert_task(&operation).unwrap();
-
-        store.clear_tasks().unwrap();
-
-        assert!(store.read_tasks().unwrap().is_empty());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn column_widths_roundtrip_replace_and_clear() {
-        let (store, root) = test_store();
-        store
-            .replace_column_widths(HashMap::from([(0, 240.5), (2, 360.0)]))
-            .unwrap();
-
-        assert_eq!(
-            store.read_column_widths().unwrap(),
-            HashMap::from([(0, 240.5), (2, 360.0)])
-        );
-
-        store
-            .replace_column_widths(HashMap::from([(1, 128.0)]))
-            .unwrap();
-
-        assert_eq!(
-            store.read_column_widths().unwrap(),
-            HashMap::from([(1, 128.0)])
-        );
-
-        store.replace_column_widths(HashMap::new()).unwrap();
-
-        assert!(store.read_column_widths().unwrap().is_empty());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn clear_tasks_keeps_column_widths() {
-        let (store, root) = test_store();
-        let operation = StoredOperation::CreateDirectory {
-            parent: StoredPath::from_path(Path::new("/tmp")),
-        };
-        store.insert_task(&operation).unwrap();
-        store
-            .replace_column_widths(HashMap::from([(0, 240.0), (2, 360.0)]))
-            .unwrap();
-
-        store.clear_tasks().unwrap();
-
-        assert!(store.read_tasks().unwrap().is_empty());
-        assert_eq!(
-            store.read_column_widths().unwrap(),
-            HashMap::from([(0, 240.0), (2, 360.0)])
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn migrates_legacy_column_widths_on_initialize() {
-        let root = test_root();
-        fs::create_dir_all(&root).unwrap();
-        let db_path = root.join("state.sqlite");
-        let connection = Connection::open(&db_path).unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE ui_column_width_overrides (
-                    column_index INTEGER PRIMARY KEY,
-                    width REAL NOT NULL
-                );
-                INSERT INTO ui_column_width_overrides (column_index, width) VALUES (2, 360.0);
-                INSERT INTO ui_column_width_overrides (column_index, width) VALUES (0, 240.0);",
-            )
-            .unwrap();
-        drop(connection);
-
-        let store = TaskQueueStore::new(db_path).unwrap();
-
-        assert_eq!(
-            store.read_column_widths().unwrap(),
-            HashMap::from([(0, 240.0), (2, 360.0)])
-        );
-        let connection = Connection::open(store.db_path()).unwrap();
-        let stored_width_0: f64 = connection
-            .query_row(
-                "SELECT value_real
-                 FROM ui_column_view_preferences
-                 WHERE preference_key = ?1",
-                params![column_width_preference_key(0)],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(stored_width_0, 240.0);
-        let stored_width_2: f64 = connection
-            .query_row(
-                "SELECT value_real
-                 FROM ui_column_view_preferences
-                 WHERE preference_key = ?1",
-                params![column_width_preference_key(2)],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(stored_width_2, 360.0);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn reads_legacy_single_column_width_as_first_column() {
-        let root = test_root();
-        fs::create_dir_all(&root).unwrap();
-        let db_path = root.join("state.sqlite");
-        let connection = Connection::open(&db_path).unwrap();
-        connection.execute_batch(SCHEMA_SQL).unwrap();
-        connection
-            .execute(
-                "INSERT INTO ui_column_view_preferences (preference_key, value_real)
-                 VALUES (?1, ?2)",
-                params![LEGACY_COLUMN_WIDTH_PREFERENCE_KEY, 240.0],
-            )
-            .unwrap();
-        drop(connection);
-
-        let store = TaskQueueStore::new(db_path).unwrap();
-
-        assert_eq!(
-            store.read_column_widths().unwrap(),
-            HashMap::from([(0, 240.0)])
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn non_utf8_unix_path_roundtrips_through_json_and_database() {
-        let (store, root) = test_store();
-        let path = PathBuf::from(OsString::from_vec(b"/tmp/non-utf8-\xFF".to_vec()));
-        let operation = StoredOperation::Trash {
-            paths: vec![StoredPath::from_path(&path)],
-        };
-        let json = serde_json::to_string(&operation).unwrap();
-        let decoded: StoredOperation = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded, operation);
-
-        let id = store.insert_task(&operation).unwrap();
-        let task = store.read_task(id).unwrap().unwrap();
-        let StoredOperation::Trash { paths } = task.operation else {
-            panic!("expected trash operation");
-        };
-        assert_eq!(
-            paths[0].to_path_buf().as_os_str().as_bytes(),
-            path.as_os_str().as_bytes()
-        );
-        let _ = fs::remove_dir_all(root);
-    }
 }

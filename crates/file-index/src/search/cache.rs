@@ -3,9 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::catalog::SearchCatalog;
+use super::ignore_policy::exclude_rules_hash;
+use super::manifest::{SearchCatalogIdentity, SearchIndexManifest};
 use super::path_encoding::path_storage_key;
-use super::store::{self, exclude_rules_hash, SearchCatalogIdentity, SearchIndexManifest};
-use crate::FileError;
+use super::store;
+use super::types::DirectoryErrorPolicy;
+use crate::IndexError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CatalogCacheKey {
@@ -13,6 +16,10 @@ struct CatalogCacheKey {
     root_key: String,
     include_hidden: bool,
     exclude_rules_hash: String,
+    directory_error_policy: DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_index_enabled: bool,
 }
 
 static LOADED_CATALOGS: OnceLock<Mutex<HashMap<CatalogCacheKey, Arc<SearchCatalog>>>> =
@@ -23,16 +30,46 @@ pub(crate) fn catalog_for_index(
     root: &Path,
     include_hidden: bool,
     exclude_patterns: &[String],
-) -> Result<Arc<SearchCatalog>, FileError> {
+    directory_error_policy: DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_index_enabled: bool,
+) -> Result<Arc<SearchCatalog>, IndexError> {
     let manifest = store::read_manifest(index_dir)?;
-    manifest.validate_for(index_dir, root, include_hidden, exclude_patterns)?;
-    let key = CatalogCacheKey::new(index_dir, root, include_hidden, exclude_patterns);
+    manifest.validate_for(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
+    )?;
+    let key = CatalogCacheKey::new(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
+    );
     if let Some(catalog) = cached_catalog(&key, &manifest.identity()) {
         return Ok(catalog);
     }
 
-    let (manifest, records) =
-        store::load_catalog(index_dir, root, include_hidden, exclude_patterns)?;
+    let (manifest, records) = store::load_catalog(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
+    )?;
     let catalog = Arc::new(SearchCatalog::from_records(
         root.to_path_buf(),
         records,
@@ -47,10 +84,23 @@ pub(crate) fn cache_built_catalog(
     root: &Path,
     include_hidden: bool,
     exclude_patterns: &[String],
+    directory_error_policy: DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_index_enabled: bool,
     manifest: &SearchIndexManifest,
     catalog: SearchCatalog,
 ) {
-    let key = CatalogCacheKey::new(index_dir, root, include_hidden, exclude_patterns);
+    let key = CatalogCacheKey::new(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
+    );
     let catalog = Arc::new(catalog);
     if catalog.identity() == Some(&manifest.identity()) {
         cache_catalog(key, catalog);
@@ -86,12 +136,20 @@ impl CatalogCacheKey {
         root: &Path,
         include_hidden: bool,
         exclude_patterns: &[String],
+        directory_error_policy: DirectoryErrorPolicy,
+        content_index_enabled: bool,
+        content_max_file_bytes: u64,
+        media_index_enabled: bool,
     ) -> Self {
         Self {
             index_dir: index_dir.to_path_buf(),
             root_key: path_storage_key(root),
             include_hidden,
             exclude_rules_hash: exclude_rules_hash(exclude_patterns),
+            directory_error_policy,
+            content_index_enabled,
+            content_max_file_bytes,
+            media_index_enabled,
         }
     }
 }

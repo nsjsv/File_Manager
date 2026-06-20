@@ -5,10 +5,11 @@ use iced::Task;
 use super::paths::path_text;
 use super::FileBrowser;
 use crate::commands::{
-    load_directory_command, operation_store_command, sidebar_devices_command,
-    sidebar_locations_command,
+    load_directory_command, operation_store_command, search_index_profile_load_command,
+    sidebar_devices_command, sidebar_locations_command,
 };
 use crate::config::UserConfig;
+use crate::config::{SearchBackendMode, SearchModePromptStatus};
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
 };
@@ -33,6 +34,7 @@ impl FileBrowser {
         self.renderer_restart_notice_visible = self.pending_renderer_restart_environment.is_some();
         let configured_favorites = self.user_config.sidebar_favorites.clone();
         self.current_dir = home.clone();
+        self.search_index.home_dir = home.clone();
         self.is_trash_view = false;
         self.path_input = path_text(&self.current_dir);
         self.sidebar_locations = vec![home_sidebar_location(&home)];
@@ -43,11 +45,28 @@ impl FileBrowser {
         self.is_loading = true;
         self.error = None;
         self.sync_active_tab_state();
-        let startup_index_setup_command = self.refresh_startup_index_setup_choices();
+        let search_mode_prompt_command = self.refresh_search_mode_prompt();
+        let startup_index_setup_command = if self.user_config.search_mode
+            == SearchBackendMode::Indexed
+            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed
+        {
+            self.refresh_startup_index_setup_choices()
+        } else {
+            Task::none()
+        };
+        let search_index_profile_command = if self.user_config.search_mode
+            == SearchBackendMode::Indexed
+            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed
+        {
+            search_index_profile_load_command(self.user_config.clone())
+        } else {
+            Task::none()
+        };
         let directory_request = self.next_directory_load_request(home.clone());
         let directory_cancellation = self.directory_load_cancellation(&directory_request);
 
         Task::batch([
+            search_mode_prompt_command,
             startup_index_setup_command,
             load_directory_command(
                 directory_request,
@@ -57,6 +76,7 @@ impl FileBrowser {
             sidebar_locations_command(home, configured_favorites),
             sidebar_devices_command(),
             operation_store_command(state_database_path),
+            search_index_profile_command,
         ])
     }
 
@@ -65,7 +85,13 @@ impl FileBrowser {
         sidebar_locations: Vec<SidebarLocation>,
     ) -> Task<Message> {
         self.sidebar_locations = sidebar_locations;
-        self.refresh_startup_index_setup_choices()
+        if self.user_config.search_mode == SearchBackendMode::Indexed
+            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed
+        {
+            self.refresh_startup_index_setup_choices()
+        } else {
+            Task::none()
+        }
     }
 
     pub(super) fn accept_operation_store(
@@ -96,23 +122,6 @@ impl FileBrowser {
                     };
                 if !persisted_column_width_overrides.is_empty() {
                     self.apply_column_width_overrides(persisted_column_width_overrides);
-                    if !self.user_config.legacy_column_width_overrides.is_empty() {
-                        self.user_config.legacy_column_width_overrides.clear();
-                        return Task::batch([
-                            self.persist_user_config_command(),
-                            restored_queue_command,
-                        ]);
-                    }
-                } else if !self.user_config.legacy_column_width_overrides.is_empty() {
-                    self.apply_column_width_overrides(
-                        self.user_config.legacy_column_width_overrides.clone(),
-                    );
-                    self.user_config.legacy_column_width_overrides.clear();
-                    return Task::batch([
-                        self.persist_column_width_overrides_command(),
-                        self.persist_user_config_command(),
-                        restored_queue_command,
-                    ]);
                 }
                 return restored_queue_command;
             }
@@ -147,9 +156,11 @@ impl FileBrowser {
 
     fn apply_loaded_user_config(&mut self, user_config: UserConfig) {
         self.search_index.base_dir = user_config.search_index_dir.clone();
+        self.search_index.directory_error_policy = user_config.search_index_directory_error_policy;
+        self.search_index.content_index_enabled = user_config.search_index_content_enabled;
+        self.search_index.media_index_enabled = user_config.search_index_media_enabled;
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
-        self.apply_column_width_overrides(user_config.legacy_column_width_overrides.clone());
         self.sidebar_width = self.sidebar_width_for_window(user_config.sidebar_width);
         self.terminal_emulator = user_config.terminal_emulator;
         self.rendering_gpu_preference = user_config.rendering_gpu_preference;
@@ -165,7 +176,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::app::FileBrowser;
-    use crate::config;
+    use crate::config::{self, SearchBackendMode, SearchModePromptStatus};
     use crate::model::StartupEnvironment;
     use crate::startup_rendering::{
         StartupRenderingEnvironment, StartupRenderingEnvironmentStatus,
@@ -186,5 +197,25 @@ mod tests {
 
         assert!(!browser.renderer_restart_notice_visible);
         assert!(browser.pending_renderer_restart_environment.is_none());
+    }
+
+    #[test]
+    fn pending_search_mode_prompt_opens_without_startup_index_setup() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        let mut user_config = config::default_user_config();
+        user_config.search_mode = SearchBackendMode::Indexed;
+        user_config.search_mode_prompt = SearchModePromptStatus::Pending;
+
+        drop(browser.accept_startup_environment(StartupEnvironment {
+            home: PathBuf::from("/home/user"),
+            user_config,
+            state_database_path: PathBuf::from("/tmp/state.sqlite"),
+            rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
+                StartupRenderingEnvironment::fast_default(),
+            ),
+        }));
+
+        assert!(browser.search_mode_prompt.is_some());
+        assert!(browser.startup_index_setup.is_none());
     }
 }

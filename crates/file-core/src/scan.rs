@@ -278,8 +278,6 @@ pub enum FileError {
     Trash { path: PathBuf, message: String },
     #[error("could not watch {path:?}: {message}")]
     Watch { path: PathBuf, message: String },
-    #[error("could not search {path:?}: {message}")]
-    SearchIndex { path: PathBuf, message: String },
     #[error("could not create archive {path:?}: {message}")]
     Archive { path: PathBuf, message: String },
     #[error("archive {path:?} requires a password")]

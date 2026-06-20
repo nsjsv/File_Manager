@@ -7,10 +7,7 @@ license.workspace = true
 [dependencies]
 blake3 = "1.8.5"
 flate2 = "1.1.9"
-ignore = "0.4.25"
 notify.workspace = true
-nucleo.workspace = true
-rusqlite = { version = "0.32.1", features = ["bundled"] }
 tar = "0.4.46"
 thiserror.workspace = true
 tokio.workspace = true

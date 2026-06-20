@@ -1,12 +1,16 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use file_core::{DirectoryEntry, FileSearchIndexMode, ScanOptions};
+use file_core::{DirectoryEntry, ScanOptions};
+use file_index::FileSearchIndexMode;
 use iced::Task;
 
 use super::FileBrowser;
-use crate::commands::startup_index_directory_children_command;
-use crate::config::{search_index_dir_for_root, StartupIndexPromptStatus};
+use crate::commands::{
+    default_search_index_profile, search_index_profile_save_command,
+    startup_index_directory_children_command,
+};
+use crate::config::{SearchBackendMode, SearchModePromptStatus};
 use crate::model::{
     Message, SidebarLocation, SidebarLocationKind, StartupIndexEntrySelection,
     StartupIndexRootSeed, StartupIndexSetupState, StartupIndexTreeEntry,
@@ -18,7 +22,9 @@ const STARTUP_INDEX_TOGGLE_ROTATION_EPSILON: f32 = 0.001;
 
 impl FileBrowser {
     pub(super) fn refresh_startup_index_setup_choices(&mut self) -> Task<Message> {
-        if self.user_config.startup_index_prompt != StartupIndexPromptStatus::Pending {
+        if self.user_config.search_mode != SearchBackendMode::Indexed
+            || self.user_config.search_mode_prompt != SearchModePromptStatus::Completed
+        {
             self.startup_index_setup = None;
             return Task::none();
         }
@@ -142,16 +148,24 @@ impl FileBrowser {
         let Some(setup) = self.startup_index_setup.take() else {
             return Task::none();
         };
-        let index_scan_options = startup_index_scan_options(&self.options, &setup);
-        let include_hidden = index_scan_options.include_hidden;
-        let exclude_patterns = self.user_config.search_index_exclude_patterns.clone();
         let index_requests = setup.selected_index_requests();
-        self.mark_startup_index_prompt_completed();
+        let profile_roots = index_requests
+            .iter()
+            .map(|request| request.root.clone())
+            .collect::<Vec<_>>();
+        self.search_index.profile_roots = profile_roots.clone();
+        self.search_index.reset_path_rule_order_from_current_rules();
+        self.search_index.service_generation = self.search_index.service_generation.wrapping_add(1);
 
-        let mut tasks = vec![self.persist_user_config_command()];
+        let mut tasks = vec![
+            self.persist_user_config_command(),
+            search_index_profile_save_command(
+                default_search_index_profile(&self.user_config, profile_roots),
+                self.user_config.clone(),
+            ),
+        ];
         let mut queued_index_task = false;
         for request in index_requests {
-            let index_dir = search_index_dir_for_root(&self.search_index.base_dir, &request.root);
             self.search_index
                 .indexing_roots
                 .insert(request.root.clone());
@@ -159,11 +173,10 @@ impl FileBrowser {
             if let Some(error) =
                 self.operation_queue
                     .enqueue(QueuedFileOperation::BuildSearchIndex {
+                        profile_id: self.search_index.profile_id.clone(),
                         root: request.root,
-                        index_dir,
+                        index_base_dir: self.search_index.base_dir.clone(),
                         selected_paths: request.selected_paths,
-                        include_hidden,
-                        exclude_patterns: exclude_patterns.clone(),
                         mode: FileSearchIndexMode::FullRebuild,
                     })
             {
@@ -179,12 +192,7 @@ impl FileBrowser {
 
     pub(super) fn skip_startup_index_setup(&mut self) -> Task<Message> {
         self.startup_index_setup = None;
-        self.mark_startup_index_prompt_completed();
         self.persist_user_config_command()
-    }
-
-    fn mark_startup_index_prompt_completed(&mut self) {
-        self.user_config.startup_index_prompt = StartupIndexPromptStatus::Completed;
     }
 
     fn startup_index_scan_options(&self) -> ScanOptions {
@@ -249,5 +257,54 @@ fn startup_index_rotation_target(entry: &StartupIndexTreeEntry) -> f32 {
         1.0
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::app::FileBrowser;
+    use crate::config::{self, SearchBackendMode, SearchModePromptStatus};
+
+    #[test]
+    fn accepting_startup_index_setup_saves_profile_and_queues_build() {
+        let mut config = config::default_user_config();
+        config.search_mode = SearchBackendMode::Indexed;
+        config.search_mode_prompt = SearchModePromptStatus::Completed;
+        let (mut browser, _) = FileBrowser::new(config);
+        browser.search_index.base_dir = PathBuf::from("/tmp/search-index");
+        browser.startup_index_setup =
+            StartupIndexSetupState::from_roots(vec![StartupIndexRootSeed {
+                label: "Home".to_owned(),
+                path: PathBuf::from("/home/user"),
+                selection: StartupIndexEntrySelection::Selected,
+            }]);
+
+        let _task = browser.accept_startup_index_setup();
+
+        assert_eq!(
+            browser.search_index.profile_roots,
+            vec![PathBuf::from("/home/user")]
+        );
+        let queued = browser.operation_queue.tasks();
+        assert_eq!(queued.len(), 1);
+        match &queued[0].operation {
+            QueuedFileOperation::BuildSearchIndex {
+                profile_id,
+                root,
+                index_base_dir,
+                selected_paths,
+                mode,
+            } => {
+                assert_eq!(profile_id, "default");
+                assert_eq!(root, &PathBuf::from("/home/user"));
+                assert_eq!(index_base_dir, &PathBuf::from("/tmp/search-index"));
+                assert_eq!(selected_paths, &vec![PathBuf::from("/home/user")]);
+                assert_eq!(*mode, FileSearchIndexMode::FullRebuild);
+            }
+            operation => panic!("expected search index build task, got {operation:?}"),
+        }
     }
 }

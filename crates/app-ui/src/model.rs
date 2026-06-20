@@ -6,21 +6,22 @@ use desktop_linux::{
     DesktopClipboardContent, OpenWithApplicationList, StorageDevice, StorageDeviceId,
     TerminalEmulator,
 };
-use file_core::{
-    DirectoryEntry, DirectoryScan, DirectoryScanBatch, FileSearchIndexMode, FileSearchIndexOutcome,
-    FileSearchIndexStatus, FileSearchMatch, FileSearchOutcome, TrashRestoreEntry, TrashScan,
+use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
+pub(crate) use file_index::SearchMode;
+use file_index::{
+    DirectoryErrorPolicy, FileSearchIndexMode, FileSearchIndexOutcome, FileSearchIndexStatus,
+    FileSearchOutcome, IndexProfile, IndexServiceEvent,
 };
 use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
 use iced::widget::text_editor;
 use iced::{event, mouse, window, Point, Rectangle, Theme};
-use tokio_util::sync::CancellationToken;
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
-use crate::config::{RenderingGpuPreference, UserConfig};
+use crate::config::{RenderingGpuPreference, SearchBackendMode, UserConfig};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::ShortcutBindingId;
@@ -58,6 +59,14 @@ pub(crate) use preview::{
     PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowProfile, VideoPreviewFrame,
     VideoPreviewPlayback, VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
+mod search;
+pub(crate) use search::{
+    SearchIndexPathRuleEditMode, SearchIndexPathRuleKind, SearchIndexPathRuleSelection,
+    SearchIndexRuntime, SearchRequest, SearchScope, SearchState,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SearchModePromptState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ScrollbarRegion {
@@ -130,8 +139,16 @@ pub(crate) enum Message {
         FilePropertiesPermissionClass,
         FilePropertiesPermissionAccess,
     ),
+    FilePropertiesApplyPermissionsToEnclosedItems,
     FilePropertiesCategorySelected(FilePropertiesCategory),
-    FilePropertiesPermissionsUpdated(PathBuf, Result<FilePropertiesPermissions, String>),
+    FilePropertiesPermissionsUpdated(
+        FilePropertiesRequest,
+        Result<FilePropertiesPermissions, String>,
+    ),
+    FilePropertiesEnclosedPermissionsUpdated(
+        FilePropertiesRequest,
+        Result<FilePropertiesPermissions, String>,
+    ),
     PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
     TextPreviewAction {
         action: text_editor::Action,
@@ -247,19 +264,37 @@ pub(crate) enum Message {
     ColumnWidthOverrideSaved(Result<(), String>),
     SidebarBookmarksSaved(Result<(), String>),
     SearchInputChanged(String),
+    SearchModeSelected(SearchMode),
     SearchInputStabilized(SearchRequest),
     SearchFocusRequested,
     SearchMatchesLoaded(SearchRequest, Result<FileSearchOutcome, String>),
     SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
     SearchIndexStatusLoaded(PathBuf, Result<FileSearchIndexStatus, String>),
+    SearchIndexProfileLoaded(Result<Option<IndexProfile>, String>),
+    SearchIndexProfileSaved(Result<IndexProfile, String>),
+    SearchIndexProfileDeleted(Result<String, String>),
+    SearchIndexMaintenanceEvent(u64, IndexServiceEvent),
+    SearchIndexMaintenanceUpdated(u64, Result<bool, String>),
     SearchIndexStatusRefreshRequested,
     SearchIndexManualBuildRequested(PathBuf, FileSearchIndexMode),
     SearchIndexRemoveRequested(PathBuf),
+    SearchIndexProfileDeleteRequested,
+    SearchIndexMaintenancePauseToggled,
     SearchIndexFailuresClearRequested(PathBuf),
-    SearchIndexExcludePatternChanged(usize, String),
-    SearchIndexExcludePatternAdded,
-    SearchIndexExcludePatternRemoved(usize),
-    SearchIndexExcludePatternsSaved,
+    SearchIndexPathRuleSelected(SearchIndexPathRuleSelection),
+    SearchIndexPathRuleKindChanged(SearchIndexPathRuleSelection, SearchIndexPathRuleKind),
+    SearchIndexPathRuleKindSelected(SearchIndexPathRuleKind),
+    SearchIndexPathRuleInputChanged(String),
+    SearchIndexPathRuleEditorCommitted,
+    SearchIndexPathRuleAdded,
+    SearchIndexPathRuleRemoved,
+    SearchIndexPathRuleUpdated,
+    SearchIndexDirectoryErrorPolicySelected(DirectoryErrorPolicy),
+    SearchIndexContentEnabledToggled(bool),
+    SearchIndexMediaEnabledToggled(bool),
+    SearchBackendModeSelected(SearchBackendMode),
+    SearchModePromptSimpleSelected,
+    SearchModePromptIndexedSelected,
     SearchMatchSelected(PathBuf),
     SearchActivated,
     StartupIndexHiddenContentVisibilityToggled,
@@ -724,68 +759,4 @@ pub(crate) struct PathSuggestionRequest {
     pub(crate) input: String,
     pub(crate) current_dir: PathBuf,
     pub(crate) generation: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchScope {
-    CurrentDirectory,
-    HomeDirectory,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SearchRequest {
-    pub(crate) scope: SearchScope,
-    pub(crate) root: PathBuf,
-    pub(crate) query: String,
-    pub(crate) generation: u64,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SearchState {
-    pub(crate) scope: SearchScope,
-    pub(crate) root: PathBuf,
-    pub(crate) query: String,
-    pub(crate) request_generation: u64,
-    pub(crate) search_cancel: Option<CancellationToken>,
-    pub(crate) matches: Vec<FileSearchMatch>,
-    pub(crate) selected_match: Option<usize>,
-    pub(crate) is_loading: bool,
-    pub(crate) is_indexing: bool,
-    pub(crate) skipped_count: usize,
-    pub(crate) error: Option<String>,
-    pub(crate) index_error: Option<String>,
-}
-
-impl SearchState {
-    pub(crate) fn request(&self) -> SearchRequest {
-        SearchRequest {
-            scope: self.scope,
-            root: self.root.clone(),
-            query: self.query.clone(),
-            generation: self.request_generation,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SearchIndexRuntime {
-    pub(crate) base_dir: PathBuf,
-    pub(crate) indexing_roots: HashSet<PathBuf>,
-    pub(crate) errors: HashMap<PathBuf, String>,
-    pub(crate) statuses: HashMap<PathBuf, FileSearchIndexStatus>,
-    pub(crate) status_loading_roots: HashSet<PathBuf>,
-    pub(crate) exclude_pattern_inputs: Vec<String>,
-}
-
-impl SearchIndexRuntime {
-    pub(crate) fn new(base_dir: PathBuf) -> Self {
-        Self {
-            base_dir,
-            indexing_roots: HashSet::new(),
-            errors: HashMap::new(),
-            statuses: HashMap::new(),
-            status_loading_roots: HashSet::new(),
-            exclude_pattern_inputs: Vec::new(),
-        }
-    }
 }

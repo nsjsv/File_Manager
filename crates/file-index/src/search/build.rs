@@ -1,33 +1,24 @@
-mod cache;
-mod catalog;
-mod crawl;
-mod path_encoding;
-mod query;
-mod store;
-mod types;
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use cache::{cache_built_catalog, catalog_for_index};
-use catalog::{SearchCatalog, SearchCatalogRecord};
-use crawl::{
-    crawl_search_records, crawl_selected_search_records_with_progress, SearchCrawlOptions,
-};
-use store::{
-    catalog_dir_size, clear_failures, current_time_ms, prepare_catalog_dir, read_index_status,
-    remove_catalog_dir, replace_catalog_dir, write_catalog, SearchIndexManifest,
-};
+use file_core::ScanWarning;
 use tokio_util::sync::CancellationToken;
 
-use crate::FileError;
-use crate::ScanWarning;
-
-pub use types::{
-    FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome,
-    FileSearchIndexProgress, FileSearchIndexStatus, FileSearchMatch, FileSearchOptions,
-    FileSearchOutcome,
+use super::cache::cache_built_catalog;
+use super::catalog::{SearchCatalog, SearchCatalogRecord};
+use super::crawl::{
+    crawl_search_records, crawl_selected_search_records_with_progress, SearchCrawlOptions,
 };
+use super::engine::write_search_documents;
+use super::manifest::{current_time_ms, SearchIndexManifest};
+use super::store::{
+    self, catalog_dir_size, prepare_catalog_dir, replace_catalog_dir, write_catalog,
+};
+use super::types::{
+    FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome,
+    FileSearchIndexProgress,
+};
+use crate::IndexError;
 
 enum SearchIndexBuildScope {
     Root,
@@ -39,197 +30,11 @@ struct PreviousSearchIndex {
     records: Vec<SearchCatalogRecord>,
     failures: Vec<FileSearchIndexFailure>,
 }
-
-pub async fn search_file_tree(
-    root: impl AsRef<Path>,
-    query: impl AsRef<str>,
-    options: FileSearchOptions,
-) -> Result<FileSearchOutcome, FileError> {
-    search_file_tree_with_cancel(root, query, options, CancellationToken::new()).await
-}
-
-pub async fn search_file_tree_with_cancel(
-    root: impl AsRef<Path>,
-    query: impl AsRef<str>,
-    options: FileSearchOptions,
-    cancel: CancellationToken,
-) -> Result<FileSearchOutcome, FileError> {
-    let root = root.as_ref().to_path_buf();
-    let query = query.as_ref().trim().to_owned();
-    if query.is_empty() {
-        return Ok(empty_search_outcome(root));
-    }
-
-    let join_root = root.clone();
-    let search_root = root.clone();
-    let include_hidden = options.include_hidden;
-    let exclude_patterns = options.exclude_patterns.clone();
-    let (catalog, skipped) = tokio::task::spawn_blocking(move || {
-        let (records, skipped) = crawl_search_records(
-            &search_root,
-            &SearchCrawlOptions {
-                include_hidden,
-                exclude_patterns,
-                excluded_index_dir: None,
-                throttle: false,
-                cancel: Some(cancel),
-            },
-        )?;
-        let catalog = SearchCatalog::from_records(search_root, records, None);
-        Ok::<_, FileError>((catalog, skipped))
-    })
-    .await
-    .map_err(|error| search_index_error(&join_root, error))??;
-    let matches = query::search_catalog(&catalog, &query, options.limit.max(1));
-
-    Ok(FileSearchOutcome {
-        root,
-        matches,
-        skipped,
-    })
-}
-
-pub async fn build_file_search_index(
-    root: impl AsRef<Path>,
-    index_dir: impl AsRef<Path>,
-    options: FileSearchIndexOptions,
-) -> Result<FileSearchIndexOutcome, FileError> {
-    let root = root.as_ref().to_path_buf();
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let join_root = root.clone();
-
-    tokio::task::spawn_blocking(move || {
-        build_file_search_index_blocking(&root, &index_dir, options)
-    })
-    .await
-    .map_err(|error| search_index_error(&join_root, error))?
-}
-
-pub async fn build_file_search_index_for_paths(
-    root: impl AsRef<Path>,
-    index_dir: impl AsRef<Path>,
-    selected_paths: Vec<PathBuf>,
-    options: FileSearchIndexOptions,
-) -> Result<FileSearchIndexOutcome, FileError> {
-    let root = root.as_ref().to_path_buf();
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let join_root = root.clone();
-
-    tokio::task::spawn_blocking(move || {
-        build_file_search_index_for_paths_blocking(&root, &index_dir, selected_paths, options)
-    })
-    .await
-    .map_err(|error| search_index_error(&join_root, error))?
-}
-
-pub async fn build_file_search_index_for_paths_with_progress(
-    root: impl AsRef<Path>,
-    index_dir: impl AsRef<Path>,
-    selected_paths: Vec<PathBuf>,
-    options: FileSearchIndexOptions,
-    cancel: CancellationToken,
-    mut progress: impl FnMut(FileSearchIndexProgress) + Send + 'static,
-) -> Result<FileSearchIndexOutcome, FileError> {
-    let root = root.as_ref().to_path_buf();
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let join_root = root.clone();
-
-    tokio::task::spawn_blocking(move || {
-        build_file_search_index_for_paths_blocking_with_progress(
-            &root,
-            &index_dir,
-            selected_paths,
-            options,
-            Some(cancel),
-            &mut progress,
-        )
-    })
-    .await
-    .map_err(|error| search_index_error(&join_root, error))?
-}
-
-pub async fn search_file_index(
-    index_dir: impl AsRef<Path>,
-    root: impl AsRef<Path>,
-    query: impl AsRef<str>,
-    options: FileSearchOptions,
-) -> Result<FileSearchOutcome, FileError> {
-    let root = root.as_ref().to_path_buf();
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let query = query.as_ref().trim().to_owned();
-    if query.is_empty() {
-        return Ok(empty_search_outcome(root));
-    }
-    let join_root = root.clone();
-
-    tokio::task::spawn_blocking(move || {
-        let catalog = catalog_for_index(
-            &index_dir,
-            &root,
-            options.include_hidden,
-            &options.exclude_patterns,
-        )?;
-        let matches = query::search_catalog(&catalog, &query, options.limit.max(1));
-        Ok(FileSearchOutcome {
-            root,
-            matches,
-            skipped: Vec::new(),
-        })
-    })
-    .await
-    .map_err(|error| search_index_error(&join_root, error))?
-}
-
-pub fn file_search_index_exists(index_dir: impl AsRef<Path>) -> bool {
-    store::read_manifest(index_dir.as_ref()).is_ok()
-}
-
-pub async fn file_search_index_status(
-    index_dir: impl AsRef<Path>,
-    root: impl AsRef<Path>,
-    options: FileSearchIndexOptions,
-) -> Result<FileSearchIndexStatus, FileError> {
-    let root = root.as_ref().to_path_buf();
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let join_root = root.clone();
-
-    tokio::task::spawn_blocking(move || {
-        read_index_status(
-            &index_dir,
-            &root,
-            options.include_hidden,
-            &options.exclude_patterns,
-        )
-    })
-    .await
-    .map_err(|error| search_index_error(&join_root, error))?
-}
-
-pub async fn clear_file_search_index_failures(
-    index_dir: impl AsRef<Path>,
-) -> Result<(), FileError> {
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let join_path = index_dir.clone();
-
-    tokio::task::spawn_blocking(move || clear_failures(&index_dir))
-        .await
-        .map_err(|error| search_index_error(&join_path, error))?
-}
-
-pub async fn remove_file_search_index(index_dir: impl AsRef<Path>) -> Result<(), FileError> {
-    let index_dir = index_dir.as_ref().to_path_buf();
-    let join_path = index_dir.clone();
-
-    tokio::task::spawn_blocking(move || remove_catalog_dir(&index_dir))
-        .await
-        .map_err(|error| search_index_error(&join_path, error))?
-}
-
-fn build_file_search_index_blocking(
+pub(super) fn build_file_search_index_blocking(
     root: &Path,
     index_dir: &Path,
     options: FileSearchIndexOptions,
-) -> Result<FileSearchIndexOutcome, FileError> {
+) -> Result<FileSearchIndexOutcome, IndexError> {
     if options.mode == FileSearchIndexMode::Incremental {
         return build_file_search_index_incremental_blocking(
             root,
@@ -248,16 +53,29 @@ fn build_file_search_index_blocking(
         &SearchCrawlOptions {
             include_hidden: options.include_hidden,
             exclude_patterns: options.exclude_patterns.clone(),
+            directory_error_policy: options.directory_error_policy,
             excluded_index_dir: Some(index_dir.to_path_buf()),
             throttle: true,
             cancel: None,
         },
     )?;
+    let mut skipped = skipped;
+    skipped.extend(write_search_documents(
+        &pending_index_dir,
+        &records,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
+    )?);
     let failures = warnings_to_failures(&skipped);
     let mut manifest = SearchIndexManifest::new(
         root,
         options.include_hidden,
         &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
         records.len(),
         failures.len(),
         None,
@@ -273,6 +91,10 @@ fn build_file_search_index_blocking(
         root,
         options.include_hidden,
         &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
         &manifest,
         catalog,
     );
@@ -288,12 +110,12 @@ fn build_file_search_index_blocking(
     })
 }
 
-fn build_file_search_index_for_paths_blocking(
+pub(super) fn build_file_search_index_for_paths_blocking(
     root: &Path,
     index_dir: &Path,
     selected_paths: Vec<PathBuf>,
     options: FileSearchIndexOptions,
-) -> Result<FileSearchIndexOutcome, FileError> {
+) -> Result<FileSearchIndexOutcome, IndexError> {
     build_file_search_index_for_paths_blocking_with_progress(
         root,
         index_dir,
@@ -304,14 +126,14 @@ fn build_file_search_index_for_paths_blocking(
     )
 }
 
-fn build_file_search_index_for_paths_blocking_with_progress(
+pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
     root: &Path,
     index_dir: &Path,
     selected_paths: Vec<PathBuf>,
     options: FileSearchIndexOptions,
     cancel: Option<CancellationToken>,
     progress: &mut impl FnMut(FileSearchIndexProgress),
-) -> Result<FileSearchIndexOutcome, FileError> {
+) -> Result<FileSearchIndexOutcome, IndexError> {
     if options.mode == FileSearchIndexMode::Incremental {
         return build_file_search_index_incremental_blocking(
             root,
@@ -332,6 +154,7 @@ fn build_file_search_index_for_paths_blocking_with_progress(
         &SearchCrawlOptions {
             include_hidden: options.include_hidden,
             exclude_patterns: options.exclude_patterns.clone(),
+            directory_error_policy: options.directory_error_policy,
             excluded_index_dir: Some(index_dir.to_path_buf()),
             throttle: true,
             cancel,
@@ -344,11 +167,23 @@ fn build_file_search_index_for_paths_blocking_with_progress(
             });
         },
     )?;
+    let mut skipped = skipped;
+    skipped.extend(write_search_documents(
+        &pending_index_dir,
+        &records,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
+    )?);
     let failures = warnings_to_failures(&skipped);
     let mut manifest = SearchIndexManifest::new(
         root,
         options.include_hidden,
         &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
         records.len(),
         failures.len(),
         None,
@@ -364,6 +199,10 @@ fn build_file_search_index_for_paths_blocking_with_progress(
         root,
         options.include_hidden,
         &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
         &manifest,
         catalog,
     );
@@ -386,12 +225,16 @@ fn build_file_search_index_incremental_blocking(
     options: FileSearchIndexOptions,
     cancel: Option<CancellationToken>,
     progress: &mut impl FnMut(FileSearchIndexProgress),
-) -> Result<FileSearchIndexOutcome, FileError> {
+) -> Result<FileSearchIndexOutcome, IndexError> {
     let previous = previous_search_index(
         index_dir,
         root,
         options.include_hidden,
         &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
     );
     let built_at_ms = previous.as_ref().map(|index| index.manifest.built_at_ms);
     let previous_records = previous
@@ -411,6 +254,7 @@ fn build_file_search_index_incremental_blocking(
                 &SearchCrawlOptions {
                     include_hidden: options.include_hidden,
                     exclude_patterns: options.exclude_patterns.clone(),
+                    directory_error_policy: options.directory_error_policy,
                     excluded_index_dir: Some(index_dir.to_path_buf()),
                     throttle: true,
                     cancel,
@@ -435,6 +279,7 @@ fn build_file_search_index_incremental_blocking(
                 &SearchCrawlOptions {
                     include_hidden: options.include_hidden,
                     exclude_patterns: options.exclude_patterns.clone(),
+                    directory_error_policy: options.directory_error_policy,
                     excluded_index_dir: Some(index_dir.to_path_buf()),
                     throttle: true,
                     cancel,
@@ -473,6 +318,10 @@ fn build_file_search_index_incremental_blocking(
         rescanned_roots.as_deref(),
         built_at_ms,
         indexed_count,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_index_enabled,
+        options.directory_error_policy,
     )
 }
 
@@ -481,9 +330,22 @@ fn previous_search_index(
     root: &Path,
     include_hidden: bool,
     exclude_patterns: &[String],
+    directory_error_policy: super::types::DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_index_enabled: bool,
 ) -> Option<PreviousSearchIndex> {
-    let (manifest, records) =
-        store::load_catalog(index_dir, root, include_hidden, exclude_patterns).ok()?;
+    let (manifest, records) = store::load_catalog(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
+    )
+    .ok()?;
     let failures = store::read_failures(index_dir).unwrap_or_default();
     Some(PreviousSearchIndex {
         manifest,
@@ -503,14 +365,30 @@ fn write_records_to_index(
     rescanned_roots: Option<&[PathBuf]>,
     built_at_ms: Option<i64>,
     indexed_count: usize,
-) -> Result<FileSearchIndexOutcome, FileError> {
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_index_enabled: bool,
+    directory_error_policy: super::types::DirectoryErrorPolicy,
+) -> Result<FileSearchIndexOutcome, IndexError> {
     let pending_index_dir = index_dir.with_extension("building");
     prepare_catalog_dir(root, &pending_index_dir)?;
+    let mut skipped = skipped;
+    skipped.extend(write_search_documents(
+        &pending_index_dir,
+        &records,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
+    )?);
     let failures = merge_scan_failures(&skipped, previous_failures, rescanned_roots);
     let mut manifest = SearchIndexManifest::new(
         root,
         include_hidden,
         exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
         records.len(),
         failures.len(),
         built_at_ms,
@@ -525,6 +403,10 @@ fn write_records_to_index(
         root,
         include_hidden,
         exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_index_enabled,
         &manifest,
         catalog,
     );
@@ -703,19 +585,4 @@ fn merge_scan_failures(
 
 fn warnings_to_failures(warnings: &[ScanWarning]) -> Vec<FileSearchIndexFailure> {
     merge_scan_failures(warnings, &[], None)
-}
-
-fn empty_search_outcome(root: PathBuf) -> FileSearchOutcome {
-    FileSearchOutcome {
-        root,
-        matches: Vec::new(),
-        skipped: Vec::new(),
-    }
-}
-
-pub(crate) fn search_index_error(path: &Path, error: impl ToString) -> FileError {
-    FileError::SearchIndex {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-    }
 }

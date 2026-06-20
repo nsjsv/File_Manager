@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use file_core::{
-    FileOperationVerification, FileSearchIndexOutcome, TransferConflictStrategy, TrashRestoreEntry,
-};
+use file_core::{FileOperationVerification, TransferConflictStrategy, TrashRestoreEntry};
+use file_index::FileSearchIndexOutcome;
 
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 

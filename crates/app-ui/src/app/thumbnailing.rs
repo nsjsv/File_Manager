@@ -163,7 +163,8 @@ impl FileBrowser {
         path: PathBuf,
         dimensions: Result<(u32, u32), String>,
     ) -> Task<Message> {
-        if !self.is_active_preview_loading(&path) {
+        let active_preview_loading = self.is_active_preview_loading(&path);
+        if !active_preview_loading {
             return Task::none();
         }
         let (width, height) = match dimensions {
@@ -221,16 +222,17 @@ impl FileBrowser {
                         cache_hit = thumbnail.cache_hit,
                         "thumbnail batch item loaded"
                     );
-                    if !self.is_current_thumbnail_request(&outcome.work.request) {
+                    let is_current_request =
+                        self.is_current_thumbnail_request(&outcome.work.request);
+                    let source = thumbnail.source.clone();
+                    let active_preview_loading = self.is_active_preview_loading(&source);
+                    if !is_current_request {
                         continue;
                     }
-                    let source = thumbnail.source.clone();
                     let ready = self
                         .thumbnail_cache
                         .insert_ready(thumbnail, outcome.work.request.max_edge);
-                    if outcome.work.purpose == ThumbnailPurpose::Preview
-                        && self.is_active_preview_loading(&source)
-                    {
+                    if outcome.work.purpose == ThumbnailPurpose::Preview && active_preview_loading {
                         self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
                             source, ready,
                         )));
@@ -245,9 +247,13 @@ impl FileBrowser {
                         "thumbnail batch item failed"
                     );
                     self.thumbnail_cache.mark_failure(key);
+                    let is_current_request =
+                        self.is_current_thumbnail_request(&outcome.work.request);
+                    let active_preview_loading =
+                        self.is_active_preview_loading(&outcome.work.request.source);
                     if outcome.work.purpose == ThumbnailPurpose::Preview
-                        && self.is_active_preview_loading(&outcome.work.request.source)
-                        && self.is_current_thumbnail_request(&outcome.work.request)
+                        && active_preview_loading
+                        && is_current_request
                     {
                         self.preview = Some(PreviewState::Error(error));
                     }

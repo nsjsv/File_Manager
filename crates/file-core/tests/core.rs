@@ -5,16 +5,14 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use file_core::{
-    available_transfer_target_path, build_file_search_index, check_transfer_conflicts, copy_path,
-    copy_path_with_options, create_archive_with_progress, create_directory, create_empty_file,
-    create_file_with_contents, extract_archive, file_search_index_exists, filter_hidden,
-    is_transfer_target_available, move_path, move_path_with_options, rename_path, scan_directory,
-    scan_directory_with_progress, search_file_index, search_file_tree,
-    search_file_tree_with_cancel, sort_entries, watch_directory, ArchiveCompressionLevel,
-    ArchiveCreationRequest, ArchiveExtractionRequest, ArchiveFormat, DirectoryEntry, EntryMetadata,
-    FileError, FileKind, FileOperationControls, FileOperationRunState, FileOperationVerification,
-    FileSearchIndexOptions, FileSearchOptions, FileTransferOptions, ScanOptions, SortDirection,
-    SortField, TransferConflictCheck, TransferConflictStrategy,
+    available_transfer_target_path, check_transfer_conflicts, copy_path, copy_path_with_options,
+    create_archive_with_progress, create_directory, create_empty_file, create_file_with_contents,
+    extract_archive, filter_hidden, is_transfer_target_available, move_path,
+    move_path_with_options, rename_path, scan_directory, scan_directory_with_progress,
+    sort_entries, watch_directory, ArchiveCompressionLevel, ArchiveCreationRequest,
+    ArchiveExtractionRequest, ArchiveFormat, DirectoryEntry, EntryMetadata, FileError, FileKind,
+    FileOperationControls, FileOperationRunState, FileOperationVerification, FileTransferOptions,
+    ScanOptions, SortDirection, SortField, TransferConflictCheck, TransferConflictStrategy,
 };
 use tempfile::tempdir;
 
@@ -46,8 +44,6 @@ mod archive;
 mod ops;
 #[path = "core/scan.rs"]
 mod scan;
-#[path = "core/search.rs"]
-mod search;
 #[path = "core/sort.rs"]
 mod sort;
 #[path = "core/watch.rs"]

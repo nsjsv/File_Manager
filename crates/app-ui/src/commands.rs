@@ -11,12 +11,14 @@ use desktop_linux::{
     OpenWithLaunchMode, TerminalEmulator,
 };
 use file_core::{
-    available_transfer_target_path, build_file_search_index,
-    check_transfer_conflicts as check_core_transfer_conflicts, clear_file_search_index_failures,
-    create_file_with_contents, file_search_index_status, is_transfer_target_available,
-    remove_file_search_index, scan_trash, search_file_index, search_file_tree_with_cancel,
-    FileSearchIndexMode, FileSearchIndexOptions, FileSearchOptions, ScanOptions,
+    available_transfer_target_path, check_transfer_conflicts as check_core_transfer_conflicts,
+    create_file_with_contents, is_transfer_target_available, scan_trash, ScanOptions,
     TransferConflictCheck, TransferConflictItem, TrashScan,
+};
+use file_index::{
+    search_file_tree_with_cancel, FileSearchIndexMode, FileSearchIndexOutcome,
+    FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome, IndexService, IndexServiceEvent,
+    SearchQuery,
 };
 use file_operation_store::TaskQueueStore;
 use iced::Task;
@@ -48,9 +50,19 @@ pub(crate) use preview::{
     text_preview_chunk_command, video_preview_frame_command, video_preview_metadata_command,
 };
 mod properties;
-pub(crate) use properties::{file_properties_command, set_file_properties_permissions_command};
+pub(crate) use properties::{
+    apply_file_properties_permissions_to_enclosed_items_command, file_properties_command,
+    set_file_properties_permissions_command,
+};
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
+mod search_index_profile;
+pub(crate) use search_index_profile::{
+    default_search_index_profile, default_search_profile_id, search_index_control_db_path,
+    search_index_maintenance_pause_command, search_index_maintenance_subscription,
+    search_index_profile_delete_command, search_index_profile_load_command,
+    search_index_profile_save_command,
+};
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
 
@@ -131,12 +143,12 @@ pub(crate) fn path_suggestions_command(
 pub(crate) fn search_command(
     request: SearchRequest,
     options: ScanOptions,
-    index_dir: PathBuf,
-    exclude_patterns: Vec<String>,
+    config: config::UserConfig,
+    profile_id: String,
 ) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
-        load_search_matches(request, options, index_dir, exclude_patterns),
+        load_search_matches(request, options, config, profile_id),
         move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
     )
 }
@@ -145,64 +157,67 @@ pub(crate) fn search_tree_command(
     request: SearchRequest,
     options: ScanOptions,
     exclude_patterns: Vec<String>,
+    directory_error_policy: file_index::DirectoryErrorPolicy,
     cancellation: CancellationToken,
 ) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
-        load_search_tree_matches(request, options, exclude_patterns, cancellation),
+        load_search_tree_matches(
+            request,
+            options,
+            exclude_patterns,
+            directory_error_policy,
+            cancellation,
+        ),
         move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
     )
 }
 
 pub(crate) fn search_index_command(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
+    config: config::UserConfig,
+    profile_id: String,
     mode: FileSearchIndexMode,
 ) -> Task<Message> {
     let issued_root = root.clone();
     Task::perform(
-        build_search_index(root, index_dir, options, exclude_patterns, mode),
+        build_search_index(root, config, profile_id, mode),
         move |outcome| Message::SearchIndexBuilt(issued_root.clone(), outcome),
     )
 }
 
 pub(crate) fn search_index_status_command(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
+    config: config::UserConfig,
+    profile_id: String,
 ) -> Task<Message> {
     let issued_root = root.clone();
     Task::perform(
-        load_search_index_status(root, index_dir, options, exclude_patterns),
+        load_search_index_status(root, config, profile_id),
         move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
     )
 }
 
 pub(crate) fn clear_search_index_failures_command(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
+    config: config::UserConfig,
+    profile_id: String,
 ) -> Task<Message> {
     let issued_root = root.clone();
     Task::perform(
-        clear_search_index_failures(root, index_dir, options, exclude_patterns),
+        clear_search_index_failures(root, config, profile_id),
         move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
     )
 }
 
 pub(crate) fn remove_search_index_command(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
+    config: config::UserConfig,
+    profile_id: String,
 ) -> Task<Message> {
     let issued_root = root.clone();
     Task::perform(
-        remove_search_index(root, index_dir, options, exclude_patterns),
+        remove_search_index(root, config, profile_id),
         move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
     )
 }
@@ -517,37 +532,46 @@ async fn load_sidebar_locations(
 
 async fn load_search_matches(
     request: SearchRequest,
-    options: ScanOptions,
-    index_dir: PathBuf,
-    exclude_patterns: Vec<String>,
-) -> Result<file_core::FileSearchOutcome, String> {
-    search_file_index(
-        index_dir,
-        request.root,
-        request.query,
-        FileSearchOptions {
-            include_hidden: options.include_hidden,
-            exclude_patterns,
+    _options: ScanOptions,
+    config: config::UserConfig,
+    profile_id: String,
+) -> Result<FileSearchOutcome, String> {
+    let service = search_index_service(&config)?;
+    match service
+        .query(SearchQuery {
+            profile_id,
+            root: request.root,
+            text: request.query,
+            mode: request.mode,
             limit: SEARCH_MATCH_LIMIT,
-        },
-    )
-    .await
-    .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        IndexServiceEvent::QueryFinished(outcome) => Ok(outcome),
+        event => Err(format!("unexpected search index event: {event:?}")),
+    }
 }
 
 async fn load_search_tree_matches(
     request: SearchRequest,
     options: ScanOptions,
     exclude_patterns: Vec<String>,
+    directory_error_policy: file_index::DirectoryErrorPolicy,
     cancellation: CancellationToken,
-) -> Result<file_core::FileSearchOutcome, String> {
+) -> Result<FileSearchOutcome, String> {
     search_file_tree_with_cancel(
         request.root,
         request.query,
         FileSearchOptions {
             include_hidden: options.include_hidden,
             exclude_patterns,
+            directory_error_policy,
             limit: SEARCH_MATCH_LIMIT,
+            mode: request.mode,
+            content_index_enabled: false,
+            content_max_file_bytes: 16 * 1024 * 1024,
+            media_index_enabled: false,
         },
         cancellation,
     )
@@ -557,65 +581,86 @@ async fn load_search_tree_matches(
 
 async fn build_search_index(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
+    config: config::UserConfig,
+    profile_id: String,
     mode: FileSearchIndexMode,
-) -> Result<file_core::FileSearchIndexOutcome, String> {
-    build_file_search_index(
-        root,
-        index_dir,
-        FileSearchIndexOptions {
-            include_hidden: options.include_hidden,
-            exclude_patterns,
-            mode,
-        },
-    )
-    .await
-    .map_err(|error| error.to_string())
+) -> Result<FileSearchIndexOutcome, String> {
+    let service = search_index_service(&config)?;
+    let event = if mode == FileSearchIndexMode::Incremental {
+        service
+            .execute(file_index::IndexServiceCommand::BuildSelectedPaths(
+                file_index::BuildSelectedPathsRequest {
+                    profile_id,
+                    root: root.clone(),
+                    selected_paths: vec![root],
+                    mode,
+                },
+            ))
+            .await
+    } else {
+        service.rebuild(&profile_id, root).await
+    }
+    .map_err(|error| error.to_string())?;
+    match event {
+        IndexServiceEvent::RebuildFinished(outcome) => Ok(outcome),
+        event => Err(format!("unexpected search index event: {event:?}")),
+    }
 }
 
 async fn load_search_index_status(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
-) -> Result<file_core::FileSearchIndexStatus, String> {
-    file_search_index_status(
-        index_dir,
-        root,
-        FileSearchIndexOptions {
-            include_hidden: options.include_hidden,
-            exclude_patterns,
-            mode: FileSearchIndexMode::FullRebuild,
-        },
-    )
-    .await
-    .map_err(|error| error.to_string())
+    config: config::UserConfig,
+    profile_id: String,
+) -> Result<FileSearchIndexStatus, String> {
+    let service = search_index_service(&config)?;
+    match service
+        .status(&profile_id, root)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        IndexServiceEvent::StatusLoaded(status) => Ok(status),
+        event => Err(format!("unexpected search index event: {event:?}")),
+    }
 }
 
 async fn clear_search_index_failures(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
-) -> Result<file_core::FileSearchIndexStatus, String> {
-    clear_file_search_index_failures(&index_dir)
+    config: config::UserConfig,
+    profile_id: String,
+) -> Result<FileSearchIndexStatus, String> {
+    let service = search_index_service(&config)?;
+    match service
+        .clear_failures(&profile_id, root)
         .await
-        .map_err(|error| error.to_string())?;
-    load_search_index_status(root, index_dir, options, exclude_patterns).await
+        .map_err(|error| error.to_string())?
+    {
+        IndexServiceEvent::FailuresCleared(status) => Ok(status),
+        event => Err(format!("unexpected search index event: {event:?}")),
+    }
 }
 
 async fn remove_search_index(
     root: PathBuf,
-    index_dir: PathBuf,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
-) -> Result<file_core::FileSearchIndexStatus, String> {
-    remove_file_search_index(&index_dir)
+    config: config::UserConfig,
+    profile_id: String,
+) -> Result<FileSearchIndexStatus, String> {
+    let service = search_index_service(&config)?;
+    match service
+        .remove_root(&profile_id, root)
         .await
-        .map_err(|error| error.to_string())?;
-    load_search_index_status(root, index_dir, options, exclude_patterns).await
+        .map_err(|error| error.to_string())?
+    {
+        IndexServiceEvent::RootRemoved(status) => Ok(status),
+        event => Err(format!("unexpected search index event: {event:?}")),
+    }
+}
+
+fn search_index_service(config: &config::UserConfig) -> Result<IndexService, String> {
+    IndexService::open(
+        crate::commands::search_index_control_db_path(&config.search_index_dir),
+        config.search_index_dir.clone(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 async fn load_path_suggestions(input: String, current_dir: PathBuf) -> Vec<PathBuf> {

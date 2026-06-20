@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use desktop_linux::{DisplayRendererGpu, DisplayRendererGpuClass, TerminalEmulator};
 use file_core::FileOperationVerification;
+use file_index::DirectoryErrorPolicy;
 
 use super::*;
 
@@ -11,32 +12,30 @@ fn parses_toml_user_config() {
     let parsed = parse_toml_user_config(
         r#"
 search_index_dir = "/tmp/search-index"
+search_index_directory_error_policy = "abort"
+search_mode = "indexed"
+search_mode_prompt = "completed"
 thumbnail_cache_dir = "/tmp/thumbnails"
 show_hidden_files = true
-startup_index_prompt = "completed"
 sidebar_width = 260.5
 terminal_emulator = "ghostty"
 rendering_backend = "gpu"
 file_operation_verification = "strong"
 browser_view_mode = "list"
-
-[column_width_overrides]
-0 = 240.5
-2 = 360
 "#,
         default_user_config(),
     );
 
     assert_eq!(parsed.search_index_dir, PathBuf::from("/tmp/search-index"));
+    assert_eq!(
+        parsed.search_index_directory_error_policy,
+        DirectoryErrorPolicy::Abort
+    );
+    assert_eq!(parsed.search_mode, SearchBackendMode::Indexed);
+    assert_eq!(parsed.search_mode_prompt, SearchModePromptStatus::Completed);
     assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
     assert!(parsed.show_hidden_files);
-    assert_eq!(
-        parsed.startup_index_prompt,
-        StartupIndexPromptStatus::Completed
-    );
     assert_eq!(parsed.sidebar_width, 260.5);
-    assert_eq!(parsed.legacy_column_width_overrides.get(&0), Some(&240.5));
-    assert_eq!(parsed.legacy_column_width_overrides.get(&2), Some(&360.0));
     assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
     assert_eq!(
         parsed.rendering_gpu_preference,
@@ -50,48 +49,15 @@ browser_view_mode = "list"
 }
 
 #[test]
-fn parses_legacy_user_config() {
-    let parsed = parse_legacy_user_config(
-        "show_hidden_files=true\nstartup_index_prompt=completed\nsidebar_width=260.5\ncolumn_width_overrides=0:240.5,2:360\nterminal_emulator=ghostty\nrendering_backend=gpu\nfile_operation_verification=strong\nbrowser_view_mode=list\n",
-        default_user_config(),
-    );
-
-    assert!(parsed.show_hidden_files);
-    assert_eq!(
-        parsed.startup_index_prompt,
-        StartupIndexPromptStatus::Completed
-    );
-    assert_eq!(parsed.sidebar_width, 260.5);
-    assert_eq!(parsed.legacy_column_width_overrides.get(&0), Some(&240.5));
-    assert_eq!(parsed.legacy_column_width_overrides.get(&2), Some(&360.0));
-    assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
-    assert_eq!(
-        parsed.rendering_gpu_preference,
-        RenderingGpuPreference::HighPerformanceGpu
-    );
-    assert_eq!(
-        parsed.file_operation_verification,
-        FileOperationVerification::Strong
-    );
-    assert_eq!(parsed.browser_view_mode, BrowserViewMode::List);
-}
-
-#[test]
-fn maps_removed_off_verification_to_basic_metadata() {
+fn removed_off_verification_value_falls_back_to_default() {
     let parsed_toml = parse_toml_user_config(
         "file_operation_verification = \"off\"\n",
         default_user_config(),
     );
-    let parsed_legacy =
-        parse_legacy_user_config("file_operation_verification=off\n", default_user_config());
 
     assert_eq!(
         parsed_toml.file_operation_verification,
-        FileOperationVerification::BasicMetadata
-    );
-    assert_eq!(
-        parsed_legacy.file_operation_verification,
-        FileOperationVerification::BasicMetadata
+        default_user_config().file_operation_verification
     );
 }
 
@@ -107,17 +73,6 @@ fn serializes_basic_metadata_verification() {
 }
 
 #[test]
-fn parses_legacy_software_as_display_gpu_preference() {
-    let parsed =
-        parse_toml_user_config("rendering_backend = \"software\"\n", default_user_config());
-
-    assert_eq!(
-        parsed.rendering_gpu_preference,
-        RenderingGpuPreference::DisplayGpu
-    );
-}
-
-#[test]
 fn parses_display_gpu_preference() {
     let parsed = parse_toml_user_config("rendering_backend = \"display\"\n", default_user_config());
 
@@ -128,14 +83,14 @@ fn parses_display_gpu_preference() {
 }
 
 #[test]
-fn invalid_column_width_overrides_fall_back_to_empty() {
+fn invalid_values_fall_back_to_defaults() {
     let default = default_user_config();
     let parsed = parse_toml_user_config(
         r#"
 show_hidden_files = "maybe"
-startup_index_prompt = "later"
+search_mode = "catalog"
+search_mode_prompt = "later"
 sidebar_width = "wide"
-column_width_overrides = "bad"
 terminal_emulator = "missing"
 rendering_backend = "metal"
 file_operation_verification = "maybe"
@@ -145,9 +100,9 @@ browser_view_mode = "cover-flow"
     );
 
     assert_eq!(parsed.show_hidden_files, default.show_hidden_files);
-    assert_eq!(parsed.startup_index_prompt, default.startup_index_prompt);
+    assert_eq!(parsed.search_mode, default.search_mode);
+    assert_eq!(parsed.search_mode_prompt, default.search_mode_prompt);
     assert_eq!(parsed.sidebar_width, default.sidebar_width);
-    assert!(parsed.legacy_column_width_overrides.is_empty());
     assert_eq!(parsed.terminal_emulator, DEFAULT_TERMINAL_EMULATOR);
     assert_eq!(
         parsed.rendering_gpu_preference,
@@ -166,21 +121,21 @@ fn writes_toml_user_config_without_column_width_overrides() {
     let path = temp_dir.path().join("config.toml");
     let mut config = default_user_config();
     config.rendering_gpu_preference = RenderingGpuPreference::HighPerformanceGpu;
-    config.legacy_column_width_overrides.insert(0, 240.0);
 
     write_user_config(&path, &config).expect("write user config");
 
     let content = fs::read_to_string(path).expect("read user config");
     assert!(content.starts_with("# File Manager user configuration\n"));
     assert!(content.contains("sidebar_width = 180.0\n"));
-    assert!(content.contains("startup_index_prompt = \"pending\"\n"));
+    assert!(content.contains("search_mode = \"simple\"\n"));
+    assert!(content.contains("search_mode_prompt = \"pending\"\n"));
+    assert!(content.contains("search_index_directory_error_policy = \"skip_unreadable\"\n"));
     assert!(content.contains("rendering_backend = \"gpu\"\n"));
     assert!(content.contains("file_operation_verification = \"basic_metadata\"\n"));
     assert!(content.contains("browser_view_mode = \"columns\"\n"));
     assert!(!content.contains("[column_width_overrides]"));
 
     let parsed = parse_toml_user_config(&content, default_user_config());
-    assert!(parsed.legacy_column_width_overrides.is_empty());
     assert_eq!(
         parsed.rendering_gpu_preference,
         RenderingGpuPreference::HighPerformanceGpu
@@ -190,6 +145,48 @@ fn writes_toml_user_config_without_column_width_overrides() {
         DEFAULT_FILE_OPERATION_VERIFICATION
     );
     assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
+}
+
+#[test]
+fn default_search_mode_is_simple_with_pending_prompt() {
+    let config = default_user_config();
+
+    assert_eq!(config.search_mode, SearchBackendMode::Simple);
+    assert_eq!(config.search_mode_prompt, SearchModePromptStatus::Pending);
+}
+
+#[test]
+fn search_mode_round_trips_through_toml() {
+    let mut config = default_user_config();
+    config.search_mode = SearchBackendMode::Indexed;
+    config.search_mode_prompt = SearchModePromptStatus::Completed;
+
+    let content = toml_user_config_content(&config).unwrap();
+    let parsed = parse_toml_user_config(&content, default_user_config());
+
+    assert_eq!(parsed.search_mode, SearchBackendMode::Indexed);
+    assert_eq!(parsed.search_mode_prompt, SearchModePromptStatus::Completed);
+}
+
+#[test]
+fn default_user_config_stores_default_search_index_excludes_as_editable_config() {
+    assert_eq!(
+        default_user_config().search_index_exclude_patterns,
+        file_index::default_search_index_exclude_patterns()
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn parses_empty_search_index_excludes_as_empty_config() {
+    let parsed = parse_toml_user_config(
+        "search_index_exclude_patterns = []\n",
+        default_user_config(),
+    );
+
+    assert!(parsed.search_index_exclude_patterns.is_empty());
 }
 
 #[test]
@@ -237,41 +234,6 @@ fn writes_sidebar_favorites_to_toml() {
     assert!(content.contains("sidebar_favorites"));
     let parsed = parse_toml_user_config(&content, default_user_config());
     assert_eq!(parsed.sidebar_favorites, config.sidebar_favorites);
-}
-
-#[test]
-fn loads_legacy_config_when_toml_is_missing() {
-    let temp_dir = tempfile::tempdir().expect("create temp config dir");
-    fs::write(
-        temp_dir.path().join("config.txt"),
-        "show_hidden_files=true\nterminal_emulator=ghostty\n",
-    )
-    .expect("write legacy config");
-
-    let parsed = load_user_config_from_dir(temp_dir.path(), default_user_config());
-
-    assert!(parsed.show_hidden_files);
-    assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
-}
-
-#[test]
-fn loads_toml_config_before_legacy_config() {
-    let temp_dir = tempfile::tempdir().expect("create temp config dir");
-    fs::write(
-        temp_dir.path().join("config.txt"),
-        "show_hidden_files=true\nterminal_emulator=ghostty\n",
-    )
-    .expect("write legacy config");
-    fs::write(
-        temp_dir.path().join("config.toml"),
-        "show_hidden_files = false\nterminal_emulator = \"kitty\"\n",
-    )
-    .expect("write toml config");
-
-    let parsed = load_user_config_from_dir(temp_dir.path(), default_user_config());
-
-    assert!(!parsed.show_hidden_files);
-    assert_eq!(parsed.terminal_emulator, TerminalEmulator::Kitty);
 }
 
 #[test]

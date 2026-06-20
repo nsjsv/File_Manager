@@ -5,10 +5,10 @@ use std::time::UNIX_EPOCH;
 
 use nucleo::Utf32String;
 
+use super::manifest::{SearchCatalogIdentity, SearchIndexManifest};
 use super::path_encoding::path_storage_key;
-use super::store::{SearchCatalogIdentity, SearchIndexManifest};
-use super::types::FileSearchMatch;
-use crate::FileKind;
+use super::types::{FileSearchMatch, SearchIndexFileRecord, SearchResultSource};
+use file_core::FileKind;
 
 #[derive(Clone)]
 pub(crate) struct SearchCatalog {
@@ -142,6 +142,19 @@ impl SearchCatalogRecord {
             name: self.name.clone(),
             kind: self.kind,
             rank_score,
+            source: SearchResultSource::Files,
+            snippet: None,
+            media: None,
+        }
+    }
+
+    pub(crate) fn to_file_record(&self) -> SearchIndexFileRecord {
+        SearchIndexFileRecord {
+            path: self.path.clone(),
+            relative_path: self.relative_path.clone(),
+            kind: self.kind,
+            mtime_ms: self.mtime_ms,
+            size_bytes: self.size_bytes,
         }
     }
 

@@ -9,6 +9,7 @@ dark-light = "2.0.0"
 desktop-linux = { path = "../desktop-linux" }
 dirs.workspace = true
 file-core = { path = "../file-core" }
+file-index = { path = "../file-index" }
 file-operation-store = { path = "../file-operation-store" }
 flate2 = "1.1.9"
 gif = "0.14.2"

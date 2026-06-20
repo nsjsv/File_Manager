@@ -2,16 +2,18 @@ use std::path::PathBuf;
 
 use file_core::{
     ArchiveCompressionLevel, ArchiveExtractionRequest, ArchiveFormat, ArchivePassword,
-    FileOperationControls, FileOperationRunState, FileOperationVerification, FileSearchIndexMode,
+    FileOperationControls, FileOperationRunState, FileOperationVerification,
     TransferConflictStrategy, TrashRestoreEntry,
 };
+use file_index::FileSearchIndexMode;
 use file_operation_store::{
-    StoredArchiveCompressionLevel, StoredArchiveFormat, StoredOperation, StoredPath,
-    StoredProgress, StoredSearchIndexMode, StoredTask, StoredTaskStatus, StoredTransfer,
-    StoredTrashEntry, TaskQueueStore,
+    StoredOperation, StoredProgress, StoredTask, StoredTaskStatus, TaskQueueStore,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+
+mod persistence;
+use persistence::{queued_operation_from_stored, queued_operation_to_stored};
 
 pub(crate) const NEW_DIRECTORY_NAME: &str = "New Folder";
 pub(crate) const NEW_FILE_NAME: &str = "New File";
@@ -60,11 +62,10 @@ pub(crate) enum QueuedFileOperation {
         request: ArchiveExtractionRequest,
     },
     BuildSearchIndex {
+        profile_id: String,
         root: PathBuf,
-        index_dir: PathBuf,
+        index_base_dir: PathBuf,
         selected_paths: Vec<PathBuf>,
-        include_hidden: bool,
-        exclude_patterns: Vec<String>,
         mode: FileSearchIndexMode,
     },
 }
@@ -122,114 +123,11 @@ impl QueuedFileOperation {
     }
 
     fn to_stored(&self) -> StoredOperation {
-        match self {
-            Self::Rename { path, new_name } => StoredOperation::Rename {
-                path: StoredPath::from_path(path),
-                new_name: new_name.clone(),
-            },
-            Self::CreateDirectory { parent } => StoredOperation::CreateDirectory {
-                parent: StoredPath::from_path(parent),
-            },
-            Self::CreateEmptyFile { parent } => StoredOperation::CreateEmptyFile {
-                parent: StoredPath::from_path(parent),
-            },
-            Self::Trash { paths } => StoredOperation::Trash {
-                paths: paths
-                    .iter()
-                    .map(|path| StoredPath::from_path(path))
-                    .collect(),
-            },
-            Self::Restore { entries } => StoredOperation::Restore {
-                entries: stored_trash_entries(entries),
-            },
-            Self::DeleteTrashEntries { entries } => StoredOperation::DeleteTrashEntries {
-                entries: stored_trash_entries(entries),
-            },
-            Self::EmptyTrash => StoredOperation::EmptyTrash,
-            Self::Copy { transfers, .. } => StoredOperation::Copy {
-                transfers: stored_transfers(transfers),
-            },
-            Self::Move { transfers, .. } => StoredOperation::Move {
-                transfers: stored_transfers(transfers),
-            },
-            Self::CreateArchive {
-                sources,
-                target,
-                format,
-                compression_level,
-                password,
-            } => StoredOperation::CreateArchive {
-                sources: sources
-                    .iter()
-                    .map(|path| StoredPath::from_path(path))
-                    .collect(),
-                target: StoredPath::from_path(target),
-                format: stored_archive_format(*format),
-                compression_level: stored_archive_compression_level(*compression_level),
-                password_required: password.is_some(),
-            },
-            Self::ExtractArchive { request } => StoredOperation::ExtractArchive {
-                archive: StoredPath::from_path(&request.archive),
-                destination: StoredPath::from_path(&request.destination),
-                password_required: request.password.is_some(),
-            },
-            Self::BuildSearchIndex {
-                root,
-                index_dir,
-                selected_paths,
-                include_hidden,
-                exclude_patterns,
-                mode,
-            } => StoredOperation::SearchIndex {
-                root: StoredPath::from_path(root),
-                index_dir: StoredPath::from_path(index_dir),
-                selected_paths: selected_paths
-                    .iter()
-                    .map(|path| StoredPath::from_path(path))
-                    .collect(),
-                include_hidden: *include_hidden,
-                exclude_patterns: exclude_patterns.clone(),
-                mode: stored_search_index_mode(*mode),
-            },
-        }
+        queued_operation_to_stored(self)
     }
 
     fn from_resumable_stored(operation: StoredOperation) -> Option<Self> {
-        match operation {
-            StoredOperation::SearchIndex {
-                root,
-                index_dir,
-                selected_paths,
-                include_hidden,
-                exclude_patterns,
-                mode,
-            } => Some(Self::BuildSearchIndex {
-                root: root.to_path_buf(),
-                index_dir: index_dir.to_path_buf(),
-                selected_paths: selected_paths
-                    .into_iter()
-                    .map(|path| path.to_path_buf())
-                    .collect(),
-                include_hidden,
-                exclude_patterns,
-                mode: file_search_index_mode_from_stored(mode),
-            }),
-            _ => None,
-        }
-    }
-}
-
-fn stored_search_index_mode(mode: FileSearchIndexMode) -> StoredSearchIndexMode {
-    match mode {
-        FileSearchIndexMode::FullRebuild => StoredSearchIndexMode::FullRebuild,
-        FileSearchIndexMode::Incremental => StoredSearchIndexMode::Incremental,
-    }
-}
-
-fn file_search_index_mode_from_stored(mode: StoredSearchIndexMode) -> FileSearchIndexMode {
-    match mode {
-        StoredSearchIndexMode::FullRebuild => FileSearchIndexMode::FullRebuild,
-        StoredSearchIndexMode::Incremental => FileSearchIndexMode::Incremental,
+        queued_operation_from_stored(operation)
     }
 }
 
@@ -734,46 +632,6 @@ impl FileOperationQueue {
             )
             .err()
             .map(storage_error)
-    }
-}
-
-fn stored_transfers(transfers: &[QueuedTransfer]) -> Vec<StoredTransfer> {
-    transfers
-        .iter()
-        .map(|transfer| StoredTransfer {
-            source: StoredPath::from_path(&transfer.source),
-            target: StoredPath::from_path(&transfer.target),
-        })
-        .collect()
-}
-
-fn stored_trash_entries(entries: &[TrashRestoreEntry]) -> Vec<StoredTrashEntry> {
-    entries
-        .iter()
-        .map(|entry| StoredTrashEntry {
-            trash_path: StoredPath::from_path(&entry.trash_path),
-            info_path: StoredPath::from_path(&entry.info_path),
-            original_path: StoredPath::from_path(&entry.original_path),
-        })
-        .collect()
-}
-
-fn stored_archive_format(format: ArchiveFormat) -> StoredArchiveFormat {
-    match format {
-        ArchiveFormat::Zip => StoredArchiveFormat::Zip,
-        ArchiveFormat::SevenZip => StoredArchiveFormat::SevenZip,
-        ArchiveFormat::TarGz => StoredArchiveFormat::TarGz,
-    }
-}
-
-fn stored_archive_compression_level(
-    compression_level: ArchiveCompressionLevel,
-) -> StoredArchiveCompressionLevel {
-    match compression_level {
-        ArchiveCompressionLevel::Store => StoredArchiveCompressionLevel::Store,
-        ArchiveCompressionLevel::Fast => StoredArchiveCompressionLevel::Fast,
-        ArchiveCompressionLevel::Balanced => StoredArchiveCompressionLevel::Balanced,
-        ArchiveCompressionLevel::Maximum => StoredArchiveCompressionLevel::Maximum,
     }
 }
 

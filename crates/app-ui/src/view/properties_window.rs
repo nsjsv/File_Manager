@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::time::SystemTime;
 
+use file_core::FileKind;
 use iced::widget::{button, column, container, row, scrollable, Button, Column, Space};
 use iced::{Alignment, Element, Length};
 
@@ -88,7 +89,7 @@ fn properties_split_view<'a>(
             properties_information_detail(snapshot, scrollbar_visibility)
         }
         FilePropertiesCategory::Permissions => {
-            properties_permissions_detail(properties, snapshot.permissions, scrollbar_visibility)
+            properties_permissions_detail(properties, snapshot, scrollbar_visibility)
         }
     };
 
@@ -199,12 +200,13 @@ fn properties_information_detail(
     )
 }
 
-fn properties_permissions_detail(
-    properties: &FilePropertiesState,
-    permissions: Option<FilePropertiesPermissions>,
+fn properties_permissions_detail<'a>(
+    properties: &'a FilePropertiesState,
+    snapshot: &'a FilePropertiesSnapshot,
     scrollbar_visibility: ScrollbarVisibility,
-) -> Element<'_, Message> {
-    let displayed_permissions = displayed_permissions(permissions, &properties.permission_update);
+) -> Element<'a, Message> {
+    let displayed_permissions =
+        displayed_permissions(snapshot.permissions, &properties.permission_update);
     let mut content = Column::new()
         .spacing(18)
         .push(permissions_header(displayed_permissions));
@@ -214,6 +216,11 @@ fn properties_permissions_detail(
             current_permissions,
             &properties.permission_update,
         ));
+        if snapshot.kind == FileKind::Directory {
+            content = content.push(apply_permissions_to_enclosed_items_button(
+                &properties.permission_update,
+            ));
+        }
     } else {
         content = content.push(permissions_unavailable_panel());
     }
@@ -271,12 +278,7 @@ fn displayed_permissions(
     permissions: Option<FilePropertiesPermissions>,
     update: &FilePropertiesPermissionUpdate,
 ) -> Option<FilePropertiesPermissions> {
-    match update {
-        FilePropertiesPermissionUpdate::Saving(pending) => Some(*pending),
-        FilePropertiesPermissionUpdate::Idle | FilePropertiesPermissionUpdate::Failed(_) => {
-            permissions
-        }
-    }
+    update.pending_permissions().or(permissions)
 }
 
 fn permissions_mode_badge(permissions: FilePropertiesPermissions) -> Element<'static, Message> {
@@ -400,11 +402,29 @@ fn permission_access_button(
         .width(Length::FillPortion(1))
         .style(context_menu_button_style());
 
-    match update {
-        FilePropertiesPermissionUpdate::Saving(_) => button,
-        FilePropertiesPermissionUpdate::Idle | FilePropertiesPermissionUpdate::Failed(_) => {
-            button.on_press(Message::FilePropertiesPermissionToggled(class, access))
-        }
+    if update.is_in_progress() {
+        button
+    } else {
+        button.on_press(Message::FilePropertiesPermissionToggled(class, access))
+    }
+}
+
+fn apply_permissions_to_enclosed_items_button(
+    update: &FilePropertiesPermissionUpdate,
+) -> Element<'static, Message> {
+    let label = container(readable_text("Apply to Enclosed Items").size(13))
+        .padding([8, 12])
+        .width(Length::Fill);
+    let button = button(label)
+        .width(Length::Fill)
+        .style(context_menu_button_style());
+
+    if update.is_in_progress() {
+        button.into()
+    } else {
+        button
+            .on_press(Message::FilePropertiesApplyPermissionsToEnclosedItems)
+            .into()
     }
 }
 
@@ -427,7 +447,12 @@ fn permissions_status_panel(
 ) -> Option<Element<'static, Message>> {
     let message = match update {
         FilePropertiesPermissionUpdate::Idle => return None,
-        FilePropertiesPermissionUpdate::Saving(_) => "Saving permissions...".to_owned(),
+        FilePropertiesPermissionUpdate::SavingCurrentItem { .. } => {
+            "Saving permissions...".to_owned()
+        }
+        FilePropertiesPermissionUpdate::ApplyingToEnclosedItems { .. } => {
+            "Applying permissions to enclosed items...".to_owned()
+        }
         FilePropertiesPermissionUpdate::Failed(error) => {
             format!("Could not update permissions: {error}")
         }

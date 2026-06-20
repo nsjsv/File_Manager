@@ -1,27 +1,26 @@
-use std::collections::HashMap;
-
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::FileOperationVerification;
+use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy};
 
 use crate::model::BrowserViewMode;
 use crate::shortcuts::ShortcutConfig;
 
 const APP_DIR_NAME: &str = "file-manager";
 const CONFIG_FILE_NAME: &str = "config.toml";
-const LEGACY_CONFIG_FILE_NAME: &str = "config.txt";
 const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
 const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
 const SEARCH_INDEX_EXCLUDE_PATTERNS_KEY: &str = "search_index_exclude_patterns";
+const SEARCH_INDEX_CONTENT_ENABLED_KEY: &str = "search_index_content_enabled";
+const SEARCH_INDEX_MEDIA_ENABLED_KEY: &str = "search_index_media_enabled";
+const SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY: &str = "search_index_directory_error_policy";
+const SEARCH_MODE_KEY: &str = "search_mode";
+const SEARCH_MODE_PROMPT_KEY: &str = "search_mode_prompt";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
-const STARTUP_INDEX_PROMPT_KEY: &str = "startup_index_prompt";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
-const COLUMN_WIDTH_OVERRIDES_KEY: &str = "column_width_overrides";
 const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
 const SIDEBAR_FAVORITE_LABEL_KEY: &str = "label";
 const SIDEBAR_FAVORITE_PATH_KEY: &str = "path";
@@ -43,12 +42,35 @@ pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StartupIndexPromptStatus {
+pub(crate) enum SearchBackendMode {
+    Simple,
+    Indexed,
+}
+
+impl SearchBackendMode {
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "simple" => Some(Self::Simple),
+            "indexed" => Some(Self::Indexed),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Indexed => "indexed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchModePromptStatus {
     Pending,
     Completed,
 }
 
-impl StartupIndexPromptStatus {
+impl SearchModePromptStatus {
     pub(crate) fn from_config_value(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
@@ -74,7 +96,7 @@ pub(crate) enum RenderingGpuPreference {
 impl RenderingGpuPreference {
     pub(crate) fn from_config_value(value: &str) -> Option<Self> {
         match value {
-            "display" | "software" => Some(Self::DisplayGpu),
+            "display" => Some(Self::DisplayGpu),
             "gpu" => Some(Self::HighPerformanceGpu),
             _ => None,
         }
@@ -124,7 +146,7 @@ pub(crate) fn file_operation_verification_from_config_value(
     value: &str,
 ) -> Option<FileOperationVerification> {
     match value {
-        "off" | "basic_metadata" => Some(FileOperationVerification::BasicMetadata),
+        "basic_metadata" => Some(FileOperationVerification::BasicMetadata),
         "strong" => Some(FileOperationVerification::Strong),
         _ => None,
     }
@@ -180,11 +202,14 @@ pub(crate) fn browser_view_mode_config_value(view_mode: BrowserViewMode) -> &'st
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
     pub(crate) search_index_exclude_patterns: Vec<String>,
+    pub(crate) search_index_content_enabled: bool,
+    pub(crate) search_index_media_enabled: bool,
+    pub(crate) search_index_directory_error_policy: DirectoryErrorPolicy,
+    pub(crate) search_mode: SearchBackendMode,
+    pub(crate) search_mode_prompt: SearchModePromptStatus,
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) show_hidden_files: bool,
-    pub(crate) startup_index_prompt: StartupIndexPromptStatus,
     pub(crate) sidebar_width: f32,
-    pub(crate) legacy_column_width_overrides: HashMap<usize, f32>,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
@@ -218,10 +243,6 @@ pub(crate) fn save_user_config(config: &UserConfig) -> io::Result<()> {
     write_user_config(&config_file, config)
 }
 
-pub(crate) fn search_index_dir_for_root(base_dir: &Path, root: &Path) -> PathBuf {
-    base_dir.join(path_hash(root))
-}
-
 pub(crate) fn default_state_database_path() -> PathBuf {
     let fallback_base = dirs::home_dir()
         .or_else(|| std::env::current_dir().ok())
@@ -239,12 +260,15 @@ pub(crate) fn default_user_config() -> UserConfig {
         .join(APP_DIR_NAME);
     UserConfig {
         search_index_dir: cache_base.join("search-index"),
-        search_index_exclude_patterns: Vec::new(),
+        search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
+        search_index_content_enabled: false,
+        search_index_media_enabled: false,
+        search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+        search_mode: SearchBackendMode::Simple,
+        search_mode_prompt: SearchModePromptStatus::Pending,
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         show_hidden_files: false,
-        startup_index_prompt: StartupIndexPromptStatus::Pending,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
-        legacy_column_width_overrides: HashMap::new(),
         sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
@@ -257,12 +281,15 @@ pub(crate) fn default_user_config() -> UserConfig {
 pub(crate) fn ui_thread_startup_config() -> UserConfig {
     UserConfig {
         search_index_dir: PathBuf::new(),
-        search_index_exclude_patterns: Vec::new(),
+        search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
+        search_index_content_enabled: false,
+        search_index_media_enabled: false,
+        search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+        search_mode: SearchBackendMode::Simple,
+        search_mode_prompt: SearchModePromptStatus::Pending,
         thumbnail_cache_dir: PathBuf::new(),
         show_hidden_files: false,
-        startup_index_prompt: StartupIndexPromptStatus::Pending,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
-        legacy_column_width_overrides: HashMap::new(),
         sidebar_favorites: None,
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
@@ -270,6 +297,13 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         browser_view_mode: BrowserViewMode::Columns,
         shortcuts: ShortcutConfig::defaults(),
     }
+}
+
+fn default_search_index_exclude_patterns_config() -> Vec<String> {
+    default_search_index_exclude_patterns()
+        .iter()
+        .map(|pattern| (*pattern).to_owned())
+        .collect()
 }
 
 pub(crate) fn normalize_search_index_exclude_patterns(patterns: Vec<String>) -> Vec<String> {
@@ -283,17 +317,6 @@ pub(crate) fn normalize_search_index_exclude_patterns(patterns: Vec<String>) -> 
         }
     }
     normalized
-}
-
-pub(crate) fn parse_search_index_exclude_patterns_text(value: &str) -> Vec<String> {
-    normalize_search_index_exclude_patterns(
-        value
-            .split([',', '\n'])
-            .map(str::trim)
-            .filter(|pattern| !pattern.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
-    )
 }
 
 pub(crate) fn normalize_column_width(width: f32) -> f32 {
@@ -324,13 +347,7 @@ fn load_user_config_from_dir(config_dir: &Path, default: UserConfig) -> UserConf
     let config_file = config_dir.join(CONFIG_FILE_NAME);
     match fs::read_to_string(&config_file) {
         Ok(content) => parse_toml_user_config(&content, default),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let legacy_config_file = config_dir.join(LEGACY_CONFIG_FILE_NAME);
-            match fs::read_to_string(&legacy_config_file) {
-                Ok(content) => parse_legacy_user_config(&content, default),
-                Err(_) => default,
-            }
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => default,
         Err(_) => default,
     }
 }
@@ -347,6 +364,33 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     if let Some(patterns) = toml_string_array(&document, SEARCH_INDEX_EXCLUDE_PATTERNS_KEY) {
         config.search_index_exclude_patterns = normalize_search_index_exclude_patterns(patterns);
     }
+    if let Some(value) = document
+        .get(SEARCH_INDEX_CONTENT_ENABLED_KEY)
+        .and_then(toml::Value::as_bool)
+    {
+        config.search_index_content_enabled = value;
+    }
+    if let Some(value) = document
+        .get(SEARCH_INDEX_MEDIA_ENABLED_KEY)
+        .and_then(toml::Value::as_bool)
+    {
+        config.search_index_media_enabled = value;
+    }
+    if let Some(value) = toml_string(&document, SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY) {
+        if let Some(policy) = DirectoryErrorPolicy::from_config_value(value) {
+            config.search_index_directory_error_policy = policy;
+        }
+    }
+    if let Some(value) = toml_string(&document, SEARCH_MODE_KEY) {
+        if let Some(search_mode) = SearchBackendMode::from_config_value(value) {
+            config.search_mode = search_mode;
+        }
+    }
+    if let Some(value) = toml_string(&document, SEARCH_MODE_PROMPT_KEY) {
+        if let Some(status) = SearchModePromptStatus::from_config_value(value) {
+            config.search_mode_prompt = status;
+        }
+    }
     if let Some(value) = toml_string(&document, THUMBNAIL_CACHE_DIR_KEY) {
         config.thumbnail_cache_dir = PathBuf::from(value);
     }
@@ -356,19 +400,8 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     {
         config.show_hidden_files = value;
     }
-    if let Some(value) = toml_string(&document, STARTUP_INDEX_PROMPT_KEY) {
-        if let Some(status) = StartupIndexPromptStatus::from_config_value(value) {
-            config.startup_index_prompt = status;
-        }
-    }
     if let Some(width) = document.get(SIDEBAR_WIDTH_KEY).and_then(toml_number_as_f32) {
         config.sidebar_width = normalize_sidebar_width(width);
-    }
-    if let Some(table) = document
-        .get(COLUMN_WIDTH_OVERRIDES_KEY)
-        .and_then(toml::Value::as_table)
-    {
-        config.legacy_column_width_overrides = parse_toml_column_width_overrides(table);
     }
     if let Some(favorites) = parse_toml_sidebar_favorites(&document) {
         config.sidebar_favorites = Some(favorites);
@@ -417,71 +450,6 @@ fn toml_string_array(document: &toml::Table, key: &str) -> Option<Vec<String>> {
     )
 }
 
-fn parse_legacy_user_config(content: &str, default: UserConfig) -> UserConfig {
-    let mut config = default;
-    for line in content.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let value = value.trim();
-        if value.is_empty() {
-            continue;
-        }
-        match key.trim() {
-            SEARCH_INDEX_DIR_KEY => config.search_index_dir = PathBuf::from(value),
-            SEARCH_INDEX_EXCLUDE_PATTERNS_KEY => {
-                config.search_index_exclude_patterns =
-                    parse_search_index_exclude_patterns_text(value);
-            }
-            THUMBNAIL_CACHE_DIR_KEY => config.thumbnail_cache_dir = PathBuf::from(value),
-            SHOW_HIDDEN_FILES_KEY => match value {
-                "true" => config.show_hidden_files = true,
-                "false" => config.show_hidden_files = false,
-                _ => {}
-            },
-            STARTUP_INDEX_PROMPT_KEY => {
-                if let Some(status) = StartupIndexPromptStatus::from_config_value(value) {
-                    config.startup_index_prompt = status;
-                }
-            }
-            SIDEBAR_WIDTH_KEY => {
-                if let Ok(width) = value.parse::<f32>() {
-                    config.sidebar_width = normalize_sidebar_width(width);
-                }
-            }
-            COLUMN_WIDTH_OVERRIDES_KEY => {
-                config.legacy_column_width_overrides = parse_legacy_column_width_overrides(value);
-            }
-            SIDEBAR_FAVORITES_KEY => {}
-            TERMINAL_EMULATOR_KEY => {
-                if let Some(terminal_emulator) = TerminalEmulator::from_config_value(value) {
-                    config.terminal_emulator = terminal_emulator;
-                }
-            }
-            RENDERING_BACKEND_KEY => {
-                if let Some(preference) = RenderingGpuPreference::from_config_value(value) {
-                    config.rendering_gpu_preference = preference;
-                }
-            }
-            FILE_OPERATION_VERIFICATION_KEY => {
-                if let Some(verification) = file_operation_verification_from_config_value(value) {
-                    config.file_operation_verification = verification;
-                }
-            }
-            BROWSER_VIEW_MODE_KEY => {
-                if let Some(view_mode) = browser_view_mode_from_config_value(value) {
-                    config.browser_view_mode = view_mode;
-                }
-            }
-            _ => {}
-        }
-    }
-    config
-}
-
 fn write_user_config(path: &Path, config: &UserConfig) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -514,16 +482,37 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
         ),
     );
     document.insert(
+        SEARCH_INDEX_CONTENT_ENABLED_KEY.to_string(),
+        toml::Value::Boolean(config.search_index_content_enabled),
+    );
+    document.insert(
+        SEARCH_INDEX_MEDIA_ENABLED_KEY.to_string(),
+        toml::Value::Boolean(config.search_index_media_enabled),
+    );
+    document.insert(
+        SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY.to_string(),
+        toml::Value::String(
+            config
+                .search_index_directory_error_policy
+                .config_value()
+                .to_string(),
+        ),
+    );
+    document.insert(
+        SEARCH_MODE_KEY.to_string(),
+        toml::Value::String(config.search_mode.config_value().to_string()),
+    );
+    document.insert(
+        SEARCH_MODE_PROMPT_KEY.to_string(),
+        toml::Value::String(config.search_mode_prompt.config_value().to_string()),
+    );
+    document.insert(
         THUMBNAIL_CACHE_DIR_KEY.to_string(),
         toml::Value::String(config.thumbnail_cache_dir.to_string_lossy().into_owned()),
     );
     document.insert(
         SHOW_HIDDEN_FILES_KEY.to_string(),
         toml::Value::Boolean(config.show_hidden_files),
-    );
-    document.insert(
-        STARTUP_INDEX_PROMPT_KEY.to_string(),
-        toml::Value::String(config.startup_index_prompt.config_value().to_string()),
     );
     document.insert(
         SIDEBAR_WIDTH_KEY.to_string(),
@@ -612,66 +601,12 @@ fn sidebar_favorite_label_from_path(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-fn parse_toml_column_width_overrides(table: &toml::Table) -> HashMap<usize, f32> {
-    let mut widths = HashMap::new();
-    for (index, width) in table {
-        let (Ok(index), Some(width)) = (index.parse::<usize>(), toml_number_as_f32(width)) else {
-            continue;
-        };
-        if width.is_finite() {
-            widths.insert(index, normalize_column_width(width));
-        }
-    }
-    widths
-}
-
 fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
     match value {
         toml::Value::Float(value) => Some(*value as f32),
         toml::Value::Integer(value) => Some(*value as f32),
         _ => None,
     }
-}
-
-fn parse_legacy_column_width_overrides(value: &str) -> HashMap<usize, f32> {
-    let mut widths = HashMap::new();
-    for entry in value
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-    {
-        let Some((index, width)) = entry.split_once(':') else {
-            continue;
-        };
-        let (Ok(index), Ok(width)) = (index.trim().parse::<usize>(), width.trim().parse::<f32>())
-        else {
-            continue;
-        };
-        if width.is_finite() {
-            widths.insert(index, normalize_column_width(width));
-        }
-    }
-    widths
-}
-
-fn path_hash(path: &Path) -> String {
-    #[cfg(unix)]
-    {
-        hash_bytes(path.as_os_str().as_bytes())
-    }
-    #[cfg(not(unix))]
-    {
-        hash_bytes(path.to_string_lossy().as_bytes())
-    }
-}
-
-fn hash_bytes(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
 }
 
 #[cfg(test)]

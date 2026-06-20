@@ -1,0 +1,335 @@
+use std::path::{Path, PathBuf};
+
+use tantivy::collector::TopDocs;
+use tantivy::query::QueryParser;
+use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
+use tantivy::snippet::SnippetGenerator;
+use tantivy::{doc, Index, TantivyDocument};
+
+use super::extractor::{ExtractedMediaDocument, ExtractedTextDocument};
+use super::types::{MediaSearchKind, MediaSearchMetadata, SearchResultSource};
+use crate::IndexError;
+
+const TANTIVY_DIR_NAME: &str = "tantivy";
+const PATH_FIELD: &str = "path";
+const RELATIVE_PATH_FIELD: &str = "relative_path";
+const NAME_FIELD: &str = "name";
+const SOURCE_FIELD: &str = "source";
+const BODY_FIELD: &str = "body";
+const MEDIA_KIND_FIELD: &str = "media_kind";
+const WIDTH_FIELD: &str = "width";
+const HEIGHT_FIELD: &str = "height";
+const DURATION_FIELD: &str = "duration_ms";
+const CODEC_FIELD: &str = "codec";
+const TITLE_FIELD: &str = "title";
+const ARTIST_FIELD: &str = "artist";
+const EXIF_FIELD: &str = "exif";
+const RANK_HINT_FIELD: &str = "rank_hint";
+
+#[derive(Clone)]
+struct SearchSchema {
+    schema: Schema,
+    path: Field,
+    relative_path: Field,
+    name: Field,
+    source: Field,
+    body: Field,
+    media_kind: Field,
+    width: Field,
+    height: Field,
+    duration_ms: Field,
+    codec: Field,
+    title: Field,
+    artist: Field,
+    exif: Field,
+    rank_hint: Field,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FullTextSearchHit {
+    pub(crate) path: PathBuf,
+    pub(crate) relative_path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) source: SearchResultSource,
+    pub(crate) score: u32,
+    pub(crate) snippet: Option<String>,
+    pub(crate) media: Option<MediaSearchMetadata>,
+}
+
+pub(crate) fn write_tantivy_index(
+    index_dir: &Path,
+    text_documents: &[ExtractedTextDocument],
+    media_documents: &[ExtractedMediaDocument],
+) -> Result<(), IndexError> {
+    let schema = search_schema();
+    let tantivy_dir = tantivy_dir(index_dir);
+    std::fs::create_dir_all(&tantivy_dir)
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    let index = Index::create_in_dir(&tantivy_dir, schema.schema.clone())
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    let mut writer = index
+        .writer(50_000_000)
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+
+    for text in text_documents {
+        let mut document = doc!(
+            schema.path => text.path.to_string_lossy().into_owned(),
+            schema.relative_path => text.relative_path.to_string_lossy().into_owned(),
+            schema.name => text.name.clone(),
+            schema.source => source_key(SearchResultSource::Contents),
+            schema.body => text.content.clone(),
+            schema.rank_hint => text.rank_hint,
+        );
+        if text.truncated {
+            document.add_text(schema.body, " content truncated");
+        }
+        writer
+            .add_document(document)
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    }
+
+    for media in media_documents {
+        let metadata = &media.metadata;
+        let mut document = doc!(
+            schema.path => media.path.to_string_lossy().into_owned(),
+            schema.relative_path => media.relative_path.to_string_lossy().into_owned(),
+            schema.name => media.name.clone(),
+            schema.source => source_key(SearchResultSource::Media),
+            schema.body => media.searchable_text.clone(),
+            schema.media_kind => media_kind_key(metadata.media_kind),
+            schema.rank_hint => media.rank_hint,
+        );
+        add_optional_u64(&mut document, schema.width, metadata.width.map(u64::from));
+        add_optional_u64(&mut document, schema.height, metadata.height.map(u64::from));
+        add_optional_u64(&mut document, schema.duration_ms, metadata.duration_ms);
+        add_optional_text(&mut document, schema.codec, metadata.codec.as_deref());
+        add_optional_text(&mut document, schema.title, metadata.title.as_deref());
+        add_optional_text(&mut document, schema.artist, metadata.artist.as_deref());
+        for exif in &metadata.exif {
+            document.add_text(schema.exif, format!("{}\t{}", exif.tag, exif.value));
+        }
+        writer
+            .add_document(document)
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    }
+
+    writer
+        .commit()
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    Ok(())
+}
+
+pub(crate) fn search_tantivy_index(
+    index_dir: &Path,
+    query_text: &str,
+    sources: &[SearchResultSource],
+    limit: usize,
+) -> Result<Vec<FullTextSearchHit>, IndexError> {
+    let tantivy_dir = tantivy_dir(index_dir);
+    if !tantivy_dir.join("meta.json").is_file() {
+        return Ok(Vec::new());
+    }
+    let schema = search_schema();
+    let index =
+        Index::open_in_dir(&tantivy_dir).map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    let reader = index
+        .reader()
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    let searcher = reader.searcher();
+    let query_parser = QueryParser::for_index(
+        &index,
+        vec![
+            schema.body,
+            schema.name,
+            schema.relative_path,
+            schema.codec,
+            schema.title,
+            schema.artist,
+            schema.exif,
+        ],
+    );
+    let query = query_parser
+        .parse_query(query_text)
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    let top_docs = searcher
+        .search(&query, &TopDocs::with_limit(limit.max(1)).order_by_score())
+        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+    let snippet_generator = SnippetGenerator::create(&searcher, &*query, schema.body).ok();
+    let allowed_sources = sources.iter().copied().map(source_key).collect::<Vec<_>>();
+    let mut hits = Vec::new();
+
+    for (score, address) in top_docs {
+        let document = searcher
+            .doc::<TantivyDocument>(address)
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+        let Some(source_text) = first_text(&document, schema.source) else {
+            continue;
+        };
+        if !allowed_sources.iter().any(|source| *source == source_text) {
+            continue;
+        }
+        let Some(source) = source_from_key(source_text) else {
+            continue;
+        };
+        let Some(path) = first_text(&document, schema.path).map(PathBuf::from) else {
+            continue;
+        };
+        let relative_path = first_text(&document, schema.relative_path)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.clone());
+        let name = first_text(&document, schema.name)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let snippet = snippet_generator
+            .as_ref()
+            .map(|generator| generator.snippet_from_doc(&document).fragment().to_owned())
+            .filter(|snippet| !snippet.trim().is_empty());
+
+        hits.push(FullTextSearchHit {
+            path,
+            relative_path,
+            name,
+            source,
+            score: score_to_rank(score),
+            snippet,
+            media: media_metadata_from_document(&document, &schema, source),
+        });
+    }
+
+    Ok(hits)
+}
+
+fn search_schema() -> SearchSchema {
+    let mut builder = Schema::builder();
+    let path = builder.add_text_field(PATH_FIELD, STRING | STORED);
+    let relative_path = builder.add_text_field(RELATIVE_PATH_FIELD, TEXT | STORED);
+    let name = builder.add_text_field(NAME_FIELD, TEXT | STORED);
+    let source = builder.add_text_field(SOURCE_FIELD, STRING | STORED);
+    let body = builder.add_text_field(BODY_FIELD, TEXT | STORED);
+    let media_kind = builder.add_text_field(MEDIA_KIND_FIELD, STRING | STORED);
+    let width = builder.add_u64_field(WIDTH_FIELD, STORED);
+    let height = builder.add_u64_field(HEIGHT_FIELD, STORED);
+    let duration_ms = builder.add_u64_field(DURATION_FIELD, STORED);
+    let codec = builder.add_text_field(CODEC_FIELD, TEXT | STORED);
+    let title = builder.add_text_field(TITLE_FIELD, TEXT | STORED);
+    let artist = builder.add_text_field(ARTIST_FIELD, TEXT | STORED);
+    let exif = builder.add_text_field(EXIF_FIELD, TEXT | STORED);
+    let rank_hint = builder.add_u64_field(RANK_HINT_FIELD, STORED);
+    let schema = builder.build();
+    SearchSchema {
+        schema,
+        path,
+        relative_path,
+        name,
+        source,
+        body,
+        media_kind,
+        width,
+        height,
+        duration_ms,
+        codec,
+        title,
+        artist,
+        exif,
+        rank_hint,
+    }
+}
+
+fn tantivy_dir(index_dir: &Path) -> PathBuf {
+    index_dir.join(TANTIVY_DIR_NAME)
+}
+
+fn add_optional_text(document: &mut TantivyDocument, field: Field, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        document.add_text(field, value);
+    }
+}
+
+fn add_optional_u64(document: &mut TantivyDocument, field: Field, value: Option<u64>) {
+    if let Some(value) = value {
+        document.add_u64(field, value);
+    }
+}
+
+fn first_text(document: &TantivyDocument, field: Field) -> Option<&str> {
+    document.get_first(field).and_then(|value| value.as_str())
+}
+
+fn first_u64(document: &TantivyDocument, field: Field) -> Option<u64> {
+    document.get_first(field).and_then(|value| value.as_u64())
+}
+
+fn media_metadata_from_document(
+    document: &TantivyDocument,
+    schema: &SearchSchema,
+    source: SearchResultSource,
+) -> Option<MediaSearchMetadata> {
+    if source != SearchResultSource::Media {
+        return None;
+    }
+    let media_kind = first_text(document, schema.media_kind).and_then(media_kind_from_key)?;
+    Some(MediaSearchMetadata {
+        media_kind,
+        width: first_u64(document, schema.width).and_then(|value| u32::try_from(value).ok()),
+        height: first_u64(document, schema.height).and_then(|value| u32::try_from(value).ok()),
+        duration_ms: first_u64(document, schema.duration_ms),
+        codec: first_text(document, schema.codec).map(ToOwned::to_owned),
+        title: first_text(document, schema.title).map(ToOwned::to_owned),
+        artist: first_text(document, schema.artist).map(ToOwned::to_owned),
+        exif: document
+            .get_all(schema.exif)
+            .filter_map(|value| value.as_str())
+            .filter_map(media_exif_from_text)
+            .collect(),
+    })
+}
+
+fn media_exif_from_text(text: &str) -> Option<super::types::MediaExifField> {
+    let (tag, value) = text.split_once('\t')?;
+    (!tag.is_empty() && !value.is_empty()).then(|| super::types::MediaExifField {
+        tag: tag.to_owned(),
+        value: value.to_owned(),
+    })
+}
+
+fn source_key(source: SearchResultSource) -> &'static str {
+    match source {
+        SearchResultSource::Files => "files",
+        SearchResultSource::Contents => "contents",
+        SearchResultSource::Media => "media",
+    }
+}
+
+fn source_from_key(key: &str) -> Option<SearchResultSource> {
+    match key {
+        "files" => Some(SearchResultSource::Files),
+        "contents" => Some(SearchResultSource::Contents),
+        "media" => Some(SearchResultSource::Media),
+        _ => None,
+    }
+}
+
+fn media_kind_key(kind: MediaSearchKind) -> &'static str {
+    match kind {
+        MediaSearchKind::Image => "image",
+        MediaSearchKind::Audio => "audio",
+        MediaSearchKind::Video => "video",
+    }
+}
+
+fn media_kind_from_key(key: &str) -> Option<MediaSearchKind> {
+    match key {
+        "image" => Some(MediaSearchKind::Image),
+        "audio" => Some(MediaSearchKind::Audio),
+        "video" => Some(MediaSearchKind::Video),
+        _ => None,
+    }
+}
+
+fn score_to_rank(score: f32) -> u32 {
+    if score.is_finite() && score > 0.0 {
+        (score * 1000.0).round().min(u32::MAX as f32) as u32
+    } else {
+        0
+    }
+}

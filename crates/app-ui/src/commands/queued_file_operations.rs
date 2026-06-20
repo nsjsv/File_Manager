@@ -5,13 +5,15 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use file_core::{
-    build_file_search_index_for_paths_with_progress, copy_path_with_options,
-    create_archive_with_progress, create_directory, create_empty_file, delete_trash_entry,
-    empty_trash, extract_archive, move_path_with_options, rename_path, restore_trash_entry,
-    trash_path_with_restore_entry, ArchiveCreationProgress, ArchiveCreationRequest,
-    ArchiveExtractionRequest, CopyProgress, FileOperationControls, FileOperationVerification,
-    FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexProgress, FileTransferOptions,
-    TransferConflictStrategy, TrashRestoreEntry,
+    copy_path_with_options, create_archive_with_progress, create_directory, create_empty_file,
+    delete_trash_entry, empty_trash, extract_archive, move_path_with_options, rename_path,
+    restore_trash_entry, trash_path_with_restore_entry, ArchiveCreationProgress,
+    ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileOperationControls,
+    FileOperationVerification, FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
+};
+use file_index::{
+    BuildSelectedPathsRequest, FileSearchIndexMode, FileSearchIndexProgress, IndexService,
+    IndexServiceEvent,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -143,19 +145,17 @@ async fn run_queued_file_operation(
             run_queued_extract_archive(request, controls, task_id, output).await
         }
         QueuedFileOperation::BuildSearchIndex {
+            profile_id,
             root,
-            index_dir,
+            index_base_dir,
             selected_paths,
-            include_hidden,
-            exclude_patterns,
             mode,
         } => {
             run_queued_search_index(
+                profile_id,
                 root,
-                index_dir,
+                index_base_dir,
                 selected_paths,
-                include_hidden,
-                exclude_patterns,
                 mode,
                 controls,
                 task_id,
@@ -253,11 +253,10 @@ async fn run_queued_create_archive(
 }
 
 async fn run_queued_search_index(
+    profile_id: String,
     root: PathBuf,
-    index_dir: PathBuf,
+    index_base_dir: PathBuf,
     selected_paths: Vec<PathBuf>,
-    include_hidden: bool,
-    exclude_patterns: Vec<String>,
     mode: FileSearchIndexMode,
     mut controls: FileOperationControls,
     task_id: u64,
@@ -271,13 +270,13 @@ async fn run_queued_search_index(
         .map_err(|error| error.to_string())?;
 
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut build = Box::pin(build_file_search_index_for_paths_with_progress(
-        root,
-        index_dir,
-        selected_paths,
-        FileSearchIndexOptions {
-            include_hidden,
-            exclude_patterns,
+    let service = IndexService::open(index_base_dir.join("control.sqlite"), index_base_dir)
+        .map_err(|error| error.to_string())?;
+    let mut build = Box::pin(service.build_selected_paths_with_cancel(
+        BuildSelectedPathsRequest {
+            profile_id,
+            root,
+            selected_paths,
             mode,
         },
         cancel,
@@ -296,7 +295,10 @@ async fn run_queued_search_index(
                 }
             }
             outcome = &mut build => {
-                let outcome = outcome.map_err(|error| error.to_string())?;
+                let event = outcome.map_err(|error| error.to_string())?;
+                let IndexServiceEvent::RebuildFinished(outcome) = event else {
+                    return Err(format!("unexpected search index event: {event:?}"));
+                };
                 send_file_operation_progress(
                     output,
                     task_id,

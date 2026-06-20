@@ -7,6 +7,7 @@ mod preview_panel;
 mod properties_window;
 mod rendering_settings;
 mod search_index_settings;
+mod search_mode_prompt;
 mod search_panel;
 mod settings_window;
 mod shortcut_settings;
@@ -68,6 +69,7 @@ use floating_panels::{
     open_with_panel, transfer_conflict_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
+use search_mode_prompt::search_mode_prompt_panel;
 use sidebar_panel::sidebar_view;
 use startup_index_setup::startup_index_setup_panel;
 
@@ -155,7 +157,13 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
 
     let mut floating = Vec::new();
     let mut floating_input = BrowserFloatingInput::Plain;
-    if let Some(startup_index_setup) = &browser.startup_index_setup {
+    if browser.search_mode_prompt.is_some() {
+        floating_input = BrowserFloatingInput::Modal;
+        floating.push(FloatingContent {
+            element: search_mode_prompt_panel(),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(startup_index_setup) = &browser.startup_index_setup {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: startup_index_setup_panel(

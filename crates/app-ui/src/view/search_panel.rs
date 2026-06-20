@@ -1,20 +1,23 @@
-use file_core::FileSearchMatch;
-use iced::widget::{column, container, mouse_area, row, scrollable, text_input, Column};
+use file_index::{FileSearchMatch, MediaSearchKind, MediaSearchMetadata, SearchResultSource};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, text_input, Button, Column,
+};
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, path_suggestion_item_style,
     preview_panel_style, selected_path_suggestion_item_style,
 };
+use crate::config::SearchBackendMode;
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::file_entry_icon_symbol;
-use crate::model::{Message, ScrollbarVisibility, SearchScope, SearchState};
+use crate::model::{Message, ScrollbarVisibility, SearchMode, SearchScope, SearchState};
 use crate::typography::readable_text;
 
 use super::{auxiliary_window_message, themed_icon, IconTone, MENU_ICON_SIZE};
 
 pub(crate) const SEARCH_RESULTS_HEIGHT: f32 = 320.0;
-pub(crate) const SEARCH_RESULT_ROW_HEIGHT: f32 = 54.0;
+pub(crate) const SEARCH_RESULT_ROW_HEIGHT: f32 = 64.0;
 pub(crate) const SEARCH_RESULT_ROW_SPACING: f32 = 4.0;
 pub(crate) const SEARCH_RESULTS_PADDING: f32 = 2.0;
 
@@ -32,15 +35,17 @@ pub(crate) fn search_results_id() -> iced::widget::Id {
 
 pub(crate) fn view_search_window(
     search: Option<&SearchState>,
+    search_backend_mode: SearchBackendMode,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     search
-        .map(|search| search_panel(search, scrollbar_visibility))
+        .map(|search| search_panel(search, search_backend_mode, scrollbar_visibility))
         .unwrap_or_else(|| auxiliary_window_message("Search window is closed"))
 }
 
 fn search_panel(
     search: &SearchState,
+    search_backend_mode: SearchBackendMode,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     let root = search.root.to_string_lossy();
@@ -62,6 +67,7 @@ fn search_panel(
 
     let content = column![
         header,
+        search_mode_selector(search.mode, search_backend_mode),
         input,
         search_results_panel(search, scrollbar_visibility),
         search_footer(search)
@@ -85,7 +91,7 @@ fn search_results_panel(
         let message = if search.is_indexing {
             "Building the index in the background. You can search by file name now"
         } else {
-            "Type a file name to search. Press Tab to switch between current folder and Home"
+            "Type to search. Press Tab to switch between current folder and Home"
         };
         return search_message(message);
     }
@@ -150,7 +156,19 @@ fn search_match_row(search_match: &FileSearchMatch, is_selected: bool) -> Elemen
     let name = format_middle_ellipsized_text(name.as_ref(), SEARCH_NAME_MAX_CHARS);
     let path = search_match.relative_path.to_string_lossy();
     let path = format_middle_ellipsized_text(path.as_ref(), SEARCH_PATH_MAX_CHARS);
-    let labels = column![readable_text(name).size(14), readable_text(path).size(12),].spacing(2);
+    let mut labels = column![
+        row![
+            readable_text(name).size(14).width(Length::Fill),
+            readable_text(search_source_label(search_match.source)).size(11),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        readable_text(path).size(12),
+    ]
+    .spacing(2);
+    if let Some(detail) = search_match_detail(search_match) {
+        labels = labels.push(readable_text(detail).size(12));
+    }
     let row_content = row![
         themed_icon(
             file_entry_icon_symbol(search_match.kind, search_match.name()),
@@ -178,26 +196,120 @@ fn search_match_row(search_match: &FileSearchMatch, is_selected: bool) -> Elemen
 }
 
 fn search_footer(search: &SearchState) -> Element<'_, Message> {
+    let mode_label = search_mode_label(search.mode);
     let status = if search.index_error.is_some() {
-        "Index build failed · Tab switches scope · Esc closes".to_owned()
+        format!("{mode_label} index failed · Tab switches scope · Esc closes")
     } else if search.is_indexing {
-        "Index updating · Tab switches scope · Enter opens match · Esc closes".to_owned()
+        format!("{mode_label} index updating · Tab switches scope · Enter opens match · Esc closes")
     } else if search.is_loading {
-        "Searching · Tab switches scope · Enter opens match · Esc closes".to_owned()
+        format!("Searching {mode_label} · Tab switches scope · Enter opens match · Esc closes")
     } else if search.skipped_count > 0 {
         format!(
-            "Matches: {} · Skipped locations: {} · Tab switches scope · Enter opens match · Esc closes",
+            "{mode_label} matches: {} · Skipped locations: {} · Tab switches scope · Enter opens match · Esc closes",
             search.matches.len(),
             search.skipped_count
         )
     } else {
         format!(
-            "Matches: {} · Tab switches scope · Enter opens match · Esc closes",
+            "{mode_label} matches: {} · Tab switches scope · Enter opens match · Esc closes",
             search.matches.len()
         )
     };
 
     readable_text(status).size(12).into()
+}
+
+fn search_mode_selector(
+    selected: SearchMode,
+    search_backend_mode: SearchBackendMode,
+) -> Element<'static, Message> {
+    let mut modes = row![search_mode_button("Files", SearchMode::Files, selected)]
+        .spacing(6)
+        .align_y(Alignment::Center);
+    if search_backend_mode == SearchBackendMode::Indexed {
+        modes = modes
+            .push(search_mode_button(
+                "Contents",
+                SearchMode::Contents,
+                selected,
+            ))
+            .push(search_mode_button("Media", SearchMode::Media, selected))
+            .push(search_mode_button("All", SearchMode::All, selected));
+    }
+    modes.into()
+}
+
+fn search_mode_button(
+    label: &'static str,
+    mode: SearchMode,
+    selected: SearchMode,
+) -> Button<'static, Message> {
+    let label = if mode == selected {
+        format!("[{label}]")
+    } else {
+        label.to_owned()
+    };
+    let button = button(readable_text(label).size(12)).padding([4, 8]);
+    if mode == selected {
+        button
+    } else {
+        button.on_press(Message::SearchModeSelected(mode))
+    }
+}
+
+fn search_mode_label(mode: SearchMode) -> &'static str {
+    match mode {
+        SearchMode::Files => "Files",
+        SearchMode::Contents => "Contents",
+        SearchMode::Media => "Media",
+        SearchMode::All => "All",
+    }
+}
+
+fn search_source_label(source: SearchResultSource) -> &'static str {
+    match source {
+        SearchResultSource::Files => "Files",
+        SearchResultSource::Contents => "Contents",
+        SearchResultSource::Media => "Media",
+    }
+}
+
+fn search_match_detail(search_match: &FileSearchMatch) -> Option<String> {
+    search_match
+        .snippet
+        .as_deref()
+        .map(|snippet| format_middle_ellipsized_text(snippet.trim(), SEARCH_PATH_MAX_CHARS))
+        .filter(|snippet| !snippet.is_empty())
+        .or_else(|| search_match.media.as_ref().map(media_detail))
+}
+
+fn media_detail(media: &MediaSearchMetadata) -> String {
+    let mut parts = Vec::new();
+    parts.push(match media.media_kind {
+        MediaSearchKind::Image => "Image".to_owned(),
+        MediaSearchKind::Audio => "Audio".to_owned(),
+        MediaSearchKind::Video => "Video".to_owned(),
+    });
+    if let (Some(width), Some(height)) = (media.width, media.height) {
+        parts.push(format!("{width}x{height}"));
+    }
+    if let Some(duration_ms) = media.duration_ms {
+        parts.push(format_duration_ms(duration_ms));
+    }
+    if let Some(codec) = media.codec.as_deref().filter(|codec| !codec.is_empty()) {
+        parts.push(codec.to_owned());
+    }
+    if let Some(exif) = media.exif.first() {
+        parts.push(format!("{}: {}", exif.tag, exif.value));
+    }
+    parts.join(" · ")
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    let total_seconds = duration_ms / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes}:{seconds:02}")
 }
 
 fn search_scope_label(scope: SearchScope) -> &'static str {
