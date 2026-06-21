@@ -10,13 +10,15 @@ use crate::text_preview::{
 };
 
 pub(crate) const PREVIEW_TEXT_LIMIT: usize = 4 * 1024 * 1024;
-pub(crate) const PLAIN_TEXT_PREVIEW_LIMIT: usize = 1024 * 1024;
 
 const TEXT_PREVIEW_READ_BLOCK_SIZE: usize = 8 * 1024;
 
-pub(crate) async fn load_initial_text_preview(path: PathBuf) -> Result<PreviewContent, String> {
+pub(crate) async fn load_initial_text_preview(
+    path: PathBuf,
+    max_file_bytes: u64,
+) -> Result<PreviewContent, String> {
     if text_preview_format_for_path(path.as_path()) == TextPreviewFormat::Plain {
-        return load_plain_text_preview(path).await;
+        return load_plain_text_preview(path, max_file_bytes).await;
     }
 
     let text_preview =
@@ -33,13 +35,19 @@ pub(crate) async fn load_initial_text_preview(path: PathBuf) -> Result<PreviewCo
     })
 }
 
-async fn load_plain_text_preview(path: PathBuf) -> Result<PreviewContent, String> {
+async fn load_plain_text_preview(
+    path: PathBuf,
+    max_file_bytes: u64,
+) -> Result<PreviewContent, String> {
     let file_len = tokio::fs::metadata(path.as_path())
         .await
         .map_err(|error| format!("could not inspect text preview: {error}"))?
         .len();
-    if file_len > PLAIN_TEXT_PREVIEW_LIMIT as u64 {
-        return Err("Text preview is only available for files up to 1 MiB".to_owned());
+    if file_len > max_file_bytes {
+        return Err(format!(
+            "Text preview is only available for files up to {}",
+            crate::formatting::format_file_size(max_file_bytes)
+        ));
     }
 
     let bytes = tokio::fs::read(path.as_path())
@@ -272,7 +280,7 @@ mod tests {
             next_offset,
             loaded_line_count,
             ..
-        } = load_initial_text_preview(text_path)
+        } = load_initial_text_preview(text_path, PREVIEW_TEXT_LIMIT as u64)
             .await
             .expect("text preview")
         else {
@@ -295,7 +303,7 @@ mod tests {
             next_offset,
             loaded_line_count,
             ..
-        } = load_initial_text_preview(text_path)
+        } = load_initial_text_preview(text_path, PREVIEW_TEXT_LIMIT as u64)
             .await
             .expect("text preview")
         else {
@@ -313,9 +321,10 @@ mod tests {
         let text_path = temp_dir.path().join("large.md");
         std::fs::write(&text_path, numbered_line_range(0, 700)).expect("write text file");
 
-        let PreviewContent::Text { next_offset, .. } = load_initial_text_preview(text_path.clone())
-            .await
-            .expect("text preview")
+        let PreviewContent::Text { next_offset, .. } =
+            load_initial_text_preview(text_path.clone(), PREVIEW_TEXT_LIMIT as u64)
+                .await
+                .expect("text preview")
         else {
             panic!("expected text preview");
         };
@@ -369,9 +378,10 @@ mod tests {
         let content = numbered_crlf_line_range(0, 52);
         std::fs::write(&text_path, content).expect("write text file");
 
-        let PreviewContent::Text { rendered, .. } = load_initial_text_preview(text_path)
-            .await
-            .expect("text preview")
+        let PreviewContent::Text { rendered, .. } =
+            load_initial_text_preview(text_path, PREVIEW_TEXT_LIMIT as u64)
+                .await
+                .expect("text preview")
         else {
             panic!("expected text preview");
         };

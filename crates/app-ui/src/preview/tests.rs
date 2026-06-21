@@ -4,9 +4,12 @@ use tempfile::tempdir;
 use zip::write::SimpleFileOptions;
 
 use crate::model::{PreviewTreeDirectoryChildren, TextPreviewFormat};
-use crate::text_preview_loading::{PLAIN_TEXT_PREVIEW_LIMIT, PREVIEW_TEXT_LIMIT};
+use crate::text_preview_loading::PREVIEW_TEXT_LIMIT;
 
 use super::*;
+
+const TEST_MAX_PREVIEW_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const TEST_LARGE_MAX_PREVIEW_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[tokio::test]
 async fn load_preview_reads_zip_archive_tree() {
@@ -14,10 +17,14 @@ async fn load_preview_reads_zip_archive_tree() {
     let archive_path = temp_dir.path().join("sample.zip");
     write_zip_archive(&archive_path);
 
-    let preview_content =
-        load_preview(archive_path.clone(), FileKind::File, ScanOptions::default())
-            .await
-            .expect("zip archive preview");
+    let preview_content = load_preview(
+        archive_path.clone(),
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("zip archive preview");
 
     let PreviewContent::Archive { entries } = preview_content else {
         panic!("expected archive preview");
@@ -42,6 +49,7 @@ async fn load_preview_reads_directory_top_layer_only() {
         temp_dir.path().to_path_buf(),
         FileKind::Directory,
         ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
     )
     .await
     .expect("directory preview");
@@ -90,9 +98,14 @@ async fn load_preview_reads_gzip_tar_archive_tree() {
     let archive_path = temp_dir.path().join("sample.tar.gz");
     write_gzip_tar_archive(&archive_path);
 
-    let preview_content = load_preview(archive_path, FileKind::File, ScanOptions::default())
-        .await
-        .expect("tar.gz archive preview");
+    let preview_content = load_preview(
+        archive_path,
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("tar.gz archive preview");
 
     let PreviewContent::Archive { entries, .. } = preview_content else {
         panic!("expected archive preview");
@@ -108,9 +121,14 @@ async fn load_preview_keeps_utf8_text_preview() {
     let text_path = temp_dir.path().join("note.txt");
     std::fs::write(&text_path, "hello\n").expect("write text file");
 
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
-        .await
-        .expect("text preview");
+    let preview_content = load_preview(
+        text_path,
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("text preview");
 
     let PreviewContent::Text {
         rendered, format, ..
@@ -128,9 +146,14 @@ async fn load_preview_renders_markdown_text_preview() {
     let text_path = temp_dir.path().join("README.md");
     std::fs::write(&text_path, "# Title\n\nHello **world**.\n").expect("write markdown file");
 
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
-        .await
-        .expect("markdown preview");
+    let preview_content = load_preview(
+        text_path,
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("markdown preview");
 
     let PreviewContent::Text {
         rendered, format, ..
@@ -149,9 +172,14 @@ async fn load_preview_reads_full_plain_text_preview() {
     let content = numbered_line_range(0, 150);
     std::fs::write(&text_path, &content).expect("write text file");
 
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
-        .await
-        .expect("text preview");
+    let preview_content = load_preview(
+        text_path,
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("text preview");
 
     let PreviewContent::Text {
         rendered,
@@ -170,20 +198,17 @@ async fn load_preview_reads_full_plain_text_preview() {
 }
 
 #[tokio::test]
-async fn load_preview_rejects_plain_text_over_one_mib() {
+async fn load_preview_rejects_file_over_configured_limit() {
     let temp_dir = tempdir().expect("temp dir");
     let text_path = temp_dir.path().join("single-line.txt");
-    let content = "a".repeat(PLAIN_TEXT_PREVIEW_LIMIT + 1);
+    let content = "a".repeat(1025);
     std::fs::write(&text_path, content).expect("write text file");
 
-    let error = load_preview(text_path, FileKind::File, ScanOptions::default())
+    let error = load_preview(text_path, FileKind::File, ScanOptions::default(), 1024)
         .await
-        .expect_err("plain text should be rejected");
+        .expect_err("file should be rejected");
 
-    assert_eq!(
-        error,
-        "Text preview is only available for files up to 1 MiB"
-    );
+    assert!(error.contains("File is too large to preview"));
 }
 
 #[tokio::test]
@@ -193,9 +218,14 @@ async fn load_preview_truncates_long_markdown_on_utf8_boundary() {
     let content = "€".repeat(PREVIEW_TEXT_LIMIT);
     std::fs::write(&text_path, content).expect("write text file");
 
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default())
-        .await
-        .expect("text preview");
+    let preview_content = load_preview(
+        text_path,
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_LARGE_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("text preview");
 
     let PreviewContent::Text { rendered, .. } = preview_content else {
         panic!("expected text preview");

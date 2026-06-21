@@ -167,6 +167,9 @@ impl FileBrowser {
         self.rendering_gpu_preference = user_config.rendering_gpu_preference;
         self.options.include_hidden = user_config.show_hidden_files;
         self.view_mode = user_config.browser_view_mode;
+        self.max_preview_file_mib_input =
+            crate::config::max_preview_file_mib(user_config.max_preview_file_bytes).to_string();
+        self.max_preview_file_mib_error = None;
         self.network_connections =
             crate::network_connections::NetworkConnectionState::from_connections(
                 user_config.network_connections.clone(),

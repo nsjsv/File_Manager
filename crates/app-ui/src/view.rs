@@ -4,6 +4,7 @@ mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;
 mod network_connections;
+mod network_settings;
 mod preview_panel;
 mod properties_window;
 mod rendering_settings;

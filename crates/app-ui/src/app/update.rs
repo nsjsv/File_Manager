@@ -590,6 +590,13 @@ impl FileBrowser {
             Message::SettingsOpened => self.open_settings(),
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
             Message::ShowHiddenFilesToggled => self.toggle_show_hidden_files(),
+            Message::NetworkListThumbnailDownloadsToggled => {
+                self.toggle_network_list_thumbnail_downloads()
+            }
+            Message::MaxPreviewFileMibInputChanged(value) => {
+                self.update_max_preview_file_mib_input(value)
+            }
+            Message::MaxPreviewFileMibInputCommitted => self.commit_max_preview_file_mib_input(),
             Message::FileOperationVerificationSelected(verification) => {
                 self.user_config.file_operation_verification = verification;
                 self.persist_user_config_command()

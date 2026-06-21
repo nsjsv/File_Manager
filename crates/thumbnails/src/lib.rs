@@ -210,6 +210,30 @@ pub async fn load_or_generate_thumbnail(
     load_or_generate_thumbnail_with_kind(cache_dir, request, media_kind).await
 }
 
+pub async fn load_cached_thumbnail(
+    cache_dir: impl AsRef<Path>,
+    request: ThumbnailRequest,
+) -> Result<Option<CachedThumbnail>, ThumbnailError> {
+    let media_kind = thumbnail_media_kind_for_path(&request.source).ok_or_else(|| {
+        ThumbnailError::UnsupportedFormat {
+            path: request.source.clone(),
+        }
+    })?;
+    let key = thumbnail_key(&request, media_kind);
+    let output = cached_thumbnail_output_path(cache_dir.as_ref(), &key);
+    match cached_thumbnail_dimensions(output.clone()).await {
+        Ok((width, height)) => Ok(Some(CachedThumbnail {
+            key,
+            source: request.source,
+            output,
+            width,
+            height,
+            cache_hit: true,
+        })),
+        Err(_) => Ok(None),
+    }
+}
+
 pub async fn load_or_generate_image_thumbnail(
     cache_dir: impl AsRef<Path>,
     request: ThumbnailRequest,
@@ -229,9 +253,7 @@ async fn load_or_generate_thumbnail_with_kind(
 ) -> Result<CachedThumbnail, ThumbnailError> {
     let started_at = Instant::now();
     let key = thumbnail_key(&request, media_kind);
-    let output = cache_dir
-        .as_ref()
-        .join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION));
+    let output = cached_thumbnail_output_path(cache_dir.as_ref(), &key);
     tracing::debug!(
         target: "thumbnails",
         source = ?request.source,
@@ -289,6 +311,10 @@ async fn load_or_generate_thumbnail_with_kind(
         ),
     }
     generated
+}
+
+fn cached_thumbnail_output_path(cache_dir: &Path, key: &ThumbnailKey) -> PathBuf {
+    cache_dir.join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION))
 }
 
 pub async fn generate_image_thumbnail(

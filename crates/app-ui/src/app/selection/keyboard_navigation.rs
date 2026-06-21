@@ -12,6 +12,7 @@ use crate::commands::{
     load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
     start_audio_preview_command,
 };
+use crate::formatting::format_file_size;
 use crate::model::{
     AudioPreviewPlayback, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryStatus, Message,
     NavigationMode, PreviewState, PreviewWindowProfile,
@@ -310,6 +311,11 @@ impl FileBrowser {
         };
 
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
+        if kind == FileKind::File {
+            if let Some(command) = self.reject_oversized_file_preview(&path) {
+                return command;
+            }
+        }
         if kind == FileKind::File && self.path_is_mounted_network(&path) {
             return self.start_network_preview_download(path);
         }
@@ -352,7 +358,12 @@ impl FileBrowser {
             self.error = None;
             return Task::batch([
                 close_window_command,
-                preview_command(path, kind, self.options.clone()),
+                preview_command(
+                    path,
+                    kind,
+                    self.options.clone(),
+                    self.max_preview_file_bytes(),
+                ),
             ]);
         }
 
@@ -369,14 +380,42 @@ impl FileBrowser {
             self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
             return Task::batch([
                 window_command,
-                preview_command(path.clone(), kind, self.options.clone()),
+                preview_command(
+                    path.clone(),
+                    kind,
+                    self.options.clone(),
+                    self.max_preview_file_bytes(),
+                ),
                 start_audio_preview_command(path),
             ]);
         }
         Task::batch([
             window_command,
-            preview_command(path, kind, self.options.clone()),
+            preview_command(
+                path,
+                kind,
+                self.options.clone(),
+                self.max_preview_file_bytes(),
+            ),
         ])
+    }
+
+    fn reject_oversized_file_preview(&mut self, path: &Path) -> Option<Task<Message>> {
+        let entry = self.entry_for_path(path)?;
+        let max_bytes = self.max_preview_file_bytes();
+        let file_bytes = entry.metadata.len;
+        if file_bytes <= max_bytes {
+            return None;
+        }
+
+        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        self.clear_preview();
+        self.preview = Some(PreviewState::Error(format!(
+            "File is too large to preview ({}). Maximum preview size is {}.",
+            format_file_size(file_bytes),
+            format_file_size(max_bytes)
+        )));
+        Some(window_command)
     }
 }
 

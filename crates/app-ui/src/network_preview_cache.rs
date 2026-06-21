@@ -12,6 +12,8 @@ use file_core::{
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
+use crate::formatting::format_file_size;
+
 const NETWORK_PREVIEW_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -20,14 +22,21 @@ const FNV_PRIME: u64 = 0x100000001b3;
 pub(crate) struct NetworkPreviewCacheRequest {
     pub(crate) source_path: PathBuf,
     pub(crate) cache_dir: PathBuf,
+    pub(crate) max_file_bytes: u64,
     pub(crate) cancel: CancellationToken,
 }
 
 impl NetworkPreviewCacheRequest {
-    pub(crate) fn new(source_path: PathBuf, cache_dir: PathBuf, cancel: CancellationToken) -> Self {
+    pub(crate) fn new(
+        source_path: PathBuf,
+        cache_dir: PathBuf,
+        max_file_bytes: u64,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             source_path,
             cache_dir,
+            max_file_bytes,
             cancel,
         }
     }
@@ -69,6 +78,13 @@ pub(crate) async fn cache_network_preview_file(
         return Err(format!(
             "network preview source is not a regular file: {:?}",
             request.source_path
+        ));
+    }
+    if source_metadata.len() > request.max_file_bytes {
+        return Err(format!(
+            "File is too large to preview ({}). Maximum preview size is {}.",
+            format_file_size(source_metadata.len()),
+            format_file_size(request.max_file_bytes)
         ));
     }
 
@@ -258,15 +274,44 @@ mod tests {
         assert!(!entry.exists());
     }
 
+    #[tokio::test]
+    async fn cache_network_preview_file_rejects_source_over_limit_before_copy() {
+        let temp_dir = tempdir().expect("temp dir");
+        let source = temp_dir.path().join("remote.txt");
+        let cache_dir = temp_dir.path().join("cache");
+        tokio::fs::write(&source, b"remote")
+            .await
+            .expect("write source");
+
+        let error = cache_once_with_limit(&source, &cache_dir, 3)
+            .await
+            .expect_err("oversized preview");
+        let mut entries = tokio::fs::read_dir(&cache_dir)
+            .await
+            .expect("read cache dir");
+
+        assert!(error.contains("File is too large to preview"));
+        assert!(entries.next_entry().await.expect("cache entry").is_none());
+    }
+
     async fn cache_once(source: &Path, cache_dir: &Path) -> PathBuf {
+        cache_once_with_limit(source, cache_dir, u64::MAX)
+            .await
+            .expect("cache preview")
+    }
+
+    async fn cache_once_with_limit(
+        source: &Path,
+        cache_dir: &Path,
+        max_file_bytes: u64,
+    ) -> Result<PathBuf, String> {
         let (progress, _receiver) = mpsc::unbounded_channel();
         let request = NetworkPreviewCacheRequest::new(
             source.to_path_buf(),
             cache_dir.to_path_buf(),
+            max_file_bytes,
             CancellationToken::new(),
         );
-        cache_network_preview_file(request, progress)
-            .await
-            .expect("cache preview")
+        cache_network_preview_file(request, progress).await
     }
 }

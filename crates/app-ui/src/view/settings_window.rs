@@ -13,6 +13,7 @@ use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCatego
 use crate::typography::readable_text;
 
 use super::file_operation_verification_settings::file_operation_verification_options;
+use super::network_settings::network_settings_content;
 use super::rendering_settings::rendering_gpu_preference_button;
 use super::search_index_settings::search_index_settings_content;
 use super::shortcut_settings::shortcut_settings_section;
@@ -81,6 +82,7 @@ fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
     let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::Settings);
     match browser.selected_settings_category {
         SettingsCategory::General => general_settings_detail(browser, scrollbar_visibility),
+        SettingsCategory::Network => network_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::SearchIndex => {
             search_index_settings_detail(browser, scrollbar_visibility)
         }
@@ -108,6 +110,13 @@ fn general_settings_detail(
         .width(Length::Fill),
         scrollbar_visibility,
     )
+}
+
+fn network_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
+    settings_detail_scroller(network_settings_content(browser), scrollbar_visibility)
 }
 
 fn search_index_settings_detail(

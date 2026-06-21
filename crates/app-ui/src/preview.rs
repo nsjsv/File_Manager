@@ -10,6 +10,7 @@ use file_core::{
 };
 
 use crate::audio_preview::inspect_audio_preview_metadata;
+use crate::formatting::format_file_size;
 use crate::model::{PreviewContent, PreviewTreeDirectoryChildren, PreviewTreeEntry};
 use crate::text_preview_loading::load_initial_text_preview;
 
@@ -23,10 +24,12 @@ pub(crate) async fn load_preview(
     path: PathBuf,
     kind: FileKind,
     options: ScanOptions,
+    max_file_bytes: u64,
 ) -> Result<PreviewContent, String> {
     match kind {
         FileKind::Directory => load_directory_preview(path, options).await,
         FileKind::File => {
+            reject_file_over_preview_limit(&path, max_file_bytes).await?;
             if let Some(format) = archive_format_for_path(&path) {
                 load_archive_preview(path, format).await
             } else if is_known_archive_path(&path) {
@@ -38,13 +41,28 @@ pub(crate) async fn load_preview(
             } else if is_supported_video_path(&path) {
                 load_video_preview(path).await
             } else {
-                load_text_preview(path).await
+                load_text_preview(path, max_file_bytes).await
             }
         }
         FileKind::Symlink | FileKind::Other => {
             Err("Preview is only available for directories, archives, audio files, images, and UTF-8 text files".to_owned())
         }
     }
+}
+
+async fn reject_file_over_preview_limit(path: &Path, max_file_bytes: u64) -> Result<(), String> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| format!("could not inspect preview file: {error}"))?;
+    if metadata.len() <= max_file_bytes {
+        return Ok(());
+    }
+
+    Err(format!(
+        "File is too large to preview ({}). Maximum preview size is {}.",
+        format_file_size(metadata.len()),
+        format_file_size(max_file_bytes)
+    ))
 }
 
 async fn load_directory_preview(
@@ -525,8 +543,8 @@ fn archive_path_segments(path: &str) -> Vec<&str> {
         .collect()
 }
 
-async fn load_text_preview(path: PathBuf) -> Result<PreviewContent, String> {
-    load_initial_text_preview(path).await
+async fn load_text_preview(path: PathBuf, max_file_bytes: u64) -> Result<PreviewContent, String> {
+    load_initial_text_preview(path, max_file_bytes).await
 }
 
 #[cfg(test)]

@@ -25,20 +25,24 @@ pub(crate) fn preview_command(
     path: PathBuf,
     kind: FileKind,
     options: ScanOptions,
+    max_file_bytes: u64,
 ) -> Task<Message> {
     let preview_path = path.clone();
-    Task::perform(load_preview(path, kind, options), move |preview_outcome| {
-        Message::PreviewLoaded(preview_path.clone(), preview_outcome)
-    })
+    Task::perform(
+        load_preview(path, kind, options, max_file_bytes),
+        move |preview_outcome| Message::PreviewLoaded(preview_path.clone(), preview_outcome),
+    )
 }
 
 pub(crate) fn network_preview_cache_command(
     source_path: PathBuf,
     generation: u64,
     cache_dir: PathBuf,
+    max_file_bytes: u64,
     cancel: CancellationToken,
 ) -> Task<Message> {
-    let request = NetworkPreviewCacheRequest::new(source_path.clone(), cache_dir, cancel);
+    let request =
+        NetworkPreviewCacheRequest::new(source_path.clone(), cache_dir, max_file_bytes, cancel);
     Task::stream(iced::stream::channel(
         NETWORK_PREVIEW_CACHE_CHANNEL_SIZE,
         async move |mut output| {

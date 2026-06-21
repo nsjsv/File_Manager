@@ -24,6 +24,12 @@ pub(crate) enum ThumbnailPurpose {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ThumbnailLoadPolicy {
+    CacheOnly,
+    LoadOrGenerate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ThumbnailPriority {
     Background,
     Visible,
@@ -36,6 +42,7 @@ pub(crate) struct ThumbnailWork {
     pub(crate) request: ThumbnailRequest,
     pub(crate) purpose: ThumbnailPurpose,
     pub(crate) priority: ThumbnailPriority,
+    pub(crate) load_policy: ThumbnailLoadPolicy,
     pub(crate) scope: Option<ThumbnailScope>,
 }
 
@@ -48,7 +55,14 @@ impl ThumbnailWork {
 #[derive(Debug, Clone)]
 pub(crate) struct ThumbnailLoadOutcome {
     pub(crate) work: ThumbnailWork,
-    pub(crate) result: Result<CachedThumbnail, String>,
+    pub(crate) result: ThumbnailLoadResult,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ThumbnailLoadResult {
+    Ready(CachedThumbnail),
+    CacheMiss,
+    Failed(String),
 }
 
 #[derive(Debug, Clone)]
@@ -111,26 +125,34 @@ impl ThumbnailCache {
         self.cache_dir.clone()
     }
 
-    pub(crate) fn enqueue_entry(
-        &mut self,
-        entry: &DirectoryEntry,
-        max_edge: u32,
-        purpose: ThumbnailPurpose,
-        priority: ThumbnailPriority,
-    ) {
-        let Some(request) = request_for_entry(entry, max_edge) else {
-            return;
-        };
-        self.enqueue_request(request, purpose, priority);
-    }
-
     pub(crate) fn enqueue_request(
         &mut self,
         request: ThumbnailRequest,
         purpose: ThumbnailPurpose,
         priority: ThumbnailPriority,
     ) {
-        self.enqueue_request_with_scope(request, purpose, priority, None);
+        self.enqueue_request_with_scope(
+            request,
+            purpose,
+            priority,
+            ThumbnailLoadPolicy::LoadOrGenerate,
+            None,
+        );
+    }
+
+    pub(crate) fn enqueue_cached_request(
+        &mut self,
+        request: ThumbnailRequest,
+        purpose: ThumbnailPurpose,
+        priority: ThumbnailPriority,
+    ) {
+        self.enqueue_request_with_scope(
+            request,
+            purpose,
+            priority,
+            ThumbnailLoadPolicy::CacheOnly,
+            None,
+        );
     }
 
     pub(crate) fn enqueue_request_for_scope(
@@ -140,7 +162,29 @@ impl ThumbnailCache {
         priority: ThumbnailPriority,
         scope: ThumbnailScope,
     ) {
-        self.enqueue_request_with_scope(request, purpose, priority, Some(scope));
+        self.enqueue_request_with_scope(
+            request,
+            purpose,
+            priority,
+            ThumbnailLoadPolicy::LoadOrGenerate,
+            Some(scope),
+        );
+    }
+
+    pub(crate) fn enqueue_cached_request_for_scope(
+        &mut self,
+        request: ThumbnailRequest,
+        purpose: ThumbnailPurpose,
+        priority: ThumbnailPriority,
+        scope: ThumbnailScope,
+    ) {
+        self.enqueue_request_with_scope(
+            request,
+            purpose,
+            priority,
+            ThumbnailLoadPolicy::CacheOnly,
+            Some(scope),
+        );
     }
 
     pub(crate) fn prune_scope_except(&mut self, scope: &ThumbnailScope, keep: &[ThumbnailKey]) {
@@ -150,15 +194,21 @@ impl ThumbnailCache {
         self.queue_order.retain(|key| self.queued.contains_key(key));
     }
 
+    pub(crate) fn retain_queued_work(&mut self, mut keep_work: impl FnMut(&ThumbnailWork) -> bool) {
+        self.queued.retain(|_, work| keep_work(work));
+        self.queue_order.retain(|key| self.queued.contains_key(key));
+    }
+
     fn enqueue_request_with_scope(
         &mut self,
         request: ThumbnailRequest,
         purpose: ThumbnailPurpose,
         priority: ThumbnailPriority,
+        load_policy: ThumbnailLoadPolicy,
         scope: Option<ThumbnailScope>,
     ) {
         let key = request.key();
-        if !self.thumbnail_can_be_queued(&key) {
+        if !self.thumbnail_can_be_queued(&key, load_policy) {
             return;
         }
 
@@ -166,10 +216,11 @@ impl ThumbnailCache {
             request,
             purpose,
             priority,
+            load_policy,
             scope,
         };
         if let Some(existing) = self.queued.get_mut(&key) {
-            if existing.priority < priority {
+            if existing.priority < priority || existing.load_policy < load_policy {
                 *existing = work;
             } else if existing.scope.is_none() {
                 existing.scope = work.scope;
@@ -257,10 +308,14 @@ impl ThumbnailCache {
         false
     }
 
-    fn thumbnail_can_be_queued(&mut self, key: &ThumbnailKey) -> bool {
+    fn thumbnail_can_be_queued(
+        &mut self,
+        key: &ThumbnailKey,
+        load_policy: ThumbnailLoadPolicy,
+    ) -> bool {
         !self.ready.contains_key(key)
             && !self.inflight.contains_key(key)
-            && !self.failure_is_active(key)
+            && (load_policy == ThumbnailLoadPolicy::CacheOnly || !self.failure_is_active(key))
     }
 
     fn take_highest_priority_work(&mut self) -> Option<ThumbnailWork> {

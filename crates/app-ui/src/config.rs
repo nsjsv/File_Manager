@@ -21,6 +21,9 @@ const SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY: &str = "search_index_directory_er
 const SEARCH_MODE_KEY: &str = "search_mode";
 const SEARCH_MODE_PROMPT_KEY: &str = "search_mode_prompt";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
+const NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY: &str =
+    "network_list_thumbnail_downloads_enabled";
+const MAX_PREVIEW_FILE_BYTES_KEY: &str = "max_preview_file_bytes";
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
 const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
@@ -47,6 +50,8 @@ pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 140.0;
 pub(crate) const MAX_SIDEBAR_WIDTH: f32 = 360.0;
 pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
+pub(crate) const PREVIEW_FILE_SIZE_UNIT_BYTES: u64 = 1024 * 1024;
+pub(crate) const DEFAULT_MAX_PREVIEW_FILE_BYTES: u64 = 3 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchBackendMode {
@@ -215,6 +220,8 @@ pub(crate) struct UserConfig {
     pub(crate) search_mode: SearchBackendMode,
     pub(crate) search_mode_prompt: SearchModePromptStatus,
     pub(crate) thumbnail_cache_dir: PathBuf,
+    pub(crate) network_list_thumbnail_downloads_enabled: bool,
+    pub(crate) max_preview_file_bytes: u64,
     pub(crate) show_hidden_files: bool,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
@@ -275,6 +282,8 @@ pub(crate) fn default_user_config() -> UserConfig {
         search_mode: SearchBackendMode::Simple,
         search_mode_prompt: SearchModePromptStatus::Pending,
         thumbnail_cache_dir: cache_base.join("thumbnails"),
+        network_list_thumbnail_downloads_enabled: false,
+        max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
         show_hidden_files: false,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         sidebar_favorites: None,
@@ -297,6 +306,8 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         search_mode: SearchBackendMode::Simple,
         search_mode_prompt: SearchModePromptStatus::Pending,
         thumbnail_cache_dir: PathBuf::new(),
+        network_list_thumbnail_downloads_enabled: false,
+        max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
         show_hidden_files: false,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         sidebar_favorites: None,
@@ -343,6 +354,19 @@ pub(crate) fn normalize_sidebar_width(width: f32) -> f32 {
     } else {
         DEFAULT_SIDEBAR_WIDTH
     }
+}
+
+pub(crate) fn normalize_max_preview_file_bytes(bytes: u64) -> u64 {
+    bytes.max(1)
+}
+
+pub(crate) fn max_preview_file_mib(bytes: u64) -> u64 {
+    normalize_max_preview_file_bytes(bytes).div_ceil(PREVIEW_FILE_SIZE_UNIT_BYTES)
+}
+
+pub(crate) fn max_preview_file_bytes_from_mib(mib: u64) -> Option<u64> {
+    mib.checked_mul(PREVIEW_FILE_SIZE_UNIT_BYTES)
+        .map(normalize_max_preview_file_bytes)
 }
 
 fn app_config_dir_path() -> Option<PathBuf> {
@@ -403,6 +427,18 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     }
     if let Some(value) = toml_string(&document, THUMBNAIL_CACHE_DIR_KEY) {
         config.thumbnail_cache_dir = PathBuf::from(value);
+    }
+    if let Some(value) = document
+        .get(NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY)
+        .and_then(toml::Value::as_bool)
+    {
+        config.network_list_thumbnail_downloads_enabled = value;
+    }
+    if let Some(bytes) = document
+        .get(MAX_PREVIEW_FILE_BYTES_KEY)
+        .and_then(toml_positive_integer_as_u64)
+    {
+        config.max_preview_file_bytes = normalize_max_preview_file_bytes(bytes);
     }
     if let Some(value) = document
         .get(SHOW_HIDDEN_FILES_KEY)
@@ -520,6 +556,17 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
     document.insert(
         THUMBNAIL_CACHE_DIR_KEY.to_string(),
         toml::Value::String(config.thumbnail_cache_dir.to_string_lossy().into_owned()),
+    );
+    document.insert(
+        NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY.to_string(),
+        toml::Value::Boolean(config.network_list_thumbnail_downloads_enabled),
+    );
+    document.insert(
+        MAX_PREVIEW_FILE_BYTES_KEY.to_string(),
+        toml::Value::Integer(
+            normalize_max_preview_file_bytes(config.max_preview_file_bytes).min(i64::MAX as u64)
+                as i64,
+        ),
     );
     document.insert(
         SHOW_HIDDEN_FILES_KEY.to_string(),
@@ -688,6 +735,13 @@ fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
     match value {
         toml::Value::Float(value) => Some(*value as f32),
         toml::Value::Integer(value) => Some(*value as f32),
+        _ => None,
+    }
+}
+
+fn toml_positive_integer_as_u64(value: &toml::Value) -> Option<u64> {
+    match value {
+        toml::Value::Integer(value) => (*value > 0).then_some(*value as u64),
         _ => None,
     }
 }

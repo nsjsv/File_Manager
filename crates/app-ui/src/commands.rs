@@ -34,7 +34,9 @@ use crate::operation_queue::QueuedTransfer;
 use crate::sidebar::{home_sidebar_location, save_gtk_bookmark_locations, sidebar_locations};
 use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
 use crate::startup_trace;
-use crate::thumbnail_cache::{ThumbnailLoadOutcome, ThumbnailWork};
+use crate::thumbnail_cache::{
+    ThumbnailLoadOutcome, ThumbnailLoadPolicy, ThumbnailLoadResult, ThumbnailWork,
+};
 
 mod archive_creation;
 pub(crate) use archive_creation::check_archive_target_command;
@@ -501,10 +503,28 @@ async fn load_thumbnail_batch(
         let task_cache_dir = cache_dir.clone();
         let fallback_work = work.clone();
         let handle = tokio::spawn(async move {
-            let outcome =
-                thumbnails::load_or_generate_thumbnail(task_cache_dir, work.request.clone())
+            let outcome = match work.load_policy {
+                ThumbnailLoadPolicy::LoadOrGenerate => {
+                    match thumbnails::load_or_generate_thumbnail(
+                        task_cache_dir,
+                        work.request.clone(),
+                    )
                     .await
-                    .map_err(|error| error.to_string());
+                    {
+                        Ok(thumbnail) => ThumbnailLoadResult::Ready(thumbnail),
+                        Err(error) => ThumbnailLoadResult::Failed(error.to_string()),
+                    }
+                }
+                ThumbnailLoadPolicy::CacheOnly => {
+                    match thumbnails::load_cached_thumbnail(task_cache_dir, work.request.clone())
+                        .await
+                    {
+                        Ok(Some(thumbnail)) => ThumbnailLoadResult::Ready(thumbnail),
+                        Ok(None) => ThumbnailLoadResult::CacheMiss,
+                        Err(error) => ThumbnailLoadResult::Failed(error.to_string()),
+                    }
+                }
+            };
             ThumbnailLoadOutcome {
                 work,
                 result: outcome,
@@ -519,7 +539,7 @@ async fn load_thumbnail_batch(
             Ok(outcome) => outcomes.push(outcome),
             Err(error) => outcomes.push(ThumbnailLoadOutcome {
                 work: fallback_work,
-                result: Err(format!("thumbnail task failed: {error}")),
+                result: ThumbnailLoadResult::Failed(format!("thumbnail task failed: {error}")),
             }),
         }
     }

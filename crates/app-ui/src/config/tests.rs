@@ -19,6 +19,8 @@ search_index_directory_error_policy = "abort"
 search_mode = "indexed"
 search_mode_prompt = "completed"
 thumbnail_cache_dir = "/tmp/thumbnails"
+network_list_thumbnail_downloads_enabled = true
+max_preview_file_bytes = 4194304
 show_hidden_files = true
 sidebar_width = 260.5
 terminal_emulator = "ghostty"
@@ -37,6 +39,8 @@ browser_view_mode = "list"
     assert_eq!(parsed.search_mode, SearchBackendMode::Indexed);
     assert_eq!(parsed.search_mode_prompt, SearchModePromptStatus::Completed);
     assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
+    assert!(parsed.network_list_thumbnail_downloads_enabled);
+    assert_eq!(parsed.max_preview_file_bytes, 4 * 1024 * 1024);
     assert!(parsed.show_hidden_files);
     assert_eq!(parsed.sidebar_width, 260.5);
     assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
@@ -91,6 +95,8 @@ fn invalid_values_fall_back_to_defaults() {
     let parsed = parse_toml_user_config(
         r#"
 show_hidden_files = "maybe"
+network_list_thumbnail_downloads_enabled = "maybe"
+max_preview_file_bytes = 0
 search_mode = "catalog"
 search_mode_prompt = "later"
 sidebar_width = "wide"
@@ -103,6 +109,14 @@ browser_view_mode = "cover-flow"
     );
 
     assert_eq!(parsed.show_hidden_files, default.show_hidden_files);
+    assert_eq!(
+        parsed.network_list_thumbnail_downloads_enabled,
+        default.network_list_thumbnail_downloads_enabled
+    );
+    assert_eq!(
+        parsed.max_preview_file_bytes,
+        default.max_preview_file_bytes
+    );
     assert_eq!(parsed.search_mode, default.search_mode);
     assert_eq!(parsed.search_mode_prompt, default.search_mode_prompt);
     assert_eq!(parsed.sidebar_width, default.sidebar_width);
@@ -130,6 +144,8 @@ fn writes_toml_user_config_without_column_width_overrides() {
     let content = fs::read_to_string(path).expect("read user config");
     assert!(content.starts_with("# File Manager user configuration\n"));
     assert!(content.contains("sidebar_width = 180.0\n"));
+    assert!(content.contains("network_list_thumbnail_downloads_enabled = false\n"));
+    assert!(content.contains("max_preview_file_bytes = 3145728\n"));
     assert!(content.contains("search_mode = \"simple\"\n"));
     assert!(content.contains("search_mode_prompt = \"pending\"\n"));
     assert!(content.contains("search_index_directory_error_policy = \"skip_unreadable\"\n"));
@@ -156,6 +172,11 @@ fn default_search_mode_is_simple_with_pending_prompt() {
 
     assert_eq!(config.search_mode, SearchBackendMode::Simple);
     assert_eq!(config.search_mode_prompt, SearchModePromptStatus::Pending);
+    assert!(!config.network_list_thumbnail_downloads_enabled);
+    assert_eq!(
+        config.max_preview_file_bytes,
+        DEFAULT_MAX_PREVIEW_FILE_BYTES
+    );
 }
 
 #[test]

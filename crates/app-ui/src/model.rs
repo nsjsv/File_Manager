@@ -69,6 +69,8 @@ pub(crate) use search::{
     SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
     SearchIndexPathRuleSelection, SearchIndexRuntime, SearchRequest, SearchScope, SearchState,
 };
+mod settings;
+pub(crate) use settings::SettingsCategory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SearchModePromptState;
@@ -320,6 +322,9 @@ pub(crate) enum Message {
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
     ShowHiddenFilesToggled,
+    NetworkListThumbnailDownloadsToggled,
+    MaxPreviewFileMibInputChanged(String),
+    MaxPreviewFileMibInputCommitted,
     FileOperationVerificationSelected(FileOperationVerification),
     TerminalEmulatorSelected(TerminalEmulator),
     RenderingGpuPreferenceSelected(RenderingGpuPreference),
@@ -412,35 +417,6 @@ pub(crate) enum DestructiveActionConfirmation {
 pub(crate) enum OperationQueuePanelMode {
     PassivePreview,
     InteractiveList,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SettingsCategory {
-    General,
-    SearchIndex,
-    FileOperations,
-    Rendering,
-    Shortcuts,
-}
-
-impl SettingsCategory {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::General,
-        Self::SearchIndex,
-        Self::FileOperations,
-        Self::Rendering,
-        Self::Shortcuts,
-    ];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::General => "General",
-            Self::SearchIndex => "Search Index",
-            Self::FileOperations => "File Operations",
-            Self::Rendering => "Rendering",
-            Self::Shortcuts => "Shortcuts",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

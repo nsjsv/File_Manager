@@ -7,6 +7,7 @@ mod events;
 mod file_operations;
 mod navigation;
 mod network_connections;
+mod network_settings;
 mod open_with;
 mod pane_drag;
 pub(crate) mod panes;
@@ -171,6 +172,8 @@ pub(crate) struct FileBrowser {
     pub(crate) file_drag: Option<FileDragState>,
     pub(crate) options: ScanOptions,
     user_config: config::UserConfig,
+    pub(crate) max_preview_file_mib_input: String,
+    pub(crate) max_preview_file_mib_error: Option<String>,
     pub(crate) rendering_gpu_preference: config::RenderingGpuPreference,
     pub(crate) renderer_restart_notice_visible: bool,
     pub(super) pending_renderer_restart_environment:
@@ -226,6 +229,14 @@ pub(crate) struct PendingKeyboardColumnFocus {
 impl FileBrowser {
     pub(crate) fn file_operation_verification(&self) -> file_core::FileOperationVerification {
         self.user_config.file_operation_verification
+    }
+
+    pub(crate) fn network_list_thumbnail_downloads_enabled(&self) -> bool {
+        self.user_config.network_list_thumbnail_downloads_enabled
+    }
+
+    pub(crate) fn max_preview_file_bytes(&self) -> u64 {
+        self.user_config.max_preview_file_bytes
     }
 
     fn boot() -> (Self, Task<Message>) {
@@ -353,6 +364,11 @@ impl FileBrowser {
             file_drag: None,
             options: options.clone(),
             user_config: user_config.clone(),
+            max_preview_file_mib_input: config::max_preview_file_mib(
+                user_config.max_preview_file_bytes,
+            )
+            .to_string(),
+            max_preview_file_mib_error: None,
             rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
             pending_renderer_restart_environment: None,

@@ -36,6 +36,7 @@ impl FileBrowser {
                 source_path,
                 generation,
                 default_network_preview_cache_dir(),
+                self.max_preview_file_bytes(),
                 cancel,
             ),
         ])

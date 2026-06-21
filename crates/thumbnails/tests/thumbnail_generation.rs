@@ -2,8 +2,8 @@ use std::path::Path;
 
 use thumbnails::{
     generate_image_thumbnail, is_supported_thumbnail_path, is_supported_video_path,
-    load_image_dimensions, load_or_generate_image_thumbnail, ThumbnailOptions, ThumbnailRequest,
-    ThumbnailSourceMetadata,
+    load_cached_thumbnail, load_image_dimensions, load_or_generate_image_thumbnail,
+    ThumbnailOptions, ThumbnailRequest, ThumbnailSourceMetadata,
 };
 
 #[tokio::test]
@@ -45,6 +45,47 @@ async fn load_or_generate_image_thumbnail_reuses_cache() {
     assert!(second.cache_hit);
     assert_eq!(first.key, second.key);
     assert_eq!(first.output, second.output);
+}
+
+#[tokio::test]
+async fn load_cached_thumbnail_reads_existing_cache_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.png");
+    let cache_dir = dir.path().join("cache");
+    let image = image::RgbImage::new(64, 32);
+    image.save(&source).unwrap();
+    let request = thumbnail_request(&source, 16);
+    let generated = load_or_generate_image_thumbnail(&cache_dir, request.clone())
+        .await
+        .unwrap();
+
+    let cached = load_cached_thumbnail(&cache_dir, request)
+        .await
+        .unwrap()
+        .expect("cached thumbnail");
+
+    assert!(cached.cache_hit);
+    assert_eq!(cached.key, generated.key);
+    assert_eq!(cached.output, generated.output);
+    assert_eq!(
+        (cached.width, cached.height),
+        (generated.width, generated.height)
+    );
+}
+
+#[tokio::test]
+async fn load_cached_thumbnail_miss_does_not_create_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.png");
+    let cache_dir = dir.path().join("cache");
+    let image = image::RgbImage::new(64, 32);
+    image.save(&source).unwrap();
+    let request = thumbnail_request(&source, 16);
+
+    let cached = load_cached_thumbnail(&cache_dir, request).await.unwrap();
+
+    assert!(cached.is_none());
+    assert!(!cache_dir.exists());
 }
 
 #[tokio::test]
