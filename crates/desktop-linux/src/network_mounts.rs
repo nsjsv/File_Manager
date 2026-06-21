@@ -336,14 +336,10 @@ async fn run_gio_mount_command(
         });
     };
     stdin
-        .write_all(credentials.password.as_bytes())
-        .await
-        .map_err(|source| NetworkMountError::MountCredentialWrite {
-            uri: connection.uri.clone(),
-            source,
-        })?;
-    stdin
-        .write_all(b"\n")
+        .write_all(&gio_mount_credential_stdin(
+            connection.protocol,
+            credentials,
+        ))
         .await
         .map_err(|source| NetworkMountError::MountCredentialWrite {
             uri: connection.uri.clone(),
@@ -377,6 +373,20 @@ fn mount_uri_for_credentials(
         });
     }
     Ok(parts.to_uri_with_username(parts.canonical_scheme(), username.as_deref()))
+}
+
+fn gio_mount_credential_stdin(
+    protocol: NetworkProtocol,
+    credentials: &NetworkMountCredentials,
+) -> Vec<u8> {
+    let mut input = Vec::with_capacity(credentials.password.len() + 2);
+    if protocol == NetworkProtocol::Smb {
+        // gvfsd-smb 会先询问 Domain [WORKGROUP]，空行表示接受默认域。
+        input.push(b'\n');
+    }
+    input.extend_from_slice(credentials.password.as_bytes());
+    input.push(b'\n');
+    input
 }
 
 pub async fn unmount_network_connection(

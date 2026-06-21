@@ -129,10 +129,8 @@ impl FileBrowser {
         let Some(connection) = self.network_connections.connection(&id).cloned() else {
             return rename_command;
         };
-        if connection.protocol == NetworkProtocol::WebDav {
-            self.prepare_network_connection_editor_surface();
-            self.network_connection_editor =
-                Some(NetworkConnectionEditorState::connect(&connection));
+        if network_connection_needs_credentials_editor(&connection) {
+            self.open_network_connection_credentials_editor(&connection);
             return rename_command;
         }
         self.network_connections.set_connecting(&id);
@@ -176,7 +174,7 @@ impl FileBrowser {
                 let Some(connection) = self.network_connections.connection(&id).cloned() else {
                     return Task::none();
                 };
-                if connection.protocol == NetworkProtocol::WebDav {
+                if network_connection_needs_credentials_editor(&connection) {
                     return self.connect_network_connection(connection);
                 }
                 self.network_connections.set_connecting(&id);
@@ -256,9 +254,14 @@ impl FileBrowser {
     }
 
     fn connect_network_connection(&mut self, connection: NetworkConnection) -> Task<Message> {
-        let command = self.prepare_network_connection_editor();
-        self.network_connection_editor = Some(NetworkConnectionEditorState::connect(&connection));
+        let command = self.commit_rename_if_active();
+        self.open_network_connection_credentials_editor(&connection);
         command
+    }
+
+    fn open_network_connection_credentials_editor(&mut self, connection: &NetworkConnection) {
+        self.prepare_network_connection_editor_surface();
+        self.network_connection_editor = Some(NetworkConnectionEditorState::connect(connection));
     }
 
     fn prepare_network_connection_editor(&mut self) -> Task<Message> {
@@ -384,6 +387,10 @@ fn network_mount_credentials_from_editor(
     }
 }
 
+fn network_connection_needs_credentials_editor(connection: &NetworkConnection) -> bool {
+    connection.protocol == NetworkProtocol::WebDav || connection.username().is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -414,6 +421,17 @@ mod tests {
         .unwrap()
     }
 
+    fn authenticated_smb_connection() -> NetworkConnection {
+        NetworkConnection::new_with_username(
+            NetworkConnectionId::new("smb-auth"),
+            "SMB Auth",
+            NetworkProtocol::Smb,
+            "smb://server/share",
+            Some("smbtest".to_owned()),
+        )
+        .unwrap()
+    }
+
     fn browser_with_connection() -> (FileBrowser, NetworkConnectionId) {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let connection = connection();
@@ -426,6 +444,15 @@ mod tests {
     fn browser_with_webdav_connection() -> (FileBrowser, NetworkConnectionId) {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let connection = webdav_connection();
+        let id = connection.id.clone();
+        browser.network_connections =
+            crate::network_connections::NetworkConnectionState::from_connections(vec![connection]);
+        (browser, id)
+    }
+
+    fn browser_with_authenticated_smb_connection() -> (FileBrowser, NetworkConnectionId) {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let connection = authenticated_smb_connection();
         let id = connection.id.clone();
         browser.network_connections =
             crate::network_connections::NetworkConnectionState::from_connections(vec![connection]);
@@ -468,6 +495,74 @@ mod tests {
                 .map(|entry| &entry.state),
             Some(NetworkMountState::Connecting)
         ));
+    }
+
+    #[test]
+    fn pressing_authenticated_smb_connection_opens_connect_editor() {
+        let (mut browser, id) = browser_with_authenticated_smb_connection();
+
+        let command = browser
+            .handle_network_connection_message(NetworkConnectionMessage::Pressed(id.clone()));
+        drop(command);
+
+        assert!(browser.network_connections.pending_action.is_none());
+        let editor = browser
+            .network_connection_editor
+            .as_ref()
+            .expect("connect editor");
+        assert_eq!(editor.mode, NetworkConnectionEditorMode::Connect);
+        assert_eq!(editor.protocol, NetworkProtocol::Smb);
+        assert_eq!(editor.username, "smbtest");
+    }
+
+    #[test]
+    fn connect_action_for_authenticated_smb_opens_connect_editor() {
+        let (mut browser, id) = browser_with_authenticated_smb_connection();
+
+        let command =
+            browser.handle_network_connection_message(NetworkConnectionMessage::ActionSelected(
+                id.clone(),
+                SidebarNetworkConnectionAction::Connect,
+            ));
+        drop(command);
+
+        assert!(browser.network_connections.pending_action.is_none());
+        let editor = browser
+            .network_connection_editor
+            .as_ref()
+            .expect("connect editor");
+        assert_eq!(editor.mode, NetworkConnectionEditorMode::Connect);
+        assert_eq!(editor.protocol, NetworkProtocol::Smb);
+        assert_eq!(editor.username, "smbtest");
+    }
+
+    #[test]
+    fn submitting_smb_credentials_saves_username_without_password() {
+        let (mut browser, id) = browser_with_authenticated_smb_connection();
+
+        drop(
+            browser
+                .handle_network_connection_message(NetworkConnectionMessage::Pressed(id.clone())),
+        );
+        drop(browser.handle_network_connection_message(
+            NetworkConnectionMessage::EditorPasswordChanged("secret-password".to_owned()),
+        ));
+        let command =
+            browser.handle_network_connection_message(NetworkConnectionMessage::EditorSaved);
+        drop(command);
+
+        let saved_connection = browser.network_connections.connection(&id).unwrap();
+        assert_eq!(saved_connection.uri, "smb://smbtest@server/share");
+        assert_eq!(
+            browser.network_connections.pending_action.as_ref(),
+            Some(&id)
+        );
+        assert!(browser
+            .user_config
+            .network_connections
+            .iter()
+            .all(|connection| !connection.uri.contains("secret-password")));
+        assert!(browser.network_connection_editor.is_none());
     }
 
     #[test]

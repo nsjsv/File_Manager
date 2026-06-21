@@ -113,6 +113,24 @@ fn network_mount_credentials_debug_redacts_password() {
 }
 
 #[test]
+fn smb_credential_stdin_accepts_default_domain_before_password() {
+    let credentials = NetworkMountCredentials::new(Some("user".to_owned()), "secret-password");
+
+    let input = gio_mount_credential_stdin(NetworkProtocol::Smb, &credentials);
+
+    assert_eq!(input, b"\nsecret-password\n");
+}
+
+#[test]
+fn webdav_credential_stdin_writes_only_password() {
+    let credentials = NetworkMountCredentials::new(Some("user".to_owned()), "secret-password");
+
+    let input = gio_mount_credential_stdin(NetworkProtocol::WebDav, &credentials);
+
+    assert_eq!(input, b"secret-password\n");
+}
+
+#[test]
 fn rejects_unsupported_or_password_network_uris() {
     assert!(validate_network_connection_uri(NetworkProtocol::Smb, "ftp://server/share").is_err());
     assert!(validate_network_connection_uri(NetworkProtocol::Smb, "smb:///share").is_err());
