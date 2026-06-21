@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use desktop_linux::{DisplayRendererGpu, DisplayRendererGpuClass, TerminalEmulator};
+use desktop_linux::{
+    DisplayRendererGpu, DisplayRendererGpuClass, NetworkConnection, NetworkConnectionId,
+    NetworkProtocol, TerminalEmulator,
+};
 use file_core::FileOperationVerification;
 use file_index::DirectoryErrorPolicy;
 
@@ -234,6 +237,70 @@ fn writes_sidebar_favorites_to_toml() {
     assert!(content.contains("sidebar_favorites"));
     let parsed = parse_toml_user_config(&content, default_user_config());
     assert_eq!(parsed.sidebar_favorites, config.sidebar_favorites);
+}
+
+#[test]
+fn parses_network_connections_from_toml() {
+    let parsed = parse_toml_user_config(
+        r#"
+network_connections = [
+  { id = "nas", label = "NAS", protocol = "smb", uri = "smb://server/share" },
+  { id = "docs", label = "", protocol = "webdav", uri = "https://user@example.test/docs" },
+]
+"#,
+        default_user_config(),
+    );
+
+    assert_eq!(parsed.network_connections.len(), 2);
+    assert_eq!(parsed.network_connections[0].id.as_str(), "nas");
+    assert_eq!(parsed.network_connections[0].label, "NAS");
+    assert_eq!(parsed.network_connections[0].protocol, NetworkProtocol::Smb);
+    assert_eq!(parsed.network_connections[0].uri, "smb://server/share");
+    assert_eq!(
+        parsed.network_connections[1].protocol,
+        NetworkProtocol::WebDav
+    );
+    assert_eq!(
+        parsed.network_connections[1].uri,
+        "davs://user@example.test/docs"
+    );
+}
+
+#[test]
+fn skips_password_bearing_network_connections() {
+    let parsed = parse_toml_user_config(
+        r#"
+network_connections = [
+  { id = "bad", label = "Bad", protocol = "webdav", uri = "davs://user:secret@example.test/docs" },
+  { id = "good", label = "Good", protocol = "smb", uri = "smb://server/share" },
+]
+"#,
+        default_user_config(),
+    );
+
+    assert_eq!(parsed.network_connections.len(), 1);
+    assert_eq!(parsed.network_connections[0].id.as_str(), "good");
+}
+
+#[test]
+fn writes_network_connections_without_password_fields() {
+    let mut config = default_user_config();
+    config.network_connections = vec![NetworkConnection::new(
+        NetworkConnectionId::new("nas"),
+        "",
+        NetworkProtocol::Smb,
+        "smb://server/share",
+    )
+    .unwrap()];
+
+    let content = toml_user_config_content(&config).unwrap();
+
+    assert!(content.contains("network_connections"));
+    assert!(content.contains("protocol = \"smb\""));
+    assert!(content.contains("uri = \"smb://server/share\""));
+    assert!(!content.contains("password"));
+    let parsed = parse_toml_user_config(&content, default_user_config());
+    assert_eq!(parsed.network_connections, config.network_connections);
 }
 
 #[test]

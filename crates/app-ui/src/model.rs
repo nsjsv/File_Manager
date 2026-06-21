@@ -22,6 +22,9 @@ use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, SearchBackendMode, UserConfig};
+use crate::network_connections::{
+    NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
+};
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::ShortcutBindingId;
@@ -55,9 +58,11 @@ pub(crate) use properties::{
 };
 mod preview;
 pub(crate) use preview::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, PreviewContent, PreviewSize, PreviewState,
-    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowProfile, VideoPreviewFrame,
-    VideoPreviewPlayback, VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, NetworkPreviewCacheFinished,
+    NetworkPreviewCacheMessage, NetworkPreviewCacheProgress, NetworkPreviewDownload,
+    PreviewContent, PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry,
+    PreviewWindowProfile, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    VideoPreviewSeekCompletion,
 };
 mod search;
 pub(crate) use search::{
@@ -113,6 +118,7 @@ pub(crate) enum Message {
         SidebarDeviceAction,
         Result<Option<PathBuf>, String>,
     ),
+    NetworkConnection(NetworkConnectionMessage),
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
     DirectoryLoadBatch(DirectoryLoadRequest, DirectoryScanBatch),
     Loaded(DirectoryLoadRequest, Result<DirectoryScan, String>),
@@ -125,6 +131,7 @@ pub(crate) enum Message {
     OpenWithApplicationFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    NetworkPreviewCache(NetworkPreviewCacheMessage),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
     FilePropertiesLoaded(
         FilePropertiesRequest,
@@ -397,6 +404,7 @@ pub(crate) enum PendingOperation {
 #[derive(Debug, Clone)]
 pub(crate) enum DestructiveActionConfirmation {
     DeleteTrashEntries { entries: Vec<TrashRestoreEntry> },
+    DeletePermanently { paths: Vec<PathBuf> },
     EmptyTrash,
 }
 
@@ -604,6 +612,7 @@ pub(crate) enum ContextMenuState {
     FileArea(FileContextMenuState),
     SidebarBookmark(SidebarBookmarkContextMenuState),
     SidebarDevice(SidebarDeviceContextMenuState),
+    NetworkConnection(SidebarNetworkConnectionContextMenuState),
 }
 
 impl ContextMenuState {
@@ -612,6 +621,7 @@ impl ContextMenuState {
             Self::FileArea(menu) => menu.position,
             Self::SidebarBookmark(menu) => menu.position,
             Self::SidebarDevice(menu) => menu.position,
+            Self::NetworkConnection(menu) => menu.position,
         }
     }
 
@@ -620,6 +630,7 @@ impl ContextMenuState {
             Self::FileArea(menu) => Some(&menu.paste_directory),
             Self::SidebarBookmark(_) => None,
             Self::SidebarDevice(_) => None,
+            Self::NetworkConnection(_) => None,
         }
     }
 }
@@ -629,8 +640,26 @@ pub(crate) struct FileContextMenuState {
     pub(crate) target: Option<PathBuf>,
     pub(crate) target_is_directory: bool,
     pub(crate) paste_directory: PathBuf,
+    pub(crate) delete_action: FileDeleteAction,
     pub(crate) position: Point,
     pub(crate) expansion: FileContextMenuExpansion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileDeleteAction {
+    MoveToTrash,
+    DeletePermanently,
+    MixedSelection,
+}
+
+impl FileDeleteAction {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::MoveToTrash => "Move to Trash",
+            Self::DeletePermanently => "Delete Permanently",
+            Self::MixedSelection => "Delete",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

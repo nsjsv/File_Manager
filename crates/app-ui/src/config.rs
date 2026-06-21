@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
+use desktop_linux::{
+    DisplayRendererGpu, NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator,
+};
 use file_core::FileOperationVerification;
 use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy};
 
@@ -24,6 +26,11 @@ const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
 const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
 const SIDEBAR_FAVORITE_LABEL_KEY: &str = "label";
 const SIDEBAR_FAVORITE_PATH_KEY: &str = "path";
+const NETWORK_CONNECTIONS_KEY: &str = "network_connections";
+const NETWORK_CONNECTION_ID_KEY: &str = "id";
+const NETWORK_CONNECTION_LABEL_KEY: &str = "label";
+const NETWORK_CONNECTION_PROTOCOL_KEY: &str = "protocol";
+const NETWORK_CONNECTION_URI_KEY: &str = "uri";
 const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
@@ -211,6 +218,7 @@ pub(crate) struct UserConfig {
     pub(crate) show_hidden_files: bool,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
+    pub(crate) network_connections: Vec<NetworkConnection>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
     pub(crate) file_operation_verification: FileOperationVerification,
@@ -270,6 +278,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         show_hidden_files: false,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         sidebar_favorites: None,
+        network_connections: Vec::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
@@ -291,6 +300,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         show_hidden_files: false,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         sidebar_favorites: None,
+        network_connections: Vec::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
@@ -406,6 +416,7 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     if let Some(favorites) = parse_toml_sidebar_favorites(&document) {
         config.sidebar_favorites = Some(favorites);
     }
+    config.network_connections = parse_toml_network_connections(&document);
     if let Some(value) = toml_string(&document, TERMINAL_EMULATOR_KEY) {
         if let Some(terminal_emulator) = TerminalEmulator::from_config_value(value) {
             config.terminal_emulator = terminal_emulator;
@@ -547,6 +558,10 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
             toml::Value::Array(toml_sidebar_favorite_values(favorites)),
         );
     }
+    document.insert(
+        NETWORK_CONNECTIONS_KEY.to_string(),
+        toml::Value::Array(toml_network_connection_values(&config.network_connections)),
+    );
 
     let content = toml::to_string_pretty(&document)?;
     Ok(format!("# File Manager user configuration\n{content}"))
@@ -588,6 +603,74 @@ fn toml_sidebar_favorite_values(favorites: &[SidebarFavoriteConfig]) -> Vec<toml
             table.insert(
                 SIDEBAR_FAVORITE_PATH_KEY.to_string(),
                 toml::Value::String(favorite.path.to_string_lossy().into_owned()),
+            );
+            toml::Value::Table(table)
+        })
+        .collect()
+}
+
+fn parse_toml_network_connections(document: &toml::Table) -> Vec<NetworkConnection> {
+    let Some(entries) = document
+        .get(NETWORK_CONNECTIONS_KEY)
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut connections = Vec::new();
+    for entry in entries {
+        let Some(table) = entry.as_table() else {
+            continue;
+        };
+        let Some(id) = toml_string(table, NETWORK_CONNECTION_ID_KEY) else {
+            continue;
+        };
+        let Some(protocol) = toml_string(table, NETWORK_CONNECTION_PROTOCOL_KEY)
+            .and_then(NetworkProtocol::from_config_value)
+        else {
+            continue;
+        };
+        let Some(uri) = toml_string(table, NETWORK_CONNECTION_URI_KEY) else {
+            continue;
+        };
+        let label = table
+            .get(NETWORK_CONNECTION_LABEL_KEY)
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if id.trim().is_empty() {
+            continue;
+        }
+        if let Ok(connection) =
+            NetworkConnection::new(NetworkConnectionId::new(id.trim()), label, protocol, uri)
+        {
+            connections.push(connection);
+        }
+    }
+    connections
+}
+
+fn toml_network_connection_values(connections: &[NetworkConnection]) -> Vec<toml::Value> {
+    connections
+        .iter()
+        .map(|connection| {
+            let mut table = toml::Table::new();
+            table.insert(
+                NETWORK_CONNECTION_ID_KEY.to_string(),
+                toml::Value::String(connection.id.as_str().to_owned()),
+            );
+            table.insert(
+                NETWORK_CONNECTION_LABEL_KEY.to_string(),
+                toml::Value::String(connection.label.clone()),
+            );
+            table.insert(
+                NETWORK_CONNECTION_PROTOCOL_KEY.to_string(),
+                toml::Value::String(connection.protocol.config_value().to_owned()),
+            );
+            table.insert(
+                NETWORK_CONNECTION_URI_KEY.to_string(),
+                toml::Value::String(connection.uri.clone()),
             );
             toml::Value::Table(table)
         })

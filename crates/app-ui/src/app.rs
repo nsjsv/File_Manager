@@ -6,6 +6,7 @@ mod column_scroll;
 mod events;
 mod file_operations;
 mod navigation;
+mod network_connections;
 mod open_with;
 mod pane_drag;
 pub(crate) mod panes;
@@ -41,7 +42,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use desktop_linux::{StorageDeviceId, TerminalEmulator};
+use desktop_linux::{NetworkConnectionId, StorageDeviceId, TerminalEmulator};
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
@@ -78,6 +79,7 @@ use crate::model::{
     SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
     TransferConflictState, VideoPreviewPlayback,
 };
+use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
 use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
@@ -96,6 +98,7 @@ const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
+const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) struct FileBrowser {
     pub(crate) current_dir: PathBuf,
@@ -108,11 +111,14 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_entry: Option<PathBuf>,
     pub(crate) hovered_sidebar: Option<PathBuf>,
     pub(crate) hovered_sidebar_device: Option<StorageDeviceId>,
+    pub(crate) hovered_network_connection: Option<NetworkConnectionId>,
     cursor_paste_directory: Option<PathBuf>,
     cursor_search_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
+    network_preview_download_cancel: Option<tokio_util::sync::CancellationToken>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
     animated_image_preview_generation: u64,
+    network_preview_download_generation: u64,
     text_preview_generation: u64,
     directory_load_generation: u64,
     directory_load_cancel: Option<tokio_util::sync::CancellationToken>,
@@ -132,6 +138,8 @@ pub(crate) struct FileBrowser {
     pub(crate) archive_extraction: Option<ArchiveExtractionState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
     pub(crate) sidebar_devices: SidebarDeviceState,
+    pub(crate) network_connections: NetworkConnectionState,
+    pub(crate) network_connection_editor: Option<NetworkConnectionEditorState>,
     pub(crate) sidebar_bookmark_drop_slot: Option<SidebarBookmarkDropSlot>,
     pub(crate) sidebar_bookmark_drag: Option<SidebarBookmarkDragState>,
     pub(crate) sidebar_bookmark_motion: HashMap<PathBuf, SidebarBookmarkMotionState>,
@@ -283,11 +291,14 @@ impl FileBrowser {
             hovered_entry: None,
             hovered_sidebar: None,
             hovered_sidebar_device: None,
+            hovered_network_connection: None,
             cursor_paste_directory: None,
             cursor_search_directory: None,
             preview: None,
+            network_preview_download_cancel: None,
             text_preview_document: None,
             animated_image_preview_generation: 0,
+            network_preview_download_generation: 0,
             text_preview_generation: 0,
             directory_load_generation: 0,
             directory_load_cancel: None,
@@ -307,6 +318,8 @@ impl FileBrowser {
             archive_extraction: None,
             sidebar_locations: Vec::new(),
             sidebar_devices: SidebarDeviceState::loading(),
+            network_connections: NetworkConnectionState::default(),
+            network_connection_editor: None,
             sidebar_bookmark_drop_slot: None,
             sidebar_bookmark_drag: None,
             sidebar_bookmark_motion: HashMap::new(),
@@ -411,6 +424,14 @@ impl FileBrowser {
                     .cloned()
                     .map(directory_watch_subscription),
             );
+        }
+
+        if !self.network_connections.entries.is_empty() {
+            subscriptions.push(time::every(NETWORK_STATUS_REFRESH_INTERVAL).map(|_| {
+                Message::NetworkConnection(
+                    crate::network_connections::NetworkConnectionMessage::StatusRefreshRequested,
+                )
+            }));
         }
 
         if let Some(operation) = self.operation_queue.active_subscription() {

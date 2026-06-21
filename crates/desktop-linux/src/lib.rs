@@ -1,6 +1,7 @@
 mod desktop_entries;
 pub mod display_renderer;
 pub mod file_clipboard;
+pub mod network_mounts;
 pub mod open;
 pub mod open_with;
 pub mod storage_devices;
@@ -14,6 +15,13 @@ pub use file_clipboard::{
     serialize_file_uri_list, serialize_gnome_copied_files, write_file_clipboard, ClipboardImage,
     DesktopClipboardContent, FileClipboardError, FileClipboardOperation, FileClipboardPayloadError,
     FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
+};
+pub use network_mounts::{
+    load_network_mount_states, mount_network_connection, mount_network_connection_with_credentials,
+    parse_gio_mount_uris, resolve_gvfs_mount_path_from_root, unmount_network_connection,
+    validate_network_connection_uri, MountedNetworkConnection, NetworkConnection,
+    NetworkConnectionId, NetworkMountCredentials, NetworkMountError, NetworkMountState,
+    NetworkProtocol,
 };
 pub use open::{
     open_path, open_path_with_terminal_emulator, open_terminal_at_directory, OpenError,

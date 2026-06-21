@@ -11,8 +11,62 @@ use crate::text_preview::{TextPreviewFormat, TextPreviewLineLimitNotice};
 #[derive(Debug, Clone)]
 pub(crate) enum PreviewState {
     Loading(PathBuf),
+    DownloadingNetworkFile(NetworkPreviewDownload),
     Ready(PreviewContent),
     Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NetworkPreviewDownload {
+    pub(crate) source_path: PathBuf,
+    pub(crate) generation: u64,
+    pub(crate) bytes_done: u64,
+    pub(crate) bytes_total: Option<u64>,
+}
+
+impl NetworkPreviewDownload {
+    pub(crate) fn new(source_path: PathBuf, generation: u64) -> Self {
+        Self {
+            source_path,
+            generation,
+            bytes_done: 0,
+            bytes_total: None,
+        }
+    }
+
+    pub(crate) fn accept_progress(&mut self, progress: &NetworkPreviewCacheProgress) {
+        self.bytes_done = progress.bytes_done;
+        self.bytes_total = Some(progress.bytes_total);
+    }
+
+    pub(crate) fn fraction(&self) -> Option<f32> {
+        let bytes_total = self.bytes_total?;
+        if bytes_total == 0 {
+            return Some(1.0);
+        }
+        Some((self.bytes_done as f32 / bytes_total as f32).clamp(0.0, 1.0))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum NetworkPreviewCacheMessage {
+    Progress(NetworkPreviewCacheProgress),
+    Finished(NetworkPreviewCacheFinished),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NetworkPreviewCacheProgress {
+    pub(crate) source_path: PathBuf,
+    pub(crate) generation: u64,
+    pub(crate) bytes_done: u64,
+    pub(crate) bytes_total: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NetworkPreviewCacheFinished {
+    pub(crate) source_path: PathBuf,
+    pub(crate) generation: u64,
+    pub(crate) outcome: Result<PathBuf, String>,
 }
 
 #[derive(Debug, Clone)]

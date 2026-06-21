@@ -205,6 +205,9 @@ pub enum StoredOperation {
     DeleteTrashEntries {
         entries: Vec<StoredTrashEntry>,
     },
+    DeletePermanently {
+        paths: Vec<StoredPath>,
+    },
     EmptyTrash,
     Copy {
         transfers: Vec<StoredTransfer>,
@@ -242,6 +245,7 @@ impl StoredOperation {
             Self::Trash { .. } => "trash",
             Self::Restore { .. } => "restore",
             Self::DeleteTrashEntries { .. } => "delete_trash_entries",
+            Self::DeletePermanently { .. } => "delete_permanently",
             Self::EmptyTrash => "empty_trash",
             Self::Copy { .. } => "copy",
             Self::Move { .. } => "move",

@@ -22,6 +22,7 @@ use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
 use crate::typography::readable_text;
 
+use super::network_connections::network_connection_context_menu_panel;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
@@ -68,6 +69,19 @@ pub(super) fn destructive_action_confirmation_panel(
             (
                 "Delete Permanently?",
                 format!("Delete {item_label} from Trash permanently? This cannot be undone."),
+                "Delete Permanently",
+            )
+        }
+        DestructiveActionConfirmation::DeletePermanently { paths } => {
+            let item_count = paths.len();
+            let item_label = if item_count == 1 {
+                "1 item".to_owned()
+            } else {
+                format!("{item_count} items")
+            };
+            (
+                "Delete Permanently?",
+                format!("Delete {item_label} permanently? This cannot be undone."),
                 "Delete Permanently",
             )
         }
@@ -417,6 +431,7 @@ pub(super) fn context_menu_panel(
         }
         ContextMenuState::SidebarBookmark(menu) => sidebar_bookmark_context_menu_panel(menu),
         ContextMenuState::SidebarDevice(menu) => sidebar_device_context_menu_panel(menu),
+        ContextMenuState::NetworkConnection(menu) => network_connection_context_menu_panel(menu),
     }
 }
 
@@ -482,7 +497,7 @@ fn file_context_menu_panel(
         menu_content = menu_content
             .push(menu_item(
                 IconSymbol::Trash,
-                "Move to Trash",
+                menu.delete_action.label(),
                 Message::TrashSelected,
             ))
             .push(menu_item(

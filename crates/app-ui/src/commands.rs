@@ -42,12 +42,18 @@ mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
+mod network_connections;
+pub(crate) use network_connections::{
+    network_connection_mount_command, network_connection_unmount_command,
+    network_mount_states_command,
+};
 mod preview;
 pub(crate) use preview::{
-    animated_image_preview_command, image_preview_dimensions_command, preview_command,
-    preview_directory_children_command, start_audio_preview_command,
-    start_video_preview_audio_command, startup_index_directory_children_command,
-    text_preview_chunk_command, video_preview_frame_command, video_preview_metadata_command,
+    animated_image_preview_command, image_preview_dimensions_command,
+    network_preview_cache_command, preview_command, preview_directory_children_command,
+    start_audio_preview_command, start_video_preview_audio_command,
+    startup_index_directory_children_command, text_preview_chunk_command,
+    video_preview_frame_command, video_preview_metadata_command,
 };
 mod properties;
 pub(crate) use properties::{

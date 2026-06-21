@@ -25,9 +25,10 @@ pub use media::{
 };
 pub use ops::{
     copy_path, copy_path_with_options, create_directory, create_empty_file,
-    create_file_with_contents, move_path, move_path_with_options, rename_path, trash_path,
-    trash_path_with_restore_entry, CopyProgress, FileOperationControls, FileOperationRunState,
-    FileOperationVerification, FileTransferOptions, ProgressSender, TransferConflictStrategy,
+    create_file_with_contents, delete_path_permanently, move_path, move_path_with_options,
+    rename_path, trash_path, trash_path_with_restore_entry, CopyProgress, FileOperationControls,
+    FileOperationRunState, FileOperationVerification, FileTransferOptions, ProgressSender,
+    TransferConflictStrategy,
 };
 pub use scan::{
     scan_directory, scan_directory_with_progress, DirectoryScan, DirectoryScanBatch, FileError,

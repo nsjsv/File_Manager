@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 
 use file_core::{
     copy_path_with_options, create_archive_with_progress, create_directory, create_empty_file,
-    delete_trash_entry, empty_trash, extract_archive, move_path_with_options, rename_path,
-    restore_trash_entry, trash_path_with_restore_entry, ArchiveCreationProgress,
-    ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileOperationControls,
-    FileOperationVerification, FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
+    delete_path_permanently, delete_trash_entry, empty_trash, extract_archive,
+    move_path_with_options, rename_path, restore_trash_entry, trash_path_with_restore_entry,
+    ArchiveCreationProgress, ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress,
+    FileOperationControls, FileOperationVerification, FileTransferOptions,
+    TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_index::{
     BuildSelectedPathsRequest, FileSearchIndexMode, FileSearchIndexProgress, IndexServiceEvent,
@@ -93,6 +94,9 @@ async fn run_queued_file_operation(
         }
         QueuedFileOperation::DeleteTrashEntries { entries } => {
             run_queued_delete_trash_entries(entries, controls, task_id, output).await
+        }
+        QueuedFileOperation::DeletePermanently { paths } => {
+            run_queued_delete_permanently(paths, controls, task_id, output).await
         }
         QueuedFileOperation::EmptyTrash => run_queued_empty_trash(controls, task_id, output).await,
         QueuedFileOperation::Copy {
@@ -479,6 +483,34 @@ async fn run_queued_delete_trash_entries(
             .await
             .map_err(|error| error.to_string())?;
         delete_trash_entry(entry)
+            .await
+            .map_err(|error| error.to_string())?;
+        send_file_operation_progress(
+            output,
+            task_id,
+            FileOperationProgressUpdate::Items {
+                completed: index + 1,
+                total,
+            },
+        )
+        .await;
+    }
+    Ok(FileOperationOutcome::NoHistory)
+}
+
+async fn run_queued_delete_permanently(
+    paths: Vec<PathBuf>,
+    mut controls: FileOperationControls,
+    task_id: u64,
+    output: &mut IcedSender<Message>,
+) -> Result<FileOperationOutcome, String> {
+    let total = paths.len();
+    for (index, path) in paths.into_iter().enumerate() {
+        controls
+            .wait_until_running()
+            .await
+            .map_err(|error| error.to_string())?;
+        delete_path_permanently(path)
             .await
             .map_err(|error| error.to_string())?;
         send_file_operation_progress(

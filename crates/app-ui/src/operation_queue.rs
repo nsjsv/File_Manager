@@ -42,6 +42,9 @@ pub(crate) enum QueuedFileOperation {
     DeleteTrashEntries {
         entries: Vec<TrashRestoreEntry>,
     },
+    DeletePermanently {
+        paths: Vec<PathBuf>,
+    },
     EmptyTrash,
     Copy {
         transfers: Vec<QueuedTransfer>,
@@ -96,6 +99,7 @@ impl QueuedFileOperation {
             Self::Trash { .. } => "Move to Trash",
             Self::Restore { .. } => "Restore",
             Self::DeleteTrashEntries { .. } => "Delete Permanently",
+            Self::DeletePermanently { .. } => "Delete Permanently",
             Self::EmptyTrash => "Empty Trash",
             Self::Copy { .. } => "Copy",
             Self::Move { .. } => "Move",

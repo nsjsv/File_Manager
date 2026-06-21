@@ -1,0 +1,272 @@
+use std::ffi::OsString;
+use std::io;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use file_core::{
+    copy_path_with_options, FileOperationVerification, FileTransferOptions, ProgressSender,
+    TransferConflictStrategy,
+};
+use tokio::fs;
+use tokio_util::sync::CancellationToken;
+
+const NETWORK_PREVIEW_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+#[derive(Debug, Clone)]
+pub(crate) struct NetworkPreviewCacheRequest {
+    pub(crate) source_path: PathBuf,
+    pub(crate) cache_dir: PathBuf,
+    pub(crate) cancel: CancellationToken,
+}
+
+impl NetworkPreviewCacheRequest {
+    pub(crate) fn new(source_path: PathBuf, cache_dir: PathBuf, cancel: CancellationToken) -> Self {
+        Self {
+            source_path,
+            cache_dir,
+            cancel,
+        }
+    }
+}
+
+pub(crate) fn default_network_preview_cache_dir() -> PathBuf {
+    let fallback_base = dirs::home_dir()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    dirs::cache_dir()
+        .unwrap_or(fallback_base)
+        .join("file-manager")
+        .join("network-preview")
+}
+
+pub(crate) async fn cache_network_preview_file(
+    request: NetworkPreviewCacheRequest,
+    progress: ProgressSender,
+) -> Result<PathBuf, String> {
+    fs::create_dir_all(&request.cache_dir)
+        .await
+        .map_err(|error| {
+            format!(
+                "could not create network preview cache {:?}: {error}",
+                request.cache_dir
+            )
+        })?;
+
+    let now = SystemTime::now();
+    let _ = remove_expired_network_preview_files(&request.cache_dir, now).await;
+
+    let source_metadata = fs::metadata(&request.source_path).await.map_err(|error| {
+        format!(
+            "could not read network preview source {:?}: {error}",
+            request.source_path
+        )
+    })?;
+    if !source_metadata.is_file() {
+        return Err(format!(
+            "network preview source is not a regular file: {:?}",
+            request.source_path
+        ));
+    }
+
+    let cache_path =
+        network_preview_cache_path(&request.cache_dir, &request.source_path, &source_metadata);
+    if cached_file_is_fresh(&cache_path, now).await {
+        return Ok(cache_path);
+    }
+
+    let transfer_options = FileTransferOptions::running(request.cancel)
+        .with_progress_sender(progress)
+        .with_conflict_strategy(TransferConflictStrategy::Replace)
+        .with_verification(FileOperationVerification::BasicMetadata);
+    copy_path_with_options(&request.source_path, &cache_path, transfer_options)
+        .await
+        .map_err(|error| format!("could not download network preview file: {error}"))?;
+    Ok(cache_path)
+}
+
+fn network_preview_cache_path(
+    cache_dir: &Path,
+    source_path: &Path,
+    source_metadata: &std::fs::Metadata,
+) -> PathBuf {
+    let signature = network_preview_cache_signature(source_path, source_metadata);
+    let mut file_name = OsString::from(format!("network-preview-{signature:016x}"));
+    if let Some(extension) = source_path.extension() {
+        file_name.push(".");
+        file_name.push(extension);
+    }
+    cache_dir.join(file_name)
+}
+
+fn network_preview_cache_signature(source_path: &Path, source_metadata: &std::fs::Metadata) -> u64 {
+    let mut hash = FNV_OFFSET;
+    #[cfg(unix)]
+    {
+        hash = hash_bytes(hash, source_path.as_os_str().as_bytes());
+    }
+    #[cfg(not(unix))]
+    {
+        let path_text = source_path.to_string_lossy();
+        hash = hash_bytes(hash, path_text.as_bytes());
+    }
+    hash = hash_bytes(hash, &source_metadata.len().to_le_bytes());
+    hash_bytes(hash, &modified_signature(source_metadata).to_le_bytes())
+}
+
+fn modified_signature(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+async fn cached_file_is_fresh(path: &Path, now: SystemTime) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    metadata.is_file()
+        && metadata
+            .modified()
+            .is_ok_and(|modified| !cache_entry_is_expired(modified, now))
+}
+
+async fn remove_expired_network_preview_files(cache_dir: &Path, now: SystemTime) -> io::Result<()> {
+    let mut entries = match fs::read_dir(cache_dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        let expired = metadata
+            .modified()
+            .map(|modified| cache_entry_is_expired(modified, now))
+            .unwrap_or(true);
+        if !expired {
+            continue;
+        }
+
+        let outcome = if metadata.is_dir() {
+            fs::remove_dir_all(&path).await
+        } else {
+            fs::remove_file(&path).await
+        };
+        if let Err(error) = outcome {
+            if error.kind() != io::ErrorKind::NotFound {
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cache_entry_is_expired(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .map(|age| age > NETWORK_PREVIEW_CACHE_TTL)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn cache_network_preview_file_reuses_fresh_cached_file() {
+        let temp_dir = tempdir().expect("temp dir");
+        let source = temp_dir.path().join("remote.txt");
+        let cache_dir = temp_dir.path().join("cache");
+        tokio::fs::write(&source, b"remote")
+            .await
+            .expect("write source");
+
+        let cached = cache_once(&source, &cache_dir).await;
+        tokio::fs::write(&cached, b"cached")
+            .await
+            .expect("mark cache");
+
+        let reused = cache_once(&source, &cache_dir).await;
+
+        assert_eq!(reused, cached);
+        assert_eq!(
+            tokio::fs::read(reused).await.expect("read reused cache"),
+            b"cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_network_preview_file_uses_new_path_when_source_size_changes() {
+        let temp_dir = tempdir().expect("temp dir");
+        let source = temp_dir.path().join("remote.txt");
+        let cache_dir = temp_dir.path().join("cache");
+        tokio::fs::write(&source, b"one")
+            .await
+            .expect("write source");
+        let first = cache_once(&source, &cache_dir).await;
+
+        tokio::fs::write(&source, b"one plus more")
+            .await
+            .expect("rewrite source");
+        let second = cache_once(&source, &cache_dir).await;
+
+        assert_ne!(first, second);
+        assert_eq!(
+            tokio::fs::read(second).await.expect("read changed cache"),
+            b"one plus more"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_expired_network_preview_files_clears_old_entries() {
+        let temp_dir = tempdir().expect("temp dir");
+        let cache_dir = temp_dir.path().join("cache");
+        tokio::fs::create_dir(&cache_dir)
+            .await
+            .expect("create cache");
+        let entry = cache_dir.join("network-preview-old.txt");
+        tokio::fs::write(&entry, b"old").await.expect("write old");
+
+        let future_now = SystemTime::now() + Duration::from_secs(60 * 60);
+        remove_expired_network_preview_files(&cache_dir, future_now)
+            .await
+            .expect("cleanup");
+
+        assert!(!entry.exists());
+    }
+
+    async fn cache_once(source: &Path, cache_dir: &Path) -> PathBuf {
+        let (progress, _receiver) = mpsc::unbounded_channel();
+        let request = NetworkPreviewCacheRequest::new(
+            source.to_path_buf(),
+            cache_dir.to_path_buf(),
+            CancellationToken::new(),
+        );
+        cache_network_preview_file(request, progress)
+            .await
+            .expect("cache preview")
+    }
+}

@@ -16,6 +16,7 @@ use crate::model::{
     trash_location_path, Message, ScrollbarRegion, SidebarBookmarkDropSlot, SidebarLocation,
     SidebarLocationKind, TRASH_LOCATION_LABEL,
 };
+use crate::network_connections::{NetworkConnectionMessage, SidebarNetworkConnectionEntry};
 use crate::sidebar_devices::SidebarDeviceEntry;
 use crate::typography::readable_text;
 
@@ -69,6 +70,7 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         }
     }
 
+    sidebar = append_sidebar_network_connections(sidebar, browser);
     sidebar = append_sidebar_devices(sidebar, browser);
 
     let scrollbar_region = ScrollbarRegion::Sidebar;
@@ -148,6 +150,44 @@ fn append_sidebar_devices<'a>(
     }
 
     sidebar
+}
+
+fn append_sidebar_network_connections<'a>(
+    mut sidebar: Column<'a, Message>,
+    browser: &'a FileBrowser,
+) -> Column<'a, Message> {
+    sidebar = sidebar.push(sidebar_network_section_header());
+    for connection in &browser.network_connections.entries {
+        sidebar = sidebar.push(sidebar_network_connection_item(browser, connection));
+    }
+
+    if browser.network_connections.entries.is_empty() {
+        sidebar = sidebar.push(sidebar_message_row("No saved connections"));
+    } else if browser.network_connections.unavailable.is_some() {
+        sidebar = sidebar.push(sidebar_message_row("Network status unavailable"));
+    }
+
+    sidebar
+}
+
+fn sidebar_network_section_header() -> Element<'static, Message> {
+    row![
+        container(readable_text("Network").size(12))
+            .padding([4, 8])
+            .width(Length::Fill),
+        button(themed_icon(
+            IconSymbol::Plus,
+            IconTone::Normal,
+            MENU_ICON_SIZE
+        ))
+        .on_press(Message::NetworkConnection(
+            NetworkConnectionMessage::AddRequested
+        ))
+        .padding([2, 5])
+        .style(navigation_icon_button_style()),
+    ]
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn sidebar_resize_handle() -> Element<'static, Message> {
@@ -327,6 +367,56 @@ fn sidebar_device_item<'a>(
         .into()
 }
 
+fn sidebar_network_connection_item<'a>(
+    browser: &'a FileBrowser,
+    connection: &'a SidebarNetworkConnectionEntry,
+) -> Element<'a, Message> {
+    let presentation = sidebar_network_connection_presentation(browser, connection);
+    let tone = if presentation.is_selected() {
+        IconTone::Selected
+    } else {
+        IconTone::Normal
+    };
+    let pending = browser.network_connections.pending_action.as_ref() == Some(connection.id());
+
+    let item_container = container(sidebar_network_connection_label(
+        connection,
+        pending,
+        tone,
+        sidebar_label_max_chars(browser.sidebar_width),
+    ))
+    .padding([6, 8])
+    .width(Length::Fill);
+    let item_container = match presentation {
+        SidebarPresentation::Selected => item_container.style(selected_sidebar_item_style),
+        SidebarPresentation::Hovered => item_container.style(hovered_sidebar_item_style),
+        SidebarPresentation::Normal => item_container,
+    };
+
+    mouse_area(item_container)
+        .on_enter(Message::NetworkConnection(
+            NetworkConnectionMessage::Hovered(connection.id().clone()),
+        ))
+        .on_exit(Message::NetworkConnection(
+            NetworkConnectionMessage::HoverCleared(connection.id().clone()),
+        ))
+        .on_middle_press(Message::NetworkConnection(
+            NetworkConnectionMessage::MiddlePressed(
+                browser.active_pane_id(),
+                connection.id().clone(),
+            ),
+        ))
+        .on_press(Message::NetworkConnection(
+            NetworkConnectionMessage::Pressed(connection.id().clone()),
+        ))
+        .on_right_press(Message::NetworkConnection(
+            NetworkConnectionMessage::RightClicked(connection.id().clone()),
+        ))
+        .on_release(Message::DragSelectionFinished)
+        .interaction(iced::mouse::Interaction::Pointer)
+        .into()
+}
+
 fn sidebar_trash_item(browser: &FileBrowser) -> Element<'_, Message> {
     let trash_path = trash_location_path();
     let trash_presentation = if browser.is_trash_view {
@@ -415,6 +505,19 @@ fn sidebar_device_presentation(
     }
 }
 
+fn sidebar_network_connection_presentation(
+    browser: &FileBrowser,
+    connection: &SidebarNetworkConnectionEntry,
+) -> SidebarPresentation {
+    if browser.network_connection_is_selected(connection.id()) {
+        SidebarPresentation::Selected
+    } else if browser.hovered_network_connection.as_ref() == Some(connection.id()) {
+        SidebarPresentation::Hovered
+    } else {
+        SidebarPresentation::Normal
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum SidebarPresentation {
     Normal,
@@ -462,6 +565,46 @@ fn sidebar_device_label(
     ]
     .spacing(8)
     .align_y(Alignment::Center)
+}
+
+fn sidebar_network_connection_label(
+    connection: &SidebarNetworkConnectionEntry,
+    pending: bool,
+    tone: IconTone,
+    max_chars: usize,
+) -> Row<'static, Message> {
+    let label = format_middle_ellipsized_text(&connection.label(), max_chars);
+    let detail = format_middle_ellipsized_text(
+        &sidebar_network_connection_detail(connection, pending),
+        max_chars,
+    );
+    row![
+        themed_icon(IconSymbol::Link, tone, MENU_ICON_SIZE),
+        column![
+            readable_text(label).size(13),
+            readable_text(detail).size(11)
+        ]
+        .spacing(1)
+        .width(Length::Fill)
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+}
+
+fn sidebar_network_connection_detail(
+    connection: &SidebarNetworkConnectionEntry,
+    pending: bool,
+) -> String {
+    if pending {
+        "Working...".to_owned()
+    } else {
+        match &connection.state {
+            desktop_linux::NetworkMountState::Disconnected => "Not connected".to_owned(),
+            desktop_linux::NetworkMountState::Connecting => "Connecting...".to_owned(),
+            desktop_linux::NetworkMountState::Mounted(path) => path.to_string_lossy().into_owned(),
+            desktop_linux::NetworkMountState::Error(_) => "Connection error".to_owned(),
+        }
+    }
 }
 
 fn sidebar_device_detail(device: &SidebarDeviceEntry, pending: bool) -> String {

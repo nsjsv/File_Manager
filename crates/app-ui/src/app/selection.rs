@@ -10,8 +10,8 @@ use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANC
 
 use crate::model::{
     trash_location_path, BrowserPaneId, ColumnEntryBounds, ContextMenuState,
-    FileContextMenuExpansion, FileContextMenuState, LastActivationClick, Message, SelectionMarquee,
-    SelectionMarqueePhase, SelectionMarqueeSource,
+    FileContextMenuExpansion, FileContextMenuState, FileDeleteAction, LastActivationClick, Message,
+    SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
 };
 
 #[cfg(test)]
@@ -297,6 +297,7 @@ impl FileBrowser {
     pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
         let rename_command = self.commit_rename_if_active();
         self.select_context_menu_target(path.clone());
+        let delete_action = self.file_delete_action_for_selection();
         self.clear_preview();
         self.drag_selection_anchor = None;
         self.file_drag = None;
@@ -304,6 +305,7 @@ impl FileBrowser {
             target: Some(path.clone()),
             target_is_directory: self.entry_kind(&path) == Some(FileKind::Directory),
             paste_directory: self.entry_parent_directory(&path),
+            delete_action,
             position: self.cursor_position,
             expansion: FileContextMenuExpansion::None,
         }));
@@ -319,6 +321,7 @@ impl FileBrowser {
             target: None,
             target_is_directory: false,
             paste_directory: directory,
+            delete_action: FileDeleteAction::MoveToTrash,
             position: self.cursor_position,
             expansion: FileContextMenuExpansion::None,
         }));
@@ -634,6 +637,17 @@ impl FileBrowser {
             }
         }
         paths
+    }
+
+    fn file_delete_action_for_selection(&self) -> FileDeleteAction {
+        let paths = self.selected_paths_for_operation();
+        let has_network_path = paths.iter().any(|path| self.path_is_mounted_network(path));
+        let has_local_path = paths.iter().any(|path| !self.path_is_mounted_network(path));
+        match (has_network_path, has_local_path) {
+            (true, false) => FileDeleteAction::DeletePermanently,
+            (true, true) => FileDeleteAction::MixedSelection,
+            _ => FileDeleteAction::MoveToTrash,
+        }
     }
 
     fn selected_trash_entries_for_operation(&self) -> Vec<file_core::TrashRestoreEntry> {

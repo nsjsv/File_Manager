@@ -123,6 +123,27 @@ fn clear_tasks_removes_all_rows() {
 }
 
 #[test]
+fn delete_permanently_operation_roundtrips_through_json_and_database() {
+    let (store, root) = test_store();
+    let operation = StoredOperation::DeletePermanently {
+        paths: vec![
+            StoredPath::from_path(Path::new("/tmp/network/file.txt")),
+            StoredPath::from_path(Path::new("/tmp/network/folder")),
+        ],
+    };
+    let json = serde_json::to_string(&operation).unwrap();
+    let decoded: StoredOperation = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, operation);
+    assert_eq!(operation.kind(), "delete_permanently");
+
+    let id = store.insert_task(&operation).unwrap();
+    let task = store.read_task(id).unwrap().unwrap();
+
+    assert_eq!(task.operation, operation);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn column_widths_roundtrip_replace_and_clear() {
     let (store, root) = test_store();
     store

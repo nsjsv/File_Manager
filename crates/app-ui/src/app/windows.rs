@@ -528,6 +528,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.network_connection_editor.is_some() {
+            self.network_connection_editor = None;
+            return Task::none();
+        }
+
         if self.open_with.is_some() {
             self.open_with = None;
             return Task::none();

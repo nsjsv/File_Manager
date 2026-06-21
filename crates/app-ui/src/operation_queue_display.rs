@@ -29,7 +29,9 @@ impl QueuedFileOperation {
                 created_entry_path_lines(parent, NEW_DIRECTORY_NAME)
             }
             Self::CreateEmptyFile { parent } => created_entry_path_lines(parent, NEW_FILE_NAME),
-            Self::Trash { paths } => path_lines_from_paths(paths),
+            Self::Trash { paths } | Self::DeletePermanently { paths } => {
+                path_lines_from_paths(paths)
+            }
             Self::Restore { entries } | Self::DeleteTrashEntries { entries } => {
                 path_lines_from_trash_originals(entries)
             }

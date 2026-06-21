@@ -75,6 +75,7 @@ impl FileBrowser {
             ),
             sidebar_locations_command(home, configured_favorites),
             sidebar_devices_command(),
+            self.refresh_network_mount_states(),
             operation_store_command(state_database_path),
             search_index_profile_command,
         ])
@@ -166,6 +167,10 @@ impl FileBrowser {
         self.rendering_gpu_preference = user_config.rendering_gpu_preference;
         self.options.include_hidden = user_config.show_hidden_files;
         self.view_mode = user_config.browser_view_mode;
+        self.network_connections =
+            crate::network_connections::NetworkConnectionState::from_connections(
+                user_config.network_connections.clone(),
+            );
         self.user_config = user_config;
         self.sync_search_index_exclude_inputs_from_config();
     }

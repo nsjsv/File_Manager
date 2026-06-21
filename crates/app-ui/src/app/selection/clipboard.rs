@@ -56,9 +56,31 @@ impl FileBrowser {
         }
         let paths = self.selected_paths_for_operation();
         if paths.is_empty() {
-            Task::none()
-        } else {
-            self.enqueue_file_operation(QueuedFileOperation::Trash { paths })
+            return Task::none();
+        }
+        let (network_paths, local_paths): (Vec<_>, Vec<_>) = paths
+            .into_iter()
+            .partition(|path| self.path_is_mounted_network(path));
+        match (network_paths.is_empty(), local_paths.is_empty()) {
+            (true, false) => {
+                self.enqueue_file_operation(QueuedFileOperation::Trash { paths: local_paths })
+            }
+            (false, true) => {
+                self.request_destructive_action_confirmation(
+                    DestructiveActionConfirmation::DeletePermanently {
+                        paths: network_paths,
+                    },
+                );
+                Task::none()
+            }
+            (false, false) => {
+                self.error = Some(
+                    "Delete local and network items separately so local files can use Trash"
+                        .to_owned(),
+                );
+                Task::none()
+            }
+            (true, true) => Task::none(),
         }
     }
 
@@ -108,6 +130,13 @@ impl FileBrowser {
                     Task::none()
                 } else {
                     self.enqueue_file_operation(QueuedFileOperation::DeleteTrashEntries { entries })
+                }
+            }
+            DestructiveActionConfirmation::DeletePermanently { paths } => {
+                if paths.is_empty() {
+                    Task::none()
+                } else {
+                    self.enqueue_file_operation(QueuedFileOperation::DeletePermanently { paths })
                 }
             }
             DestructiveActionConfirmation::EmptyTrash => {
@@ -310,5 +339,112 @@ impl FileBrowser {
             .cloned()
             .or_else(|| self.cursor_paste_directory.clone())
             .unwrap_or_else(|| self.current_dir.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    use desktop_linux::{
+        NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
+    };
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+
+    use super::*;
+    use crate::config;
+
+    fn test_entry(path: &Path) -> DirectoryEntry {
+        DirectoryEntry::new(
+            path.to_path_buf(),
+            FileKind::File,
+            EntryMetadata {
+                len: 0,
+                modified: None,
+                readonly: false,
+            },
+            false,
+            false,
+            false,
+        )
+    }
+
+    fn browser_with_entries(paths: &[PathBuf]) -> FileBrowser {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.entries = paths.iter().map(|path| test_entry(path)).collect();
+        browser.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
+        browser.selected = paths.first().cloned();
+        browser
+    }
+
+    fn mount_network_connection(browser: &mut FileBrowser, mount_path: PathBuf) {
+        let connection = NetworkConnection::new(
+            NetworkConnectionId::new("nas"),
+            "NAS",
+            NetworkProtocol::Smb,
+            "smb://server/share",
+        )
+        .unwrap();
+        let id = connection.id.clone();
+        browser.network_connections =
+            crate::network_connections::NetworkConnectionState::from_connections(vec![connection]);
+        browser
+            .network_connections
+            .accept_loaded(vec![(id, NetworkMountState::Mounted(mount_path))]);
+    }
+
+    #[test]
+    fn local_delete_still_uses_trash_operation() {
+        let local_path = PathBuf::from("/workspace/local.txt");
+        let mut browser = browser_with_entries(std::slice::from_ref(&local_path));
+
+        let command = browser.trash_selected();
+        drop(command);
+
+        assert!(browser.destructive_action_confirmation.is_none());
+        assert_eq!(browser.operation_queue.tasks().len(), 1);
+        assert!(matches!(
+            &browser.operation_queue.tasks()[0].operation,
+            QueuedFileOperation::Trash { paths } if paths == &vec![local_path]
+        ));
+    }
+
+    #[test]
+    fn network_delete_requests_permanent_delete_confirmation() {
+        let mount_path = PathBuf::from("/run/user/1000/gvfs/smb-share:server=server,share=share");
+        let network_path = mount_path.join("remote.txt");
+        let mut browser = browser_with_entries(std::slice::from_ref(&network_path));
+        mount_network_connection(&mut browser, mount_path);
+
+        let command = browser.trash_selected();
+        drop(command);
+
+        assert_eq!(browser.operation_queue.tasks().len(), 0);
+        assert!(matches!(
+            &browser.destructive_action_confirmation,
+            Some(DestructiveActionConfirmation::DeletePermanently { paths })
+                if paths == &vec![network_path]
+        ));
+    }
+
+    #[test]
+    fn mixed_local_and_network_delete_is_rejected() {
+        let mount_path = PathBuf::from("/run/user/1000/gvfs/smb-share:server=server,share=share");
+        let network_path = mount_path.join("remote.txt");
+        let local_path = PathBuf::from("/workspace/local.txt");
+        let mut browser = browser_with_entries(&[local_path, network_path]);
+        mount_network_connection(&mut browser, mount_path);
+
+        let command = browser.trash_selected();
+        drop(command);
+
+        assert_eq!(browser.operation_queue.tasks().len(), 0);
+        assert!(browser.destructive_action_confirmation.is_none());
+        assert_eq!(
+            browser.error.as_deref(),
+            Some("Delete local and network items separately so local files can use Trash")
+        );
     }
 }

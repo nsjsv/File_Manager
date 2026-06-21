@@ -109,6 +109,22 @@ pub async fn trash_path(path: impl AsRef<Path>) -> Result<(), FileError> {
         })
 }
 
+pub async fn delete_path_permanently(path: impl AsRef<Path>) -> Result<(), FileError> {
+    let path = path.as_ref().to_path_buf();
+    let metadata = fs::symlink_metadata(&path)
+        .await
+        .map_err(|source| FileError::Delete {
+            path: path.clone(),
+            source,
+        })?;
+    let outcome = if metadata.file_type().is_dir() {
+        fs::remove_dir_all(&path).await
+    } else {
+        fs::remove_file(&path).await
+    };
+    outcome.map_err(|source| FileError::Delete { path, source })
+}
+
 pub async fn trash_path_with_restore_entry(
     path: impl AsRef<Path>,
 ) -> Result<Option<crate::TrashRestoreEntry>, FileError> {

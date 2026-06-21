@@ -3,6 +3,7 @@ mod archive_extraction;
 mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;
+mod network_connections;
 mod preview_panel;
 mod properties_window;
 mod rendering_settings;
@@ -62,6 +63,7 @@ use crate::selection_marquee::selection_marquee_overlay;
 use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
+use self::network_connections::network_connection_editor_panel;
 use archive_creation::archive_creation_panel;
 use archive_extraction::archive_extraction_panel;
 use floating_panels::{
@@ -188,6 +190,12 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: archive_extraction_panel(archive_extraction),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(editor) = &browser.network_connection_editor {
+        floating_input = BrowserFloatingInput::Modal;
+        floating.push(FloatingContent {
+            element: network_connection_editor_panel(editor),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(marquee) = &browser.selection_marquee {

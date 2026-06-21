@@ -336,18 +336,30 @@ async fn copy_file_to_target(
     }
     drop(writer);
 
-    if let Err(source) = fs::set_permissions(to, metadata.permissions()).await {
-        let _ = fs::remove_file(to).await;
-        return Err(FileError::Copy {
-            from: from.to_path_buf(),
-            to: to.to_path_buf(),
-            source,
-        });
-    }
+    let permissions_preserved = match fs::set_permissions(to, metadata.permissions()).await {
+        Ok(()) => true,
+        Err(source) if copy_permission_unsupported(&source) => false,
+        Err(source) => {
+            let _ = fs::remove_file(to).await;
+            return Err(FileError::Copy {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            });
+        }
+    };
     let source_content_hash =
         source_content_hasher.map(|source_content_hasher| source_content_hasher.finalize());
-    if let Err(error) =
-        verify_copied_file(from, to, metadata, controls, buffer, source_content_hash).await
+    if let Err(error) = verify_copied_file(
+        from,
+        to,
+        metadata,
+        controls,
+        buffer,
+        source_content_hash,
+        permissions_preserved,
+    )
+    .await
     {
         let _ = fs::remove_file(to).await;
         return Err(error);
@@ -363,6 +375,7 @@ async fn verify_copied_file(
     controls: &mut FileOperationControls,
     buffer: &mut [u8],
     expected_content_hash: Option<blake3::Hash>,
+    permissions_preserved: bool,
 ) -> Result<(), FileError> {
     controls.wait_until_running().await?;
     let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
@@ -384,7 +397,9 @@ async fn verify_copied_file(
             "target file size differs from source after copy",
         ));
     }
-    if target_metadata.permissions().readonly() != source_metadata.permissions().readonly() {
+    if permissions_preserved
+        && target_metadata.permissions().readonly() != source_metadata.permissions().readonly()
+    {
         return Err(copy_verification_error(
             from,
             to,
@@ -402,6 +417,20 @@ async fn verify_copied_file(
         }
     }
     Ok(())
+}
+
+fn copy_permission_unsupported(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Unsupported || operation_not_supported_os_error(error)
+}
+
+#[cfg(unix)]
+fn operation_not_supported_os_error(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(95)
+}
+
+#[cfg(not(unix))]
+fn operation_not_supported_os_error(_error: &io::Error) -> bool {
+    false
 }
 
 async fn copied_file_content_hash(
@@ -694,43 +723,4 @@ async fn remove_copy_target(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn strong_verification_rejects_matching_size_hash_mismatch() {
-        let directory = tempdir().unwrap();
-        let source_path = directory.path().join("source.bin");
-        let target = directory.path().join("target.bin");
-        let source_contents = b"same length data";
-        let target_contents = b"same length DATA";
-
-        fs::write(&source_path, source_contents).await.unwrap();
-        fs::write(&target, target_contents).await.unwrap();
-
-        let source_metadata = fs::metadata(&source_path).await.unwrap();
-        let mut controls = FileOperationControls::running(CancellationToken::new());
-        let mut buffer = vec![0; COPY_BUFFER_SIZE];
-        let error = verify_copied_file(
-            &source_path,
-            &target,
-            &source_metadata,
-            &mut controls,
-            &mut buffer,
-            Some(blake3::hash(source_contents)),
-        )
-        .await
-        .unwrap_err();
-
-        match error {
-            FileError::Copy { from, to, source } => {
-                assert_eq!(from, source_path);
-                assert_eq!(to, target);
-                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-}
+mod tests;

@@ -33,6 +33,12 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
                 entries: stored_trash_entries(entries),
             }
         }
+        QueuedFileOperation::DeletePermanently { paths } => StoredOperation::DeletePermanently {
+            paths: paths
+                .iter()
+                .map(|path| StoredPath::from_path(path))
+                .collect(),
+        },
         QueuedFileOperation::EmptyTrash => StoredOperation::EmptyTrash,
         QueuedFileOperation::Copy { transfers, .. } => StoredOperation::Copy {
             transfers: stored_transfers(transfers),

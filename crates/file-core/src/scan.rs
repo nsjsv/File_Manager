@@ -274,6 +274,12 @@ pub enum FileError {
         #[source]
         source: std::io::Error,
     },
+    #[error("could not delete {path:?}: {source}")]
+    Delete {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("could not move {path:?} to trash: {message}")]
     Trash { path: PathBuf, message: String },
     #[error("could not watch {path:?}: {message}")]

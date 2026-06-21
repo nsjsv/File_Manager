@@ -15,6 +15,8 @@ mod input_blocking_space;
 mod list_view;
 mod measured_middle_ellipsized_text;
 mod model;
+mod network_connections;
+mod network_preview_cache;
 mod open_with;
 mod operation_history;
 mod operation_queue;

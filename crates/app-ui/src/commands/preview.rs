@@ -1,16 +1,25 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use file_core::{FileKind, ScanOptions};
+use file_core::{CopyProgress, FileKind, ScanOptions};
+use iced::futures::channel::mpsc::Sender as IcedSender;
+use iced::futures::SinkExt;
 use iced::Task;
+use tokio_util::sync::CancellationToken;
 
 use crate::animated_image_preview::load_animated_image_preview;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
-use crate::model::Message;
+use crate::model::{
+    Message, NetworkPreviewCacheFinished, NetworkPreviewCacheMessage, NetworkPreviewCacheProgress,
+};
+use crate::network_preview_cache::{cache_network_preview_file, NetworkPreviewCacheRequest};
 use crate::preview::{load_directory_preview_children, load_preview};
 use crate::text_preview::TextPreviewChunkRequest;
 use crate::text_preview_loading::load_text_preview_chunk;
 use crate::video_preview::{inspect_video_preview_metadata, load_video_preview_frame};
+
+const NETWORK_PREVIEW_CACHE_CHANNEL_SIZE: usize = 16;
+const NETWORK_PREVIEW_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn preview_command(
     path: PathBuf,
@@ -21,6 +30,31 @@ pub(crate) fn preview_command(
     Task::perform(load_preview(path, kind, options), move |preview_outcome| {
         Message::PreviewLoaded(preview_path.clone(), preview_outcome)
     })
+}
+
+pub(crate) fn network_preview_cache_command(
+    source_path: PathBuf,
+    generation: u64,
+    cache_dir: PathBuf,
+    cancel: CancellationToken,
+) -> Task<Message> {
+    let request = NetworkPreviewCacheRequest::new(source_path.clone(), cache_dir, cancel);
+    Task::stream(iced::stream::channel(
+        NETWORK_PREVIEW_CACHE_CHANNEL_SIZE,
+        async move |mut output| {
+            let outcome =
+                download_network_preview_with_progress(request, generation, &mut output).await;
+            let _ = output
+                .send(Message::NetworkPreviewCache(
+                    NetworkPreviewCacheMessage::Finished(NetworkPreviewCacheFinished {
+                        source_path,
+                        generation,
+                        outcome,
+                    }),
+                ))
+                .await;
+        },
+    ))
 }
 
 pub(crate) fn preview_directory_children_command(
@@ -59,6 +93,69 @@ pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     Task::perform(load_image_dimensions(path), move |dimensions| {
         Message::ImagePreviewDimensionsLoaded(image_path.clone(), dimensions)
     })
+}
+
+async fn download_network_preview_with_progress(
+    request: NetworkPreviewCacheRequest,
+    generation: u64,
+    output: &mut IcedSender<Message>,
+) -> Result<PathBuf, String> {
+    let source_path = request.source_path.clone();
+    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let cache = cache_network_preview_file(request, progress_sender);
+    tokio::pin!(cache);
+    let mut latest_progress = None;
+    let mut last_progress_sent_at = None;
+
+    loop {
+        tokio::select! {
+            progress = progress_receiver.recv() => {
+                if let Some(progress) = progress {
+                    latest_progress = Some(progress);
+                    let now = Instant::now();
+                    if should_send_network_preview_progress(last_progress_sent_at, now) {
+                        if let Some(progress) = latest_progress.take() {
+                            send_network_preview_progress(output, &source_path, generation, progress).await;
+                            last_progress_sent_at = Some(now);
+                        }
+                    }
+                }
+            }
+            outcome = &mut cache => {
+                if let Some(progress) = latest_progress.take() {
+                    send_network_preview_progress(output, &source_path, generation, progress).await;
+                }
+                return outcome;
+            }
+        }
+    }
+}
+
+fn should_send_network_preview_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
+    match last_sent_at {
+        Some(last_sent_at) => {
+            now.duration_since(last_sent_at) >= NETWORK_PREVIEW_PROGRESS_UI_INTERVAL
+        }
+        None => true,
+    }
+}
+
+async fn send_network_preview_progress(
+    output: &mut IcedSender<Message>,
+    source_path: &PathBuf,
+    generation: u64,
+    progress: CopyProgress,
+) {
+    let _ = output
+        .send(Message::NetworkPreviewCache(
+            NetworkPreviewCacheMessage::Progress(NetworkPreviewCacheProgress {
+                source_path: source_path.clone(),
+                generation,
+                bytes_done: progress.bytes_done,
+                bytes_total: progress.bytes_total,
+            }),
+        ))
+        .await;
 }
 
 pub(crate) fn animated_image_preview_command(path: PathBuf, generation: u64) -> Task<Message> {

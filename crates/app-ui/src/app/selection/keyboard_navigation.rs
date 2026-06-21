@@ -310,6 +310,18 @@ impl FileBrowser {
         };
 
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
+        if kind == FileKind::File && self.path_is_mounted_network(&path) {
+            return self.start_network_preview_download(path);
+        }
+
+        self.open_preview_for_resolved_path(path, kind)
+    }
+
+    pub(in crate::app) fn open_preview_for_resolved_path(
+        &mut self,
+        path: PathBuf,
+        kind: FileKind,
+    ) -> Task<Message> {
         let is_audio_preview = kind == FileKind::File && is_supported_audio_path(&path);
         let is_video_preview = kind == FileKind::File && is_supported_video_path(&path);
         let is_animated_image_preview =

@@ -40,6 +40,41 @@ async fn create_file_with_contents_writes_exact_bytes() {
 }
 
 #[tokio::test]
+async fn delete_path_permanently_removes_files_and_directories() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("remove.txt");
+    let folder = dir.path().join("folder");
+    fs::write(&file, b"delete").unwrap();
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("child.txt"), b"delete").unwrap();
+
+    delete_path_permanently(&file).await.unwrap();
+    delete_path_permanently(&folder).await.unwrap();
+
+    assert!(!file.exists());
+    assert!(!folder.exists());
+}
+
+#[tokio::test]
+async fn delete_path_permanently_missing_path_returns_structured_error() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("missing.txt");
+
+    let error = delete_path_permanently(&path).await.unwrap_err();
+
+    match error {
+        FileError::Delete {
+            path: error_path,
+            source,
+        } => {
+            assert_eq!(error_path, path);
+            assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn create_empty_file_existing_path_returns_structured_error() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("existing.txt");
