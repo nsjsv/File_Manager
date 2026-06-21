@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::app::FileBrowser;
 use crate::model::{
-    SearchIndexPathRuleEditMode, SearchIndexPathRuleKind, SearchIndexPathRuleSelection,
+    SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
+    SearchIndexPathRuleSelection,
 };
 
 #[test]
@@ -434,6 +435,23 @@ fn ignored_click_in_search_index_settings_commits_path_rule_editor() {
         vec![PathBuf::from("/home/user/Documents")]
     );
     assert_eq!(browser.search_index.path_rule_editor, None);
+}
+
+#[test]
+fn daemon_status_error_stays_in_search_index_settings_state() {
+    let mut browser = browser_with_search_index_home();
+    browser.search_index.daemon_status_loading = true;
+
+    let _task = browser.accept_search_index_daemon_status(Err("socket unavailable".to_owned()));
+
+    assert!(!browser.search_index.daemon_status_loading);
+    assert_eq!(
+        browser.search_index.daemon_status,
+        Some(SearchIndexDaemonStatus::Unreachable(
+            "socket unavailable".to_owned()
+        ))
+    );
+    assert!(browser.error.is_none());
 }
 
 fn browser_with_search_index_home() -> FileBrowser {

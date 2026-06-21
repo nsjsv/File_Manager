@@ -92,19 +92,20 @@ pub enum IndexServiceEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct IndexService {
+pub struct IndexServiceCore {
     inner: Arc<IndexServiceInner>,
 }
 
+pub type IndexService = IndexServiceCore;
+
 #[derive(Debug)]
 pub struct IndexMaintenanceHandle {
-    service: IndexService,
-    profile_id: String,
+    token: CancellationToken,
 }
 
 impl Drop for IndexMaintenanceHandle {
     fn drop(&mut self) {
-        self.service.cancel_profile_maintenance(&self.profile_id);
+        self.token.cancel();
     }
 }
 
@@ -117,7 +118,7 @@ struct IndexServiceInner {
     maintenance_tokens: Mutex<HashMap<String, CancellationToken>>,
 }
 
-impl IndexService {
+impl IndexServiceCore {
     pub fn open(
         control_db_path: impl Into<PathBuf>,
         index_base_dir: impl Into<PathBuf>,
@@ -165,6 +166,10 @@ impl IndexService {
 
     pub fn status_stream(&self) -> broadcast::Receiver<IndexServiceEvent> {
         self.inner.events.subscribe()
+    }
+
+    pub fn load_profiles(&self) -> Result<Vec<IndexProfile>, IndexError> {
+        self.inner.profile_store.load_profiles()
     }
 
     pub fn configure_profile(
@@ -413,8 +418,7 @@ impl IndexService {
         let profile_id = profile_id.into();
         let token = self.replace_profile_maintenance_token(&profile_id);
         let handle = IndexMaintenanceHandle {
-            service: self.clone(),
-            profile_id: profile_id.clone(),
+            token: token.clone(),
         };
         tokio::spawn(async move {
             service.maintain_profile_task(profile_id, token).await;

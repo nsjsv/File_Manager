@@ -12,8 +12,7 @@ use file_core::{
     FileOperationVerification, FileTransferOptions, TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_index::{
-    BuildSelectedPathsRequest, FileSearchIndexMode, FileSearchIndexProgress, IndexService,
-    IndexServiceEvent,
+    BuildSelectedPathsRequest, FileSearchIndexMode, FileSearchIndexProgress, IndexServiceEvent,
 };
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -27,6 +26,8 @@ use crate::operation_queue::{
     FileOperationProgressUpdate, QueuedFileOperation, QueuedTransfer, RunningFileOperation,
     NEW_DIRECTORY_NAME, NEW_FILE_NAME,
 };
+
+use super::search_index_daemon;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
 const COPY_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
@@ -270,9 +271,8 @@ async fn run_queued_search_index(
         .map_err(|error| error.to_string())?;
 
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let service = IndexService::open(index_base_dir.join("control.sqlite"), index_base_dir)
-        .map_err(|error| error.to_string())?;
-    let mut build = Box::pin(service.build_selected_paths_with_cancel(
+    let mut build = Box::pin(search_index_daemon::build_selected_paths_with_progress(
+        index_base_dir,
         BuildSelectedPathsRequest {
             profile_id,
             root,

@@ -1,0 +1,10 @@
+[Unit]
+Description=File Manager search index daemon
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/file-indexd
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

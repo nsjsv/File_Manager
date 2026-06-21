@@ -528,6 +528,9 @@ impl FileBrowser {
             | Message::SearchIndexProfileLoaded(_)
             | Message::SearchIndexProfileSaved(_)
             | Message::SearchIndexProfileDeleted(_)
+            | Message::SearchIndexDaemonStatusLoaded(_)
+            | Message::SearchIndexDaemonRestartRequested
+            | Message::SearchIndexDaemonRestarted(_)
             | Message::SearchIndexMaintenanceEvent(_, _)
             | Message::SearchIndexMaintenanceUpdated(_, _)
             | Message::SearchIndexStatusRefreshRequested

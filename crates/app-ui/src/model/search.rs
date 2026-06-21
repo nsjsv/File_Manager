@@ -80,6 +80,12 @@ pub(crate) enum SearchIndexPathRuleEditMode {
     Modifying(SearchIndexPathRuleSelection),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SearchIndexDaemonStatus {
+    Reachable,
+    Unreachable(String),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SearchIndexRuntime {
     pub(crate) base_dir: PathBuf,
@@ -90,6 +96,8 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) profile_error: Option<String>,
     pub(crate) maintenance_paused: bool,
     pub(crate) service_generation: u64,
+    pub(crate) daemon_status: Option<SearchIndexDaemonStatus>,
+    pub(crate) daemon_status_loading: bool,
     pub(crate) indexing_roots: HashSet<PathBuf>,
     pub(crate) errors: HashMap<PathBuf, String>,
     pub(crate) statuses: HashMap<PathBuf, FileSearchIndexStatus>,
@@ -116,6 +124,8 @@ impl SearchIndexRuntime {
             profile_error: None,
             maintenance_paused: false,
             service_generation: 0,
+            daemon_status: None,
+            daemon_status_loading: false,
             indexing_roots: HashSet::new(),
             errors: HashMap::new(),
             statuses: HashMap::new(),

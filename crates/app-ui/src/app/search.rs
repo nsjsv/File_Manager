@@ -351,21 +351,8 @@ impl FileBrowser {
         {
             let index_command = self.ensure_search_index(root);
             self.mark_active_search_loading();
-            if matches!(request.mode, SearchMode::Contents | SearchMode::Media) {
-                self.clear_active_search_cancel_token();
-                return index_command;
-            }
-            let cancellation = self.replace_active_search_cancel_token();
-            return Task::batch([
-                index_command,
-                search_tree_command(
-                    request,
-                    self.options.clone(),
-                    self.search_index.exclude_pattern_inputs.clone(),
-                    self.user_config.search_index_directory_error_policy,
-                    cancellation,
-                ),
-            ]);
+            self.clear_active_search_cancel_token();
+            return index_command;
         }
 
         self.mark_active_search_loading();

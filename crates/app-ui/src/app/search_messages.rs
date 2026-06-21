@@ -44,13 +44,22 @@ impl FileBrowser {
             Message::SearchIndexProfileDeleted(outcome) => {
                 self.accept_search_index_profile_delete(outcome)
             }
+            Message::SearchIndexDaemonStatusLoaded(outcome)
+            | Message::SearchIndexDaemonRestarted(outcome) => {
+                self.accept_search_index_daemon_status(outcome)
+            }
+            Message::SearchIndexDaemonRestartRequested => {
+                self.request_search_index_daemon_restart()
+            }
             Message::SearchIndexMaintenanceEvent(generation, event) => {
                 self.accept_search_index_maintenance_event(generation, event)
             }
             Message::SearchIndexMaintenanceUpdated(generation, outcome) => {
                 self.accept_search_index_maintenance_update(generation, outcome)
             }
-            Message::SearchIndexStatusRefreshRequested => self.refresh_search_index_statuses(),
+            Message::SearchIndexStatusRefreshRequested => {
+                self.refresh_search_index_settings_statuses()
+            }
             Message::SearchIndexManualBuildRequested(root, mode) => {
                 self.request_search_index_manual_build(root, mode)
             }
@@ -108,6 +117,7 @@ fn search_index_message_commits_path_rule_editor(message: &Message) -> bool {
             | Message::SearchIndexManualBuildRequested(_, _)
             | Message::SearchIndexRemoveRequested(_)
             | Message::SearchIndexProfileDeleteRequested
+            | Message::SearchIndexDaemonRestartRequested
             | Message::SearchIndexMaintenancePauseToggled
             | Message::SearchIndexFailuresClearRequested(_)
             | Message::SearchIndexDirectoryErrorPolicySelected(_)

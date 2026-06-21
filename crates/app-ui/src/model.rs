@@ -61,8 +61,8 @@ pub(crate) use preview::{
 };
 mod search;
 pub(crate) use search::{
-    SearchIndexPathRuleEditMode, SearchIndexPathRuleKind, SearchIndexPathRuleSelection,
-    SearchIndexRuntime, SearchRequest, SearchScope, SearchState,
+    SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
+    SearchIndexPathRuleSelection, SearchIndexRuntime, SearchRequest, SearchScope, SearchState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +273,9 @@ pub(crate) enum Message {
     SearchIndexProfileLoaded(Result<Option<IndexProfile>, String>),
     SearchIndexProfileSaved(Result<IndexProfile, String>),
     SearchIndexProfileDeleted(Result<String, String>),
+    SearchIndexDaemonStatusLoaded(Result<SearchIndexDaemonStatus, String>),
+    SearchIndexDaemonRestartRequested,
+    SearchIndexDaemonRestarted(Result<SearchIndexDaemonStatus, String>),
     SearchIndexMaintenanceEvent(u64, IndexServiceEvent),
     SearchIndexMaintenanceUpdated(u64, Result<bool, String>),
     SearchIndexStatusRefreshRequested,

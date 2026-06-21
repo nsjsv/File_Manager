@@ -8,13 +8,14 @@ use iced::Task;
 use super::FileBrowser;
 use crate::commands::{
     clear_search_index_failures_command, default_search_index_profile, default_search_profile_id,
-    remove_search_index_command, search_index_profile_delete_command,
+    remove_search_index_command, search_index_daemon_restart_command,
+    search_index_daemon_status_command, search_index_profile_delete_command,
     search_index_profile_save_command, search_index_status_command,
 };
 use crate::config::normalize_search_index_exclude_patterns;
 use crate::model::{
-    Message, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind, SearchIndexPathRuleSelection,
-    SettingsCategory,
+    Message, SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
+    SearchIndexPathRuleSelection, SettingsCategory,
 };
 use crate::operation_queue::QueuedFileOperation;
 
@@ -142,6 +143,48 @@ impl FileBrowser {
             .map(|root| self.refresh_search_index_status_for_root(root))
             .collect::<Vec<_>>();
         Task::batch(tasks)
+    }
+
+    pub(super) fn refresh_search_index_settings_statuses(&mut self) -> Task<Message> {
+        Task::batch([
+            self.refresh_search_index_daemon_status(),
+            self.refresh_search_index_statuses(),
+        ])
+    }
+
+    pub(super) fn refresh_search_index_daemon_status(&mut self) -> Task<Message> {
+        if self.user_config.search_mode != crate::config::SearchBackendMode::Indexed {
+            return Task::none();
+        }
+        if self.search_index.daemon_status_loading {
+            return Task::none();
+        }
+        self.search_index.daemon_status_loading = true;
+        search_index_daemon_status_command(self.user_config.clone())
+    }
+
+    pub(super) fn request_search_index_daemon_restart(&mut self) -> Task<Message> {
+        if self.user_config.search_mode != crate::config::SearchBackendMode::Indexed {
+            return Task::none();
+        }
+        if self.search_index.daemon_status_loading {
+            return Task::none();
+        }
+        self.search_index.daemon_status_loading = true;
+        self.search_index.service_generation = self.search_index.service_generation.wrapping_add(1);
+        search_index_daemon_restart_command(self.user_config.clone())
+    }
+
+    pub(super) fn accept_search_index_daemon_status(
+        &mut self,
+        outcome: Result<SearchIndexDaemonStatus, String>,
+    ) -> Task<Message> {
+        self.search_index.daemon_status_loading = false;
+        self.search_index.daemon_status = Some(match outcome {
+            Ok(status) => status,
+            Err(error) => SearchIndexDaemonStatus::Unreachable(error),
+        });
+        Task::none()
     }
 
     pub(super) fn accept_search_index_status(
@@ -681,6 +724,7 @@ impl FileBrowser {
             return Task::none();
         }
         Task::batch([
+            self.refresh_search_index_daemon_status(),
             self.load_search_index_profile_command(),
             self.refresh_search_index_statuses(),
         ])

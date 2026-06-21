@@ -1,3 +1,5 @@
+pub mod daemon;
+pub mod ipc;
 mod layout;
 pub mod profile;
 pub mod search;
@@ -30,6 +32,10 @@ impl IndexError {
     }
 }
 
+pub use ipc::{
+    default_socket_path, IndexClient, IndexClientError, IndexMaintenanceSubscription,
+    INDEX_PROTOCOL_VERSION,
+};
 pub use layout::search_index_dir_for_root;
 pub use profile::{
     ContentIndexPolicy, IndexProfile, IndexTaskPhase, IndexTaskStatus, MediaMetadataPolicy,
@@ -47,5 +53,5 @@ pub use search::{
 };
 pub use service::{
     BuildSelectedPathsRequest, IndexMaintenanceHandle, IndexService, IndexServiceCommand,
-    IndexServiceEvent, SearchQuery,
+    IndexServiceCore, IndexServiceEvent, SearchQuery,
 };

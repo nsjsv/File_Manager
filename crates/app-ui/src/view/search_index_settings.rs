@@ -20,7 +20,8 @@ use crate::appearance::{
 use crate::config::SearchBackendMode;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text, format_system_time};
 use crate::model::{
-    Message, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind, SearchIndexPathRuleSelection,
+    Message, SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
+    SearchIndexPathRuleSelection,
 };
 use crate::typography::readable_text;
 
@@ -136,12 +137,22 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
     } else {
         "Running"
     };
+    let daemon_state = search_index_daemon_status_label(
+        browser.search_index.daemon_status.as_ref(),
+        browser.search_index.daemon_status_loading,
+    );
+    let daemon_controls_enabled = !browser.search_index.daemon_status_loading;
     let mut profile = column![
         readable_text("Profile").size(13),
+        metadata_row("Service", daemon_state),
         metadata_row("Profile id", browser.search_index.profile_id.clone()),
         metadata_row("Roots", roots_label),
         metadata_row("Maintenance", maintenance_state.to_owned()),
         row![
+            action_button(
+                "Restart service",
+                daemon_controls_enabled.then_some(Message::SearchIndexDaemonRestartRequested),
+            ),
             action_button(
                 if browser.search_index.maintenance_paused {
                     "Resume"
@@ -186,6 +197,22 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
     );
 
     section_panel(profile)
+}
+
+fn search_index_daemon_status_label(
+    status: Option<&SearchIndexDaemonStatus>,
+    loading: bool,
+) -> String {
+    if loading {
+        return "Checking...".to_owned();
+    }
+    match status {
+        Some(SearchIndexDaemonStatus::Reachable) => "Connected".to_owned(),
+        Some(SearchIndexDaemonStatus::Unreachable(error)) => {
+            format!("Unavailable: {error}")
+        }
+        None => "Unknown".to_owned(),
+    }
 }
 
 fn directory_error_policy_row(

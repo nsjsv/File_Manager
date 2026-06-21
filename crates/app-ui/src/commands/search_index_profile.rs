@@ -1,13 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use file_index::{IndexProfile, IndexService, IndexServiceCommand, IndexServiceEvent};
+use file_index::{IndexProfile, IndexServiceCommand, IndexServiceEvent};
 use iced::futures::SinkExt;
 use iced::{Subscription, Task};
 
+use super::search_index_daemon;
 use crate::config::UserConfig;
 use crate::model::Message;
 
-const SEARCH_INDEX_CONTROL_DB: &str = "control.sqlite";
 const DEFAULT_SEARCH_PROFILE_ID: &str = "default";
 
 pub(crate) fn search_index_profile_load_command(config: UserConfig) -> Task<Message> {
@@ -54,7 +54,6 @@ pub(crate) fn search_index_maintenance_subscription(
     Subscription::run_with(
         SearchIndexMaintenanceSubscription {
             profile_id,
-            control_db_path: search_index_control_db_path(&config.search_index_dir),
             index_base_dir: config.search_index_dir,
             generation,
         },
@@ -75,20 +74,17 @@ pub(crate) fn default_search_index_profile(
     profile
 }
 
-pub(crate) fn search_index_control_db_path(base_dir: &Path) -> PathBuf {
-    base_dir.join(SEARCH_INDEX_CONTROL_DB)
-}
-
 pub(crate) fn default_search_profile_id() -> &'static str {
     DEFAULT_SEARCH_PROFILE_ID
 }
 
 async fn load_search_index_profile(config: UserConfig) -> Result<Option<IndexProfile>, String> {
     let profile_id = default_search_profile_id().to_owned();
-    let service = search_index_service(&config)?;
-    match service
-        .load_profile(&profile_id)
-        .map_err(|error| error.to_string())?
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::LoadProfile(profile_id),
+    )
+    .await?
     {
         IndexServiceEvent::ProfileLoaded(profile) => Ok(profile),
         event => Err(format!("unexpected search index event: {event:?}")),
@@ -100,10 +96,11 @@ async fn save_search_index_profile(
     config: UserConfig,
 ) -> Result<IndexProfile, String> {
     let saved_profile = profile.clone();
-    let service = search_index_service(&config)?;
-    match service
-        .configure_profile(profile)
-        .map_err(|error| error.to_string())?
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::ConfigureProfile(profile),
+    )
+    .await?
     {
         IndexServiceEvent::ProfileConfigured(_) => Ok(saved_profile),
         event => Err(format!("unexpected search index event: {event:?}")),
@@ -114,16 +111,16 @@ async fn delete_search_index_profile(
     profile_id: String,
     config: UserConfig,
 ) -> Result<String, String> {
-    let control_db = search_index_control_db_path(&config.search_index_dir);
-    let index_base_dir = config.search_index_dir.clone();
     let deleted_id = profile_id.clone();
-    let service =
-        IndexService::open(control_db, index_base_dir).map_err(|error| error.to_string())?;
-    service
-        .delete_profile(&profile_id)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(deleted_id)
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::DeleteProfile(profile_id),
+    )
+    .await?
+    {
+        IndexServiceEvent::ProfileDeleted(_) => Ok(deleted_id),
+        event => Err(format!("unexpected search index event: {event:?}")),
+    }
 }
 
 async fn save_search_index_maintenance_pause(
@@ -131,16 +128,13 @@ async fn save_search_index_maintenance_pause(
     config: UserConfig,
     paused: bool,
 ) -> Result<(), String> {
-    let service = search_index_service(&config)?;
     let command = if paused {
         IndexServiceCommand::Pause
     } else {
         IndexServiceCommand::Resume
     };
-    let event = service
-        .execute(command)
-        .await
-        .map_err(|error| error.to_string())?;
+    let event =
+        search_index_daemon::execute_index_command(config.search_index_dir, command).await?;
     match (paused, event) {
         (true, IndexServiceEvent::Paused) | (false, IndexServiceEvent::Resumed) => Ok(()),
         (_, event) => Err(format!("unexpected search index event: {event:?}")),
@@ -150,7 +144,6 @@ async fn save_search_index_maintenance_pause(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SearchIndexMaintenanceSubscription {
     profile_id: String,
-    control_db_path: PathBuf,
     index_base_dir: PathBuf,
     generation: u64,
 }
@@ -160,11 +153,13 @@ fn search_index_maintenance_stream(
 ) -> impl iced::futures::Stream<Item = Message> + 'static {
     let subscription = subscription.clone();
     iced::stream::channel(64, async move |mut output| {
-        let service = match IndexService::open(
-            subscription.control_db_path,
+        let mut events = match search_index_daemon::subscribe_index_maintenance(
             subscription.index_base_dir.clone(),
-        ) {
-            Ok(service) => service,
+            subscription.profile_id.clone(),
+        )
+        .await
+        {
+            Ok(events) => events,
             Err(error) => {
                 let _ = output
                     .send(Message::SearchIndexMaintenanceUpdated(
@@ -176,8 +171,6 @@ fn search_index_maintenance_stream(
                 return;
             }
         };
-        let mut events = service.status_stream();
-        let _maintenance = service.maintain_profile(subscription.profile_id.clone());
         let _ = output
             .send(Message::SearchIndexMaintenanceUpdated(
                 subscription.generation,
@@ -185,17 +178,31 @@ fn search_index_maintenance_stream(
             ))
             .await;
 
-        while let Ok(event) = events.recv().await {
-            if maintenance_event_is_user_visible(&event)
-                && output
-                    .send(Message::SearchIndexMaintenanceEvent(
-                        subscription.generation,
-                        event,
-                    ))
-                    .await
-                    .is_err()
-            {
-                break;
+        loop {
+            match events.next_event().await {
+                Ok(Some(event)) if maintenance_event_is_user_visible(&event) => {
+                    if output
+                        .send(Message::SearchIndexMaintenanceEvent(
+                            subscription.generation,
+                            event,
+                        ))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = output
+                        .send(Message::SearchIndexMaintenanceUpdated(
+                            subscription.generation,
+                            Err(error.to_string()),
+                        ))
+                        .await;
+                    break;
+                }
             }
         }
         iced::futures::future::pending::<()>().await
@@ -211,12 +218,4 @@ fn maintenance_event_is_user_visible(event: &IndexServiceEvent) -> bool {
             | IndexServiceEvent::IncrementalUpdateFinished { .. }
             | IndexServiceEvent::IncrementalUpdateFailed { .. }
     )
-}
-
-fn search_index_service(config: &UserConfig) -> Result<IndexService, String> {
-    IndexService::open(
-        search_index_control_db_path(&config.search_index_dir),
-        config.search_index_dir.clone(),
-    )
-    .map_err(|error| error.to_string())
 }

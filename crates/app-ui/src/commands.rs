@@ -16,9 +16,9 @@ use file_core::{
     TransferConflictCheck, TransferConflictItem, TrashScan,
 };
 use file_index::{
-    search_file_tree_with_cancel, FileSearchIndexMode, FileSearchIndexOutcome,
-    FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome, IndexService, IndexServiceEvent,
-    SearchQuery,
+    search_file_tree_with_cancel, BuildSelectedPathsRequest, FileSearchIndexMode,
+    FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome,
+    IndexServiceCommand, IndexServiceEvent, SearchQuery,
 };
 use file_operation_store::TaskQueueStore;
 use iced::Task;
@@ -56,9 +56,13 @@ pub(crate) use properties::{
 };
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
+mod search_index_daemon;
+pub(crate) use search_index_daemon::{
+    search_index_daemon_restart_command, search_index_daemon_status_command,
+};
 mod search_index_profile;
 pub(crate) use search_index_profile::{
-    default_search_index_profile, default_search_profile_id, search_index_control_db_path,
+    default_search_index_profile, default_search_profile_id,
     search_index_maintenance_pause_command, search_index_maintenance_subscription,
     search_index_profile_delete_command, search_index_profile_load_command,
     search_index_profile_save_command,
@@ -536,17 +540,17 @@ async fn load_search_matches(
     config: config::UserConfig,
     profile_id: String,
 ) -> Result<FileSearchOutcome, String> {
-    let service = search_index_service(&config)?;
-    match service
-        .query(SearchQuery {
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::Query(SearchQuery {
             profile_id,
             root: request.root,
             text: request.query,
             mode: request.mode,
             limit: SEARCH_MATCH_LIMIT,
-        })
-        .await
-        .map_err(|error| error.to_string())?
+        }),
+    )
+    .await?
     {
         IndexServiceEvent::QueryFinished(outcome) => Ok(outcome),
         event => Err(format!("unexpected search index event: {event:?}")),
@@ -585,22 +589,18 @@ async fn build_search_index(
     profile_id: String,
     mode: FileSearchIndexMode,
 ) -> Result<FileSearchIndexOutcome, String> {
-    let service = search_index_service(&config)?;
-    let event = if mode == FileSearchIndexMode::Incremental {
-        service
-            .execute(file_index::IndexServiceCommand::BuildSelectedPaths(
-                file_index::BuildSelectedPathsRequest {
-                    profile_id,
-                    root: root.clone(),
-                    selected_paths: vec![root],
-                    mode,
-                },
-            ))
-            .await
+    let command = if mode == FileSearchIndexMode::Incremental {
+        IndexServiceCommand::BuildSelectedPaths(BuildSelectedPathsRequest {
+            profile_id,
+            root: root.clone(),
+            selected_paths: vec![root],
+            mode,
+        })
     } else {
-        service.rebuild(&profile_id, root).await
-    }
-    .map_err(|error| error.to_string())?;
+        IndexServiceCommand::Rebuild { profile_id, root }
+    };
+    let event =
+        search_index_daemon::execute_index_command(config.search_index_dir, command).await?;
     match event {
         IndexServiceEvent::RebuildFinished(outcome) => Ok(outcome),
         event => Err(format!("unexpected search index event: {event:?}")),
@@ -612,11 +612,11 @@ async fn load_search_index_status(
     config: config::UserConfig,
     profile_id: String,
 ) -> Result<FileSearchIndexStatus, String> {
-    let service = search_index_service(&config)?;
-    match service
-        .status(&profile_id, root)
-        .await
-        .map_err(|error| error.to_string())?
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::Status { profile_id, root },
+    )
+    .await?
     {
         IndexServiceEvent::StatusLoaded(status) => Ok(status),
         event => Err(format!("unexpected search index event: {event:?}")),
@@ -628,11 +628,11 @@ async fn clear_search_index_failures(
     config: config::UserConfig,
     profile_id: String,
 ) -> Result<FileSearchIndexStatus, String> {
-    let service = search_index_service(&config)?;
-    match service
-        .clear_failures(&profile_id, root)
-        .await
-        .map_err(|error| error.to_string())?
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::ClearFailures { profile_id, root },
+    )
+    .await?
     {
         IndexServiceEvent::FailuresCleared(status) => Ok(status),
         event => Err(format!("unexpected search index event: {event:?}")),
@@ -644,23 +644,15 @@ async fn remove_search_index(
     config: config::UserConfig,
     profile_id: String,
 ) -> Result<FileSearchIndexStatus, String> {
-    let service = search_index_service(&config)?;
-    match service
-        .remove_root(&profile_id, root)
-        .await
-        .map_err(|error| error.to_string())?
+    match search_index_daemon::execute_index_command(
+        config.search_index_dir,
+        IndexServiceCommand::RemoveRoot { profile_id, root },
+    )
+    .await?
     {
         IndexServiceEvent::RootRemoved(status) => Ok(status),
         event => Err(format!("unexpected search index event: {event:?}")),
     }
-}
-
-fn search_index_service(config: &config::UserConfig) -> Result<IndexService, String> {
-    IndexService::open(
-        crate::commands::search_index_control_db_path(&config.search_index_dir),
-        config.search_index_dir.clone(),
-    )
-    .map_err(|error| error.to_string())
 }
 
 async fn load_path_suggestions(input: String, current_dir: PathBuf) -> Vec<PathBuf> {

@@ -76,7 +76,7 @@ jobs:
           fi
 
       - name: Build release binary
-        run: cargo build --release --locked -p "${CARGO_PACKAGE}"
+        run: cargo build --release --locked -p "${CARGO_PACKAGE}" -p file-index
 
       - name: Package release archive
         id: package
@@ -86,8 +86,10 @@ jobs:
           payload="dist/${package_dir}"
 
           install -Dm755 "target/release/${CARGO_BINARY}" "${payload}/usr/bin/${APP_NAME}"
+          install -Dm755 "target/release/file-indexd" "${payload}/usr/bin/file-indexd"
           install -Dm644 LICENSE "${payload}/usr/share/licenses/${APP_NAME}/LICENSE"
           install -Dm644 packaging/linux/file-manager.desktop "${payload}/usr/share/applications/${APP_NAME}.desktop"
+          install -Dm644 packaging/linux/file-manager-index.service "${payload}/usr/lib/systemd/user/file-manager-index.service"
 
           tar -C dist -czf "${asset_name}" "${package_dir}"
           sha256sum "${asset_name}" > SHA256SUMS
