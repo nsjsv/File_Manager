@@ -147,6 +147,12 @@ pub struct StoredTransfer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredBatchRenameItem {
+    pub from: StoredPath,
+    pub to: StoredPath,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredTrashEntry {
     pub trash_path: StoredPath,
     pub info_path: StoredPath,
@@ -189,6 +195,9 @@ pub enum StoredOperation {
     Rename {
         path: StoredPath,
         new_name: String,
+    },
+    BatchRename {
+        items: Vec<StoredBatchRenameItem>,
     },
     CreateDirectory {
         parent: StoredPath,
@@ -240,6 +249,7 @@ impl StoredOperation {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Rename { .. } => "rename",
+            Self::BatchRename { .. } => "batch_rename",
             Self::CreateDirectory { .. } => "create_directory",
             Self::CreateEmptyFile { .. } => "create_empty_file",
             Self::Trash { .. } => "trash",

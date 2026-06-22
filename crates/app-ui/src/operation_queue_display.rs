@@ -25,6 +25,15 @@ impl QueuedFileOperation {
                 directory_path: path_parent_text(path),
                 total_items: 1,
             },
+            Self::BatchRename { items } => match items.as_slice() {
+                [] => FileOperationPathLines::empty(),
+                [item, ..] => FileOperationPathLines::from_paths(
+                    &item.to,
+                    &item.from,
+                    parent_path(&item.to),
+                    items.len(),
+                ),
+            },
             Self::CreateDirectory { parent } => {
                 created_entry_path_lines(parent, NEW_DIRECTORY_NAME)
             }

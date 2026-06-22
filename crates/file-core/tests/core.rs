@@ -5,14 +5,15 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use file_core::{
-    available_transfer_target_path, check_transfer_conflicts, copy_path, copy_path_with_options,
-    create_archive_with_progress, create_directory, create_empty_file, create_file_with_contents,
-    delete_path_permanently, extract_archive, filter_hidden, is_transfer_target_available,
-    move_path, move_path_with_options, rename_path, scan_directory, scan_directory_with_progress,
-    sort_entries, watch_directory, ArchiveCompressionLevel, ArchiveCreationRequest,
-    ArchiveExtractionRequest, ArchiveFormat, DirectoryEntry, EntryMetadata, FileError, FileKind,
-    FileOperationControls, FileOperationRunState, FileOperationVerification, FileTransferOptions,
-    ScanOptions, SortDirection, SortField, TransferConflictCheck, TransferConflictStrategy,
+    available_transfer_target_path, batch_rename_paths, check_transfer_conflicts, copy_path,
+    copy_path_with_options, create_archive_with_progress, create_directory, create_empty_file,
+    create_file_with_contents, delete_path_permanently, extract_archive, filter_hidden,
+    is_transfer_target_available, move_path, move_path_with_options, rename_path, scan_directory,
+    scan_directory_with_progress, sort_entries, watch_directory, ArchiveCompressionLevel,
+    ArchiveCreationRequest, ArchiveExtractionRequest, ArchiveFormat, BatchRenameItem,
+    DirectoryEntry, EntryMetadata, FileError, FileKind, FileOperationControls,
+    FileOperationRunState, FileOperationVerification, FileTransferOptions, ScanOptions,
+    SortDirection, SortField, TransferConflictCheck, TransferConflictStrategy,
 };
 use tempfile::tempdir;
 

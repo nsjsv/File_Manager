@@ -1,6 +1,7 @@
 pub(crate) mod archive_creation;
 pub(crate) mod archive_extraction;
 pub(crate) mod archive_password;
+mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod events;
@@ -13,6 +14,7 @@ mod pane_drag;
 pub(crate) mod panes;
 mod path_suggestions;
 mod paths;
+mod persistence_feedback;
 mod pointer_interactions;
 mod preview_state;
 mod properties;
@@ -71,8 +73,8 @@ use crate::commands::search_index_maintenance_subscription;
 use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
-    AudioPreviewPlayback, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    BrowserViewMode, ContextMenuState, DestructiveActionConfirmation,
+    AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
+    BrowserTab, BrowserViewMode, ContextMenuState, DestructiveActionConfirmation,
     DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, FilePropertiesState,
     Message, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize, PreviewState,
     PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState,
@@ -137,6 +139,7 @@ pub(crate) struct FileBrowser {
     pub(crate) open_with: Option<OpenWithState>,
     pub(crate) archive_creation: Option<ArchiveCreationState>,
     pub(crate) archive_extraction: Option<ArchiveExtractionState>,
+    pub(crate) batch_rename: Option<BatchRenameState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
     pub(crate) sidebar_devices: SidebarDeviceState,
     pub(crate) network_connections: NetworkConnectionState,
@@ -327,6 +330,7 @@ impl FileBrowser {
             open_with: None,
             archive_creation: None,
             archive_extraction: None,
+            batch_rename: None,
             sidebar_locations: Vec::new(),
             sidebar_devices: SidebarDeviceState::loading(),
             network_connections: NetworkConnectionState::default(),

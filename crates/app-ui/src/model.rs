@@ -49,6 +49,10 @@ pub(crate) use browser_panes::{
     DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, SplitAxis, SplitRegion,
 };
+mod batch_rename;
+pub(crate) use batch_rename::{
+    same_parent, BatchRenameCaseRule, BatchRenameMessage, BatchRenamePreviewRow, BatchRenameState,
+};
 mod properties;
 pub(crate) use properties::{
     FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
@@ -91,6 +95,7 @@ pub(crate) enum ScrollbarRegion {
     StartupIndexSetup,
     OpenWithApplications,
     OperationQueue,
+    BatchRenamePreview,
     PreviewDirectory,
     PreviewArchive,
     MarkdownPreview,
@@ -251,6 +256,7 @@ pub(crate) enum Message {
     DismissFloating,
     ArchiveCreation(ArchiveCreationMessage),
     ArchiveExtraction(ArchiveExtractionMessage),
+    BatchRename(BatchRenameMessage),
     FileContextMenuExpansionChanged(FileContextMenuExpansion),
     DestructiveActionConfirmed,
     DestructiveActionCanceled,
@@ -341,6 +347,7 @@ pub(crate) enum Message {
     StartupIndexSetupScrolled,
     OpenWithApplicationsScrolled,
     OperationQueueScrolled,
+    BatchRenamePreviewScrolled,
     PreviewDirectoryScrolled,
     PreviewArchiveScrolled,
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
@@ -616,6 +623,7 @@ pub(crate) struct FileContextMenuState {
     pub(crate) target: Option<PathBuf>,
     pub(crate) target_is_directory: bool,
     pub(crate) paste_directory: PathBuf,
+    pub(crate) can_batch_rename: bool,
     pub(crate) delete_action: FileDeleteAction,
     pub(crate) position: Point,
     pub(crate) expansion: FileContextMenuExpansion,

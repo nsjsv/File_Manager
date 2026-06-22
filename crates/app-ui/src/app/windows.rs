@@ -528,6 +528,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.batch_rename.is_some() {
+            self.batch_rename = None;
+            return Task::none();
+        }
+
         if self.network_connection_editor.is_some() {
             self.network_connection_editor = None;
             return Task::none();

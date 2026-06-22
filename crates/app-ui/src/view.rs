@@ -1,6 +1,7 @@
 mod archive_creation;
 mod archive_extraction;
 mod auxiliary_window_layout;
+mod batch_rename;
 mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;
@@ -69,6 +70,7 @@ use crate::typography::readable_text;
 use self::network_connections::network_connection_editor_panel;
 use archive_creation::archive_creation_panel;
 use archive_extraction::archive_extraction_panel;
+use batch_rename::batch_rename_panel;
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
     open_with_panel, transfer_conflict_panel,
@@ -193,6 +195,15 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: archive_extraction_panel(archive_extraction),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(batch_rename) = &browser.batch_rename {
+        floating_input = BrowserFloatingInput::Modal;
+        floating.push(FloatingContent {
+            element: batch_rename_panel(
+                batch_rename,
+                browser.scrollbar_visibility_for(&ScrollbarRegion::BatchRenamePreview),
+            ),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(editor) = &browser.network_connection_editor {

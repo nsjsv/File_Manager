@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use file_core::{
     ArchiveCompressionLevel, ArchiveExtractionRequest, ArchiveFormat, ArchivePassword,
-    FileOperationControls, FileOperationRunState, FileOperationVerification,
+    BatchRenameItem, FileOperationControls, FileOperationRunState, FileOperationVerification,
     TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_index::FileSearchIndexMode;
@@ -26,6 +26,9 @@ pub(crate) enum QueuedFileOperation {
     Rename {
         path: PathBuf,
         new_name: String,
+    },
+    BatchRename {
+        items: Vec<BatchRenameItem>,
     },
     CreateDirectory {
         parent: PathBuf,
@@ -94,6 +97,7 @@ impl QueuedFileOperation {
     pub(crate) fn title(&self) -> &'static str {
         match self {
             Self::Rename { .. } => "Rename",
+            Self::BatchRename { .. } => "Batch Rename",
             Self::CreateDirectory { .. } => "New Folder",
             Self::CreateEmptyFile { .. } => "New File",
             Self::Trash { .. } => "Move to Trash",

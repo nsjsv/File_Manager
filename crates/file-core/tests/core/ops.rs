@@ -15,6 +15,119 @@ async fn create_directory_and_rename_path_update_filesystem() {
 }
 
 #[tokio::test]
+async fn batch_rename_paths_updates_all_items() {
+    let dir = tempdir().unwrap();
+    let first = dir.path().join("first.txt");
+    let second = dir.path().join("second.txt");
+    let alpha = dir.path().join("alpha.txt");
+    let beta = dir.path().join("beta.txt");
+    fs::write(&first, b"one").unwrap();
+    fs::write(&second, b"two").unwrap();
+
+    let completed = batch_rename_paths(vec![
+        BatchRenameItem {
+            from: first.clone(),
+            to: alpha.clone(),
+        },
+        BatchRenameItem {
+            from: second.clone(),
+            to: beta.clone(),
+        },
+    ])
+    .await
+    .unwrap();
+
+    assert_eq!(completed.len(), 2);
+    assert_eq!(fs::read(&alpha).unwrap(), b"one");
+    assert_eq!(fs::read(&beta).unwrap(), b"two");
+    assert!(!first.exists());
+    assert!(!second.exists());
+}
+
+#[tokio::test]
+async fn batch_rename_paths_rejects_duplicate_targets() {
+    let dir = tempdir().unwrap();
+    let first = dir.path().join("first.txt");
+    let second = dir.path().join("second.txt");
+    let target = dir.path().join("target.txt");
+    fs::write(&first, b"one").unwrap();
+    fs::write(&second, b"two").unwrap();
+
+    let error = batch_rename_paths(vec![
+        BatchRenameItem {
+            from: first.clone(),
+            to: target.clone(),
+        },
+        BatchRenameItem {
+            from: second.clone(),
+            to: target.clone(),
+        },
+    ])
+    .await
+    .unwrap_err();
+
+    match error {
+        FileError::InvalidInput { path, message } => {
+            assert_eq!(path, target);
+            assert_eq!(message, "target appears more than once");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(fs::read(&first).unwrap(), b"one");
+    assert_eq!(fs::read(&second).unwrap(), b"two");
+}
+
+#[tokio::test]
+async fn batch_rename_paths_rejects_existing_unrelated_target() {
+    let dir = tempdir().unwrap();
+    let source_path = dir.path().join("source.txt");
+    let target = dir.path().join("target.txt");
+    fs::write(&source_path, b"source").unwrap();
+    fs::write(&target, b"target").unwrap();
+
+    let error = batch_rename_paths(vec![BatchRenameItem {
+        from: source_path.clone(),
+        to: target.clone(),
+    }])
+    .await
+    .unwrap_err();
+
+    match error {
+        FileError::Rename { from, to, source } => {
+            assert_eq!(from, source_path);
+            assert_eq!(to, target);
+            assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn batch_rename_paths_allows_swapping_names() {
+    let dir = tempdir().unwrap();
+    let first = dir.path().join("first.txt");
+    let second = dir.path().join("second.txt");
+    fs::write(&first, b"one").unwrap();
+    fs::write(&second, b"two").unwrap();
+
+    batch_rename_paths(vec![
+        BatchRenameItem {
+            from: first.clone(),
+            to: second.clone(),
+        },
+        BatchRenameItem {
+            from: second.clone(),
+            to: first.clone(),
+        },
+    ])
+    .await
+    .unwrap();
+
+    assert_eq!(fs::read(&first).unwrap(), b"two");
+    assert_eq!(fs::read(&second).unwrap(), b"one");
+}
+
+#[tokio::test]
 async fn create_empty_file_writes_zero_length_file() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("empty.txt");

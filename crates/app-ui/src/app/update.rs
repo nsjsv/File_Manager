@@ -467,6 +467,7 @@ impl FileBrowser {
             Message::DismissFloating => self.dismiss_floating(),
             Message::ArchiveCreation(message) => self.handle_archive_creation_message(message),
             Message::ArchiveExtraction(message) => self.handle_archive_extraction_message(message),
+            Message::BatchRename(message) => self.handle_batch_rename_message(message),
             Message::FileContextMenuExpansionChanged(expansion) => {
                 self.update_file_context_menu_expansion(expansion)
             }
@@ -507,21 +508,9 @@ impl FileBrowser {
                 self.theme = theme;
                 Task::none()
             }
-            Message::UserConfigSaved(Ok(())) => Task::none(),
-            Message::UserConfigSaved(Err(error)) => {
-                self.error = Some(format!("Failed to save user configuration: {error}"));
-                Task::none()
-            }
-            Message::ColumnWidthOverrideSaved(Ok(())) => Task::none(),
-            Message::ColumnWidthOverrideSaved(Err(error)) => {
-                self.error = Some(format!("Failed to save column width: {error}"));
-                Task::none()
-            }
-            Message::SidebarBookmarksSaved(Ok(())) => Task::none(),
-            Message::SidebarBookmarksSaved(Err(error)) => {
-                self.error = Some(format!("Failed to save sidebar favorites: {error}"));
-                Task::none()
-            }
+            Message::UserConfigSaved(result) => self.accept_user_config_saved(result),
+            Message::ColumnWidthOverrideSaved(result) => self.accept_column_width_saved(result),
+            Message::SidebarBookmarksSaved(result) => self.accept_sidebar_bookmarks_saved(result),
             Message::SearchInputChanged(_)
             | Message::SearchModeSelected(_)
             | Message::SearchInputStabilized(_)
@@ -644,6 +633,9 @@ impl FileBrowser {
             }
             Message::OperationQueueScrolled => {
                 self.show_scrollbars_temporarily(ScrollbarRegion::OperationQueue)
+            }
+            Message::BatchRenamePreviewScrolled => {
+                self.show_scrollbars_temporarily(ScrollbarRegion::BatchRenamePreview)
             }
             Message::PreviewDirectoryScrolled => {
                 self.show_scrollbars_temporarily(ScrollbarRegion::PreviewDirectory)

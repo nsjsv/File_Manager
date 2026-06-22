@@ -42,6 +42,7 @@ mod archive_creation;
 pub(crate) use archive_creation::check_archive_target_command;
 mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
+mod batch_rename_operation;
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
 mod network_connections;

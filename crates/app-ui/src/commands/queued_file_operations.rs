@@ -28,6 +28,7 @@ use crate::operation_queue::{
     NEW_DIRECTORY_NAME, NEW_FILE_NAME,
 };
 
+use super::batch_rename_operation::run_queued_batch_rename;
 use super::search_index_daemon;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
@@ -79,6 +80,25 @@ async fn run_queued_file_operation(
     match operation {
         QueuedFileOperation::Rename { path, new_name } => {
             run_queued_rename(path, new_name, controls, task_id, output).await
+        }
+        QueuedFileOperation::BatchRename { items } => {
+            send_file_operation_progress(
+                output,
+                task_id,
+                FileOperationProgressUpdate::Indeterminate,
+            )
+            .await;
+            let outcome = run_queued_batch_rename(items, controls).await?;
+            send_file_operation_progress(
+                output,
+                task_id,
+                FileOperationProgressUpdate::Items {
+                    completed: 1,
+                    total: 1,
+                },
+            )
+            .await;
+            Ok(outcome)
         }
         QueuedFileOperation::CreateDirectory { parent } => {
             run_queued_create_directory(parent, controls, task_id, output).await

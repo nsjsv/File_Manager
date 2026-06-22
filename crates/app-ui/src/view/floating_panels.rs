@@ -14,9 +14,10 @@ use crate::appearance::{
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
-    BrowserPaneId, ContextMenuState, DestructiveActionConfirmation, FileContextMenuExpansion,
-    FileContextMenuState, Message, ScrollbarVisibility, SidebarBookmarkContextMenuState,
-    TransferConflictChoice, TransferConflictItem, TransferConflictMetadata, TransferConflictState,
+    BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
+    FileContextMenuExpansion, FileContextMenuState, Message, ScrollbarVisibility,
+    SidebarBookmarkContextMenuState, TransferConflictChoice, TransferConflictItem,
+    TransferConflictMetadata, TransferConflictState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
@@ -491,6 +492,13 @@ fn file_context_menu_panel(
                 "Rename",
                 Message::BeginRename(path.clone()),
             ));
+        if menu.can_batch_rename {
+            menu_content = menu_content.push(menu_item(
+                IconSymbol::Pencil,
+                "Batch Rename...",
+                Message::BatchRename(BatchRenameMessage::OpenSelected),
+            ));
+        }
     } else {
         menu_content =
             menu_content.push(menu_item(IconSymbol::Copy, "Paste", Message::PastePending));
@@ -537,7 +545,11 @@ fn new_entry_submenu_slot(menu: &FileContextMenuState) -> Element<'_, Message> {
 }
 
 fn new_entry_trigger_top(menu: &FileContextMenuState) -> f32 {
-    let rows_before_new_entry = if menu.target.is_some() { 7.0 } else { 1.0 };
+    let rows_before_new_entry = match (menu.target.is_some(), menu.can_batch_rename) {
+        (true, true) => 8.0,
+        (true, false) => 7.0,
+        (false, _) => 1.0,
+    };
     CONTEXT_MENU_PADDING
         + rows_before_new_entry * (CONTEXT_MENU_ITEM_HEIGHT + CONTEXT_MENU_ITEM_SPACING)
 }

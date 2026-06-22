@@ -76,6 +76,7 @@ impl FileBrowser {
             && self.open_with.is_none()
             && self.archive_creation.is_none()
             && self.archive_extraction.is_none()
+            && self.batch_rename.is_none()
             && self.settings_window != Some(self.focused_window)
             && self.properties_window != Some(self.focused_window)
             && self.renaming.is_none()

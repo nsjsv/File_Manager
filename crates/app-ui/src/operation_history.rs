@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use file_core::{FileOperationVerification, TransferConflictStrategy, TrashRestoreEntry};
+use file_core::{
+    BatchRenameItem, CompletedBatchRename, FileOperationVerification, TransferConflictStrategy,
+    TrashRestoreEntry,
+};
 use file_index::FileSearchIndexOutcome;
 
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
@@ -18,6 +21,9 @@ pub(crate) enum FileOperationOutcome {
     Rename {
         from: PathBuf,
         to: PathBuf,
+    },
+    BatchRename {
+        renames: Vec<CompletedBatchRename>,
     },
     CreateDirectory {
         path: PathBuf,
@@ -61,6 +67,9 @@ pub(crate) enum FileOperationHistoryItem {
     Rename {
         from: PathBuf,
         to: PathBuf,
+    },
+    BatchRename {
+        renames: Vec<CompletedBatchRename>,
     },
     CreateDirectory {
         path: PathBuf,
@@ -189,6 +198,12 @@ impl FileOperationHistoryItem {
                 from: from.clone(),
                 to: to.clone(),
             }),
+            FileOperationOutcome::BatchRename { renames } if !renames.is_empty() => {
+                Some(Self::BatchRename {
+                    renames: renames.clone(),
+                })
+            }
+            FileOperationOutcome::BatchRename { .. } => None,
             FileOperationOutcome::CreateDirectory { path } => {
                 Some(Self::CreateDirectory { path: path.clone() })
             }
@@ -225,6 +240,9 @@ impl FileOperationHistoryItem {
     fn undo_operation(&self) -> Option<QueuedFileOperation> {
         match self {
             Self::Rename { from, to } => rename_operation(to.clone(), from),
+            Self::BatchRename { renames } => Some(QueuedFileOperation::BatchRename {
+                items: reverse_batch_rename_items(renames),
+            }),
             Self::CreateDirectory { path } | Self::CreateEmptyFile { path } => {
                 Some(QueuedFileOperation::Trash {
                     paths: vec![path.clone()],
@@ -252,6 +270,9 @@ impl FileOperationHistoryItem {
     fn redo_operation(&self) -> Option<QueuedFileOperation> {
         match self {
             Self::Rename { from, to } => rename_operation(from.clone(), to),
+            Self::BatchRename { renames } => Some(QueuedFileOperation::BatchRename {
+                items: forward_batch_rename_items(renames),
+            }),
             Self::CreateDirectory { path } => create_directory_operation(path),
             Self::CreateEmptyFile { path } => create_empty_file_operation(path),
             Self::Trash { original_paths, .. } => Some(QueuedFileOperation::Trash {
@@ -331,6 +352,27 @@ fn reverse_transfers(transfers: &[CompletedTransfer]) -> Vec<QueuedTransfer> {
             source: transfer.target.clone(),
             target: transfer.source.clone(),
             conflict_strategy: TransferConflictStrategy::Fail,
+        })
+        .collect()
+}
+
+fn forward_batch_rename_items(renames: &[CompletedBatchRename]) -> Vec<BatchRenameItem> {
+    renames
+        .iter()
+        .map(|rename| BatchRenameItem {
+            from: rename.from.clone(),
+            to: rename.to.clone(),
+        })
+        .collect()
+}
+
+fn reverse_batch_rename_items(renames: &[CompletedBatchRename]) -> Vec<BatchRenameItem> {
+    renames
+        .iter()
+        .rev()
+        .map(|rename| BatchRenameItem {
+            from: rename.to.clone(),
+            to: rename.from.clone(),
         })
         .collect()
 }

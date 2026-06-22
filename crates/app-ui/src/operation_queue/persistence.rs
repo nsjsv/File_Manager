@@ -1,8 +1,8 @@
-use file_core::{ArchiveCompressionLevel, ArchiveFormat, TrashRestoreEntry};
+use file_core::{ArchiveCompressionLevel, ArchiveFormat, BatchRenameItem, TrashRestoreEntry};
 use file_index::FileSearchIndexMode;
 use file_operation_store::{
-    StoredArchiveCompressionLevel, StoredArchiveFormat, StoredOperation, StoredPath,
-    StoredSearchIndexMode, StoredTransfer, StoredTrashEntry,
+    StoredArchiveCompressionLevel, StoredArchiveFormat, StoredBatchRenameItem, StoredOperation,
+    StoredPath, StoredSearchIndexMode, StoredTransfer, StoredTrashEntry,
 };
 
 use super::{QueuedFileOperation, QueuedTransfer};
@@ -12,6 +12,9 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
         QueuedFileOperation::Rename { path, new_name } => StoredOperation::Rename {
             path: StoredPath::from_path(path),
             new_name: new_name.clone(),
+        },
+        QueuedFileOperation::BatchRename { items } => StoredOperation::BatchRename {
+            items: stored_batch_rename_items(items),
         },
         QueuedFileOperation::CreateDirectory { parent } => StoredOperation::CreateDirectory {
             parent: StoredPath::from_path(parent),
@@ -114,6 +117,16 @@ fn stored_transfers(transfers: &[QueuedTransfer]) -> Vec<StoredTransfer> {
         .map(|transfer| StoredTransfer {
             source: StoredPath::from_path(&transfer.source),
             target: StoredPath::from_path(&transfer.target),
+        })
+        .collect()
+}
+
+fn stored_batch_rename_items(items: &[BatchRenameItem]) -> Vec<StoredBatchRenameItem> {
+    items
+        .iter()
+        .map(|item| StoredBatchRenameItem {
+            from: StoredPath::from_path(&item.from),
+            to: StoredPath::from_path(&item.to),
         })
         .collect()
 }
