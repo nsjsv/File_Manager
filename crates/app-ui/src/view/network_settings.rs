@@ -22,13 +22,11 @@ pub(super) fn network_settings_content(browser: &FileBrowser) -> Column<'_, Mess
 
 fn network_thumbnail_downloads_button(browser: &FileBrowser) -> Button<'static, Message> {
     let enabled = browser.network_list_thumbnail_downloads_enabled();
-    let status = if enabled { "On" } else { "Off" };
     let label = column![
         row![
             readable_text("Network List Thumbnails")
                 .size(12)
                 .width(Length::Fill),
-            readable_text(status).size(12),
             switch_control(enabled),
         ]
         .spacing(8)

@@ -173,28 +173,6 @@ pub(crate) fn file_operation_verification_config_value(
     }
 }
 
-pub(crate) fn file_operation_verification_label(
-    verification: FileOperationVerification,
-) -> &'static str {
-    match verification {
-        FileOperationVerification::BasicMetadata => "Basic + Metadata",
-        FileOperationVerification::Strong => "Strong",
-    }
-}
-
-pub(crate) fn file_operation_verification_description(
-    verification: FileOperationVerification,
-) -> &'static str {
-    match verification {
-        FileOperationVerification::BasicMetadata => {
-            "Checks the copied target type, size, and key metadata after the transfer."
-        }
-        FileOperationVerification::Strong => {
-            "Includes Basic + Metadata, then compares copied file content hashes."
-        }
-    }
-}
-
 pub(crate) fn browser_view_mode_from_config_value(value: &str) -> Option<BrowserViewMode> {
     match value {
         "columns" => Some(BrowserViewMode::Columns),

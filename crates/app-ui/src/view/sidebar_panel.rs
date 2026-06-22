@@ -116,7 +116,7 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     .into()
 }
 
-fn sidebar_floating_panel_margin() -> Padding {
+pub(super) fn sidebar_floating_panel_margin() -> Padding {
     Padding {
         top: SIDEBAR_FLOATING_MARGIN_VERTICAL,
         right: SIDEBAR_FLOATING_MARGIN_RIGHT,

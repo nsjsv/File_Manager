@@ -132,7 +132,7 @@ impl NetworkConnectionEditorState {
             id: None,
             protocol: NetworkProtocol::Smb,
             label: String::new(),
-            uri: "smb://".to_owned(),
+            uri: String::new(),
             username: String::new(),
             password: String::new(),
             error: None,

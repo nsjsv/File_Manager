@@ -17,7 +17,6 @@ pub(super) fn rendering_gpu_preference_button(
 ) -> Button<'static, Message> {
     let label = row![
         readable_text("Discrete GPU").size(12).width(Length::Fill),
-        readable_text(rendering_status(preference)).size(12),
         switch_control(matches!(
             preference,
             RenderingGpuPreference::HighPerformanceGpu
@@ -72,13 +71,6 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
     .width(Length::Fixed(RENDERER_RESTART_NOTICE_WIDTH))
     .style(context_menu_style)
     .into()
-}
-
-fn rendering_status(preference: RenderingGpuPreference) -> &'static str {
-    match preference {
-        RenderingGpuPreference::DisplayGpu => "Display GPU",
-        RenderingGpuPreference::HighPerformanceGpu => "On",
-    }
 }
 
 fn next_rendering_gpu_preference(preference: RenderingGpuPreference) -> RenderingGpuPreference {

@@ -3,12 +3,11 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use file_core::FileKind;
-use iced::widget::{button, column, container, row, scrollable, Button, Column, Space};
+use iced::widget::{button, column, container, row, Button, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{
-    app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
-    context_menu_button_style, context_menu_style, preview_panel_style,
+    app_content_style, context_menu_button_style, context_menu_style, preview_panel_style,
     selected_sidebar_item_style,
 };
 use crate::formatting::{format_file_size, format_system_time};
@@ -21,6 +20,9 @@ use crate::model::{
 };
 use crate::typography::readable_text;
 
+use super::auxiliary_window_layout::{
+    auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
+};
 use super::toggle_switch::switch_control;
 use super::{auxiliary_window_message, themed_icon, IconTone};
 
@@ -93,17 +95,12 @@ fn properties_split_view<'a>(
         }
     };
 
-    container(row![sidebar, detail].height(Length::Fill))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(app_content_style)
-        .into()
+    auxiliary_split_window(sidebar, detail)
 }
 
 fn properties_category_sidebar(selected: FilePropertiesCategory) -> Element<'static, Message> {
     let mut categories = Column::new()
         .spacing(6)
-        .padding(14)
         .push(readable_text("Properties").size(18))
         .push(Space::new().height(Length::Fixed(6.0)));
 
@@ -111,30 +108,18 @@ fn properties_category_sidebar(selected: FilePropertiesCategory) -> Element<'sta
         categories = categories.push(properties_category_button(category, selected));
     }
 
-    container(categories)
-        .width(Length::Fixed(196.0))
-        .height(Length::Fill)
-        .style(context_menu_style)
-        .into()
+    auxiliary_sidebar(categories)
 }
 
 fn properties_category_button(
     category: FilePropertiesCategory,
     selected: FilePropertiesCategory,
 ) -> Button<'static, Message> {
-    let label = container(readable_text(category.label()).size(13))
-        .padding([7, 10])
-        .width(Length::Fill);
-    let label = if category == selected {
-        label.style(selected_sidebar_item_style)
-    } else {
-        label
-    };
-
-    button(label)
-        .on_press(Message::FilePropertiesCategorySelected(category))
-        .width(Length::Fill)
-        .style(context_menu_button_style())
+    auxiliary_sidebar_button(
+        category.label(),
+        category == selected,
+        Message::FilePropertiesCategorySelected(category),
+    )
 }
 
 fn properties_information_detail(
@@ -258,20 +243,7 @@ fn properties_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
-    let panel = container(content).padding([18, 20]).width(Length::Fill);
-    let scrollable = scrollable(panel)
-        .direction(auto_hide_vertical_scrollbar_direction(
-            scrollbar_visibility,
-            6.0,
-        ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .on_scroll(|_| Message::PropertiesScrolled);
-
-    container(scrollable)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(app_content_style)
-        .into()
+    auxiliary_detail_scroller(content, scrollbar_visibility, Message::PropertiesScrolled)
 }
 
 fn displayed_permissions(

@@ -92,9 +92,22 @@ enum BackgroundInputPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FloatingPointerTarget {
-    FloatingContent,
+    FloatingBounds,
     Background,
     CursorUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FloatingInputDecision<Message> {
+    dismiss_message: Option<Message>,
+    background_update: BackgroundUpdateDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundUpdateDecision {
+    Update,
+    Stop,
+    Capture,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -210,27 +223,23 @@ where
     ) {
         let floating_pointer_target =
             self.floating_pointer_target(&mut tree.children, layout, cursor, renderer);
-
-        if self.outside_click_dismissal.is_some()
-            && is_left_mouse_press(event)
-            && floating_pointer_target == FloatingPointerTarget::Background
-        {
-            if let Some(dismissal) = self.outside_click_dismissal.clone() {
-                shell.publish(dismissal.message);
-                if dismissal.clicked_event_flow == DismissedClickFlow::Capture {
-                    shell.capture_event();
-                    return;
-                }
-            }
+        let input_decision = decide_floating_input(
+            self.background_input_policy,
+            self.outside_click_dismissal.as_ref(),
+            floating_pointer_target,
+            is_mouse_event(event),
+            is_left_mouse_press(event),
+        );
+        if let Some(message) = input_decision.dismiss_message {
+            shell.publish(message);
         }
-
-        if self.background_input_policy == BackgroundInputPolicy::Blocked {
-            if is_mouse_event(event)
-                && floating_pointer_target != FloatingPointerTarget::FloatingContent
-            {
+        match input_decision.background_update {
+            BackgroundUpdateDecision::Update => {}
+            BackgroundUpdateDecision::Stop => return,
+            BackgroundUpdateDecision::Capture => {
                 shell.capture_event();
+                return;
             }
-            return;
         }
 
         self.content.as_widget_mut().update(
@@ -348,7 +357,7 @@ where
                 .as_widget_mut()
                 .layout(tree, renderer, &limits);
             if floating_bounds(floating.placement, node.size(), surface_size).contains(position) {
-                return FloatingPointerTarget::FloatingContent;
+                return FloatingPointerTarget::FloatingBounds;
             }
         }
 
@@ -364,6 +373,56 @@ where
             BackgroundInputPolicy::Interactive => cursor,
             BackgroundInputPolicy::Blocked => mouse::Cursor::Unavailable,
         }
+    }
+}
+
+fn decide_floating_input<Message: Clone>(
+    background_input_policy: BackgroundInputPolicy,
+    outside_click_dismissal: Option<&OutsideClickDismissal<Message>>,
+    pointer_target: FloatingPointerTarget,
+    is_mouse_event: bool,
+    is_left_mouse_press: bool,
+) -> FloatingInputDecision<Message> {
+    if pointer_target == FloatingPointerTarget::FloatingBounds
+        && (background_input_policy == BackgroundInputPolicy::Blocked
+            || outside_click_dismissal.is_some())
+    {
+        return FloatingInputDecision {
+            dismiss_message: None,
+            background_update: if is_mouse_event {
+                BackgroundUpdateDecision::Capture
+            } else {
+                BackgroundUpdateDecision::Stop
+            },
+        };
+    }
+
+    if is_left_mouse_press && pointer_target == FloatingPointerTarget::Background {
+        if let Some(dismissal) = outside_click_dismissal {
+            return FloatingInputDecision {
+                dismiss_message: Some(dismissal.message.clone()),
+                background_update: match dismissal.clicked_event_flow {
+                    DismissedClickFlow::Capture => BackgroundUpdateDecision::Capture,
+                    DismissedClickFlow::Continue => BackgroundUpdateDecision::Update,
+                },
+            };
+        }
+    }
+
+    if background_input_policy == BackgroundInputPolicy::Blocked {
+        return FloatingInputDecision {
+            dismiss_message: None,
+            background_update: if is_mouse_event {
+                BackgroundUpdateDecision::Capture
+            } else {
+                BackgroundUpdateDecision::Stop
+            },
+        };
+    }
+
+    FloatingInputDecision {
+        dismiss_message: None,
+        background_update: BackgroundUpdateDecision::Update,
     }
 }
 
@@ -495,4 +554,122 @@ fn floating_position(placement: FloatingPlacement, size: Size, surface: Size) ->
         desired.x.max(FLOATING_SURFACE_MARGIN).min(max_x),
         desired.y.max(FLOATING_SURFACE_MARGIN).min(max_y),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum TestMessage {
+        Dismiss,
+    }
+
+    fn dismissal(clicked_event_flow: DismissedClickFlow) -> OutsideClickDismissal<TestMessage> {
+        OutsideClickDismissal {
+            message: TestMessage::Dismiss,
+            clicked_event_flow,
+        }
+    }
+
+    #[test]
+    fn modal_inside_floating_bounds_stops_background_without_dismissal() {
+        let decision = decide_floating_input::<TestMessage>(
+            BackgroundInputPolicy::Blocked,
+            None,
+            FloatingPointerTarget::FloatingBounds,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            decision,
+            FloatingInputDecision {
+                dismiss_message: None,
+                background_update: BackgroundUpdateDecision::Capture
+            }
+        );
+    }
+
+    #[test]
+    fn dismissible_inside_floating_bounds_stops_background_without_dismissal() {
+        let dismissal = dismissal(DismissedClickFlow::Capture);
+
+        let decision = decide_floating_input(
+            BackgroundInputPolicy::Blocked,
+            Some(&dismissal),
+            FloatingPointerTarget::FloatingBounds,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            decision,
+            FloatingInputDecision {
+                dismiss_message: None,
+                background_update: BackgroundUpdateDecision::Capture
+            }
+        );
+    }
+
+    #[test]
+    fn modal_outside_left_click_captures_without_dismissal() {
+        let decision = decide_floating_input::<TestMessage>(
+            BackgroundInputPolicy::Blocked,
+            None,
+            FloatingPointerTarget::Background,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            decision,
+            FloatingInputDecision {
+                dismiss_message: None,
+                background_update: BackgroundUpdateDecision::Capture
+            }
+        );
+    }
+
+    #[test]
+    fn blocking_dismissible_outside_left_click_dismisses_and_captures() {
+        let dismissal = dismissal(DismissedClickFlow::Capture);
+
+        let decision = decide_floating_input(
+            BackgroundInputPolicy::Blocked,
+            Some(&dismissal),
+            FloatingPointerTarget::Background,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            decision,
+            FloatingInputDecision {
+                dismiss_message: Some(TestMessage::Dismiss),
+                background_update: BackgroundUpdateDecision::Capture
+            }
+        );
+    }
+
+    #[test]
+    fn pass_through_dismissible_outside_left_click_dismisses_and_updates_background() {
+        let dismissal = dismissal(DismissedClickFlow::Continue);
+
+        let decision = decide_floating_input(
+            BackgroundInputPolicy::Interactive,
+            Some(&dismissal),
+            FloatingPointerTarget::Background,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            decision,
+            FloatingInputDecision {
+                dismiss_message: Some(TestMessage::Dismiss),
+                background_update: BackgroundUpdateDecision::Update
+            }
+        );
+    }
 }

@@ -1,25 +1,23 @@
 use std::fmt;
 
 use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
-use iced::widget::{button, column, container, pick_list, row, scrollable, Button, Column, Space};
+use iced::widget::{button, column, container, pick_list, row, Button, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::app::FileBrowser;
-use crate::appearance::{
-    app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
-    context_menu_button_style, context_menu_style, selected_sidebar_item_style,
-};
+use crate::appearance::context_menu_button_style;
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
 use crate::typography::readable_text;
 
+use super::auxiliary_window_layout::{
+    auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
+};
 use super::file_operation_verification_settings::file_operation_verification_options;
 use super::network_settings::network_settings_content;
 use super::rendering_settings::rendering_gpu_preference_button;
 use super::search_index_settings::search_index_settings_content;
 use super::shortcut_settings::shortcut_settings_section;
 use super::toggle_switch::switch_control;
-
-const SETTINGS_CATEGORY_WIDTH: f32 = 196.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerminalEmulatorPickOption(TerminalEmulator);
@@ -34,17 +32,12 @@ pub(crate) fn view_settings_window(browser: &FileBrowser) -> Element<'_, Message
     let categories = settings_category_sidebar(browser.selected_settings_category);
     let detail = settings_category_detail(browser);
 
-    container(row![categories, detail].height(Length::Fill))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(app_content_style)
-        .into()
+    auxiliary_split_window(categories, detail)
 }
 
 fn settings_category_sidebar(selected: SettingsCategory) -> Element<'static, Message> {
     let mut categories = Column::new()
         .spacing(6)
-        .padding(14)
         .push(readable_text("Settings").size(18))
         .push(Space::new().height(Length::Fixed(6.0)));
 
@@ -52,30 +45,18 @@ fn settings_category_sidebar(selected: SettingsCategory) -> Element<'static, Mes
         categories = categories.push(settings_category_button(category, selected));
     }
 
-    container(categories)
-        .width(Length::Fixed(SETTINGS_CATEGORY_WIDTH))
-        .height(Length::Fill)
-        .style(context_menu_style)
-        .into()
+    auxiliary_sidebar(categories)
 }
 
 fn settings_category_button(
     category: SettingsCategory,
     selected: SettingsCategory,
 ) -> Button<'static, Message> {
-    let label = container(readable_text(category.label()).size(13))
-        .padding([7, 10])
-        .width(Length::Fill);
-    let label = if category == selected {
-        label.style(selected_sidebar_item_style)
-    } else {
-        label
-    };
-
-    button(label)
-        .on_press(Message::SettingsCategorySelected(category))
-        .width(Length::Fill)
-        .style(context_menu_button_style())
+    auxiliary_sidebar_button(
+        category.label(),
+        category == selected,
+        Message::SettingsCategorySelected(category),
+    )
 }
 
 fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
@@ -176,19 +157,7 @@ fn settings_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
-    let content = container(content).padding(18).width(Length::Fill);
-    let scroller = scrollable(content)
-        .direction(auto_hide_vertical_scrollbar_direction(
-            scrollbar_visibility,
-            6.0,
-        ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .on_scroll(|_| Message::SettingsScrolled);
-
-    container(scroller)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    auxiliary_detail_scroller(content, scrollbar_visibility, Message::SettingsScrolled)
 }
 
 fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Message> {
@@ -210,16 +179,10 @@ fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Mes
 }
 
 fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Message> {
-    let status = if browser.options.include_hidden {
-        "On"
-    } else {
-        "Off"
-    };
     let label = row![
         readable_text("Show Hidden Files")
             .size(12)
             .width(Length::Fill),
-        readable_text(status).size(12),
         switch_control(browser.options.include_hidden),
     ]
     .spacing(8)

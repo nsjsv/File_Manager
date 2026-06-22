@@ -1,5 +1,6 @@
 mod archive_creation;
 mod archive_extraction;
+mod auxiliary_window_layout;
 mod file_operation_verification_settings;
 mod floating_panels;
 mod markdown_preview;

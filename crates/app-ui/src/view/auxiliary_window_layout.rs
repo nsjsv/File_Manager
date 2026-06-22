@@ -1,0 +1,77 @@
+use iced::widget::{button, container, row, scrollable, Button, Column};
+use iced::{Element, Length};
+
+use crate::appearance::{
+    app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
+    context_menu_button_style, selected_sidebar_item_style, sidebar_style,
+};
+use crate::model::{Message, ScrollbarVisibility};
+use crate::typography::readable_text;
+
+use super::sidebar_panel::sidebar_floating_panel_margin;
+
+const AUXILIARY_SIDEBAR_WIDTH: f32 = 196.0;
+
+pub(super) fn auxiliary_split_window<'a>(
+    sidebar: Element<'a, Message>,
+    detail: Element<'a, Message>,
+) -> Element<'a, Message> {
+    container(row![sidebar, detail].height(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(app_content_style)
+        .into()
+}
+
+pub(super) fn auxiliary_sidebar<'a>(content: Column<'a, Message>) -> Element<'a, Message> {
+    let sidebar = container(content.padding(14))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(sidebar_style);
+
+    container(sidebar)
+        .padding(sidebar_floating_panel_margin())
+        .width(Length::Fixed(AUXILIARY_SIDEBAR_WIDTH))
+        .height(Length::Fill)
+        .into()
+}
+
+pub(super) fn auxiliary_sidebar_button(
+    label: &'static str,
+    selected: bool,
+    message: Message,
+) -> Button<'static, Message> {
+    let label = container(readable_text(label).size(13))
+        .padding([7, 10])
+        .width(Length::Fill);
+    let label = if selected {
+        label.style(selected_sidebar_item_style)
+    } else {
+        label
+    };
+
+    button(label)
+        .on_press(message)
+        .width(Length::Fill)
+        .style(context_menu_button_style())
+}
+
+pub(super) fn auxiliary_detail_scroller<'a>(
+    content: Column<'a, Message>,
+    scrollbar_visibility: ScrollbarVisibility,
+    scroll_message: Message,
+) -> Element<'a, Message> {
+    let content = container(content).padding(18).width(Length::Fill);
+    let scroller = scrollable(content)
+        .direction(auto_hide_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
+        ))
+        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .on_scroll(move |_| scroll_message.clone());
+
+    container(scroller)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}

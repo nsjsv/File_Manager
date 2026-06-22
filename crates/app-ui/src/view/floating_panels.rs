@@ -23,6 +23,7 @@ use crate::sidebar_devices::SidebarDeviceContextMenuState;
 use crate::typography::readable_text;
 
 use super::network_connections::network_connection_context_menu_panel;
+use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
@@ -147,12 +148,6 @@ pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let apply_label = if state.apply_to_all {
-        "On: apply this choice to later compatible conflicts"
-    } else {
-        "Apply to all: off"
-    };
-
     let mut actions = row![
         conflict_choice_button("Replace", TransferConflictChoice::Replace),
         conflict_choice_button("Skip", TransferConflictChoice::Skip),
@@ -197,10 +192,22 @@ pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<
         transfer_conflict_paths(conflict),
         transfer_conflict_comparison(conflict),
         row![
-            button(readable_text(apply_label).size(12))
-                .on_press(Message::TransferConflictApplyToAllToggled)
-                .padding([6, 10])
-                .style(context_menu_button_style()),
+            button(
+                column![
+                    row![
+                        readable_text("Apply to all").size(12).width(Length::Fill),
+                        switch_control(state.apply_to_all),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    readable_text("Use this choice for later compatible conflicts.").size(11),
+                ]
+                .spacing(3)
+            )
+            .on_press(Message::TransferConflictApplyToAllToggled)
+            .padding([6, 10])
+            .width(Length::Fill)
+            .style(context_menu_button_style()),
             button(readable_text("Cancel").size(12))
                 .on_press(Message::TransferConflictCancelRequested)
                 .padding([6, 10])
