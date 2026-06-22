@@ -8,6 +8,7 @@ use file_core::FileOperationVerification;
 use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy};
 
 use crate::model::BrowserViewMode;
+use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
 
 const APP_DIR_NAME: &str = "file-manager";
@@ -34,6 +35,7 @@ const NETWORK_CONNECTION_ID_KEY: &str = "id";
 const NETWORK_CONNECTION_LABEL_KEY: &str = "label";
 const NETWORK_CONNECTION_PROTOCOL_KEY: &str = "protocol";
 const NETWORK_CONNECTION_URI_KEY: &str = "uri";
+const NETWORK_CONNECTION_AUTO_CONNECT_KEY: &str = "auto_connect";
 const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
@@ -203,7 +205,7 @@ pub(crate) struct UserConfig {
     pub(crate) show_hidden_files: bool,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
-    pub(crate) network_connections: Vec<NetworkConnection>,
+    pub(crate) network_connections: Vec<SavedNetworkConnection>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
     pub(crate) file_operation_verification: FileOperationVerification,
@@ -634,7 +636,7 @@ fn toml_sidebar_favorite_values(favorites: &[SidebarFavoriteConfig]) -> Vec<toml
         .collect()
 }
 
-fn parse_toml_network_connections(document: &toml::Table) -> Vec<NetworkConnection> {
+fn parse_toml_network_connections(document: &toml::Table) -> Vec<SavedNetworkConnection> {
     let Some(entries) = document
         .get(NETWORK_CONNECTIONS_KEY)
         .and_then(toml::Value::as_array)
@@ -667,19 +669,24 @@ fn parse_toml_network_connections(document: &toml::Table) -> Vec<NetworkConnecti
         if id.trim().is_empty() {
             continue;
         }
+        let auto_connect = table
+            .get(NETWORK_CONNECTION_AUTO_CONNECT_KEY)
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false);
         if let Ok(connection) =
             NetworkConnection::new(NetworkConnectionId::new(id.trim()), label, protocol, uri)
         {
-            connections.push(connection);
+            connections.push(SavedNetworkConnection::new(connection, auto_connect));
         }
     }
     connections
 }
 
-fn toml_network_connection_values(connections: &[NetworkConnection]) -> Vec<toml::Value> {
+fn toml_network_connection_values(connections: &[SavedNetworkConnection]) -> Vec<toml::Value> {
     connections
         .iter()
-        .map(|connection| {
+        .map(|saved| {
+            let connection = &saved.connection;
             let mut table = toml::Table::new();
             table.insert(
                 NETWORK_CONNECTION_ID_KEY.to_string(),
@@ -696,6 +703,10 @@ fn toml_network_connection_values(connections: &[NetworkConnection]) -> Vec<toml
             table.insert(
                 NETWORK_CONNECTION_URI_KEY.to_string(),
                 toml::Value::String(connection.uri.clone()),
+            );
+            table.insert(
+                NETWORK_CONNECTION_AUTO_CONNECT_KEY.to_string(),
+                toml::Value::Boolean(saved.auto_connect),
             );
             toml::Value::Table(table)
         })

@@ -39,6 +39,7 @@ impl fmt::Display for NetworkConnectionId {
 pub enum NetworkProtocol {
     Smb,
     WebDav,
+    Sftp,
 }
 
 impl NetworkProtocol {
@@ -46,6 +47,7 @@ impl NetworkProtocol {
         match value {
             "smb" => Some(Self::Smb),
             "webdav" => Some(Self::WebDav),
+            "sftp" => Some(Self::Sftp),
             _ => None,
         }
     }
@@ -54,6 +56,7 @@ impl NetworkProtocol {
         match self {
             Self::Smb => "smb",
             Self::WebDav => "webdav",
+            Self::Sftp => "sftp",
         }
     }
 
@@ -65,6 +68,7 @@ impl NetworkProtocol {
                 "davs" | "https" => Some("davs"),
                 _ => None,
             },
+            Self::Sftp if scheme == "sftp" => Some("sftp"),
             _ => None,
         }
     }
@@ -73,6 +77,7 @@ impl NetworkProtocol {
         match self {
             Self::Smb => "gvfs-smb",
             Self::WebDav => "gvfs-dav",
+            Self::Sftp => "gvfs-sftp",
         }
     }
 }
@@ -261,7 +266,7 @@ pub async fn load_network_mount_states(
     for connection in connections {
         let state = if mount_uris
             .iter()
-            .any(|mount_uri| network_uris_match(&connection.uri, mount_uri))
+            .any(|mount_uri| network_connection_matches_mounted_uri(&connection, mount_uri))
         {
             NetworkMountState::Mounted(resolve_gvfs_mount_path_from_root(&connection, &fuse_root)?)
         } else {
@@ -287,11 +292,10 @@ pub async fn mount_network_connection_with_credentials(
     let mount_uri = mount_uri_for_credentials(&connection, credentials.as_ref())?;
     let output = run_gio_mount_command(&connection, &mount_uri, credentials.as_ref()).await?;
     if !output.status.success() {
-        return Err(mount_command_error(
-            &connection,
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        if !mount_already_present_message(&stderr) {
+            return Err(mount_command_error(&connection, output.status, stderr));
+        }
     }
 
     let mount_path = wait_for_gvfs_mount_path(&connection).await?;
@@ -493,7 +497,7 @@ pub fn resolve_gvfs_mount_path_from_root(
             })?
     {
         if gvfs_mount_directory_matches(&entry.file_name().to_string_lossy(), connection)? {
-            return Ok(entry.path());
+            return gvfs_mount_path_for_connection(entry.path(), connection);
         }
     }
 
@@ -539,6 +543,10 @@ fn gio_unavailable_message(stderr: &str) -> Option<&str> {
 
 fn backend_error_message(stderr: &str) -> Option<&str> {
     gio_unavailable_message(stderr)
+}
+
+fn mount_already_present_message(stderr: &str) -> bool {
+    stderr.to_lowercase().contains("already mounted")
 }
 
 async fn load_gio_mount_listing() -> Result<String, NetworkMountError> {
@@ -637,6 +645,41 @@ fn gvfs_mount_directory_matches(
                     .get("prefix")
                     .is_some_and(|prefix| prefix == &percent_encode_gvfs_prefix(&parts.path)))
         }
+        NetworkProtocol::Sftp => {
+            let Some(values) = directory_name
+                .strip_prefix("sftp:")
+                .map(parse_gvfs_mount_values)
+            else {
+                return Ok(false);
+            };
+            Ok(values.get("host").is_some_and(|host| host == &parts.host)
+                && sftp_gvfs_user_matches(parts.username().as_deref(), values.get("user")))
+        }
+    }
+}
+
+fn gvfs_mount_path_for_connection(
+    mount_root: PathBuf,
+    connection: &NetworkConnection,
+) -> Result<PathBuf, NetworkMountError> {
+    if connection.protocol != NetworkProtocol::Sftp {
+        return Ok(mount_root);
+    }
+    let parts = parse_network_uri(&connection.uri)?;
+    Ok(parts
+        .path_segments
+        .iter()
+        .fold(mount_root, |path, segment| path.join(segment)))
+}
+
+fn sftp_gvfs_user_matches(connection_user: Option<&str>, mount_user: Option<&String>) -> bool {
+    match (connection_user, mount_user) {
+        (Some(connection_user), Some(mount_user)) => {
+            mount_user == connection_user
+                || mount_user == &percent_encode_gvfs_prefix(connection_user)
+        }
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -664,9 +707,40 @@ fn network_uris_match(left: &str, right: &str) -> bool {
     }
 }
 
+fn network_connection_matches_mounted_uri(connection: &NetworkConnection, mount_uri: &str) -> bool {
+    match connection.protocol {
+        NetworkProtocol::Sftp => match (
+            parse_network_uri(&connection.uri),
+            parse_network_uri(mount_uri),
+        ) {
+            (Ok(connection_parts), Ok(mount_parts)) => {
+                connection_parts.canonical_scheme() == "sftp"
+                    && mount_parts.canonical_scheme() == "sftp"
+                    && connection_parts.host == mount_parts.host
+                    && sftp_uri_users_match(
+                        connection_parts.username().as_deref(),
+                        mount_parts.username().as_deref(),
+                    )
+            }
+            _ => false,
+        },
+        NetworkProtocol::Smb | NetworkProtocol::WebDav => {
+            network_uris_match(&connection.uri, mount_uri)
+        }
+    }
+}
+
+fn sftp_uri_users_match(connection_user: Option<&str>, mount_user: Option<&str>) -> bool {
+    match (connection_user, mount_user) {
+        (Some(connection_user), Some(mount_user)) => connection_user == mount_user,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 fn is_supported_network_uri(uri: &str) -> bool {
     parse_network_uri(uri)
-        .map(|parts| matches!(parts.canonical_scheme(), "smb" | "dav" | "davs"))
+        .map(|parts| matches!(parts.canonical_scheme(), "smb" | "dav" | "davs" | "sftp"))
         .unwrap_or(false)
 }
 

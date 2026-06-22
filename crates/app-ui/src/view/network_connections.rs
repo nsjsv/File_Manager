@@ -14,6 +14,7 @@ use crate::typography::readable_text;
 use super::option_controls::{
     primary_action_button, secondary_action_button, segmented_choice_row, SegmentedChoice,
 };
+use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const NETWORK_EDITOR_PANEL_WIDTH: f32 = 460.0;
@@ -83,6 +84,10 @@ pub(super) fn network_connection_editor_panel(
                 .size(14),
         );
 
+    if editor.mode != NetworkConnectionEditorMode::Connect {
+        content = content.push(editor_auto_connect_button(editor.auto_connect));
+    }
+
     if let Some(error) = &editor.error {
         content = content.push(
             readable_text(format_middle_ellipsized_text(
@@ -114,6 +119,24 @@ pub(super) fn network_connection_editor_panel(
         .width(Length::Fixed(NETWORK_EDITOR_PANEL_WIDTH))
         .style(context_menu_style)
         .into()
+}
+
+fn editor_auto_connect_button(is_on: bool) -> Button<'static, Message> {
+    let content = row![
+        readable_text("Connect on startup")
+            .size(12)
+            .width(Length::Fill),
+        switch_control(is_on),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    button(container(content).padding([5, 8]).width(Length::Fill))
+        .on_press(Message::NetworkConnection(
+            NetworkConnectionMessage::EditorAutoConnectToggled(!is_on),
+        ))
+        .width(Length::Fill)
+        .style(context_menu_button_style())
 }
 
 fn editor_title(mode: NetworkConnectionEditorMode) -> &'static str {
@@ -150,6 +173,13 @@ fn protocol_selector(selected: desktop_linux::NetworkProtocol) -> Element<'stati
             selected: selected == desktop_linux::NetworkProtocol::WebDav,
             message: Message::NetworkConnection(NetworkConnectionMessage::EditorProtocolSelected(
                 desktop_linux::NetworkProtocol::WebDav,
+            )),
+        },
+        SegmentedChoice {
+            label: "SFTP",
+            selected: selected == desktop_linux::NetworkProtocol::Sftp,
+            message: Message::NetworkConnection(NetworkConnectionMessage::EditorProtocolSelected(
+                desktop_linux::NetworkProtocol::Sftp,
             )),
         },
     ])

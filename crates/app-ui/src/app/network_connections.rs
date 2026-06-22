@@ -5,13 +5,15 @@ use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::{
-    network_connection_mount_command, network_connection_unmount_command,
-    network_mount_states_command,
+    network_connection_credentials_clear_command, network_connection_credentials_lookup_command,
+    network_connection_credentials_store_command, network_connection_mount_command,
+    network_connection_unmount_command, network_mount_states_command,
 };
 use crate::model::{ContextMenuState, Message, NavigationMode};
 use crate::network_connections::{
-    NetworkConnectionEditorState, NetworkConnectionMessage, SidebarNetworkConnectionAction,
-    SidebarNetworkConnectionContextMenuState,
+    NetworkConnectionCredentialFallback, NetworkConnectionEditorMode, NetworkConnectionEditorState,
+    NetworkConnectionMessage, NetworkConnectionMountCompletion, SavedNetworkConnection,
+    SidebarNetworkConnectionAction, SidebarNetworkConnectionContextMenuState,
 };
 
 impl FileBrowser {
@@ -32,6 +34,29 @@ impl FileBrowser {
         } else {
             network_mount_states_command(connections)
         }
+    }
+
+    pub(super) fn startup_auto_connect_network_connections(&mut self) -> Task<Message> {
+        let connections = self
+            .user_config
+            .network_connections
+            .iter()
+            .filter(|saved| saved.auto_connect)
+            .map(|saved| saved.connection.clone())
+            .collect::<Vec<_>>();
+        if connections.is_empty() {
+            return Task::none();
+        }
+
+        let mut commands = Vec::new();
+        for connection in connections {
+            commands.push(self.start_network_connection_mount_after_credential_lookup(
+                connection,
+                NetworkConnectionMountCompletion::RefreshOnly,
+                NetworkConnectionCredentialFallback::MountWithoutCredentials,
+            ));
+        }
+        Task::batch(commands)
     }
 
     pub(super) fn handle_network_connection_message(
@@ -72,11 +97,25 @@ impl FileBrowser {
             NetworkConnectionMessage::ActionSelected(id, action) => {
                 self.perform_network_connection_action(id, action)
             }
-            NetworkConnectionMessage::MountFinished(id, result) => {
-                self.accept_network_connection_mounted(id, result)
+            NetworkConnectionMessage::StoredCredentialsLoaded(
+                connection,
+                completion,
+                fallback,
+                result,
+            ) => self.accept_network_connection_credentials_loaded(
+                connection, completion, fallback, result,
+            ),
+            NetworkConnectionMessage::StoredCredentialsSaved(id, result) => {
+                self.accept_network_connection_credentials_saved(id, result)
             }
-            NetworkConnectionMessage::UnmountFinished(id, result) => {
-                self.accept_network_connection_unmounted(id, result)
+            NetworkConnectionMessage::StoredCredentialsCleared(id, result) => {
+                self.accept_network_connection_credentials_cleared(id, result)
+            }
+            NetworkConnectionMessage::MountFinished(connection, completion, result) => {
+                self.accept_network_connection_mounted(connection, completion, result)
+            }
+            NetworkConnectionMessage::UnmountFinished(connection, result) => {
+                self.accept_network_connection_unmounted(connection, result)
             }
             NetworkConnectionMessage::EditorProtocolSelected(protocol) => {
                 self.select_network_connection_editor_protocol(protocol)
@@ -109,6 +148,13 @@ impl FileBrowser {
                 }
                 Task::none()
             }
+            NetworkConnectionMessage::EditorAutoConnectToggled(auto_connect) => {
+                if let Some(editor) = &mut self.network_connection_editor {
+                    editor.auto_connect = auto_connect;
+                    editor.error = None;
+                }
+                Task::none()
+            }
             NetworkConnectionMessage::EditorSaved => self.save_network_connection_editor(),
             NetworkConnectionMessage::EditorCanceled => {
                 self.network_connection_editor = None;
@@ -129,14 +175,24 @@ impl FileBrowser {
         let Some(connection) = self.network_connections.connection(&id).cloned() else {
             return rename_command;
         };
-        if network_connection_needs_credentials_editor(&connection) {
-            self.open_network_connection_credentials_editor(&connection);
-            return rename_command;
+        let credentials = self.network_connections.remembered_credentials(&id);
+        if credentials.is_none() && network_connection_needs_credentials_editor(&connection) {
+            return Task::batch([
+                rename_command,
+                self.start_network_connection_mount_after_credential_lookup(
+                    connection,
+                    NetworkConnectionMountCompletion::NavigateToMount,
+                    NetworkConnectionCredentialFallback::OpenEditor,
+                ),
+            ]);
         }
-        self.network_connections.set_connecting(&id);
         Task::batch([
             rename_command,
-            network_connection_mount_command(connection, None),
+            self.start_network_connection_mount(
+                connection,
+                credentials,
+                NetworkConnectionMountCompletion::NavigateToMount,
+            ),
         ])
     }
 
@@ -174,64 +230,212 @@ impl FileBrowser {
                 let Some(connection) = self.network_connections.connection(&id).cloned() else {
                     return Task::none();
                 };
-                if network_connection_needs_credentials_editor(&connection) {
-                    return self.connect_network_connection(connection);
+                let credentials = self.network_connections.remembered_credentials(&id);
+                if credentials.is_none() && network_connection_needs_credentials_editor(&connection)
+                {
+                    return self.start_network_connection_mount_after_credential_lookup(
+                        connection,
+                        NetworkConnectionMountCompletion::NavigateToMount,
+                        NetworkConnectionCredentialFallback::OpenEditor,
+                    );
                 }
-                self.network_connections.set_connecting(&id);
-                network_connection_mount_command(connection, None)
+                self.start_network_connection_mount(
+                    connection,
+                    credentials,
+                    NetworkConnectionMountCompletion::NavigateToMount,
+                )
             }
             SidebarNetworkConnectionAction::Disconnect => {
                 let Some(connection) = self.network_connections.connection(&id).cloned() else {
                     return Task::none();
                 };
-                self.network_connections.pending_action = Some(id.clone());
-                network_connection_unmount_command(id, connection)
+                self.network_connections.set_disconnecting(&id);
+                network_connection_unmount_command(connection)
             }
             SidebarNetworkConnectionAction::Edit => self.edit_network_connection(id),
             SidebarNetworkConnectionAction::Remove => {
+                let clear_command = self
+                    .network_connections
+                    .connection(&id)
+                    .cloned()
+                    .map(network_connection_credentials_clear_command)
+                    .unwrap_or_else(Task::none);
                 self.network_connections.remove(&id);
-                self.user_config.network_connections = self.network_connections.connections();
-                self.persist_user_config_command()
+                self.user_config.network_connections = self.network_connections.saved_connections();
+                Task::batch([self.persist_user_config_command(), clear_command])
             }
         }
     }
 
+    fn accept_network_connection_credentials_loaded(
+        &mut self,
+        expected_connection: NetworkConnection,
+        completion: NetworkConnectionMountCompletion,
+        fallback: NetworkConnectionCredentialFallback,
+        result: Result<Option<NetworkMountCredentials>, String>,
+    ) -> Task<Message> {
+        let id = expected_connection.id.clone();
+        if !self
+            .network_connections
+            .remote_identity_matches(&expected_connection)
+        {
+            return Task::none();
+        }
+        let Some(connection) = self.network_connections.connection(&id).cloned() else {
+            self.network_connections.pending_actions.remove(&id);
+            return Task::none();
+        };
+        match result {
+            Ok(Some(credentials)) => {
+                self.start_network_connection_mount(connection, Some(credentials), completion)
+            }
+            Ok(None) => self.handle_missing_network_connection_credentials(
+                connection, completion, fallback, None,
+            ),
+            Err(error) => self.handle_missing_network_connection_credentials(
+                connection,
+                completion,
+                fallback,
+                Some(format!("Could not load saved network password: {error}")),
+            ),
+        }
+    }
+
+    fn handle_missing_network_connection_credentials(
+        &mut self,
+        connection: NetworkConnection,
+        completion: NetworkConnectionMountCompletion,
+        fallback: NetworkConnectionCredentialFallback,
+        error: Option<String>,
+    ) -> Task<Message> {
+        if let Some(error) = error {
+            self.error = Some(error);
+        }
+        match fallback {
+            NetworkConnectionCredentialFallback::OpenEditor => {
+                self.network_connections
+                    .pending_actions
+                    .remove(&connection.id);
+                self.open_network_connection_credentials_editor(&connection);
+                Task::none()
+            }
+            NetworkConnectionCredentialFallback::MountWithoutCredentials => {
+                self.start_network_connection_mount(connection, None, completion)
+            }
+        }
+    }
+
+    fn accept_network_connection_credentials_saved(
+        &mut self,
+        _id: NetworkConnectionId,
+        result: Result<(), String>,
+    ) -> Task<Message> {
+        if let Err(error) = result {
+            self.error = Some(format!(
+                "Connected, but could not save network password: {error}"
+            ));
+        }
+        Task::none()
+    }
+
+    fn accept_network_connection_credentials_cleared(
+        &mut self,
+        _id: NetworkConnectionId,
+        result: Result<(), String>,
+    ) -> Task<Message> {
+        if let Err(error) = result {
+            self.error = Some(format!("Could not remove saved network password: {error}"));
+        }
+        Task::none()
+    }
+
     fn accept_network_connection_mounted(
         &mut self,
-        id: NetworkConnectionId,
+        expected_connection: NetworkConnection,
+        completion: NetworkConnectionMountCompletion,
         result: Result<desktop_linux::MountedNetworkConnection, String>,
     ) -> Task<Message> {
+        let id = expected_connection.id.clone();
+        if !self
+            .network_connections
+            .remote_identity_matches(&expected_connection)
+        {
+            return Task::none();
+        }
         match result {
             Ok(mounted) => {
+                let connection = mounted.connection.clone();
                 let Some(path) = self.network_connections.accept_mounted(mounted) else {
                     return Task::none();
                 };
-                Task::batch([
-                    self.navigate_to(path, NavigationMode::RecordHistory),
-                    self.refresh_network_mount_states(),
-                ])
+                let store_command = self
+                    .network_connections
+                    .remembered_credentials(&id)
+                    .map(|credentials| {
+                        network_connection_credentials_store_command(connection, credentials)
+                    })
+                    .unwrap_or_else(Task::none);
+                match completion {
+                    NetworkConnectionMountCompletion::NavigateToMount => Task::batch([
+                        self.navigate_to(path, NavigationMode::RecordHistory),
+                        self.refresh_network_mount_states(),
+                        store_command,
+                    ]),
+                    NetworkConnectionMountCompletion::RefreshOnly => {
+                        Task::batch([self.refresh_network_mount_states(), store_command])
+                    }
+                }
             }
             Err(error) => {
-                self.network_connections
-                    .accept_mount_error(&id, error.clone());
+                let clear_command = if self
+                    .network_connections
+                    .remembered_credentials(&id)
+                    .is_some()
+                {
+                    self.network_connections
+                        .connection(&id)
+                        .cloned()
+                        .map(network_connection_credentials_clear_command)
+                        .unwrap_or_else(Task::none)
+                } else {
+                    Task::none()
+                };
+                if !self
+                    .network_connections
+                    .accept_mount_error(&expected_connection, error.clone())
+                {
+                    return Task::none();
+                }
                 self.error = Some(format!("Could not connect network location: {error}"));
-                Task::none()
+                clear_command
             }
         }
     }
 
     fn accept_network_connection_unmounted(
         &mut self,
-        id: NetworkConnectionId,
+        expected_connection: NetworkConnection,
         result: Result<(), String>,
     ) -> Task<Message> {
+        if !self
+            .network_connections
+            .remote_identity_matches(&expected_connection)
+        {
+            return Task::none();
+        }
         match result {
             Ok(()) => {
-                self.network_connections.accept_unmounted(&id);
+                if !self
+                    .network_connections
+                    .accept_unmounted(&expected_connection)
+                {
+                    return Task::none();
+                }
                 self.refresh_network_mount_states()
             }
             Err(error) => {
-                self.network_connections.pending_action = None;
+                let id = expected_connection.id;
+                self.network_connections.pending_actions.remove(&id);
                 self.error = Some(format!("Could not disconnect network location: {error}"));
                 Task::none()
             }
@@ -246,16 +450,10 @@ impl FileBrowser {
 
     fn edit_network_connection(&mut self, id: NetworkConnectionId) -> Task<Message> {
         let command = self.prepare_network_connection_editor();
-        let Some(connection) = self.network_connections.connection(&id) else {
+        let Some(entry) = self.network_connections.entry(&id) else {
             return command;
         };
-        self.network_connection_editor = Some(NetworkConnectionEditorState::edit(connection));
-        command
-    }
-
-    fn connect_network_connection(&mut self, connection: NetworkConnection) -> Task<Message> {
-        let command = self.commit_rename_if_active();
-        self.open_network_connection_credentials_editor(&connection);
+        self.network_connection_editor = Some(NetworkConnectionEditorState::edit(entry));
         command
     }
 
@@ -293,6 +491,30 @@ impl FileBrowser {
         Task::none()
     }
 
+    fn start_network_connection_mount(
+        &mut self,
+        connection: NetworkConnection,
+        credentials: Option<NetworkMountCredentials>,
+        completion: NetworkConnectionMountCompletion,
+    ) -> Task<Message> {
+        if let Some(credentials) = credentials.as_ref() {
+            self.network_connections
+                .remember_credentials(&connection.id, credentials);
+        }
+        self.network_connections.set_connecting(&connection.id);
+        network_connection_mount_command(connection, credentials, completion)
+    }
+
+    fn start_network_connection_mount_after_credential_lookup(
+        &mut self,
+        connection: NetworkConnection,
+        completion: NetworkConnectionMountCompletion,
+        fallback: NetworkConnectionCredentialFallback,
+    ) -> Task<Message> {
+        self.network_connections.set_connecting(&connection.id);
+        network_connection_credentials_lookup_command(connection, completion, fallback)
+    }
+
     fn save_network_connection_editor(&mut self) -> Task<Message> {
         let Some(editor) = self.network_connection_editor.clone() else {
             return Task::none();
@@ -320,22 +542,47 @@ impl FileBrowser {
             return Task::none();
         }
         let credentials = network_mount_credentials_from_editor(&editor, &connection);
-        let should_connect = editor.mode
-            == crate::network_connections::NetworkConnectionEditorMode::Connect
-            || credentials.is_some();
+        let should_connect =
+            editor.mode == NetworkConnectionEditorMode::Connect || credentials.is_some();
+        let auto_connect = if editor.mode == NetworkConnectionEditorMode::Connect {
+            self.network_connections.auto_connect_for(&connection.id)
+        } else {
+            editor.auto_connect
+        };
+        let old_connection = editor
+            .id
+            .as_ref()
+            .and_then(|id| self.network_connections.connection(id))
+            .cloned();
+        let clear_old_credentials_command = old_connection
+            .filter(|old_connection| {
+                old_connection.protocol != connection.protocol
+                    || old_connection.uri != connection.uri
+            })
+            .map(network_connection_credentials_clear_command)
+            .unwrap_or_else(Task::none);
 
-        self.network_connections.upsert(connection.clone());
-        self.user_config.network_connections = self.network_connections.connections();
+        self.network_connections
+            .upsert_saved(SavedNetworkConnection::new(
+                connection.clone(),
+                auto_connect,
+            ));
+        self.user_config.network_connections = self.network_connections.saved_connections();
         self.network_connection_editor = None;
         if should_connect {
-            self.network_connections.set_connecting(&connection.id);
             Task::batch([
                 self.persist_user_config_command(),
-                network_connection_mount_command(connection, credentials),
+                clear_old_credentials_command,
+                self.start_network_connection_mount(
+                    connection,
+                    credentials,
+                    NetworkConnectionMountCompletion::NavigateToMount,
+                ),
             ])
         } else {
             Task::batch([
                 self.persist_user_config_command(),
+                clear_old_credentials_command,
                 self.refresh_network_mount_states(),
             ])
         }
@@ -382,6 +629,7 @@ fn default_network_connection_uri_prefix(protocol: NetworkProtocol) -> &'static 
     match protocol {
         NetworkProtocol::Smb => "smb://",
         NetworkProtocol::WebDav => "https://",
+        NetworkProtocol::Sftp => "sftp://",
     }
 }
 
@@ -400,7 +648,10 @@ fn network_mount_credentials_from_editor(
 }
 
 fn network_connection_needs_credentials_editor(connection: &NetworkConnection) -> bool {
-    connection.protocol == NetworkProtocol::WebDav || connection.username().is_some()
+    matches!(
+        connection.protocol,
+        NetworkProtocol::WebDav | NetworkProtocol::Sftp
+    ) || connection.username().is_some()
 }
 
 #[cfg(test)]

@@ -21,6 +21,12 @@ fn accepts_supported_network_uris_without_passwords() {
         "https://user@example.test/docs"
     )
     .is_ok());
+    assert!(validate_network_connection_uri(
+        NetworkProtocol::Sftp,
+        "sftp://user@example.test/srv/docs"
+    )
+    .is_ok());
+    assert!(validate_network_connection_uri(NetworkProtocol::Sftp, "sftp://example.test").is_ok());
 }
 
 #[test]
@@ -131,6 +137,15 @@ fn webdav_credential_stdin_writes_only_password() {
 }
 
 #[test]
+fn sftp_credential_stdin_writes_only_password() {
+    let credentials = NetworkMountCredentials::new(Some("user".to_owned()), "secret-password");
+
+    let input = gio_mount_credential_stdin(NetworkProtocol::Sftp, &credentials);
+
+    assert_eq!(input, b"secret-password\n");
+}
+
+#[test]
 fn rejects_unsupported_or_password_network_uris() {
     assert!(validate_network_connection_uri(NetworkProtocol::Smb, "ftp://server/share").is_err());
     assert!(validate_network_connection_uri(NetworkProtocol::Smb, "smb:///share").is_err());
@@ -140,6 +155,12 @@ fn rejects_unsupported_or_password_network_uris() {
         "davs://user:secret@host/docs"
     )
     .is_err());
+    assert!(validate_network_connection_uri(
+        NetworkProtocol::Sftp,
+        "sftp://user:secret@host/srv/docs"
+    )
+    .is_err());
+    assert!(validate_network_connection_uri(NetworkProtocol::Sftp, "ssh://host/srv/docs").is_err());
 }
 
 #[test]
@@ -150,6 +171,8 @@ Mount(0): Photos -> smb://server/photos/
   default_location=smb://server/photos/
 Mount(1): Docs -> davs://example.test/docs
   default_location=davs://example.test/docs
+Mount(2): SFTP -> sftp://smbtest@172.31.240.10/
+  Type: GDaemonMount
 "#;
 
     let uris = parse_gio_mount_uris(output);
@@ -158,7 +181,8 @@ Mount(1): Docs -> davs://example.test/docs
         uris,
         vec![
             "smb://server/photos/".to_owned(),
-            "davs://example.test/docs".to_owned()
+            "davs://example.test/docs".to_owned(),
+            "sftp://smbtest@172.31.240.10/".to_owned()
         ]
     );
 }
@@ -201,6 +225,32 @@ fn resolves_webdav_gvfs_mount_path_from_fixture_root() {
     let resolved = resolve_gvfs_mount_path_from_root(&connection, root.path()).unwrap();
 
     assert_eq!(resolved, mount_dir);
+}
+
+#[test]
+fn resolves_sftp_gvfs_mount_path_from_fixture_root() {
+    let root = tempdir().unwrap();
+    let mount_dir = root.path().join("sftp:host=server,user=ym");
+    std::fs::create_dir(&mount_dir).unwrap();
+    let connection = connection(NetworkProtocol::Sftp, "sftp://ym@server/srv/share");
+
+    let resolved = resolve_gvfs_mount_path_from_root(&connection, root.path()).unwrap();
+
+    assert_eq!(resolved, mount_dir.join("srv").join("share"));
+}
+
+#[test]
+fn sftp_mounted_uri_matches_host_and_user_without_remote_path() {
+    let connection = connection(NetworkProtocol::Sftp, "sftp://ym@server/srv/share");
+
+    assert!(network_connection_matches_mounted_uri(
+        &connection,
+        "sftp://ym@server/"
+    ));
+    assert!(!network_connection_matches_mounted_uri(
+        &connection,
+        "sftp://other@server/"
+    ));
 }
 
 #[test]
@@ -282,6 +332,15 @@ fn not_mountable_failure_is_backend_unavailable() {
             reason,
         } if uri == "davs://example.test/docs" && reason == "Location is not mountable"
     ));
+}
+
+#[test]
+fn already_mounted_message_is_mount_success_boundary() {
+    assert!(mount_already_present_message("Location is already mounted"));
+    assert!(mount_already_present_message(
+        "gio: davs://example.test/docs/: Location is already mounted"
+    ));
+    assert!(!mount_already_present_message("authentication failed"));
 }
 
 #[cfg(unix)]

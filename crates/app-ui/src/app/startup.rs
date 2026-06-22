@@ -76,6 +76,7 @@ impl FileBrowser {
             sidebar_locations_command(home, configured_favorites),
             sidebar_devices_command(),
             self.refresh_network_mount_states(),
+            self.startup_auto_connect_network_connections(),
             operation_store_command(state_database_path),
             search_index_profile_command,
         ])
@@ -171,7 +172,7 @@ impl FileBrowser {
             crate::config::max_preview_file_mib(user_config.max_preview_file_bytes).to_string();
         self.max_preview_file_mib_error = None;
         self.network_connections =
-            crate::network_connections::NetworkConnectionState::from_connections(
+            crate::network_connections::NetworkConnectionState::from_saved_connections(
                 user_config.network_connections.clone(),
             );
         self.user_config = user_config;
@@ -186,8 +187,12 @@ mod tests {
     use crate::app::FileBrowser;
     use crate::config::{self, SearchBackendMode, SearchModePromptStatus};
     use crate::model::StartupEnvironment;
+    use crate::network_connections::SavedNetworkConnection;
     use crate::startup_rendering::{
         StartupRenderingEnvironment, StartupRenderingEnvironmentStatus,
+    };
+    use desktop_linux::{
+        NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
     };
 
     #[test]
@@ -225,5 +230,58 @@ mod tests {
 
         assert!(browser.search_mode_prompt.is_some());
         assert!(browser.startup_index_setup.is_none());
+    }
+
+    #[test]
+    fn startup_marks_only_auto_connect_network_connections_connecting() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        let auto_connection = NetworkConnection::new(
+            NetworkConnectionId::new("auto"),
+            "Auto",
+            NetworkProtocol::Smb,
+            "smb://server/auto",
+        )
+        .unwrap();
+        let manual_connection = NetworkConnection::new(
+            NetworkConnectionId::new("manual"),
+            "Manual",
+            NetworkProtocol::Smb,
+            "smb://server/manual",
+        )
+        .unwrap();
+        let auto_id = auto_connection.id.clone();
+        let manual_id = manual_connection.id.clone();
+        let mut user_config = config::default_user_config();
+        user_config.network_connections = vec![
+            SavedNetworkConnection::new(auto_connection, true),
+            SavedNetworkConnection::new(manual_connection, false),
+        ];
+
+        drop(browser.accept_startup_environment(StartupEnvironment {
+            home: PathBuf::from("/home/user"),
+            user_config,
+            state_database_path: PathBuf::from("/tmp/state.sqlite"),
+            rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
+                StartupRenderingEnvironment::fast_default(),
+            ),
+        }));
+
+        assert_eq!(browser.current_dir, PathBuf::from("/home/user"));
+        assert!(browser.network_connections.is_pending(&auto_id));
+        assert!(!browser.network_connections.is_pending(&manual_id));
+        assert!(matches!(
+            browser
+                .network_connections
+                .entry(&auto_id)
+                .map(|entry| &entry.state),
+            Some(NetworkMountState::Connecting)
+        ));
+        assert!(matches!(
+            browser
+                .network_connections
+                .entry(&manual_id)
+                .map(|entry| &entry.state),
+            Some(NetworkMountState::Disconnected)
+        ));
     }
 }

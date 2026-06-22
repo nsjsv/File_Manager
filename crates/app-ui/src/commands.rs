@@ -46,8 +46,9 @@ mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
 mod network_connections;
 pub(crate) use network_connections::{
-    network_connection_mount_command, network_connection_unmount_command,
-    network_mount_states_command,
+    network_connection_credentials_clear_command, network_connection_credentials_lookup_command,
+    network_connection_credentials_store_command, network_connection_mount_command,
+    network_connection_unmount_command, network_mount_states_command,
 };
 mod preview;
 pub(crate) use preview::{

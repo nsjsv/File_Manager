@@ -377,7 +377,7 @@ fn sidebar_network_connection_item<'a>(
     } else {
         IconTone::Normal
     };
-    let pending = browser.network_connections.pending_action.as_ref() == Some(connection.id());
+    let pending = browser.network_connections.is_pending(connection.id());
 
     let item_container = container(sidebar_network_connection_label(
         connection,

@@ -1,8 +1,9 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use desktop_linux::{
-    MountedNetworkConnection, NetworkConnection, NetworkConnectionId, NetworkMountState,
-    NetworkProtocol,
+    MountedNetworkConnection, NetworkConnection, NetworkConnectionId, NetworkMountCredentials,
+    NetworkMountState, NetworkProtocol,
 };
 use iced::Point;
 
@@ -17,18 +18,40 @@ pub(crate) enum NetworkConnectionMessage {
     MiddlePressed(crate::model::BrowserPaneId, NetworkConnectionId),
     RightClicked(NetworkConnectionId),
     ActionSelected(NetworkConnectionId, SidebarNetworkConnectionAction),
+    StoredCredentialsLoaded(
+        NetworkConnection,
+        NetworkConnectionMountCompletion,
+        NetworkConnectionCredentialFallback,
+        Result<Option<NetworkMountCredentials>, String>,
+    ),
+    StoredCredentialsSaved(NetworkConnectionId, Result<(), String>),
+    StoredCredentialsCleared(NetworkConnectionId, Result<(), String>),
     MountFinished(
-        NetworkConnectionId,
+        NetworkConnection,
+        NetworkConnectionMountCompletion,
         Result<MountedNetworkConnection, String>,
     ),
-    UnmountFinished(NetworkConnectionId, Result<(), String>),
+    UnmountFinished(NetworkConnection, Result<(), String>),
     EditorProtocolSelected(NetworkProtocol),
     EditorLabelChanged(String),
     EditorUriChanged(String),
     EditorUsernameChanged(String),
     EditorPasswordChanged(String),
+    EditorAutoConnectToggled(bool),
     EditorSaved,
     EditorCanceled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkConnectionMountCompletion {
+    NavigateToMount,
+    RefreshOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkConnectionCredentialFallback {
+    OpenEditor,
+    MountWithoutCredentials,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,17 +73,36 @@ impl SidebarNetworkConnectionAction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SavedNetworkConnection {
+    pub(crate) connection: NetworkConnection,
+    pub(crate) auto_connect: bool,
+}
+
+impl SavedNetworkConnection {
+    pub(crate) fn new(connection: NetworkConnection, auto_connect: bool) -> Self {
+        Self {
+            connection,
+            auto_connect,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SidebarNetworkConnectionEntry {
     pub(crate) connection: NetworkConnection,
+    pub(crate) auto_connect: bool,
     pub(crate) state: NetworkMountState,
+    remembered_credentials: Option<NetworkMountCredentials>,
 }
 
 impl SidebarNetworkConnectionEntry {
-    fn new(connection: NetworkConnection) -> Self {
+    fn new(saved: SavedNetworkConnection) -> Self {
         Self {
-            connection,
+            connection: saved.connection,
+            auto_connect: saved.auto_connect,
             state: NetworkMountState::Disconnected,
+            remembered_credentials: None,
         }
     }
 
@@ -122,6 +164,7 @@ pub(crate) struct NetworkConnectionEditorState {
     pub(crate) uri: String,
     pub(crate) username: String,
     pub(crate) password: String,
+    pub(crate) auto_connect: bool,
     pub(crate) error: Option<String>,
 }
 
@@ -135,19 +178,21 @@ impl NetworkConnectionEditorState {
             uri: String::new(),
             username: String::new(),
             password: String::new(),
+            auto_connect: false,
             error: None,
         }
     }
 
-    pub(crate) fn edit(connection: &NetworkConnection) -> Self {
+    pub(crate) fn edit(entry: &SidebarNetworkConnectionEntry) -> Self {
         Self {
             mode: NetworkConnectionEditorMode::Edit,
-            id: Some(connection.id.clone()),
-            protocol: connection.protocol,
-            label: connection.label.clone(),
-            uri: connection.uri_without_username(),
-            username: connection.username().unwrap_or_default(),
+            id: Some(entry.connection.id.clone()),
+            protocol: entry.connection.protocol,
+            label: entry.connection.label.clone(),
+            uri: entry.connection.uri_without_username(),
+            username: entry.connection.username().unwrap_or_default(),
             password: String::new(),
+            auto_connect: entry.auto_connect,
             error: None,
         }
     }
@@ -161,6 +206,7 @@ impl NetworkConnectionEditorState {
             uri: connection.uri_without_username(),
             username: connection.username().unwrap_or_default(),
             password: String::new(),
+            auto_connect: false,
             error: None,
         }
     }
@@ -183,24 +229,50 @@ impl NetworkConnectionEditorState {
 pub(crate) struct NetworkConnectionState {
     pub(crate) entries: Vec<SidebarNetworkConnectionEntry>,
     pub(crate) unavailable: Option<String>,
-    pub(crate) pending_action: Option<NetworkConnectionId>,
+    pub(crate) pending_actions: BTreeSet<NetworkConnectionId>,
 }
 
 impl NetworkConnectionState {
+    #[cfg(test)]
     pub(crate) fn from_connections(connections: Vec<NetworkConnection>) -> Self {
+        Self::from_saved_connections(
+            connections
+                .into_iter()
+                .map(|connection| SavedNetworkConnection::new(connection, false))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn from_saved_connections(connections: Vec<SavedNetworkConnection>) -> Self {
         Self {
             entries: connections
                 .into_iter()
                 .map(SidebarNetworkConnectionEntry::new)
                 .collect(),
             unavailable: None,
-            pending_action: None,
+            pending_actions: BTreeSet::new(),
         }
     }
 
     pub(crate) fn connections(&self) -> Vec<NetworkConnection> {
         self.entries
             .iter()
+            .map(|entry| entry.connection.clone())
+            .collect()
+    }
+
+    pub(crate) fn saved_connections(&self) -> Vec<SavedNetworkConnection> {
+        self.entries
+            .iter()
+            .map(|entry| SavedNetworkConnection::new(entry.connection.clone(), entry.auto_connect))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn auto_connect_connections(&self) -> Vec<NetworkConnection> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.auto_connect)
             .map(|entry| entry.connection.clone())
             .collect()
     }
@@ -216,13 +288,49 @@ impl NetworkConnectionState {
         self.entries.iter().find(|entry| entry.id() == id)
     }
 
+    pub(crate) fn auto_connect_for(&self, id: &NetworkConnectionId) -> bool {
+        self.entry(id)
+            .map(|entry| entry.auto_connect)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn is_pending(&self, id: &NetworkConnectionId) -> bool {
+        self.pending_actions.contains(id)
+    }
+
+    pub(crate) fn remembered_credentials(
+        &self,
+        id: &NetworkConnectionId,
+    ) -> Option<NetworkMountCredentials> {
+        self.entry(id)
+            .and_then(|entry| entry.remembered_credentials.clone())
+    }
+
+    pub(crate) fn remember_credentials(
+        &mut self,
+        id: &NetworkConnectionId,
+        credentials: &NetworkMountCredentials,
+    ) {
+        if credentials.is_empty() {
+            return;
+        }
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) {
+            entry.remembered_credentials = Some(credentials.clone());
+        }
+    }
+
+    pub(crate) fn remote_identity_matches(&self, expected: &NetworkConnection) -> bool {
+        self.connection(&expected.id)
+            .is_some_and(|current| network_connections_share_remote_identity(current, expected))
+    }
+
     pub(crate) fn accept_loaded(
         &mut self,
         statuses: Vec<(NetworkConnectionId, NetworkMountState)>,
     ) {
         self.unavailable = None;
         for (id, state) in statuses {
-            if self.pending_action.as_ref() == Some(&id) {
+            if self.pending_actions.contains(&id) {
                 continue;
             }
             if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == &id) {
@@ -236,59 +344,85 @@ impl NetworkConnectionState {
     }
 
     pub(crate) fn set_connecting(&mut self, id: &NetworkConnectionId) {
-        self.pending_action = Some(id.clone());
+        self.pending_actions.insert(id.clone());
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) {
             entry.state = NetworkMountState::Connecting;
         }
     }
 
+    pub(crate) fn set_disconnecting(&mut self, id: &NetworkConnectionId) {
+        self.pending_actions.insert(id.clone());
+    }
+
     pub(crate) fn accept_mounted(&mut self, mounted: MountedNetworkConnection) -> Option<PathBuf> {
-        self.pending_action = None;
+        let id = mounted.connection.id.clone();
         let mount_path = mounted.mount_path;
-        if let Some(entry) = self
-            .entries
-            .iter_mut()
-            .find(|entry| entry.id() == &mounted.connection.id)
-        {
-            entry.connection = mounted.connection;
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == &id) {
+            if !network_connections_share_remote_identity(&entry.connection, &mounted.connection) {
+                return None;
+            }
+            self.pending_actions.remove(&id);
             entry.state = NetworkMountState::Mounted(mount_path.clone());
-        }
-        Some(mount_path)
-    }
-
-    pub(crate) fn accept_mount_error(&mut self, id: &NetworkConnectionId, error: String) {
-        self.pending_action = None;
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) {
-            entry.state = NetworkMountState::Error(error);
+            Some(mount_path)
+        } else {
+            None
         }
     }
 
-    pub(crate) fn accept_unmounted(&mut self, id: &NetworkConnectionId) {
-        self.pending_action = None;
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) {
-            entry.state = NetworkMountState::Disconnected;
+    pub(crate) fn accept_mount_error(
+        &mut self,
+        expected: &NetworkConnection,
+        error: String,
+    ) -> bool {
+        let id = &expected.id;
+        let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) else {
+            return false;
+        };
+        if !network_connections_share_remote_identity(&entry.connection, expected) {
+            return false;
         }
+        self.pending_actions.remove(id);
+        entry.state = NetworkMountState::Error(error);
+        entry.remembered_credentials = None;
+        true
     }
 
-    pub(crate) fn upsert(&mut self, connection: NetworkConnection) {
+    pub(crate) fn accept_unmounted(&mut self, expected: &NetworkConnection) -> bool {
+        let id = &expected.id;
+        let Some(entry) = self.entries.iter_mut().find(|entry| entry.id() == id) else {
+            return false;
+        };
+        if !network_connections_share_remote_identity(&entry.connection, expected) {
+            return false;
+        }
+        self.pending_actions.remove(id);
+        entry.state = NetworkMountState::Disconnected;
+        true
+    }
+
+    pub(crate) fn upsert_saved(&mut self, saved: SavedNetworkConnection) {
         if let Some(entry) = self
             .entries
             .iter_mut()
-            .find(|entry| entry.id() == &connection.id)
+            .find(|entry| entry.id() == &saved.connection.id)
         {
-            entry.connection = connection;
+            let same_remote_identity = entry.connection.protocol == saved.connection.protocol
+                && entry.connection.uri == saved.connection.uri;
+            entry.connection = saved.connection;
+            entry.auto_connect = saved.auto_connect;
             entry.state = NetworkMountState::Disconnected;
+            if !same_remote_identity {
+                entry.remembered_credentials = None;
+                self.pending_actions.remove(&entry.connection.id);
+            }
         } else {
-            self.entries
-                .push(SidebarNetworkConnectionEntry::new(connection));
+            self.entries.push(SidebarNetworkConnectionEntry::new(saved));
         }
     }
 
     pub(crate) fn remove(&mut self, id: &NetworkConnectionId) {
         self.entries.retain(|entry| entry.id() != id);
-        if self.pending_action.as_ref() == Some(id) {
-            self.pending_action = None;
-        }
+        self.pending_actions.remove(id);
     }
 
     pub(crate) fn mounted_path_for(&self, id: &NetworkConnectionId) -> Option<PathBuf> {
@@ -341,6 +475,15 @@ fn path_is_inside_mount(path: &Path, mount_point: &Path) -> bool {
     path == mount_point || path.starts_with(mount_point)
 }
 
+fn network_connections_share_remote_identity(
+    current: &NetworkConnection,
+    expected: &NetworkConnection,
+) -> bool {
+    current.id == expected.id
+        && current.protocol == expected.protocol
+        && current.uri == expected.uri
+}
+
 fn network_connection_id_base(label: &str, uri: &str) -> String {
     let source = if label.trim().is_empty() { uri } else { label };
     let mut output = String::new();
@@ -391,5 +534,27 @@ mod tests {
         let id = state.unique_id_for("NAS", "smb://other/share");
 
         assert_eq!(id.as_str(), "nas-2");
+    }
+
+    #[test]
+    fn remote_identity_edit_rejects_stale_mount_result() {
+        let old_connection = connection("nas", "smb://server/share");
+        let new_connection = connection("nas", "smb://server/other");
+        let mut state = NetworkConnectionState::from_connections(vec![old_connection.clone()]);
+        state.set_connecting(&old_connection.id);
+
+        state.upsert_saved(SavedNetworkConnection::new(new_connection.clone(), false));
+        let accepted_path = state.accept_mounted(MountedNetworkConnection {
+            connection: old_connection.clone(),
+            mount_path: PathBuf::from("/run/user/1000/gvfs/old"),
+        });
+
+        assert!(accepted_path.is_none());
+        assert!(!state.remote_identity_matches(&old_connection));
+        assert!(!state.is_pending(&new_connection.id));
+        assert!(matches!(
+            state.entry(&new_connection.id).map(|entry| &entry.state),
+            Some(NetworkMountState::Disconnected)
+        ));
     }
 }

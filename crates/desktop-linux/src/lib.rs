@@ -2,6 +2,7 @@ mod desktop_entries;
 pub mod display_renderer;
 pub mod file_clipboard;
 pub mod network_mounts;
+pub mod network_secrets;
 pub mod open;
 pub mod open_with;
 pub mod storage_devices;
@@ -22,6 +23,10 @@ pub use network_mounts::{
     validate_network_connection_uri, MountedNetworkConnection, NetworkConnection,
     NetworkConnectionId, NetworkMountCredentials, NetworkMountError, NetworkMountState,
     NetworkProtocol,
+};
+pub use network_secrets::{
+    clear_network_connection_credentials, lookup_network_connection_credentials,
+    store_network_connection_credentials, NetworkSecretError,
 };
 pub use open::{
     open_path, open_path_with_terminal_emulator, open_terminal_at_directory, OpenError,

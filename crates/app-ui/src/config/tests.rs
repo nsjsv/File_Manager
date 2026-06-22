@@ -8,6 +8,8 @@ use desktop_linux::{
 use file_core::FileOperationVerification;
 use file_index::DirectoryErrorPolicy;
 
+use crate::network_connections::SavedNetworkConnection;
+
 use super::*;
 
 #[test]
@@ -266,25 +268,43 @@ fn parses_network_connections_from_toml() {
         r#"
 network_connections = [
   { id = "nas", label = "NAS", protocol = "smb", uri = "smb://server/share" },
-  { id = "docs", label = "", protocol = "webdav", uri = "https://user@example.test/docs" },
+  { id = "docs", label = "", protocol = "webdav", uri = "https://user@example.test/docs", auto_connect = true },
+  { id = "sftp", label = "SFTP", protocol = "sftp", uri = "sftp://user@sftp.example.test/srv/share" },
 ]
 "#,
         default_user_config(),
     );
 
-    assert_eq!(parsed.network_connections.len(), 2);
-    assert_eq!(parsed.network_connections[0].id.as_str(), "nas");
-    assert_eq!(parsed.network_connections[0].label, "NAS");
-    assert_eq!(parsed.network_connections[0].protocol, NetworkProtocol::Smb);
-    assert_eq!(parsed.network_connections[0].uri, "smb://server/share");
+    assert_eq!(parsed.network_connections.len(), 3);
+    assert_eq!(parsed.network_connections[0].connection.id.as_str(), "nas");
+    assert_eq!(parsed.network_connections[0].connection.label, "NAS");
     assert_eq!(
-        parsed.network_connections[1].protocol,
+        parsed.network_connections[0].connection.protocol,
+        NetworkProtocol::Smb
+    );
+    assert_eq!(
+        parsed.network_connections[0].connection.uri,
+        "smb://server/share"
+    );
+    assert!(!parsed.network_connections[0].auto_connect);
+    assert_eq!(
+        parsed.network_connections[1].connection.protocol,
         NetworkProtocol::WebDav
     );
     assert_eq!(
-        parsed.network_connections[1].uri,
+        parsed.network_connections[1].connection.uri,
         "davs://user@example.test/docs"
     );
+    assert!(parsed.network_connections[1].auto_connect);
+    assert_eq!(
+        parsed.network_connections[2].connection.protocol,
+        NetworkProtocol::Sftp
+    );
+    assert_eq!(
+        parsed.network_connections[2].connection.uri,
+        "sftp://user@sftp.example.test/srv/share"
+    );
+    assert!(!parsed.network_connections[2].auto_connect);
 }
 
 #[test]
@@ -300,25 +320,52 @@ network_connections = [
     );
 
     assert_eq!(parsed.network_connections.len(), 1);
-    assert_eq!(parsed.network_connections[0].id.as_str(), "good");
+    assert_eq!(parsed.network_connections[0].connection.id.as_str(), "good");
 }
 
 #[test]
 fn writes_network_connections_without_password_fields() {
     let mut config = default_user_config();
-    config.network_connections = vec![NetworkConnection::new(
-        NetworkConnectionId::new("nas"),
-        "",
-        NetworkProtocol::Smb,
-        "smb://server/share",
-    )
-    .unwrap()];
+    config.network_connections = vec![SavedNetworkConnection::new(
+        NetworkConnection::new(
+            NetworkConnectionId::new("nas"),
+            "",
+            NetworkProtocol::Smb,
+            "smb://server/share",
+        )
+        .unwrap(),
+        true,
+    )];
 
     let content = toml_user_config_content(&config).unwrap();
 
     assert!(content.contains("network_connections"));
     assert!(content.contains("protocol = \"smb\""));
     assert!(content.contains("uri = \"smb://server/share\""));
+    assert!(content.contains("auto_connect = true"));
+    assert!(!content.contains("password"));
+    let parsed = parse_toml_user_config(&content, default_user_config());
+    assert_eq!(parsed.network_connections, config.network_connections);
+}
+
+#[test]
+fn writes_sftp_network_connection_protocol() {
+    let mut config = default_user_config();
+    config.network_connections = vec![SavedNetworkConnection::new(
+        NetworkConnection::new(
+            NetworkConnectionId::new("sftp"),
+            "SFTP",
+            NetworkProtocol::Sftp,
+            "sftp://user@sftp.example.test/srv/share",
+        )
+        .unwrap(),
+        false,
+    )];
+
+    let content = toml_user_config_content(&config).unwrap();
+
+    assert!(content.contains("protocol = \"sftp\""));
+    assert!(content.contains("uri = \"sftp://user@sftp.example.test/srv/share\""));
     assert!(!content.contains("password"));
     let parsed = parse_toml_user_config(&content, default_user_config());
     assert_eq!(parsed.network_connections, config.network_connections);
