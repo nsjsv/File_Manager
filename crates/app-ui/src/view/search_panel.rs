@@ -1,7 +1,5 @@
 use file_index::{FileSearchMatch, MediaSearchKind, MediaSearchMetadata, SearchResultSource};
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text_input, Button, Column,
-};
+use iced::widget::{column, container, mouse_area, row, scrollable, text_input, Column};
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{
@@ -14,6 +12,7 @@ use crate::icons::file_entry_icon_symbol;
 use crate::model::{Message, ScrollbarVisibility, SearchMode, SearchScope, SearchState};
 use crate::typography::readable_text;
 
+use super::option_controls::{segmented_choice_row, SegmentedChoice};
 use super::{auxiliary_window_message, themed_icon, IconTone, MENU_ICON_SIZE};
 
 pub(crate) const SEARCH_RESULTS_HEIGHT: f32 = 320.0;
@@ -223,37 +222,28 @@ fn search_mode_selector(
     selected: SearchMode,
     search_backend_mode: SearchBackendMode,
 ) -> Element<'static, Message> {
-    let mut modes = row![search_mode_button("Files", SearchMode::Files, selected)]
-        .spacing(6)
-        .align_y(Alignment::Center);
+    let mut choices = vec![search_mode_choice("Files", SearchMode::Files, selected)];
     if search_backend_mode == SearchBackendMode::Indexed {
-        modes = modes
-            .push(search_mode_button(
-                "Contents",
-                SearchMode::Contents,
-                selected,
-            ))
-            .push(search_mode_button("Media", SearchMode::Media, selected))
-            .push(search_mode_button("All", SearchMode::All, selected));
+        choices.push(search_mode_choice(
+            "Contents",
+            SearchMode::Contents,
+            selected,
+        ));
+        choices.push(search_mode_choice("Media", SearchMode::Media, selected));
+        choices.push(search_mode_choice("All", SearchMode::All, selected));
     }
-    modes.into()
+    segmented_choice_row(choices)
 }
 
-fn search_mode_button(
+fn search_mode_choice(
     label: &'static str,
     mode: SearchMode,
     selected: SearchMode,
-) -> Button<'static, Message> {
-    let label = if mode == selected {
-        format!("[{label}]")
-    } else {
-        label.to_owned()
-    };
-    let button = button(readable_text(label).size(12)).padding([4, 8]);
-    if mode == selected {
-        button
-    } else {
-        button.on_press(Message::SearchModeSelected(mode))
+) -> SegmentedChoice {
+    SegmentedChoice {
+        label,
+        selected: mode == selected,
+        message: Message::SearchModeSelected(mode),
     }
 }
 

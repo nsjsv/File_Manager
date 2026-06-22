@@ -25,6 +25,7 @@ use crate::model::{
 };
 use crate::typography::readable_text;
 
+use super::option_controls::selectable_choice_row;
 use super::toggle_switch::switch_control;
 
 const ROOT_PATH_MAX_CHARS: usize = 72;
@@ -71,50 +72,19 @@ fn search_mode_panel(browser: &FileBrowser) -> Element<'static, Message> {
     let mode = browser.search_backend_mode();
     section_panel(column![
         readable_text("Search mode").size(13),
-        readable_text("Indexed search is experimental. Use simple search first.").size(12),
-        search_mode_button(
+        selectable_choice_row(
             "Simple search",
             "Live filename and path search. No index is built or maintained.",
-            mode,
-            SearchBackendMode::Simple,
+            mode == SearchBackendMode::Simple,
+            Message::SearchBackendModeSelected(SearchBackendMode::Simple),
         ),
-        search_mode_button(
+        selectable_choice_row(
             "Indexed search",
             "Uses configured indexed paths and enables content or media indexing options.",
-            mode,
-            SearchBackendMode::Indexed,
+            mode == SearchBackendMode::Indexed,
+            Message::SearchBackendModeSelected(SearchBackendMode::Indexed),
         ),
     ])
-}
-
-fn search_mode_button(
-    label: &'static str,
-    description: &'static str,
-    selected: SearchBackendMode,
-    mode: SearchBackendMode,
-) -> Element<'static, Message> {
-    let content = row![
-        column![
-            readable_text(label).size(12),
-            readable_text(description).size(11),
-        ]
-        .spacing(2)
-        .width(Length::Fill),
-        switch_control(selected == mode),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    let button = button(container(content).padding([5, 8]).width(Length::Fill))
-        .width(Length::Fill)
-        .style(context_menu_button_style());
-    if selected == mode {
-        button.into()
-    } else {
-        button
-            .on_press(Message::SearchBackendModeSelected(mode))
-            .into()
-    }
 }
 
 fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {

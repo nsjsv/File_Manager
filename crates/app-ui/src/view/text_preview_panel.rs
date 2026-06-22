@@ -1,8 +1,8 @@
 use iced::mouse;
-use iced::widget::{button, column, row, text_editor, Button, Column};
-use iced::{Alignment, Element, Font, Length};
+use iced::widget::{column, text_editor, Column};
+use iced::{Element, Font, Length};
 
-use crate::appearance::{navigation_icon_button_style, text_preview_editor_style};
+use crate::appearance::text_preview_editor_style;
 use crate::model::{
     MarkdownPreviewMode, Message, ScrollbarVisibility, TextPreviewDocument, TextPreviewFormat,
     TextPreviewLineLimitNotice,
@@ -13,6 +13,7 @@ use crate::text_preview_viewer::text_preview_viewer;
 use crate::typography::readable_text;
 
 use super::markdown_preview::markdown_preview_body;
+use super::option_controls::{segmented_choice_row, SegmentedChoice};
 
 const MARKDOWN_MODE_SWITCH_RESERVED_HEIGHT: f32 = 40.0;
 const MARKDOWN_MIN_BODY_SCROLL_HEIGHT: f32 = 120.0;
@@ -194,31 +195,20 @@ fn markdown_text_preview_body<'a>(
 }
 
 fn markdown_preview_mode_switch(mode: MarkdownPreviewMode) -> Element<'static, Message> {
-    row![
-        markdown_preview_mode_button("Rendered", MarkdownPreviewMode::Rendered, mode),
-        markdown_preview_mode_button("Raw", MarkdownPreviewMode::Raw, mode),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .into()
+    segmented_choice_row(vec![
+        markdown_preview_mode_choice("Rendered", MarkdownPreviewMode::Rendered, mode),
+        markdown_preview_mode_choice("Raw", MarkdownPreviewMode::Raw, mode),
+    ])
 }
 
-fn markdown_preview_mode_button(
+fn markdown_preview_mode_choice(
     label: &'static str,
     mode: MarkdownPreviewMode,
     selected_mode: MarkdownPreviewMode,
-) -> Button<'static, Message> {
-    let label = if mode == selected_mode {
-        format!("[{label}]")
-    } else {
-        label.to_owned()
-    };
-    let button = button(readable_text(label).size(12))
-        .padding([4, 8])
-        .style(navigation_icon_button_style());
-    if mode == selected_mode {
-        button
-    } else {
-        button.on_press(Message::MarkdownPreviewModeSelected(mode))
+) -> SegmentedChoice {
+    SegmentedChoice {
+        label,
+        selected: mode == selected_mode,
+        message: Message::MarkdownPreviewModeSelected(mode),
     }
 }

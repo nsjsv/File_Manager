@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, row, text_input, Button, Column, Space};
+use iced::widget::{column, container, row, text_input, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::app::archive_creation::{
@@ -6,12 +6,16 @@ use crate::app::archive_creation::{
     ArchiveCreationState, ARCHIVE_COMPRESSION_LEVELS, ARCHIVE_FORMATS,
 };
 use crate::app::archive_password::ArchivePasswordDraft;
-use crate::appearance::{context_menu_button_style, context_menu_style};
+use crate::appearance::context_menu_style;
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::Message;
 use crate::typography::readable_text;
 
+use super::option_controls::{
+    inactive_primary_action_button, primary_action_button, secondary_action_button,
+    segmented_choice_row, SegmentedChoice,
+};
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ARCHIVE_CREATION_PANEL_WIDTH: f32 = 500.0;
@@ -67,27 +71,33 @@ pub(super) fn archive_creation_panel(state: &ArchiveCreationState) -> Element<'_
 }
 
 fn archive_format_buttons(state: &ArchiveCreationState) -> Element<'_, Message> {
-    let mut options = row![].spacing(6).align_y(Alignment::Center);
-    for format in ARCHIVE_FORMATS {
-        options = options.push(option_button(
-            archive_format_label(format),
-            format == state.format(),
-            Message::ArchiveCreation(ArchiveCreationMessage::FormatSelected(format)),
-        ));
-    }
-    options.into()
+    segmented_choice_row(
+        ARCHIVE_FORMATS
+            .iter()
+            .copied()
+            .map(|format| SegmentedChoice {
+                label: archive_format_label(format),
+                selected: format == state.format(),
+                message: Message::ArchiveCreation(ArchiveCreationMessage::FormatSelected(format)),
+            })
+            .collect(),
+    )
 }
 
 fn archive_compression_buttons(state: &ArchiveCreationState) -> Element<'_, Message> {
-    let mut options = row![].spacing(6).align_y(Alignment::Center);
-    for level in ARCHIVE_COMPRESSION_LEVELS {
-        options = options.push(option_button(
-            archive_compression_level_label(level),
-            level == state.compression_level(),
-            Message::ArchiveCreation(ArchiveCreationMessage::CompressionLevelSelected(level)),
-        ));
-    }
-    options.into()
+    segmented_choice_row(
+        ARCHIVE_COMPRESSION_LEVELS
+            .iter()
+            .copied()
+            .map(|level| SegmentedChoice {
+                label: archive_compression_level_label(level),
+                selected: level == state.compression_level(),
+                message: Message::ArchiveCreation(
+                    ArchiveCreationMessage::CompressionLevelSelected(level),
+                ),
+            })
+            .collect(),
+    )
 }
 
 fn archive_password_input(state: &ArchiveCreationState) -> Element<'_, Message> {
@@ -122,37 +132,23 @@ fn archive_creation_actions(state: &ArchiveCreationState) -> Element<'_, Message
     } else {
         "Create"
     };
-    let mut create_button = button(readable_text(create_label).size(12))
-        .padding([6, 10])
-        .style(context_menu_button_style());
-    if state.can_submit() {
-        create_button =
-            create_button.on_press(Message::ArchiveCreation(ArchiveCreationMessage::Submitted));
-    }
+    let create_button = if state.can_submit() {
+        primary_action_button(
+            create_label,
+            Message::ArchiveCreation(ArchiveCreationMessage::Submitted),
+        )
+    } else {
+        inactive_primary_action_button(create_label)
+    };
 
     row![
         Space::new().width(Length::Fill),
-        button(readable_text("Cancel").size(12))
-            .on_press(Message::DismissFloating)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
+        secondary_action_button("Cancel", Message::DismissFloating),
         create_button,
     ]
     .spacing(6)
     .align_y(Alignment::Center)
     .into()
-}
-
-fn option_button(
-    label: &'static str,
-    selected: bool,
-    message: Message,
-) -> Button<'static, Message> {
-    let prefix = if selected { "[x]" } else { "[ ]" };
-    button(readable_text(format!("{prefix} {label}")).size(12))
-        .on_press(message)
-        .padding([6, 10])
-        .style(context_menu_button_style())
 }
 
 fn source_summary(state: &ArchiveCreationState) -> String {

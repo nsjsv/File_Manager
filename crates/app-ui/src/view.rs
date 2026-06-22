@@ -6,6 +6,7 @@ mod floating_panels;
 mod markdown_preview;
 mod network_connections;
 mod network_settings;
+mod option_controls;
 mod preview_panel;
 mod properties_window;
 mod rendering_settings;

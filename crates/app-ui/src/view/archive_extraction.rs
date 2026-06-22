@@ -1,14 +1,17 @@
-use iced::widget::{button, column, container, row, text_input, Column, Space};
+use iced::widget::{column, container, row, text_input, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::app::archive_extraction::{ArchiveExtractionMessage, ArchiveExtractionState};
 use crate::app::archive_password::ArchivePasswordDraft;
-use crate::appearance::{context_menu_button_style, context_menu_style};
+use crate::appearance::context_menu_style;
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::Message;
 use crate::typography::readable_text;
 
+use super::option_controls::{
+    inactive_primary_action_button, primary_action_button, secondary_action_button,
+};
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ARCHIVE_EXTRACTION_PANEL_WIDTH: f32 = 500.0;
@@ -92,21 +95,18 @@ fn archive_extraction_actions(state: &ArchiveExtractionState) -> Element<'_, Mes
     } else {
         "Extract"
     };
-    let mut extract_button = button(readable_text(extract_label).size(12))
-        .padding([6, 10])
-        .style(context_menu_button_style());
-    if state.is_waiting_for_password() && state.can_submit_password() {
-        extract_button = extract_button.on_press(Message::ArchiveExtraction(
-            ArchiveExtractionMessage::Submitted,
-        ));
-    }
+    let extract_button = if state.is_waiting_for_password() && state.can_submit_password() {
+        primary_action_button(
+            extract_label,
+            Message::ArchiveExtraction(ArchiveExtractionMessage::Submitted),
+        )
+    } else {
+        inactive_primary_action_button(extract_label)
+    };
 
     row![
         Space::new().width(Length::Fill),
-        button(readable_text("Cancel").size(12))
-            .on_press(Message::DismissFloating)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
+        secondary_action_button("Cancel", Message::DismissFloating),
         extract_button,
     ]
     .spacing(6)

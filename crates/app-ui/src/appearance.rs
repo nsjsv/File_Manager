@@ -730,7 +730,7 @@ fn transparent_text_preview_editor_style(
     }
 }
 
-fn base_text_color(theme: &Theme) -> Color {
+pub(crate) fn base_text_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(226, 233, 242)
     } else {
@@ -738,7 +738,7 @@ fn base_text_color(theme: &Theme) -> Color {
     }
 }
 
-fn muted_text_color(theme: &Theme) -> Color {
+pub(crate) fn muted_text_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(137, 146, 159)
     } else {
@@ -746,7 +746,7 @@ fn muted_text_color(theme: &Theme) -> Color {
     }
 }
 
-fn subtle_border_color(theme: &Theme) -> Color {
+pub(crate) fn subtle_border_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(54, 65, 82)
     } else {
@@ -754,7 +754,7 @@ fn subtle_border_color(theme: &Theme) -> Color {
     }
 }
 
-fn is_dark_theme(theme: &Theme) -> bool {
+pub(crate) fn is_dark_theme(theme: &Theme) -> bool {
     let background = theme.palette().background;
     background.r * 0.299 + background.g * 0.587 + background.b * 0.114 < 0.5
 }

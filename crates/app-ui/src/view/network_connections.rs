@@ -11,6 +11,9 @@ use crate::network_connections::{
 };
 use crate::typography::readable_text;
 
+use super::option_controls::{
+    primary_action_button, secondary_action_button, segmented_choice_row, SegmentedChoice,
+};
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const NETWORK_EDITOR_PANEL_WIDTH: f32 = 460.0;
@@ -47,18 +50,7 @@ pub(super) fn network_connection_editor_panel(
     }
     let mut content = column![title_row].spacing(10).width(Length::Fill);
     if editor.mode != NetworkConnectionEditorMode::Connect {
-        content = content.push(
-            row![
-                protocol_button("SMB", desktop_linux::NetworkProtocol::Smb, editor.protocol),
-                protocol_button(
-                    "WebDAV",
-                    desktop_linux::NetworkProtocol::WebDav,
-                    editor.protocol
-                ),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        );
+        content = content.push(protocol_selector(editor.protocol));
     }
     content = content
         .push(label_input)
@@ -104,18 +96,14 @@ pub(super) fn network_connection_editor_panel(
     content = content.push(
         row![
             Space::new().width(Length::Fill),
-            button(readable_text("Cancel").size(12))
-                .on_press(Message::NetworkConnection(
-                    NetworkConnectionMessage::EditorCanceled
-                ))
-                .padding([6, 10])
-                .style(context_menu_button_style()),
-            button(readable_text(editor_primary_action_label(editor)).size(12))
-                .on_press(Message::NetworkConnection(
-                    NetworkConnectionMessage::EditorSaved
-                ))
-                .padding([6, 10])
-                .style(context_menu_button_style()),
+            secondary_action_button(
+                "Cancel",
+                Message::NetworkConnection(NetworkConnectionMessage::EditorCanceled),
+            ),
+            primary_action_button(
+                editor_primary_action_label(editor),
+                Message::NetworkConnection(NetworkConnectionMessage::EditorSaved),
+            ),
         ]
         .spacing(6)
         .align_y(Alignment::Center),
@@ -148,22 +136,23 @@ fn editor_primary_action_label(editor: &NetworkConnectionEditorState) -> &'stati
     }
 }
 
-fn protocol_button(
-    label: &'static str,
-    protocol: desktop_linux::NetworkProtocol,
-    selected: desktop_linux::NetworkProtocol,
-) -> Button<'static, Message> {
-    let label = if protocol == selected {
-        format!("{label} *")
-    } else {
-        label.to_owned()
-    };
-    button(readable_text(label).size(12))
-        .on_press(Message::NetworkConnection(
-            NetworkConnectionMessage::EditorProtocolSelected(protocol),
-        ))
-        .padding([6, 10])
-        .style(context_menu_button_style())
+fn protocol_selector(selected: desktop_linux::NetworkProtocol) -> Element<'static, Message> {
+    segmented_choice_row(vec![
+        SegmentedChoice {
+            label: "SMB",
+            selected: selected == desktop_linux::NetworkProtocol::Smb,
+            message: Message::NetworkConnection(NetworkConnectionMessage::EditorProtocolSelected(
+                desktop_linux::NetworkProtocol::Smb,
+            )),
+        },
+        SegmentedChoice {
+            label: "WebDAV",
+            selected: selected == desktop_linux::NetworkProtocol::WebDav,
+            message: Message::NetworkConnection(NetworkConnectionMessage::EditorProtocolSelected(
+                desktop_linux::NetworkProtocol::WebDav,
+            )),
+        },
+    ])
 }
 
 pub(super) fn network_connection_context_menu_panel(
