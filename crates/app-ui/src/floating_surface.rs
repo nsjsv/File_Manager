@@ -197,17 +197,6 @@ where
         self.content
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
-
-        for (index, floating) in self.floating.iter_mut().enumerate() {
-            if let Some(floating_tree) = tree.children.get_mut(index + 1) {
-                floating.element.as_widget_mut().operate(
-                    floating_tree,
-                    layout,
-                    renderer,
-                    operation,
-                );
-            }
-        }
     }
 
     fn update(
@@ -389,11 +378,7 @@ fn decide_floating_input<Message: Clone>(
     {
         return FloatingInputDecision {
             dismiss_message: None,
-            background_update: if is_mouse_event {
-                BackgroundUpdateDecision::Capture
-            } else {
-                BackgroundUpdateDecision::Stop
-            },
+            background_update: BackgroundUpdateDecision::Stop,
         };
     }
 
@@ -477,7 +462,11 @@ where
 
         self.floating.as_widget_mut().update(
             self.state, event, layout, cursor, renderer, clipboard, shell, &bounds,
-        )
+        );
+
+        if should_capture_floating_overlay_event(event, cursor, bounds) {
+            shell.capture_event();
+        }
     }
 
     fn mouse_interaction(
@@ -505,6 +494,36 @@ where
             .as_widget()
             .draw(self.state, renderer, theme, style, layout, cursor, &bounds);
     }
+
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.floating
+            .as_widget_mut()
+            .operate(self.state, layout, renderer, operation);
+    }
+
+    fn overlay<'c>(
+        &'c mut self,
+        layout: Layout<'c>,
+        renderer: &Renderer,
+    ) -> Option<overlay::Element<'c, Message, Theme, Renderer>> {
+        let bounds = layout.bounds();
+        self.floating
+            .as_widget_mut()
+            .overlay(self.state, layout, renderer, &bounds, Vector::ZERO)
+    }
+}
+
+fn should_capture_floating_overlay_event(
+    event: &Event,
+    cursor: mouse::Cursor,
+    bounds: Rectangle,
+) -> bool {
+    is_mouse_event(event) && cursor.is_over(bounds)
 }
 
 fn floating_max_size(placement: FloatingPlacement, bounds: Size) -> Size {
@@ -586,7 +605,7 @@ mod tests {
             decision,
             FloatingInputDecision {
                 dismiss_message: None,
-                background_update: BackgroundUpdateDecision::Capture
+                background_update: BackgroundUpdateDecision::Stop
             }
         );
     }
@@ -607,7 +626,7 @@ mod tests {
             decision,
             FloatingInputDecision {
                 dismiss_message: None,
-                background_update: BackgroundUpdateDecision::Capture
+                background_update: BackgroundUpdateDecision::Stop
             }
         );
     }
@@ -671,5 +690,24 @@ mod tests {
                 background_update: BackgroundUpdateDecision::Update
             }
         );
+    }
+
+    #[test]
+    fn floating_overlay_captures_mouse_events_inside_bounds() {
+        let event = Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+        });
+        let bounds = Rectangle::new(Point::new(10.0, 10.0), Size::new(100.0, 100.0));
+
+        assert!(should_capture_floating_overlay_event(
+            &event,
+            mouse::Cursor::Available(Point::new(20.0, 20.0)),
+            bounds,
+        ));
+        assert!(!should_capture_floating_overlay_event(
+            &event,
+            mouse::Cursor::Available(Point::new(200.0, 200.0)),
+            bounds,
+        ));
     }
 }

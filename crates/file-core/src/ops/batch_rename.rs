@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -224,14 +224,41 @@ async fn rollback_final_batch_renames(
     completed_steps: &[(PathBuf, PathBuf)],
     temporary_steps: &[(PathBuf, PathBuf)],
 ) {
-    let original_by_temporary = temporary_steps
+    let mut reserved = temporary_steps
         .iter()
-        .cloned()
-        .collect::<HashMap<PathBuf, PathBuf>>();
+        .flat_map(|(temporary_path, original_path)| [temporary_path.clone(), original_path.clone()])
+        .chain(
+            completed_steps
+                .iter()
+                .flat_map(|(final_path, original_path)| {
+                    [final_path.clone(), original_path.clone()]
+                }),
+        )
+        .collect::<HashSet<_>>();
+    let mut completed_rollback_steps = Vec::new();
+
     for (final_path, original_path) in completed_steps.iter().rev() {
-        let _ = fs::rename(final_path, original_path).await;
+        let Ok(rollback_temporary) =
+            available_batch_rename_temporary_path(final_path, &mut reserved).await
+        else {
+            continue;
+        };
+        if fs::rename(final_path, &rollback_temporary).await.is_ok() {
+            completed_rollback_steps.push((rollback_temporary, original_path.clone()));
+        }
     }
-    for (temporary_path, original_path) in original_by_temporary {
+
+    let completed_originals = completed_steps
+        .iter()
+        .map(|(_, original_path)| original_path.clone())
+        .collect::<HashSet<_>>();
+    for (temporary_path, original_path) in temporary_steps {
+        if completed_originals.contains(original_path) {
+            continue;
+        }
+        let _ = fs::rename(temporary_path, original_path).await;
+    }
+    for (temporary_path, original_path) in completed_rollback_steps {
         let _ = fs::rename(temporary_path, original_path).await;
     }
 }
@@ -275,5 +302,37 @@ mod tests {
         assert_eq!(fs::read(&second).unwrap(), b"two");
         assert!(!final_first.exists());
         assert!(!temp_second.exists());
+    }
+
+    #[tokio::test]
+    async fn rollback_final_batch_renames_restores_cycles_without_overwriting() {
+        let dir = tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        let third = dir.path().join("third.txt");
+        let temp_first = dir.path().join(".file-manager-batch-rename-0.tmp");
+        let temp_second = dir.path().join(".file-manager-batch-rename-1.tmp");
+        let temp_third = dir.path().join(".file-manager-batch-rename-2.tmp");
+        fs::write(&second, b"one").unwrap();
+        fs::write(&third, b"two").unwrap();
+        fs::write(&temp_third, b"three").unwrap();
+
+        rollback_final_batch_renames(
+            &[
+                (second.clone(), first.clone()),
+                (third.clone(), second.clone()),
+            ],
+            &[
+                (temp_first.clone(), first.clone()),
+                (temp_second.clone(), second.clone()),
+                (temp_third.clone(), third.clone()),
+            ],
+        )
+        .await;
+
+        assert_eq!(fs::read(&first).unwrap(), b"one");
+        assert_eq!(fs::read(&second).unwrap(), b"two");
+        assert_eq!(fs::read(&third).unwrap(), b"three");
+        assert!(!temp_third.exists());
     }
 }

@@ -13,47 +13,12 @@ impl FileBrowser {
     ) -> Task<Message> {
         match message {
             BatchRenameMessage::OpenSelected => self.open_batch_rename_selected(),
-            BatchRenameMessage::SequencePrefixChanged(value) => {
-                self.update_batch_rename(|state| state.sequence.prefix = value)
-            }
-            BatchRenameMessage::SequenceStartChanged(value) => {
-                self.update_batch_rename(|state| state.sequence.start_input = value)
-            }
-            BatchRenameMessage::SequencePaddingChanged(value) => {
-                self.update_batch_rename(|state| state.sequence.padding_input = value)
-            }
-            BatchRenameMessage::SequenceIncludeOriginalToggled(value) => {
-                self.update_batch_rename(|state| state.sequence.include_original_stem = value)
-            }
-            BatchRenameMessage::SequencePreserveExtensionToggled(value) => {
-                self.update_batch_rename(|state| state.sequence.preserve_extension = value)
-            }
-            BatchRenameMessage::ReplaceFindChanged(value) => {
-                self.update_batch_rename(|state| state.replace.find = value)
-            }
-            BatchRenameMessage::ReplaceWithChanged(value) => {
-                self.update_batch_rename(|state| state.replace.replacement = value)
-            }
-            BatchRenameMessage::InsertTextChanged(value) => {
-                self.update_batch_rename(|state| state.insert.text = value)
-            }
-            BatchRenameMessage::InsertPositionChanged(value) => {
-                self.update_batch_rename(|state| state.insert.position_input = value)
-            }
-            BatchRenameMessage::SliceStartChanged(value) => {
-                self.update_batch_rename(|state| state.slice.start_input = value)
-            }
-            BatchRenameMessage::SliceLengthChanged(value) => {
-                self.update_batch_rename(|state| state.slice.length_input = value)
-            }
-            BatchRenameMessage::CaseSelected(case) => {
-                self.update_batch_rename(|state| state.case = case)
-            }
             BatchRenameMessage::Apply => self.apply_batch_rename(),
             BatchRenameMessage::Cancel => {
                 self.batch_rename = None;
                 Task::none()
             }
+            message => self.update_batch_rename(|state| state.apply_update(message)),
         }
     }
 
@@ -85,6 +50,12 @@ impl FileBrowser {
             state.rebuild_preview();
         }
         Task::none()
+    }
+
+    pub(super) fn finish_batch_rename_preview_drag(&mut self) {
+        if let Some(state) = &mut self.batch_rename {
+            state.finish_preview_drag();
+        }
     }
 
     fn apply_batch_rename(&mut self) -> Task<Message> {

@@ -456,6 +456,7 @@ impl FileBrowser {
             Message::DragSelectionFinished => {
                 self.finish_tab_drag();
                 self.finish_pane_drag();
+                self.finish_batch_rename_preview_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
@@ -685,6 +686,7 @@ impl FileBrowser {
             Message::TabDragFinished => {
                 self.finish_tab_drag();
                 self.finish_pane_drag();
+                self.finish_batch_rename_preview_drag();
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),

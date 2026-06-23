@@ -51,7 +51,9 @@ pub(crate) use browser_panes::{
 };
 mod batch_rename;
 pub(crate) use batch_rename::{
-    same_parent, BatchRenameCaseRule, BatchRenameMessage, BatchRenamePreviewRow, BatchRenameState,
+    same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameMessage,
+    BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRulePanel, BatchRenameSortMode,
+    BatchRenameState,
 };
 mod properties;
 pub(crate) use properties::{

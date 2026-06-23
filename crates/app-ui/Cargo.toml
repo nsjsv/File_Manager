@@ -16,6 +16,7 @@ gif = "0.14.2"
 iced.workspace = true
 image.workspace = true
 pulldown-cmark = "0.13.4"
+regex = "1.12.3"
 rodio = "0.22.2"
 tar = "0.4.46"
 thumbnails = { path = "../thumbnails" }

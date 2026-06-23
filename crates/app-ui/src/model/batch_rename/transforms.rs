@@ -1,0 +1,482 @@
+use std::path::Path;
+
+use regex::Regex;
+
+use super::{
+    BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameRandomMode, BatchRenameSource,
+    BatchRenameState,
+};
+
+pub(super) struct PreparedBatchRenameRules {
+    regex: Result<Option<Regex>, String>,
+    batch_commands: Result<Vec<BatchRenameCommand>, String>,
+    list_names: Vec<String>,
+}
+
+enum BatchRenameCommand {
+    Prefix(String),
+    Suffix(String),
+    Replace { find: String, replacement: String },
+    Remove(String),
+    Insert { position: usize, text: String },
+    Slice { start: usize, length: Option<usize> },
+    Case(BatchRenameCaseRule),
+    Extension(Option<String>),
+    Regex { pattern: Regex, replacement: String },
+}
+
+impl PreparedBatchRenameRules {
+    pub(super) fn new(state: &BatchRenameState) -> Self {
+        let regex = if state.regex.pattern.trim().is_empty() {
+            Ok(None)
+        } else {
+            Regex::new(&state.regex.pattern)
+                .map(Some)
+                .map_err(|error| format!("invalid regex: {error}"))
+        };
+        let batch_commands = parse_batch_commands(&state.batch.commands);
+        let list_names = parse_list_names(&state.list.names);
+
+        Self {
+            regex,
+            batch_commands,
+            list_names,
+        }
+    }
+
+    pub(super) fn rename_item_name(
+        &self,
+        item: &BatchRenameSource,
+        preview_index: usize,
+        state: &BatchRenameState,
+    ) -> Result<String, String> {
+        let start = parse_usize_or_default(&state.sequence.start_input, 1);
+        let padding = parse_usize_or_default(&state.sequence.padding_input, 0);
+        let sequence_number = start.saturating_add(preview_index);
+        let insert_position = parse_usize_or_default(&state.insert.position_input, 0);
+        let slice_start = parse_optional_usize(&state.slice.start_input);
+        let slice_length = parse_optional_usize(&state.slice.length_input);
+        let remove_start = parse_optional_usize(&state.remove.start_input);
+        let remove_length = parse_optional_usize(&state.remove.length_input);
+        let random_text = deterministic_random_text(
+            &item.name,
+            preview_index,
+            parse_usize_or_default(&state.random.length_input, 6).min(64),
+            &state.random.alphabet,
+        );
+
+        let (mut stem, mut extension) = split_file_name(&item.name);
+        if !state.replace.find.is_empty() {
+            stem = stem.replace(&state.replace.find, &state.replace.replacement);
+        }
+        if !state.insert.text.is_empty() {
+            stem = insert_text_at_char_position(&stem, &state.insert.text, insert_position);
+        }
+        if slice_start.is_some() || slice_length.is_some() {
+            stem = slice_text_by_chars(&stem, slice_start.unwrap_or(0), slice_length);
+        }
+        if !state.remove.text.is_empty() {
+            stem = stem.replace(&state.remove.text, "");
+        }
+        if remove_start.is_some() || remove_length.is_some() {
+            stem = remove_text_by_char_range(&stem, remove_start.unwrap_or(0), remove_length);
+        }
+        stem = apply_case_rule(&stem, state.case);
+        stem = apply_random_rule(stem, &random_text, state.random.mode);
+        stem = apply_sequence_rule(stem, sequence_number, padding, state);
+
+        if !state.sequence.preserve_extension {
+            extension = None;
+        }
+        extension = apply_extension_rule(extension, state);
+
+        let mut target_name = join_stem_extension(&stem, extension.as_deref());
+        if let Some(list_name) = self.list_names.get(preview_index) {
+            target_name = list_name.clone();
+        }
+        if !state.custom.template.is_empty() {
+            target_name = render_custom_template(
+                &state.custom.template,
+                &target_name,
+                item,
+                sequence_number,
+                padding,
+                &random_text,
+            );
+        }
+        if let Some(regex) = self.regex.as_ref().map_err(|error| error.clone())? {
+            target_name = regex
+                .replace_all(&target_name, state.regex.replacement.as_str())
+                .to_string();
+        }
+        for command in self
+            .batch_commands
+            .as_ref()
+            .map_err(|error| error.clone())?
+        {
+            target_name = apply_batch_command(target_name, command);
+        }
+
+        Ok(target_name)
+    }
+}
+
+fn apply_sequence_rule(
+    stem: String,
+    sequence_number: usize,
+    padding: usize,
+    state: &BatchRenameState,
+) -> String {
+    if state.sequence.prefix.is_empty() && state.sequence.include_original_stem {
+        return stem;
+    }
+
+    let number = padded_number(sequence_number, padding);
+    let mut name = format!("{}{}", state.sequence.prefix, number);
+    if state.sequence.include_original_stem && !stem.is_empty() {
+        name.push(' ');
+        name.push_str(&stem);
+    }
+    name
+}
+
+fn apply_extension_rule(extension: Option<String>, state: &BatchRenameState) -> Option<String> {
+    match state.extension.mode {
+        BatchRenameExtensionMode::Preserve => extension,
+        BatchRenameExtensionMode::Remove => None,
+        BatchRenameExtensionMode::Replace => normalize_extension(&state.extension.replacement),
+        BatchRenameExtensionMode::Lowercase => extension.map(|extension| extension.to_lowercase()),
+        BatchRenameExtensionMode::Uppercase => extension.map(|extension| extension.to_uppercase()),
+    }
+}
+
+fn apply_random_rule(stem: String, random_text: &str, mode: BatchRenameRandomMode) -> String {
+    match mode {
+        BatchRenameRandomMode::Off => stem,
+        BatchRenameRandomMode::ReplaceStem => random_text.to_owned(),
+        BatchRenameRandomMode::Prefix => format!("{random_text}{stem}"),
+        BatchRenameRandomMode::Suffix => format!("{stem}{random_text}"),
+    }
+}
+
+fn render_custom_template(
+    template: &str,
+    current_name: &str,
+    item: &BatchRenameSource,
+    sequence_number: usize,
+    padding: usize,
+    random_text: &str,
+) -> String {
+    let (current_stem, current_extension) = split_file_name(current_name);
+    let (original_stem, original_extension) = split_file_name(&item.name);
+    template
+        .replace("{name}", current_name)
+        .replace("{stem}", &current_stem)
+        .replace("{ext}", current_extension.as_deref().unwrap_or(""))
+        .replace("{index}", &sequence_number.to_string())
+        .replace("{n}", &padded_number(sequence_number, padding))
+        .replace("{original}", &item.name)
+        .replace("{original_stem}", &original_stem)
+        .replace(
+            "{original_ext}",
+            original_extension.as_deref().unwrap_or(""),
+        )
+        .replace("{random}", random_text)
+}
+
+fn apply_batch_command(current_name: String, command: &BatchRenameCommand) -> String {
+    match command {
+        BatchRenameCommand::Prefix(prefix) => {
+            let (stem, extension) = split_file_name(&current_name);
+            join_stem_extension(&format!("{prefix}{stem}"), extension.as_deref())
+        }
+        BatchRenameCommand::Suffix(suffix) => {
+            let (stem, extension) = split_file_name(&current_name);
+            join_stem_extension(&format!("{stem}{suffix}"), extension.as_deref())
+        }
+        BatchRenameCommand::Replace { find, replacement } => {
+            current_name.replace(find, replacement)
+        }
+        BatchRenameCommand::Remove(text) => current_name.replace(text, ""),
+        BatchRenameCommand::Insert { position, text } => {
+            insert_text_at_char_position(&current_name, text, *position)
+        }
+        BatchRenameCommand::Slice { start, length } => {
+            slice_text_by_chars(&current_name, *start, *length)
+        }
+        BatchRenameCommand::Case(case) => {
+            let (stem, extension) = split_file_name(&current_name);
+            join_stem_extension(&apply_case_rule(&stem, *case), extension.as_deref())
+        }
+        BatchRenameCommand::Extension(extension) => {
+            let (stem, _) = split_file_name(&current_name);
+            join_stem_extension(&stem, extension.as_deref())
+        }
+        BatchRenameCommand::Regex {
+            pattern,
+            replacement,
+        } => pattern
+            .replace_all(&current_name, replacement.as_str())
+            .to_string(),
+    }
+}
+
+fn parse_batch_commands(input: &str) -> Result<Vec<BatchRenameCommand>, String> {
+    let mut commands = Vec::new();
+    for raw_command in input.lines().flat_map(|line| line.split(';')) {
+        let command = raw_command.trim();
+        if command.is_empty() {
+            continue;
+        }
+        commands.push(parse_batch_command(command)?);
+    }
+    Ok(commands)
+}
+
+fn parse_batch_command(command: &str) -> Result<BatchRenameCommand, String> {
+    let mut words = command.splitn(2, char::is_whitespace);
+    let keyword = words.next().unwrap_or("").to_ascii_lowercase();
+    let rest = words.next().unwrap_or("").trim();
+
+    match keyword.as_str() {
+        "prefix" if !rest.is_empty() => Ok(BatchRenameCommand::Prefix(rest.to_owned())),
+        "suffix" if !rest.is_empty() => Ok(BatchRenameCommand::Suffix(rest.to_owned())),
+        "replace" => {
+            let (find, replacement) = split_rule_arrow(rest, "replace")?;
+            Ok(BatchRenameCommand::Replace { find, replacement })
+        }
+        "remove" if !rest.is_empty() => Ok(BatchRenameCommand::Remove(rest.to_owned())),
+        "insert" => {
+            let (position, text) = split_position_text(rest, "insert")?;
+            Ok(BatchRenameCommand::Insert { position, text })
+        }
+        "slice" => {
+            let mut parts = rest.split_whitespace();
+            let start = parse_required_usize(parts.next(), "slice start")?;
+            let length = parts
+                .next()
+                .map(|value| parse_required_usize(Some(value), "slice length"))
+                .transpose()?;
+            Ok(BatchRenameCommand::Slice { start, length })
+        }
+        "case" => parse_batch_case_command(rest),
+        "ext" | "extension" => Ok(BatchRenameCommand::Extension(normalize_extension(rest))),
+        "regex" => {
+            let (pattern, replacement) = split_rule_arrow(rest, "regex")?;
+            let pattern =
+                Regex::new(&pattern).map_err(|error| format!("invalid regex command: {error}"))?;
+            Ok(BatchRenameCommand::Regex {
+                pattern,
+                replacement,
+            })
+        }
+        _ => Err(format!("unsupported batch command: {command}")),
+    }
+}
+
+fn parse_batch_case_command(rest: &str) -> Result<BatchRenameCommand, String> {
+    let case = match rest.to_ascii_lowercase().as_str() {
+        "lower" | "lowercase" => BatchRenameCaseRule::Lowercase,
+        "upper" | "uppercase" => BatchRenameCaseRule::Uppercase,
+        "title" | "titlecase" => BatchRenameCaseRule::TitleCase,
+        "keep" | "unchanged" => BatchRenameCaseRule::Unchanged,
+        _ => return Err(format!("unsupported case command: {rest}")),
+    };
+    Ok(BatchRenameCommand::Case(case))
+}
+
+fn split_rule_arrow(rest: &str, command: &str) -> Result<(String, String), String> {
+    let Some((left, right)) = rest.split_once("=>") else {
+        return Err(format!("{command} command requires =>"));
+    };
+    let find = left.trim().to_owned();
+    if find.is_empty() {
+        return Err(format!("{command} command requires a pattern"));
+    }
+    Ok((find, right.trim().to_owned()))
+}
+
+fn split_position_text(rest: &str, command: &str) -> Result<(usize, String), String> {
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let position = parse_required_usize(parts.next(), command)?;
+    let text = parts.next().unwrap_or("").trim();
+    if text.is_empty() {
+        return Err(format!("{command} command requires text"));
+    }
+    Ok((position, text.to_owned()))
+}
+
+fn parse_required_usize(value: Option<&str>, label: &str) -> Result<usize, String> {
+    value
+        .ok_or_else(|| format!("{label} is missing"))?
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| format!("{label} must be a number"))
+}
+
+fn parse_list_names(input: &str) -> Vec<String> {
+    if input.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let names = if input.contains('\n') {
+        input.lines().collect::<Vec<_>>()
+    } else {
+        input.split('|').collect::<Vec<_>>()
+    };
+    names
+        .into_iter()
+        .map(|name| name.trim_matches('\r').trim().to_owned())
+        .collect()
+}
+
+fn normalize_extension(input: &str) -> Option<String> {
+    let extension = input.trim().trim_start_matches('.');
+    if extension.is_empty() || extension.eq_ignore_ascii_case("remove") {
+        None
+    } else {
+        Some(extension.to_owned())
+    }
+}
+
+fn split_file_name(name: &str) -> (String, Option<String>) {
+    let path = Path::new(name);
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(ToOwned::to_owned);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(name)
+        .to_owned();
+    (stem, extension)
+}
+
+fn join_stem_extension(stem: &str, extension: Option<&str>) -> String {
+    match extension {
+        Some(extension) if !extension.is_empty() => format!("{stem}.{extension}"),
+        _ => stem.to_owned(),
+    }
+}
+
+fn insert_text_at_char_position(source: &str, text: &str, position: usize) -> String {
+    let byte_position = source
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(source.len()))
+        .nth(position)
+        .unwrap_or(source.len());
+    let mut next = String::with_capacity(source.len() + text.len());
+    next.push_str(&source[..byte_position]);
+    next.push_str(text);
+    next.push_str(&source[byte_position..]);
+    next
+}
+
+fn slice_text_by_chars(source: &str, start: usize, length: Option<usize>) -> String {
+    let chars = source.chars().collect::<Vec<_>>();
+    if start >= chars.len() {
+        return String::new();
+    }
+    let end = length
+        .map(|length| start.saturating_add(length).min(chars.len()))
+        .unwrap_or(chars.len());
+    chars[start..end].iter().collect()
+}
+
+fn remove_text_by_char_range(source: &str, start: usize, length: Option<usize>) -> String {
+    let chars = source.chars().collect::<Vec<_>>();
+    if start >= chars.len() {
+        return source.to_owned();
+    }
+    let end = length
+        .map(|length| start.saturating_add(length).min(chars.len()))
+        .unwrap_or(chars.len());
+    chars
+        .iter()
+        .enumerate()
+        .filter_map(|(index, character)| {
+            if (start..end).contains(&index) {
+                None
+            } else {
+                Some(*character)
+            }
+        })
+        .collect()
+}
+
+fn apply_case_rule(source: &str, case: BatchRenameCaseRule) -> String {
+    match case {
+        BatchRenameCaseRule::Unchanged => source.to_owned(),
+        BatchRenameCaseRule::Lowercase => source.to_lowercase(),
+        BatchRenameCaseRule::Uppercase => source.to_uppercase(),
+        BatchRenameCaseRule::TitleCase => title_case(source),
+    }
+}
+
+fn title_case(source: &str) -> String {
+    let mut next_word = true;
+    let mut output = String::new();
+    for character in source.chars() {
+        if character.is_alphanumeric() {
+            if next_word {
+                output.extend(character.to_uppercase());
+                next_word = false;
+            } else {
+                output.extend(character.to_lowercase());
+            }
+        } else {
+            output.push(character);
+            next_word = true;
+        }
+    }
+    output
+}
+
+fn deterministic_random_text(name: &str, index: usize, length: usize, alphabet: &str) -> String {
+    let alphabet = alphabet.chars().collect::<Vec<_>>();
+    let alphabet = if alphabet.is_empty() {
+        "abcdefghijklmnopqrstuvwxyz0123456789"
+            .chars()
+            .collect::<Vec<_>>()
+    } else {
+        alphabet
+    };
+    let mut seed = 0xcbf29ce484222325u64;
+    for byte in name.as_bytes().iter().chain(index.to_le_bytes().iter()) {
+        seed ^= u64::from(*byte);
+        seed = seed.wrapping_mul(0x100000001b3);
+    }
+
+    let mut output = String::new();
+    for _ in 0..length {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let character = alphabet[(seed as usize) % alphabet.len()];
+        output.push(character);
+    }
+    output
+}
+
+fn padded_number(number: usize, padding: usize) -> String {
+    if padding == 0 {
+        number.to_string()
+    } else {
+        format!("{number:0padding$}")
+    }
+}
+
+fn parse_usize_or_default(input: &str, default: usize) -> usize {
+    input.trim().parse::<usize>().unwrap_or(default)
+}
+
+fn parse_optional_usize(input: &str) -> Option<usize> {
+    let input = input.trim();
+    if input.is_empty() {
+        None
+    } else {
+        input.parse::<usize>().ok()
+    }
+}
