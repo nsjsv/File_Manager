@@ -32,8 +32,8 @@ pub(super) fn shortcut_settings_section(browser: &FileBrowser) -> Element<'_, Me
         section = section.push(shortcut_capture_feedback(capture));
     }
 
-    let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::ShortcutSettings);
     let scroll_region = ScrollbarRegion::ShortcutSettings;
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&scroll_region);
     section = section.push(
         scrollable(smooth_scroll_content(shortcut_rows, scroll_region.clone()))
             .id(smooth_scroll_id(&scroll_region))

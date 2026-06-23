@@ -13,7 +13,7 @@ use crate::model::{Message, ScrollbarRegion};
 const MOS_SCROLL_STEP: f32 = 33.6;
 const MOS_SCROLL_SPEED: f32 = 2.70;
 const MOS_SCROLL_DURATION_TRANSITION: f32 = 0.095;
-const MOS_SCROLL_DEAD_ZONE: f32 = 1.0;
+const MOS_SCROLL_DEAD_ZONE: f32 = 0.1;
 const MOS_SCROLL_FILTER_WEIGHT: f32 = 0.23;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -45,15 +45,24 @@ struct WheelScrollDelta {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct MosScrollRegionState {
+pub(crate) struct MosScrollState {
+    active_region: Option<ScrollbarRegion>,
     current: SmoothScrollDelta,
     buffer: SmoothScrollDelta,
     last_input: SmoothScrollDelta,
     filter: MosScrollFilter,
 }
 
-impl MosScrollRegionState {
-    fn push_wheel_delta(&mut self, delta: SmoothScrollDelta) {
+impl MosScrollState {
+    fn push_wheel_delta(&mut self, region: ScrollbarRegion, delta: SmoothScrollDelta) {
+        if self.active_region.as_ref() != Some(&region) {
+            self.active_region = Some(region);
+            self.current = SmoothScrollDelta::default();
+            self.buffer = SmoothScrollDelta::default();
+            self.last_input = SmoothScrollDelta::default();
+            self.filter = MosScrollFilter::default();
+        }
+
         update_mos_axis(
             &mut self.current.y,
             &mut self.buffer.y,
@@ -69,7 +78,7 @@ impl MosScrollRegionState {
         self.last_input = delta;
     }
 
-    fn next_frame_delta(&mut self) -> Option<SmoothScrollDelta> {
+    fn next_frame_delta(&mut self) -> Option<(ScrollbarRegion, SmoothScrollDelta)> {
         let frame = SmoothScrollDelta {
             x: (self.buffer.x - self.current.x) * MOS_SCROLL_DURATION_TRANSITION,
             y: (self.buffer.y - self.current.y) * MOS_SCROLL_DURATION_TRANSITION,
@@ -79,10 +88,18 @@ impl MosScrollRegionState {
         self.current.y += frame.y;
 
         let filtered = self.filter.fill(frame);
-        (filtered.magnitude() > MOS_SCROLL_DEAD_ZONE).then_some(filtered)
+        if filtered.magnitude() <= MOS_SCROLL_DEAD_ZONE {
+            return None;
+        }
+
+        self.active_region.clone().map(|region| (region, filtered))
     }
 
     fn is_active(&self) -> bool {
+        if self.active_region.is_none() {
+            return false;
+        }
+
         let residual = SmoothScrollDelta {
             x: self.buffer.x - self.current.x,
             y: self.buffer.y - self.current.y,
@@ -90,6 +107,10 @@ impl MosScrollRegionState {
 
         residual.magnitude() > MOS_SCROLL_DEAD_ZONE
             || self.filter.pending().magnitude() > MOS_SCROLL_DEAD_ZONE
+    }
+
+    fn stop(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -127,14 +148,13 @@ impl FileBrowser {
 
         match scroll_delta.mode {
             WheelScrollMode::MosAnimated => {
-                self.smooth_scroll_regions
-                    .entry(region.clone())
-                    .or_default()
-                    .push_wheel_delta(scroll_delta.delta);
+                self.smooth_scroll
+                    .push_wheel_delta(region.clone(), scroll_delta.delta);
 
                 self.show_scrollbars_temporarily(region)
             }
             WheelScrollMode::Direct => {
+                self.smooth_scroll.stop();
                 let scroll_task = iced::widget::operation::scroll_by(
                     smooth_scroll_id(&region),
                     scroll_frame_offset(scroll_delta.delta),
@@ -146,24 +166,25 @@ impl FileBrowser {
     }
 
     pub(super) fn smooth_scroll_animation_is_active(&self) -> bool {
-        !self.smooth_scroll_regions.is_empty()
+        self.smooth_scroll.is_active()
     }
 
     pub(super) fn advance_smooth_scroll_animation(&mut self) -> Task<Message> {
-        let mut scroll_tasks = Vec::new();
-
-        self.smooth_scroll_regions.retain(|region, state| {
-            if let Some(delta) = state.next_frame_delta() {
-                scroll_tasks.push(iced::widget::operation::scroll_by(
-                    smooth_scroll_id(region),
+        let scroll_task = self
+            .smooth_scroll
+            .next_frame_delta()
+            .map(|(region, delta)| {
+                iced::widget::operation::scroll_by(
+                    smooth_scroll_id(&region),
                     scroll_frame_offset(delta),
-                ));
-            }
+                )
+            });
 
-            state.is_active()
-        });
+        if !self.smooth_scroll.is_active() {
+            self.smooth_scroll.stop();
+        }
 
-        Task::batch(scroll_tasks)
+        scroll_task.unwrap_or_else(Task::none)
     }
 
     fn smooth_scroll_delta_for_region(
@@ -247,17 +268,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SmoothScrollArea<'_> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        if cursor.is_over(layout.bounds()) {
-            if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
-                if wheel_delta_for_region(&self.region, self.shift_pressed, *delta).is_some() {
-                    shell.publish(Message::SmoothScrollWheel(self.region.clone(), *delta));
-                    shell.capture_event();
-                    shell.request_redraw();
-                    return;
-                }
-            }
-        }
+        let cursor_over_area = cursor.is_over(layout.bounds());
 
+        // 嵌套滚动区必须让内层先认领 wheel；否则 Settings 会吞掉 ShortcutSettings。
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
@@ -268,6 +281,21 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SmoothScrollArea<'_> {
             shell,
             viewport,
         );
+
+        if shell.is_event_captured() {
+            return;
+        }
+
+        if cursor_over_area {
+            if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+                if wheel_delta_for_region(&self.region, self.shift_pressed, *delta).is_some() {
+                    shell.publish(Message::SmoothScrollWheel(self.region.clone(), *delta));
+                    shell.capture_event();
+                    shell.request_redraw();
+                    return;
+                }
+            }
+        }
     }
 
     fn mouse_interaction(
@@ -540,33 +568,47 @@ mod tests {
     }
 
     #[test]
-    fn mos_region_state_accumulates_same_direction_buffer() {
-        let mut state = MosScrollRegionState::default();
-        state.push_wheel_delta(SmoothScrollDelta {
-            x: 0.0,
-            y: MOS_SCROLL_STEP,
-        });
-        state.push_wheel_delta(SmoothScrollDelta {
-            x: 0.0,
-            y: MOS_SCROLL_STEP,
-        });
+    fn mos_global_state_accumulates_same_region_buffer() {
+        let mut state = MosScrollState::default();
+        let region = ScrollbarRegion::Sidebar;
+        state.push_wheel_delta(
+            region.clone(),
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP,
+            },
+        );
+        state.push_wheel_delta(
+            region,
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP,
+            },
+        );
 
         assert!((state.buffer.y - MOS_SCROLL_STEP * MOS_SCROLL_SPEED * 2.0).abs() <= 0.0001);
         assert_eq!(state.current.y, 0.0);
     }
 
     #[test]
-    fn mos_region_state_resets_current_on_opposite_direction() {
-        let mut state = MosScrollRegionState::default();
+    fn mos_global_state_resets_current_on_opposite_direction() {
+        let mut state = MosScrollState::default();
+        let region = ScrollbarRegion::Sidebar;
         state.current.y = 12.0;
-        state.push_wheel_delta(SmoothScrollDelta {
-            x: 0.0,
-            y: MOS_SCROLL_STEP,
-        });
-        state.push_wheel_delta(SmoothScrollDelta {
-            x: 0.0,
-            y: -MOS_SCROLL_STEP,
-        });
+        state.push_wheel_delta(
+            region.clone(),
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP,
+            },
+        );
+        state.push_wheel_delta(
+            region,
+            SmoothScrollDelta {
+                x: 0.0,
+                y: -MOS_SCROLL_STEP,
+            },
+        );
 
         assert!((state.buffer.y + MOS_SCROLL_STEP * MOS_SCROLL_SPEED).abs() <= 0.0001);
         assert_eq!(state.current.y, 0.0);
@@ -574,16 +616,62 @@ mod tests {
 
     #[test]
     fn mos_filter_delays_first_scroll_frame() {
-        let mut state = MosScrollRegionState::default();
-        state.push_wheel_delta(SmoothScrollDelta {
-            x: 0.0,
-            y: MOS_SCROLL_STEP,
-        });
+        let mut state = MosScrollState::default();
+        state.push_wheel_delta(
+            ScrollbarRegion::Sidebar,
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP,
+            },
+        );
 
         assert_eq!(state.next_frame_delta(), None);
-        let second_frame = state.next_frame_delta().expect("second frame");
+        let (_, second_frame) = state.next_frame_delta().expect("second frame");
 
         assert!(second_frame.y > MOS_SCROLL_DEAD_ZONE);
+    }
+
+    #[test]
+    fn mos_filter_preserves_fractional_line_wheel_delta() {
+        let mut state = MosScrollState::default();
+        state.push_wheel_delta(
+            ScrollbarRegion::Sidebar,
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP * 0.1,
+            },
+        );
+
+        assert_eq!(state.next_frame_delta(), None);
+        let (_, second_frame) = state.next_frame_delta().expect("second frame");
+
+        assert!(second_frame.y > MOS_SCROLL_DEAD_ZONE);
+    }
+
+    #[test]
+    fn mos_global_state_switches_active_region() {
+        let mut state = MosScrollState::default();
+        state.push_wheel_delta(
+            ScrollbarRegion::Sidebar,
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP,
+            },
+        );
+        state.current.y = 12.0;
+
+        let next_region = ScrollbarRegion::PaneList(BrowserPaneId::PRIMARY);
+        state.push_wheel_delta(
+            next_region.clone(),
+            SmoothScrollDelta {
+                x: 0.0,
+                y: MOS_SCROLL_STEP,
+            },
+        );
+
+        assert_eq!(state.active_region, Some(next_region));
+        assert_eq!(state.current.y, 0.0);
+        assert!((state.buffer.y - MOS_SCROLL_STEP * MOS_SCROLL_SPEED).abs() <= 0.0001);
     }
 
     #[test]

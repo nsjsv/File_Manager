@@ -337,7 +337,7 @@ pub(crate) enum Message {
     RendererRestartRequested,
     RendererRestartNoticeDismissed,
     SmoothScrollWheel(ScrollbarRegion, mouse::ScrollDelta),
-    ScrollbarAutoHideElapsed(ScrollbarRegion, u64),
+    ScrollbarAutoHideElapsed(u64),
     WindowChromeAnimationTick,
     SidebarScrolled,
     SearchResultsScrolled,

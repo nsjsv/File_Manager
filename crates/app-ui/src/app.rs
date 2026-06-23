@@ -62,10 +62,10 @@ use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command,
     sidebar_device_refresh_subscription, system_theme_command,
 };
-use crate::app::scrollbar::{ScrollbarRegionState, SCROLLBAR_ANIMATION_INTERVAL};
+use crate::app::scrollbar::{ScrollbarState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
 use crate::app::sidebar_resize::SidebarResizeDrag;
-use crate::app::smooth_scroll::MosScrollRegionState;
+use crate::app::smooth_scroll::MosScrollState;
 use crate::app::tabs::{TabAnimationState, TabBarReveal};
 use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
@@ -213,8 +213,8 @@ pub(crate) struct FileBrowser {
     operation_history: FileOperationHistory,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
-    scrollbar_regions: HashMap<ScrollbarRegion, ScrollbarRegionState>,
-    smooth_scroll_regions: HashMap<ScrollbarRegion, MosScrollRegionState>,
+    scrollbar: ScrollbarState,
+    smooth_scroll: MosScrollState,
     pending_search_reveal: Option<PathBuf>,
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
@@ -409,8 +409,8 @@ impl FileBrowser {
             operation_history: FileOperationHistory::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
-            scrollbar_regions: HashMap::new(),
-            smooth_scroll_regions: HashMap::new(),
+            scrollbar: ScrollbarState::default(),
+            smooth_scroll: MosScrollState::default(),
             pending_search_reveal: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
