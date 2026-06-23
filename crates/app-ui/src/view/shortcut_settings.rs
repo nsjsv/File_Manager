@@ -1,6 +1,7 @@
 use iced::widget::{button, column, container, row, scrollable, Column, Space};
 use iced::{Alignment, Element, Length};
 
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
@@ -32,8 +33,10 @@ pub(super) fn shortcut_settings_section(browser: &FileBrowser) -> Element<'_, Me
     }
 
     let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::ShortcutSettings);
+    let scroll_region = ScrollbarRegion::ShortcutSettings;
     section = section.push(
-        scrollable(shortcut_rows)
+        scrollable(smooth_scroll_content(shortcut_rows, scroll_region.clone()))
+            .id(smooth_scroll_id(&scroll_region))
             .direction(auto_hide_vertical_scrollbar_direction(
                 scrollbar_visibility,
                 6.0,

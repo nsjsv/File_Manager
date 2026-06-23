@@ -336,7 +336,7 @@ pub(crate) enum Message {
     RenderingGpuPreferenceSelected(RenderingGpuPreference),
     RendererRestartRequested,
     RendererRestartNoticeDismissed,
-    CapturedWheelScrolled(mouse::ScrollDelta),
+    SmoothScrollWheel(ScrollbarRegion, mouse::ScrollDelta),
     ScrollbarAutoHideElapsed(ScrollbarRegion, u64),
     WindowChromeAnimationTick,
     SidebarScrolled,

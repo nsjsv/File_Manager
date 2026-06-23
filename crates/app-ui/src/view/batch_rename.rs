@@ -1,6 +1,7 @@
 use iced::widget::{checkbox, column, container, row, scrollable, text_input, Column, Space};
 use iced::{Alignment, Element, Length};
 
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_style,
     path_suggestion_item_style,
@@ -8,7 +9,7 @@ use crate::appearance::{
 use crate::formatting::format_middle_ellipsized_text;
 use crate::model::{
     BatchRenameCaseRule, BatchRenameMessage, BatchRenamePreviewRow, BatchRenameState, Message,
-    ScrollbarVisibility,
+    ScrollbarRegion, ScrollbarVisibility,
 };
 use crate::typography::readable_text;
 
@@ -190,9 +191,11 @@ fn preview_rows(
         rows = rows.push(preview_row(row));
     }
 
+    let scroll_region = ScrollbarRegion::BatchRenamePreview;
     column![
         section_title("Preview"),
-        scrollable(rows)
+        scrollable(smooth_scroll_content(rows, scroll_region.clone()))
+            .id(smooth_scroll_id(&scroll_region))
             .direction(auto_hide_vertical_scrollbar_direction(
                 scrollbar_visibility,
                 6.0,

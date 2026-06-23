@@ -41,6 +41,7 @@ use iced::{Alignment, Element, Length, Point, Theme};
 
 use crate::anchored_popup::anchored_popup;
 use crate::app::panes::BrowserPaneView;
+use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::app::FileBrowser;
 use crate::appearance::{
     app_content_style, drag_preview_style, icon_svg_style, navigation_icon_button_style,
@@ -131,7 +132,7 @@ pub(crate) fn path_input_id(pane_id: BrowserPaneId) -> iced::widget::Id {
 }
 
 pub(crate) fn column_browser_scroll_id(pane_id: BrowserPaneId) -> iced::widget::Id {
-    iced::widget::Id::from(format!("column-browser-{}", pane_id.key()))
+    smooth_scroll_id(&ScrollbarRegion::ColumnBrowser(pane_id))
 }
 
 pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static, Message> {

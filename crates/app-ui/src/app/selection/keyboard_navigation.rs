@@ -194,27 +194,6 @@ impl FileBrowser {
         }
     }
 
-    fn entry_paths_in_directory(&self, directory: &Path) -> Vec<PathBuf> {
-        if directory == self.current_dir.as_path() {
-            return self
-                .entries
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect();
-        }
-
-        self.expanded_directories
-            .get(directory)
-            .map(|expanded| {
-                expanded
-                    .entries
-                    .iter()
-                    .map(|entry| entry.path.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     pub(crate) fn select_path_from_keyboard(&mut self, path: PathBuf) {
         self.select_path(path.clone());
         self.selection_anchor = Some(path);

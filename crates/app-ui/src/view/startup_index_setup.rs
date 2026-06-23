@@ -3,6 +3,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
     context_menu_style,
@@ -10,8 +11,8 @@ use crate::appearance::{
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view};
 use crate::model::{
-    Message, ScrollbarVisibility, StartupIndexDirectoryChildren, StartupIndexSetupState,
-    StartupIndexTreeEntry,
+    Message, ScrollbarRegion, ScrollbarVisibility, StartupIndexDirectoryChildren,
+    StartupIndexSetupState, StartupIndexTreeEntry,
 };
 use crate::typography::readable_text;
 
@@ -61,13 +62,15 @@ pub(super) fn startup_index_setup_panel(
     .spacing(6)
     .align_y(Alignment::Center);
 
+    let scroll_region = ScrollbarRegion::StartupIndexSetup;
     let content = column![
         header,
         readable_text(
             "Indexing lets search return filename and path matches quickly. Expand folders and choose the content to index now."
         )
         .size(13),
-        scrollable(tree)
+        scrollable(smooth_scroll_content(tree, scroll_region.clone()))
+            .id(smooth_scroll_id(&scroll_region))
             .direction(auto_hide_vertical_scrollbar_direction(
                 scrollbar_visibility,
                 6.0,

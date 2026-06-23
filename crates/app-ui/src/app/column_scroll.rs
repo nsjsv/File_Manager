@@ -3,19 +3,14 @@ use std::path::Path;
 use iced::advanced::widget as advanced_widget;
 use iced::advanced::widget::operation::{Operation, Scrollable as ScrollableOperation};
 use iced::widget::scrollable;
-use iced::{mouse, Rectangle, Task, Vector};
+use iced::{Rectangle, Task, Vector};
 
-use super::{FileBrowser, COLUMN_BROWSER_WHEEL_LINE_PIXELS};
+use super::FileBrowser;
 use crate::model::Message;
 use crate::three_column_view::{
     column_directories, sidebar_underlay_width_for_pane, COLUMN_RESIZE_DIVIDER_WIDTH,
 };
 use crate::view::column_browser_scroll_id;
-
-struct ColumnBrowserScrollBy {
-    target: advanced_widget::Id,
-    delta_x: f32,
-}
 
 struct ColumnBrowserRevealColumn {
     target: advanced_widget::Id,
@@ -23,15 +18,6 @@ struct ColumnBrowserRevealColumn {
     column_right_x: f32,
     real_content_width: f32,
     viewport_underlay_width: f32,
-}
-
-impl ColumnBrowserScrollBy {
-    fn new(target: iced::widget::Id, delta_x: f32) -> Self {
-        Self {
-            target: target.into(),
-            delta_x,
-        }
-    }
 }
 
 impl ColumnBrowserRevealColumn {
@@ -48,28 +34,6 @@ impl ColumnBrowserRevealColumn {
             column_right_x,
             real_content_width,
             viewport_underlay_width,
-        }
-    }
-}
-
-impl Operation<Message> for ColumnBrowserScrollBy {
-    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Message>)) {
-        operate(self);
-    }
-
-    fn scrollable(
-        &mut self,
-        id: Option<&advanced_widget::Id>,
-        _bounds: Rectangle,
-        _content_bounds: Rectangle,
-        translation: Vector,
-        state: &mut dyn ScrollableOperation,
-    ) {
-        if id == Some(&self.target) {
-            state.scroll_to(scrollable::AbsoluteOffset {
-                x: Some((translation.x - self.delta_x).max(0.0)),
-                y: Some(translation.y.max(0.0)),
-            });
         }
     }
 }
@@ -120,46 +84,6 @@ impl FileBrowser {
         };
         let real_column_count = column_directories(self).len();
         self.reveal_column_index(column_index, real_column_count)
-    }
-
-    pub(super) fn handle_column_browser_wheel_scrolled(
-        &self,
-        delta: mouse::ScrollDelta,
-    ) -> Option<Task<Message>> {
-        if !self.is_cursor_over_column_browser {
-            return None;
-        }
-
-        let Some(delta_x) = self.column_browser_horizontal_wheel_delta(delta) else {
-            return None;
-        };
-
-        Some(advanced_widget::operate(ColumnBrowserScrollBy::new(
-            column_browser_scroll_id(self.active_pane_id()),
-            delta_x,
-        )))
-    }
-
-    fn column_browser_horizontal_wheel_delta(&self, delta: mouse::ScrollDelta) -> Option<f32> {
-        let delta_x = match delta {
-            mouse::ScrollDelta::Lines { x, y } => {
-                let horizontal_lines = if self.keyboard_modifiers.shift() {
-                    y
-                } else {
-                    x
-                };
-                horizontal_lines * COLUMN_BROWSER_WHEEL_LINE_PIXELS
-            }
-            mouse::ScrollDelta::Pixels { x, y } => {
-                if self.keyboard_modifiers.shift() {
-                    y
-                } else {
-                    x
-                }
-            }
-        };
-
-        (delta_x.abs() > f32::EPSILON).then_some(delta_x)
     }
 
     fn column_index_containing_path(&self, path: &Path) -> Option<usize> {

@@ -2,8 +2,9 @@ use iced::widget::{container, row, scrollable, Column, Space};
 use iced::{Alignment, Element, Font, Length};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction};
-use crate::model::{Message, ScrollbarVisibility, TextPreviewLineLimitNotice};
+use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, TextPreviewLineLimitNotice};
 use crate::typography::readable_text;
 
 const MARKDOWN_BODY_TEXT_SIZE: u32 = 14;
@@ -35,7 +36,9 @@ pub(super) fn markdown_preview_body(
         content = content.push(readable_text(notice.label()).size(12));
     }
 
-    scrollable(content)
+    let scroll_region = ScrollbarRegion::MarkdownPreview;
+    scrollable(smooth_scroll_content(content, scroll_region.clone()))
+        .id(smooth_scroll_id(&scroll_region))
         .direction(auto_hide_vertical_scrollbar_direction(
             scrollbar_visibility,
             MARKDOWN_SCROLLBAR_WIDTH,

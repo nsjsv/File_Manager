@@ -9,7 +9,7 @@ use super::paths;
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
 
 use crate::model::{
-    trash_location_path, BrowserPaneId, ColumnEntryBounds, ContextMenuState,
+    trash_location_path, BrowserPaneId, BrowserViewMode, ColumnEntryBounds, ContextMenuState,
     FileContextMenuExpansion, FileContextMenuState, FileDeleteAction, LastActivationClick, Message,
     SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
 };
@@ -491,8 +491,8 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn select_all_visible(&mut self) -> Task<Message> {
-        let paths = self.visible_entry_paths();
+    pub(super) fn select_all_in_file_selection_scope(&mut self) -> Task<Message> {
+        let paths = self.select_all_selection_scope_paths();
         self.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
         self.selection_anchor = paths.first().cloned();
         if let Some(path) = paths.first().cloned() {
@@ -506,8 +506,60 @@ impl FileBrowser {
         Task::none()
     }
 
+    fn select_all_selection_scope_paths(&self) -> Vec<PathBuf> {
+        if self.view_mode == BrowserViewMode::Columns {
+            return self.entry_paths_in_directory(&self.column_select_all_directory());
+        }
+
+        self.visible_entry_paths()
+    }
+
+    fn column_select_all_directory(&self) -> PathBuf {
+        if let Some(path) = &self.hovered_entry {
+            return self.entry_parent_directory(path);
+        }
+
+        if let Some(directory) = self.hovered_column_directory() {
+            return directory;
+        }
+
+        self.selected
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.current_dir.clone())
+    }
+
+    fn hovered_column_directory(&self) -> Option<PathBuf> {
+        let directory = self.cursor_paste_directory.as_ref()?;
+        crate::three_column_view::column_directories(self)
+            .into_iter()
+            .find(|column_directory| column_directory == directory)
+    }
+
     pub(super) fn entry_kind(&self, path: &Path) -> Option<FileKind> {
         self.entry_kind_recursive(path)
+    }
+
+    fn entry_paths_in_directory(&self, directory: &Path) -> Vec<PathBuf> {
+        if directory == self.current_dir.as_path() {
+            return self
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+        }
+
+        self.expanded_directories
+            .get(directory)
+            .map(|expanded| {
+                expanded
+                    .entries
+                    .iter()
+                    .map(|entry| entry.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn cursor_paste_directory_for_entry(&self, path: &Path) -> PathBuf {

@@ -2,6 +2,7 @@ use file_index::{FileSearchMatch, MediaSearchKind, MediaSearchMetadata, SearchRe
 use iced::widget::{column, container, mouse_area, row, scrollable, text_input, Column};
 use iced::{Alignment, Element, Length};
 
+use crate::app::smooth_scroll::smooth_scroll_content;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, path_suggestion_item_style,
     preview_panel_style, selected_path_suggestion_item_style,
@@ -9,7 +10,9 @@ use crate::appearance::{
 use crate::config::SearchBackendMode;
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::file_entry_icon_symbol;
-use crate::model::{Message, ScrollbarVisibility, SearchMode, SearchScope, SearchState};
+use crate::model::{
+    Message, ScrollbarRegion, ScrollbarVisibility, SearchMode, SearchScope, SearchState,
+};
 use crate::typography::readable_text;
 
 use super::option_controls::{segmented_choice_row, SegmentedChoice};
@@ -125,16 +128,19 @@ fn search_results_panel(
         ));
     }
 
-    scrollable(matches)
-        .id(search_results_id())
-        .direction(auto_hide_vertical_scrollbar_direction(
-            scrollbar_visibility,
-            6.0,
-        ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .height(Length::Fixed(SEARCH_RESULTS_HEIGHT))
-        .on_scroll(|_| Message::SearchResultsScrolled)
-        .into()
+    scrollable(smooth_scroll_content(
+        matches,
+        ScrollbarRegion::SearchResults,
+    ))
+    .id(search_results_id())
+    .direction(auto_hide_vertical_scrollbar_direction(
+        scrollbar_visibility,
+        6.0,
+    ))
+    .style(auto_hide_scrollbar_style(scrollbar_visibility))
+    .height(Length::Fixed(SEARCH_RESULTS_HEIGHT))
+    .on_scroll(|_| Message::SearchResultsScrolled)
+    .into()
 }
 
 fn search_message(message: &str) -> Element<'_, Message> {

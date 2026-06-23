@@ -30,6 +30,7 @@ mod shortcuts;
 mod sidebar_bookmarks;
 mod sidebar_devices;
 mod sidebar_resize;
+pub(crate) mod smooth_scroll;
 mod startup;
 mod startup_index_setup;
 mod tabs;
@@ -64,6 +65,7 @@ use crate::app::runtime::{
 use crate::app::scrollbar::{ScrollbarRegionState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
 use crate::app::sidebar_resize::SidebarResizeDrag;
+use crate::app::smooth_scroll::MosScrollRegionState;
 use crate::app::tabs::{TabAnimationState, TabBarReveal};
 use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
@@ -100,7 +102,6 @@ const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
-const COLUMN_BROWSER_WHEEL_LINE_PIXELS: f32 = 60.0;
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) struct FileBrowser {
@@ -213,6 +214,7 @@ pub(crate) struct FileBrowser {
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
     scrollbar_regions: HashMap<ScrollbarRegion, ScrollbarRegionState>,
+    smooth_scroll_regions: HashMap<ScrollbarRegion, MosScrollRegionState>,
     pending_search_reveal: Option<PathBuf>,
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
@@ -408,6 +410,7 @@ impl FileBrowser {
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
             scrollbar_regions: HashMap::new(),
+            smooth_scroll_regions: HashMap::new(),
             pending_search_reveal: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
@@ -484,6 +487,7 @@ impl FileBrowser {
         }
 
         if self.scrollbar_animation_is_active()
+            || self.smooth_scroll_animation_is_active()
             || self.tab_bar_reveal_animation_is_active()
             || self.tab_animation_is_active()
             || self.list_directory_animation_is_active()

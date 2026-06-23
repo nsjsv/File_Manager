@@ -3,6 +3,7 @@ use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, S
 use iced::{Alignment, Element, Length};
 
 use crate::app::panes::BrowserPaneView;
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, icon_svg_style,
@@ -126,7 +127,8 @@ pub(crate) fn list_browser_view<'a>(
 
     let scrollbar_region = ScrollbarRegion::PaneList(pane.id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
-    let list_scroll = scrollable(rows)
+    let list_scroll = scrollable(smooth_scroll_content(rows, scrollbar_region.clone()))
+        .id(smooth_scroll_id(&scrollbar_region))
         .direction(auto_hide_vertical_scrollbar_direction(
             scrollbar_visibility,
             8.0,

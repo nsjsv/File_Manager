@@ -157,7 +157,12 @@ fn settings_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
-    auxiliary_detail_scroller(content, scrollbar_visibility, Message::SettingsScrolled)
+    auxiliary_detail_scroller(
+        content,
+        ScrollbarRegion::Settings,
+        scrollbar_visibility,
+        Message::SettingsScrolled,
+    )
 }
 
 fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Message> {

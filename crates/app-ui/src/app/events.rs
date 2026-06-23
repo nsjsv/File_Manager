@@ -44,12 +44,6 @@ pub(super) fn global_event_message(
         return Some(message);
     }
 
-    if matches!(status, event::Status::Captured) {
-        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = &event {
-            return Some(Message::CapturedWheelScrolled(*delta));
-        }
-    }
-
     if matches!(
         &event,
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
@@ -166,19 +160,6 @@ mod tests {
         };
         assert_eq!(received.x, position.x);
         assert_eq!(received.y, position.y);
-    }
-
-    #[test]
-    fn captured_wheel_scroll_reports_scrollbar_activity() {
-        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 };
-        let event = Event::Mouse(mouse::Event::WheelScrolled { delta });
-
-        let message = route_event(event, event::Status::Captured);
-
-        assert!(matches!(
-            message,
-            Some(Message::CapturedWheelScrolled(received)) if received == delta
-        ));
     }
 
     #[test]

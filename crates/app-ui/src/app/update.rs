@@ -600,12 +600,15 @@ impl FileBrowser {
             }
             Message::RendererRestartRequested => self.restart_with_selected_renderer(),
             Message::RendererRestartNoticeDismissed => self.dismiss_renderer_restart_notice(),
-            Message::CapturedWheelScrolled(delta) => self.handle_captured_wheel_scrolled(delta),
+            Message::SmoothScrollWheel(region, delta) => {
+                self.handle_smooth_scroll_wheel(region, delta)
+            }
             Message::ScrollbarAutoHideElapsed(region, generation) => {
                 self.start_scrollbar_hide(region, generation);
                 Task::none()
             }
             Message::WindowChromeAnimationTick => Task::batch([
+                self.advance_smooth_scroll_animation(),
                 self.advance_scrollbar_animation(),
                 self.advance_tab_bar_reveal_animation(),
                 self.advance_tab_animations(),
@@ -783,7 +786,7 @@ impl FileBrowser {
                 self.transfer_conflict = None;
                 Task::none()
             }
-            Message::SelectAll => self.select_all_visible(),
+            Message::SelectAll => self.select_all_in_file_selection_scope(),
         }
     }
 }

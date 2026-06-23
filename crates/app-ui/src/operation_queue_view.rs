@@ -1,13 +1,14 @@
 use iced::widget::{button, column, container, progress_bar, row, scrollable, svg, Svg};
 use iced::{Alignment, Element, Length};
 
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
     context_menu_style, error_notification_style, navigation_icon_button_style,
     path_suggestion_item_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
-use crate::model::{Message, ScrollbarVisibility};
+use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
 use crate::operation_queue::{FileOperationQueue, FileOperationStatus, FileOperationTask};
 use crate::operation_queue_display::FileOperationPathLines;
 use crate::typography::readable_text;
@@ -68,9 +69,11 @@ pub(crate) fn operation_queue_panel(
         }
     }
 
+    let scroll_region = ScrollbarRegion::OperationQueue;
     let content = column![
         header,
-        scrollable(tasks)
+        scrollable(smooth_scroll_content(tasks, scroll_region.clone()))
+            .id(smooth_scroll_id(&scroll_region))
             .direction(auto_hide_vertical_scrollbar_direction(
                 scrollbar_visibility,
                 6.0,

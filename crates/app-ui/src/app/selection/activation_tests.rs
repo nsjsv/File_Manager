@@ -438,7 +438,7 @@ fn list_select_all_and_range_use_the_same_visible_rows() {
         loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
     );
 
-    drop(browser.select_all_visible());
+    drop(browser.select_all_in_file_selection_scope());
 
     assert_eq!(
         browser.selected_paths,
@@ -452,4 +452,58 @@ fn list_select_all_and_range_use_the_same_visible_rows() {
         browser.selected_paths,
         HashSet::from([parent, child, PathBuf::from("/workspace/readme.txt")])
     );
+}
+
+#[test]
+fn column_select_all_uses_hovered_column_directory() {
+    let project = PathBuf::from("/workspace/project");
+    let sibling = PathBuf::from("/workspace/readme.txt");
+    let first_child = PathBuf::from("/workspace/project/a.txt");
+    let second_child = PathBuf::from("/workspace/project/b.txt");
+    let mut browser = browser_with_entries(&[project.clone(), sibling.clone()]);
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(sibling, FileKind::File),
+    ];
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![
+            test_entry(first_child.clone(), FileKind::File),
+            test_entry(second_child.clone(), FileKind::File),
+        ]),
+    );
+    browser.deepest_open_column_directory = Some(project.clone());
+    browser.cursor_paste_directory = Some(project.clone());
+
+    drop(browser.select_all_in_file_selection_scope());
+
+    assert_eq!(
+        browser.selected_paths,
+        HashSet::from([first_child.clone(), second_child])
+    );
+    assert_eq!(browser.selected, Some(first_child));
+    assert_eq!(browser.deepest_open_column_directory, Some(project));
+}
+
+#[test]
+fn column_select_all_hovered_directory_entry_stays_in_entry_column() {
+    let project = PathBuf::from("/workspace/project");
+    let sibling = PathBuf::from("/workspace/readme.txt");
+    let child = PathBuf::from("/workspace/project/main.rs");
+    let mut browser = browser_with_entries(&[project.clone(), sibling.clone()]);
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(sibling.clone(), FileKind::File),
+    ];
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(child, FileKind::File)]),
+    );
+    browser.deepest_open_column_directory = Some(project.clone());
+    browser.hovered_entry = Some(project.clone());
+    browser.cursor_paste_directory = Some(project.clone());
+
+    drop(browser.select_all_in_file_selection_scope());
+
+    assert_eq!(browser.selected_paths, HashSet::from([project, sibling]));
 }

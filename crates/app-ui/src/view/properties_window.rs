@@ -16,7 +16,7 @@ use crate::model::{
     FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
     FilePropertiesLoadState, FilePropertiesPermissionAccess, FilePropertiesPermissionClass,
     FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesSnapshot,
-    FilePropertiesState, Message, ScrollbarVisibility,
+    FilePropertiesState, Message, ScrollbarRegion, ScrollbarVisibility,
 };
 use crate::typography::readable_text;
 
@@ -243,7 +243,12 @@ fn properties_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
-    auxiliary_detail_scroller(content, scrollbar_visibility, Message::PropertiesScrolled)
+    auxiliary_detail_scroller(
+        content,
+        ScrollbarRegion::Properties,
+        scrollbar_visibility,
+        Message::PropertiesScrolled,
+    )
 }
 
 fn displayed_permissions(

@@ -1,5 +1,3 @@
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use file_core::{DirectoryEntry, FileKind};
@@ -7,6 +5,7 @@ use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, R
 use iced::{Alignment, Element, Length};
 
 use crate::app::panes::BrowserPaneView;
+use crate::app::smooth_scroll::{smooth_scroll_content_with_shift, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
@@ -89,16 +88,20 @@ pub(crate) fn column_browser_view<'a>(
 
     let scrollbar_region = ScrollbarRegion::ColumnBrowser(pane.id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
-    let column_content: Element<'_, Message> = scrollable(columns)
-        .id(column_browser_scroll_id(pane.id))
-        .direction(auto_hide_horizontal_scrollbar_direction(
-            scrollbar_visibility,
-            8.0,
-        ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+    let column_content: Element<'_, Message> = scrollable(smooth_scroll_content_with_shift(
+        columns,
+        scrollbar_region.clone(),
+        browser.smooth_scroll_shift_pressed(),
+    ))
+    .id(column_browser_scroll_id(pane.id))
+    .direction(auto_hide_horizontal_scrollbar_direction(
+        scrollbar_visibility,
+        8.0,
+    ))
+    .style(auto_hide_scrollbar_style(scrollbar_visibility))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into();
     let column_content = if sidebar_underlay_width > f32::EPSILON {
         translated_with_width_overflow(
             column_content,
@@ -222,19 +225,23 @@ fn directory_column<'a>(
     };
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let scroll_directory = directory.to_path_buf();
-    let column_scroll = scrollable(content)
-        .id(column_scroll_id(pane.id, directory))
-        .direction(auto_hide_vertical_scrollbar_direction(
-            scrollbar_visibility,
-            8.0,
-        ))
-        .height(Length::Fill)
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .on_scroll(move |viewport| {
-            let offset = viewport.absolute_offset();
-            let bounds = viewport.bounds();
-            Message::ColumnScrolled(pane.id, scroll_directory.clone(), offset.y, bounds.height)
-        });
+    let column_scroll = scrollable(smooth_scroll_content_with_shift(
+        content,
+        scrollbar_region.clone(),
+        browser.smooth_scroll_shift_pressed(),
+    ))
+    .id(smooth_scroll_id(&scrollbar_region))
+    .direction(auto_hide_vertical_scrollbar_direction(
+        scrollbar_visibility,
+        8.0,
+    ))
+    .height(Length::Fill)
+    .style(auto_hide_scrollbar_style(scrollbar_visibility))
+    .on_scroll(move |viewport| {
+        let offset = viewport.absolute_offset();
+        let bounds = viewport.bounds();
+        Message::ColumnScrolled(pane.id, scroll_directory.clone(), offset.y, bounds.height)
+    });
 
     let column = container(column_scroll)
         .width(Length::Fixed(browser.column_width(column_index)))
@@ -521,34 +528,6 @@ fn active_child_for_column(
         return Some(selected.to_path_buf());
     }
     None
-}
-
-fn column_scroll_id(pane_id: BrowserPaneId, directory: &Path) -> iced::widget::Id {
-    iced::widget::Id::from(format!(
-        "column-scroll-{}-{}",
-        pane_id.key(),
-        path_hash(directory)
-    ))
-}
-
-fn path_hash(path: &Path) -> String {
-    #[cfg(unix)]
-    {
-        hash_bytes(path.as_os_str().as_bytes())
-    }
-    #[cfg(not(unix))]
-    {
-        hash_bytes(path.to_string_lossy().as_bytes())
-    }
-}
-
-fn hash_bytes(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
 }
 
 enum ColumnContent<'a> {

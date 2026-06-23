@@ -7,6 +7,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Length};
 
 use crate::app::archive_creation::ArchiveCreationMessage;
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
     context_menu_style, error_notification_style,
@@ -15,7 +16,7 @@ use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
-    FileContextMenuExpansion, FileContextMenuState, Message, ScrollbarVisibility,
+    FileContextMenuExpansion, FileContextMenuState, Message, ScrollbarRegion, ScrollbarVisibility,
     SidebarBookmarkContextMenuState, TransferConflictChoice, TransferConflictItem,
     TransferConflictMetadata, TransferConflictState,
 };
@@ -328,7 +329,9 @@ fn open_with_application_list(
         );
     }
 
-    scrollable(applications)
+    let scroll_region = ScrollbarRegion::OpenWithApplications;
+    scrollable(smooth_scroll_content(applications, scroll_region.clone()))
+        .id(smooth_scroll_id(&scroll_region))
         .direction(auto_hide_vertical_scrollbar_direction(
             scrollbar_visibility,
             6.0,

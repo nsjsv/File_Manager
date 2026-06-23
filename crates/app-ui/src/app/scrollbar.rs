@@ -1,6 +1,5 @@
 use std::time::{Duration, Instant};
 
-use iced::mouse;
 use iced::Task;
 
 use super::runtime::scrollbar_auto_hide_command;
@@ -77,18 +76,6 @@ impl FileBrowser {
         }
 
         scrollbar_auto_hide_command(region, region_state.auto_hide_generation)
-    }
-
-    pub(super) fn handle_captured_wheel_scrolled(
-        &mut self,
-        delta: mouse::ScrollDelta,
-    ) -> Task<Message> {
-        let Some(scroll_task) = self.handle_column_browser_wheel_scrolled(delta) else {
-            return Task::none();
-        };
-        let region = ScrollbarRegion::ColumnBrowser(self.active_pane_id());
-
-        Task::batch([self.show_scrollbars_temporarily(region), scroll_task])
     }
 
     pub(super) fn start_scrollbar_hide(&mut self, region: ScrollbarRegion, generation: u64) {

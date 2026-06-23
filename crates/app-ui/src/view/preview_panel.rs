@@ -8,6 +8,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Length};
 
 use crate::animated_image_preview::AnimatedImagePreview;
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
     navigation_icon_button_style, preview_window_panel_style,
@@ -17,7 +18,8 @@ use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSy
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, NetworkPreviewDownload,
     PreviewContent, PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry,
-    ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    ScrollbarRegion, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
+    VideoPreviewPlaybackStatus,
 };
 use crate::typography::readable_text;
 
@@ -203,12 +205,16 @@ fn directory_preview_panel(
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Column<'static, Message> {
     let listing = preview_tree_listing(entries, "Empty directory");
+    let scroll_region = ScrollbarRegion::PreviewDirectory;
 
-    column![scrollable(listing)
-        .direction(preview_scroll_direction(scrollbar_visibility))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .height(Length::Fixed(scroll_height))
-        .on_scroll(|_| Message::PreviewDirectoryScrolled),]
+    column![
+        scrollable(smooth_scroll_content(listing, scroll_region.clone()))
+            .id(smooth_scroll_id(&scroll_region))
+            .direction(preview_scroll_direction(scrollbar_visibility))
+            .style(auto_hide_scrollbar_style(scrollbar_visibility))
+            .height(Length::Fixed(scroll_height))
+            .on_scroll(|_| Message::PreviewDirectoryScrolled),
+    ]
 }
 
 fn archive_preview_panel(
@@ -217,12 +223,16 @@ fn archive_preview_panel(
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Column<'static, Message> {
     let listing = preview_tree_listing(entries, "Empty archive");
+    let scroll_region = ScrollbarRegion::PreviewArchive;
 
-    column![scrollable(listing)
-        .direction(preview_scroll_direction(scrollbar_visibility))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .height(Length::Fixed(scroll_height))
-        .on_scroll(|_| Message::PreviewArchiveScrolled),]
+    column![
+        scrollable(smooth_scroll_content(listing, scroll_region.clone()))
+            .id(smooth_scroll_id(&scroll_region))
+            .direction(preview_scroll_direction(scrollbar_visibility))
+            .style(auto_hide_scrollbar_style(scrollbar_visibility))
+            .height(Length::Fixed(scroll_height))
+            .on_scroll(|_| Message::PreviewArchiveScrolled),
+    ]
 }
 
 fn preview_tree_listing(
