@@ -6,7 +6,7 @@ use iced::{Subscription, Task};
 
 use super::search_index_daemon;
 use crate::config::UserConfig;
-use crate::model::Message;
+use crate::model::{Message, SearchIndexProfileSaveReason};
 
 const DEFAULT_SEARCH_PROFILE_ID: &str = "default";
 
@@ -19,9 +19,10 @@ pub(crate) fn search_index_profile_load_command(config: UserConfig) -> Task<Mess
 pub(crate) fn search_index_profile_save_command(
     profile: IndexProfile,
     config: UserConfig,
+    reason: SearchIndexProfileSaveReason,
 ) -> Task<Message> {
-    Task::perform(save_search_index_profile(profile, config), |outcome| {
-        Message::SearchIndexProfileSaved(outcome)
+    Task::perform(save_search_index_profile(profile, config), move |outcome| {
+        Message::SearchIndexProfileSaved(reason, outcome)
     })
 }
 
@@ -70,7 +71,7 @@ pub(crate) fn default_search_index_profile(
     profile.exclude_patterns = config.search_index_exclude_patterns.clone();
     profile.directory_error_policy = config.search_index_directory_error_policy;
     profile.content.enabled = config.search_index_content_enabled;
-    profile.media.enabled = config.search_index_media_enabled;
+    profile.media.scope = config.search_index_media_scope;
     profile
 }
 

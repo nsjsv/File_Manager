@@ -88,12 +88,19 @@ impl SearchCatalog {
 }
 
 impl SearchCatalogRecord {
-    pub(crate) fn from_path(root: &Path, path: PathBuf, kind: FileKind) -> Self {
-        let (mtime_ms, size_bytes) = std::fs::symlink_metadata(&path)
-            .ok()
-            .map(|metadata| (metadata_mtime_ms(&metadata), Some(metadata.len())))
-            .unwrap_or((None, None));
-        Self::from_path_with_index_metadata(root, path, kind, mtime_ms, size_bytes)
+    pub(crate) fn from_path_with_metadata(
+        root: &Path,
+        path: PathBuf,
+        kind: FileKind,
+        metadata: &std::fs::Metadata,
+    ) -> Self {
+        Self::from_path_with_index_metadata(
+            root,
+            path,
+            kind,
+            metadata_mtime_ms(metadata),
+            Some(metadata.len()),
+        )
     }
 
     pub(crate) fn from_path_with_index_metadata(

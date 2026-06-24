@@ -7,16 +7,41 @@ use crate::model::{Message, SearchModePromptState, SettingsCategory};
 impl FileBrowser {
     pub(super) fn refresh_search_mode_prompt(&mut self) -> Task<Message> {
         if self.user_config.search_mode_prompt == SearchModePromptStatus::Pending {
-            self.search_mode_prompt = Some(SearchModePromptState);
+            if self.search_mode_prompt.is_none() {
+                self.search_mode_prompt = Some(SearchModePromptState::default());
+            }
         } else {
             self.search_mode_prompt = None;
         }
         Task::none()
     }
 
+    pub(super) fn select_search_mode_prompt_mode(
+        &mut self,
+        mode: SearchBackendMode,
+    ) -> Task<Message> {
+        if let Some(prompt) = &mut self.search_mode_prompt {
+            prompt.selected_mode = Some(mode);
+        }
+        Task::none()
+    }
+
+    pub(super) fn accept_search_mode_prompt(&mut self) -> Task<Message> {
+        match self
+            .search_mode_prompt
+            .as_ref()
+            .and_then(|prompt| prompt.selected_mode)
+        {
+            Some(SearchBackendMode::Simple) => self.select_simple_search_from_prompt(),
+            Some(SearchBackendMode::Indexed) => self.select_indexed_search_from_prompt(),
+            None => Task::none(),
+        }
+    }
+
     pub(super) fn select_simple_search_from_prompt(&mut self) -> Task<Message> {
         self.search_mode_prompt = None;
         self.startup_index_setup = None;
+        self.search_index.pending_startup_index_builds.clear();
         self.user_config.search_mode = SearchBackendMode::Simple;
         self.user_config.search_mode_prompt = SearchModePromptStatus::Completed;
         self.search_index.service_generation = self.search_index.service_generation.wrapping_add(1);
@@ -26,10 +51,8 @@ impl FileBrowser {
     pub(super) fn select_indexed_search_from_prompt(&mut self) -> Task<Message> {
         self.search_mode_prompt = None;
         self.user_config.search_mode = SearchBackendMode::Indexed;
-        self.user_config.search_mode_prompt = SearchModePromptStatus::Completed;
         self.search_index.service_generation = self.search_index.service_generation.wrapping_add(1);
         Task::batch([
-            self.persist_user_config_command(),
             self.load_search_index_profile_for_mode(),
             self.refresh_startup_index_setup_choices(),
         ])
@@ -79,6 +102,7 @@ impl FileBrowser {
         self.search_index.maintenance_paused = false;
         self.search_index.status_loading_roots.clear();
         self.search_index.indexing_roots.clear();
+        self.search_index.pending_startup_index_builds.clear();
         if let Some(search) = &mut self.search {
             if search.mode != crate::model::SearchMode::Files {
                 search.mode = crate::model::SearchMode::Files;
@@ -99,14 +123,18 @@ mod tests {
 
     use super::*;
     use crate::config;
-    use crate::model::{SearchMode, SearchScope, SearchState};
+    use crate::model::{
+        SearchMode, SearchScope, SearchState, SidebarLocation, SidebarLocationKind,
+    };
 
     #[test]
     fn selecting_simple_from_prompt_completes_prompt_without_index_setup() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        browser.search_mode_prompt = Some(SearchModePromptState);
+        browser.search_mode_prompt = Some(SearchModePromptState {
+            selected_mode: Some(SearchBackendMode::Simple),
+        });
 
-        let _task = browser.select_simple_search_from_prompt();
+        let _task = browser.accept_search_mode_prompt();
 
         assert_eq!(browser.user_config.search_mode, SearchBackendMode::Simple);
         assert_eq!(
@@ -120,20 +148,39 @@ mod tests {
     #[test]
     fn selecting_indexed_from_prompt_opens_startup_index_setup() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        browser.search_mode_prompt = Some(SearchModePromptState);
-        browser.sidebar_locations = vec![crate::sidebar::home_sidebar_location(
-            PathBuf::from("/home/user").as_path(),
-        )];
+        browser.search_mode_prompt = Some(SearchModePromptState {
+            selected_mode: Some(SearchBackendMode::Indexed),
+        });
+        browser.sidebar_locations = vec![SidebarLocation {
+            label: "Documents".to_owned(),
+            path: PathBuf::from("/home/user/Documents"),
+            kind: SidebarLocationKind::Documents,
+        }];
 
-        let _task = browser.select_indexed_search_from_prompt();
+        let _task = browser.accept_search_mode_prompt();
 
         assert_eq!(browser.user_config.search_mode, SearchBackendMode::Indexed);
         assert_eq!(
             browser.user_config.search_mode_prompt,
-            SearchModePromptStatus::Completed
+            SearchModePromptStatus::Pending
         );
         assert!(browser.search_mode_prompt.is_none());
         assert!(browser.startup_index_setup.is_some());
+    }
+
+    #[test]
+    fn prompt_next_without_selection_does_not_commit_mode() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.search_mode_prompt = Some(SearchModePromptState::default());
+
+        let _task = browser.accept_search_mode_prompt();
+
+        assert_eq!(
+            browser.user_config.search_mode_prompt,
+            SearchModePromptStatus::Pending
+        );
+        assert!(browser.search_mode_prompt.is_some());
+        assert!(browser.startup_index_setup.is_none());
     }
 
     #[test]
@@ -148,7 +195,7 @@ mod tests {
         browser
             .search_index
             .status_loading_roots
-            .insert(PathBuf::from("/home/user"));
+            .insert(PathBuf::from("/home/user"), 1);
         browser.search = Some(SearchState {
             scope: SearchScope::CurrentDirectory,
             mode: SearchMode::Contents,

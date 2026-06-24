@@ -6,7 +6,7 @@ use desktop_linux::{
     NetworkProtocol, TerminalEmulator,
 };
 use file_core::FileOperationVerification;
-use file_index::DirectoryErrorPolicy;
+use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 
 use crate::network_connections::SavedNetworkConnection;
 
@@ -18,6 +18,7 @@ fn parses_toml_user_config() {
         r#"
 search_index_dir = "/tmp/search-index"
 search_index_directory_error_policy = "abort"
+search_index_media_scope = "images"
 search_mode = "indexed"
 search_mode_prompt = "completed"
 thumbnail_cache_dir = "/tmp/thumbnails"
@@ -38,6 +39,7 @@ browser_view_mode = "list"
         parsed.search_index_directory_error_policy,
         DirectoryErrorPolicy::Abort
     );
+    assert_eq!(parsed.search_index_media_scope, MediaMetadataScope::Images);
     assert_eq!(parsed.search_mode, SearchBackendMode::Indexed);
     assert_eq!(parsed.search_mode_prompt, SearchModePromptStatus::Completed);
     assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
@@ -135,6 +137,14 @@ browser_view_mode = "cover-flow"
 }
 
 #[test]
+fn legacy_search_index_media_enabled_reads_as_all_scope() {
+    let parsed =
+        parse_toml_user_config("search_index_media_enabled = true\n", default_user_config());
+
+    assert_eq!(parsed.search_index_media_scope, MediaMetadataScope::All);
+}
+
+#[test]
 fn writes_toml_user_config_without_column_width_overrides() {
     let temp_dir = tempfile::tempdir().expect("create temp config dir");
     let path = temp_dir.path().join("config.toml");
@@ -151,6 +161,8 @@ fn writes_toml_user_config_without_column_width_overrides() {
     assert!(content.contains("search_mode = \"simple\"\n"));
     assert!(content.contains("search_mode_prompt = \"pending\"\n"));
     assert!(content.contains("search_index_directory_error_policy = \"skip_unreadable\"\n"));
+    assert!(content.contains("search_index_media_scope = \"off\"\n"));
+    assert!(!content.contains("search_index_media_enabled"));
     assert!(content.contains("rendering_backend = \"gpu\"\n"));
     assert!(content.contains("file_operation_verification = \"basic_metadata\"\n"));
     assert!(content.contains("browser_view_mode = \"columns\"\n"));

@@ -270,7 +270,7 @@ fn search_index_status(
         include_hidden: false,
         content_index_enabled: false,
         content_max_file_bytes: 16 * 1024 * 1024,
-        media_index_enabled: false,
+        media_metadata_scope: file_index::MediaMetadataScope::Off,
         record_count: 0,
         index_size_bytes: 0,
         built_at_ms: None,

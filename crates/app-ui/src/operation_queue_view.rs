@@ -54,7 +54,7 @@ pub(crate) fn operation_queue_panel(
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     let header = row![
-        readable_text("File Tasks").size(16).width(Length::Fill),
+        readable_text("Tasks").size(16).width(Length::Fill),
         readable_text(format!("{} tasks", queue.task_count())).size(12),
     ]
     .spacing(8)
@@ -109,17 +109,8 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
     .spacing(2)
     .width(Length::Fill);
 
-    let progress = progress_bar(
-        0.0..=1.0,
-        task.progress.fraction().unwrap_or_else(|| {
-            if task.status == FileOperationStatus::Failed {
-                1.0
-            } else {
-                0.0
-            }
-        }),
-    )
-    .girth(Length::Fixed(3.0));
+    let progress =
+        progress_bar(0.0..=1.0, task.progress.display_fraction()).girth(Length::Fixed(3.0));
 
     let mut body = column![title, paths, progress]
         .spacing(4)
@@ -163,7 +154,7 @@ fn path_line_text(label: &'static str, path: &str) -> String {
 }
 
 fn empty_queue_row() -> Element<'static, Message> {
-    container(readable_text("No file tasks").size(13).width(Length::Fill))
+    container(readable_text("No tasks").size(13).width(Length::Fill))
         .padding(10)
         .width(Length::Fill)
         .style(path_suggestion_item_style)

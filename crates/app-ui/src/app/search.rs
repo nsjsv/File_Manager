@@ -198,7 +198,7 @@ impl FileBrowser {
         self.search_index.indexing_roots.remove(&root);
         match outcome {
             Ok(outcome) => {
-                self.search_index.errors.remove(&root);
+                self.search_index.root_errors.remove(&root);
                 let mut reload_search = false;
                 if let Some(search) = self.active_search_mut_for_root(&root) {
                     search.is_indexing = false;
@@ -208,7 +208,7 @@ impl FileBrowser {
                     }
                     reload_search = true;
                 }
-                let status_command = self.refresh_search_index_status_for_root(root.clone());
+                let status_command = self.force_refresh_search_index_status_for_root(root.clone());
                 return if reload_search {
                     Task::batch([self.load_search_matches(), status_command])
                 } else {
@@ -218,7 +218,7 @@ impl FileBrowser {
             Err(error) => {
                 let message = format!("Failed to build search index: {error}");
                 self.search_index
-                    .errors
+                    .root_errors
                     .insert(root.clone(), message.clone());
                 if let Some(search) = self.active_search_mut_for_root(&root) {
                     search.is_loading = false;
@@ -385,7 +385,7 @@ impl FileBrowser {
 
     pub(super) fn ensure_search_index(&mut self, root: PathBuf) -> Task<Message> {
         if !self.search_index_root_is_allowed(&root) {
-            self.search_index.errors.insert(
+            self.search_index.root_errors.insert(
                 root.clone(),
                 "Only paths under your home directory can be indexed.".to_owned(),
             );
@@ -408,7 +408,7 @@ impl FileBrowser {
         }
 
         self.search_index.indexing_roots.insert(root.clone());
-        self.search_index.errors.remove(&root);
+        self.search_index.root_errors.remove(&root);
         self.sync_active_search_index_status();
         search_index_command(
             root,
@@ -488,7 +488,7 @@ impl FileBrowser {
 
     fn sync_active_search_index_status_for_root(&mut self, root: &Path) {
         let is_indexing = self.search_index.indexing_roots.contains(root);
-        let index_error = self.search_index.errors.get(root).cloned();
+        let index_error = self.search_index.root_errors.get(root).cloned();
         if let Some(search) = self.active_search_mut_for_root(root) {
             search.is_indexing = is_indexing;
             search.index_error = index_error;

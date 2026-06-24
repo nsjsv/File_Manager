@@ -5,7 +5,7 @@ use desktop_linux::{
     DisplayRendererGpu, NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator,
 };
 use file_core::FileOperationVerification;
-use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy};
+use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy, MediaMetadataScope};
 
 use crate::model::BrowserViewMode;
 use crate::network_connections::SavedNetworkConnection;
@@ -17,6 +17,7 @@ const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
 const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
 const SEARCH_INDEX_EXCLUDE_PATTERNS_KEY: &str = "search_index_exclude_patterns";
 const SEARCH_INDEX_CONTENT_ENABLED_KEY: &str = "search_index_content_enabled";
+const SEARCH_INDEX_MEDIA_SCOPE_KEY: &str = "search_index_media_scope";
 const SEARCH_INDEX_MEDIA_ENABLED_KEY: &str = "search_index_media_enabled";
 const SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY: &str = "search_index_directory_error_policy";
 const SEARCH_MODE_KEY: &str = "search_mode";
@@ -195,7 +196,7 @@ pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
     pub(crate) search_index_exclude_patterns: Vec<String>,
     pub(crate) search_index_content_enabled: bool,
-    pub(crate) search_index_media_enabled: bool,
+    pub(crate) search_index_media_scope: MediaMetadataScope,
     pub(crate) search_index_directory_error_policy: DirectoryErrorPolicy,
     pub(crate) search_mode: SearchBackendMode,
     pub(crate) search_mode_prompt: SearchModePromptStatus,
@@ -257,7 +258,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         search_index_dir: cache_base.join("search-index"),
         search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
         search_index_content_enabled: false,
-        search_index_media_enabled: false,
+        search_index_media_scope: MediaMetadataScope::Off,
         search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
         search_mode: SearchBackendMode::Simple,
         search_mode_prompt: SearchModePromptStatus::Pending,
@@ -281,7 +282,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         search_index_dir: PathBuf::new(),
         search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
         search_index_content_enabled: false,
-        search_index_media_enabled: false,
+        search_index_media_scope: MediaMetadataScope::Off,
         search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
         search_mode: SearchBackendMode::Simple,
         search_mode_prompt: SearchModePromptStatus::Pending,
@@ -384,11 +385,19 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
     {
         config.search_index_content_enabled = value;
     }
-    if let Some(value) = document
+    if let Some(value) = toml_string(&document, SEARCH_INDEX_MEDIA_SCOPE_KEY) {
+        if let Some(scope) = MediaMetadataScope::from_config_value(value) {
+            config.search_index_media_scope = scope;
+        }
+    } else if let Some(value) = document
         .get(SEARCH_INDEX_MEDIA_ENABLED_KEY)
         .and_then(toml::Value::as_bool)
     {
-        config.search_index_media_enabled = value;
+        config.search_index_media_scope = if value {
+            MediaMetadataScope::All
+        } else {
+            MediaMetadataScope::Off
+        };
     }
     if let Some(value) = toml_string(&document, SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY) {
         if let Some(policy) = DirectoryErrorPolicy::from_config_value(value) {
@@ -513,8 +522,8 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
         toml::Value::Boolean(config.search_index_content_enabled),
     );
     document.insert(
-        SEARCH_INDEX_MEDIA_ENABLED_KEY.to_string(),
-        toml::Value::Boolean(config.search_index_media_enabled),
+        SEARCH_INDEX_MEDIA_SCOPE_KEY.to_string(),
+        toml::Value::String(config.search_index_media_scope.config_value().to_string()),
     );
     document.insert(
         SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY.to_string(),

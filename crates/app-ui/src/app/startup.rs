@@ -87,8 +87,9 @@ impl FileBrowser {
         sidebar_locations: Vec<SidebarLocation>,
     ) -> Task<Message> {
         self.sidebar_locations = sidebar_locations;
-        if self.user_config.search_mode == SearchBackendMode::Indexed
-            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed
+        if self.startup_index_setup.is_some()
+            || (self.user_config.search_mode == SearchBackendMode::Indexed
+                && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed)
         {
             self.refresh_startup_index_setup_choices()
         } else {
@@ -113,7 +114,7 @@ impl FileBrowser {
                 for task in self.operation_queue.tasks() {
                     if let QueuedFileOperation::BuildSearchIndex { root, .. } = &task.operation {
                         self.search_index.indexing_roots.insert(root.clone());
-                        self.search_index.errors.remove(root);
+                        self.search_index.root_errors.remove(root);
                     }
                 }
                 let restored_queue_command =
@@ -160,7 +161,7 @@ impl FileBrowser {
         self.search_index.base_dir = user_config.search_index_dir.clone();
         self.search_index.directory_error_policy = user_config.search_index_directory_error_policy;
         self.search_index.content_index_enabled = user_config.search_index_content_enabled;
-        self.search_index.media_index_enabled = user_config.search_index_media_enabled;
+        self.search_index.media_metadata_scope = user_config.search_index_media_scope;
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
         self.sidebar_width = self.sidebar_width_for_window(user_config.sidebar_width);

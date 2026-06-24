@@ -14,7 +14,7 @@ use crate::search::{
     search_file_index, FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome,
     FileSearchIndexProgress, FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome,
 };
-use crate::watch::{watch_index_root, IndexFileChangeBatch};
+use crate::watch::{watch_index_root, IndexFileChangeBatch, WatchIndexRootOptions};
 use crate::IndexError;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +41,7 @@ pub struct BuildSelectedPathsRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexServiceCommand {
+    Ping,
     ConfigureProfile(IndexProfile),
     LoadProfile(String),
     Query(SearchQuery),
@@ -51,11 +52,13 @@ pub enum IndexServiceCommand {
     RemoveRoot { profile_id: String, root: PathBuf },
     Pause,
     Resume,
+    StartMaintenance { profile_id: String },
     DeleteProfile(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexServiceEvent {
+    Pong,
     ProfileConfigured(String),
     ProfileLoaded(Option<IndexProfile>),
     QueryFinished(FileSearchOutcome),
@@ -79,6 +82,9 @@ pub enum IndexServiceEvent {
     },
     Paused,
     Resumed,
+    MaintenanceStarted {
+        profile_id: String,
+    },
     ProfileDeleted(String),
     WatchStarted {
         profile_id: String,
@@ -141,6 +147,7 @@ impl IndexServiceCore {
     ) -> Result<IndexServiceEvent, IndexError> {
         match command {
             IndexServiceCommand::ConfigureProfile(profile) => self.configure_profile(profile),
+            IndexServiceCommand::Ping => Ok(IndexServiceEvent::Pong),
             IndexServiceCommand::LoadProfile(profile_id) => self.load_profile(&profile_id),
             IndexServiceCommand::Query(query) => self.query(query).await,
             IndexServiceCommand::Rebuild { profile_id, root } => {
@@ -160,6 +167,9 @@ impl IndexServiceCore {
             }
             IndexServiceCommand::Pause => self.pause(),
             IndexServiceCommand::Resume => self.resume(),
+            IndexServiceCommand::StartMaintenance { profile_id } => {
+                self.start_maintenance(&profile_id)
+            }
             IndexServiceCommand::DeleteProfile(id) => self.delete_profile(&id).await,
         }
     }
@@ -214,7 +224,7 @@ impl IndexServiceCore {
                 mode: query.mode,
                 content_index_enabled: profile.content.enabled,
                 content_max_file_bytes: profile.content.max_file_bytes,
-                media_index_enabled: profile.media.enabled,
+                media_metadata_scope: profile.media.scope,
             },
         )
         .await?;
@@ -388,6 +398,13 @@ impl IndexServiceCore {
         Ok(self.publish(IndexServiceEvent::Resumed))
     }
 
+    pub fn start_maintenance(&self, profile_id: &str) -> Result<IndexServiceEvent, IndexError> {
+        let _ = self.profile(profile_id)?;
+        Ok(self.publish(IndexServiceEvent::MaintenanceStarted {
+            profile_id: profile_id.to_owned(),
+        }))
+    }
+
     pub async fn delete_profile(&self, id: &str) -> Result<IndexServiceEvent, IndexError> {
         self.cancel_profile_maintenance(id);
         if let Some(profile) = self
@@ -439,18 +456,24 @@ impl IndexServiceCore {
             }
         };
 
-        for root in profile.roots {
+        for root in profile.roots.clone() {
             let service = self.clone();
-            let profile_id = profile.id.clone();
+            let profile = profile.clone();
             let token = token.child_token();
             tokio::spawn(async move {
-                service.maintain_root_task(profile_id, root, token).await;
+                service.maintain_root_task(profile, root, token).await;
             });
         }
     }
 
-    async fn maintain_root_task(self, profile_id: String, root: PathBuf, token: CancellationToken) {
-        let mut watcher = match watch_index_root(&root) {
+    async fn maintain_root_task(
+        self,
+        profile: IndexProfile,
+        root: PathBuf,
+        token: CancellationToken,
+    ) {
+        let profile_id = profile.id.clone();
+        let mut watcher = match watch_index_root(&root, self.watch_options_for_profile(&profile)) {
             Ok(watcher) => watcher,
             Err(error) => {
                 let message = error.to_string();
@@ -468,19 +491,33 @@ impl IndexServiceCore {
                 return;
             }
         };
+        let registration_warnings = watcher.registration_warnings().to_vec();
 
+        let watch_status_message = if registration_warnings.is_empty() {
+            "watch started".to_owned()
+        } else {
+            format!(
+                "watch started with {} skipped path(s)",
+                registration_warnings.len()
+            )
+        };
         let _ = self.inner.profile_store.save_task_status(
             &profile_id,
             Some(&root),
             IndexTaskPhase::Queued,
-            Some("watch started"),
+            Some(&watch_status_message),
         );
         self.publish(IndexServiceEvent::WatchStarted {
             profile_id: profile_id.clone(),
             root: root.clone(),
         });
-        self.reconcile_root_after_startup(&profile_id, &root).await;
-
+        for warning in registration_warnings {
+            self.publish(IndexServiceEvent::WatchFailed {
+                profile_id: profile_id.clone(),
+                root: warning.path,
+                message: warning.message,
+            });
+        }
         loop {
             let batch = tokio::select! {
                 _ = token.cancelled() => break,
@@ -494,61 +531,6 @@ impl IndexServiceCore {
                 break;
             }
             self.apply_change_batch(&profile_id, &root, batch).await;
-        }
-    }
-
-    async fn reconcile_root_after_startup(&self, profile_id: &str, root: &Path) {
-        let index_dir = self.index_dir_for_root(root);
-        if !index_dir.join("catalog.sqlite").is_file() {
-            return;
-        }
-        self.wait_until_resumed().await;
-        self.publish(IndexServiceEvent::IncrementalUpdateStarted {
-            profile_id: profile_id.to_owned(),
-            root: root.to_path_buf(),
-            changed_paths: 1,
-        });
-        if let Err(error) = self.inner.profile_store.save_task_status(
-            profile_id,
-            Some(root),
-            IndexTaskPhase::Running,
-            Some("startup reconcile started"),
-        ) {
-            self.publish_incremental_failure(profile_id, root, error.to_string());
-            return;
-        }
-
-        let profile = match self.profile(profile_id) {
-            Ok(profile) => profile,
-            Err(error) => {
-                self.publish_incremental_failure(profile_id, root, error.to_string());
-                return;
-            }
-        };
-        let mut options = self.index_options_for_profile(&profile);
-        options.mode = FileSearchIndexMode::Incremental;
-        let outcome = build_file_search_index(root, index_dir, options).await;
-
-        match outcome {
-            Ok(outcome) => {
-                if let Err(error) = self.save_control_snapshot(profile_id, root, &profile).await {
-                    self.publish_incremental_failure(profile_id, root, error.to_string());
-                    return;
-                }
-                let _ = self.inner.profile_store.save_task_status(
-                    profile_id,
-                    Some(root),
-                    IndexTaskPhase::Finished,
-                    Some("startup reconcile finished"),
-                );
-                self.publish(IndexServiceEvent::IncrementalUpdateFinished {
-                    profile_id: profile_id.to_owned(),
-                    outcome,
-                });
-            }
-            Err(error) => {
-                self.publish_incremental_failure(profile_id, root, error.to_string());
-            }
         }
     }
 
@@ -651,10 +633,20 @@ impl IndexServiceCore {
             include_hidden: profile.include_hidden,
             exclude_patterns: profile.exclude_patterns.clone(),
             directory_error_policy: profile.directory_error_policy,
+            excluded_index_dir: Some(self.inner.index_base_dir.clone()),
             content_index_enabled: profile.content.enabled,
             content_max_file_bytes: profile.content.max_file_bytes,
-            media_index_enabled: profile.media.enabled,
+            media_metadata_scope: profile.media.scope,
             ..FileSearchIndexOptions::default()
+        }
+    }
+
+    fn watch_options_for_profile(&self, profile: &IndexProfile) -> WatchIndexRootOptions {
+        WatchIndexRootOptions {
+            include_hidden: profile.include_hidden,
+            exclude_patterns: profile.exclude_patterns.clone(),
+            directory_error_policy: profile.directory_error_policy,
+            excluded_index_dir: Some(self.inner.index_base_dir.clone()),
         }
     }
 

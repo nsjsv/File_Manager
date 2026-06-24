@@ -1,21 +1,22 @@
-use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, Column, Space,
-};
+use iced::widget::{checkbox, column, container, mouse_area, row, scrollable, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
-    context_menu_style,
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view};
 use crate::model::{
-    Message, ScrollbarRegion, ScrollbarVisibility, StartupIndexDirectoryChildren,
-    StartupIndexSetupState, StartupIndexTreeEntry,
+    Message, ScrollbarRegion, ScrollbarVisibility, StartupIndexCapability,
+    StartupIndexDirectoryChildren, StartupIndexSetupState, StartupIndexTargetMode,
+    StartupIndexTreeEntry,
 };
 use crate::typography::readable_text;
 
+use super::option_controls::{
+    inactive_primary_action_button, primary_action_button, selectable_choice_row,
+};
 use super::toggle_switch::switch_control;
 use super::{icon_tone_style, themed_icon, IconTone};
 
@@ -32,62 +33,132 @@ pub(super) fn startup_index_setup_panel(
     setup: &StartupIndexSetupState,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
-    let tree = startup_index_tree_listing(setup);
-    let header = row![
-        readable_text("Build a search index?")
-            .size(16)
-            .width(Length::Fill),
-        startup_index_hidden_content_toggle(setup.show_hidden_entries),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-
-    let build_button = button(readable_text("Build selected indexes").size(12))
-        .padding([6, 10])
-        .style(context_menu_button_style());
-    let build_button = if setup.has_selected_entries() {
-        build_button.on_press(Message::StartupIndexAccepted)
+    let build_button = if setup.can_accept() {
+        primary_action_button("Start indexing", Message::StartupIndexAccepted)
     } else {
-        build_button
+        inactive_primary_action_button("Start indexing")
     };
 
-    let actions = row![
-        Space::new().width(Length::Fill),
-        button(readable_text("Do not build").size(12))
-            .on_press(Message::StartupIndexSkipped)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
-        build_button,
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
+    let actions = row![Space::new().width(Length::Fill), build_button]
+        .spacing(6)
+        .align_y(Alignment::Center);
 
-    let scroll_region = ScrollbarRegion::StartupIndexSetup;
-    let content = column![
-        header,
-        readable_text(
-            "Indexing lets search return filename and path matches quickly. Expand folders and choose the content to index now."
-        )
-        .size(13),
-        scrollable(smooth_scroll_content(tree, scroll_region.clone()))
-            .id(smooth_scroll_id(&scroll_region))
-            .direction(auto_hide_vertical_scrollbar_direction(
-                scrollbar_visibility,
-                6.0,
-            ))
-            .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(STARTUP_INDEX_TREE_HEIGHT))
-            .on_scroll(|_| Message::StartupIndexSetupScrolled),
-        actions,
+    let mut content = column![
+        readable_text("Build a search index?").size(16),
+        startup_index_target_choices(setup),
     ]
     .spacing(12)
     .width(Length::Fill);
+
+    if setup.target_mode.is_some() {
+        content = content.push(startup_index_capability_choices(setup));
+    }
+
+    if setup.capability.is_some() {
+        match setup.target_mode {
+            Some(StartupIndexTargetMode::Common) => {
+                content = content.push(startup_index_common_roots_listing(setup));
+            }
+            Some(StartupIndexTargetMode::Custom) => {
+                let scroll_region = ScrollbarRegion::StartupIndexSetup;
+                content = content
+                    .push(startup_index_hidden_content_toggle(
+                        setup.show_hidden_entries,
+                    ))
+                    .push(
+                        scrollable(smooth_scroll_content(
+                            startup_index_tree_listing(setup),
+                            scroll_region.clone(),
+                        ))
+                        .id(smooth_scroll_id(&scroll_region))
+                        .direction(auto_hide_vertical_scrollbar_direction(
+                            scrollbar_visibility,
+                            6.0,
+                        ))
+                        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+                        .height(Length::Fixed(STARTUP_INDEX_TREE_HEIGHT))
+                        .on_scroll(|_| Message::StartupIndexSetupScrolled),
+                    );
+            }
+            None => {}
+        }
+    }
+
+    content = content.push(actions);
 
     container(content)
         .padding(14)
         .width(Length::Fixed(STARTUP_INDEX_PANEL_WIDTH))
         .style(context_menu_style)
         .into()
+}
+
+fn startup_index_target_choices(setup: &StartupIndexSetupState) -> Column<'static, Message> {
+    column![
+        selectable_choice_row(
+            "Common locations",
+            "Desktop, documents, downloads, media, and user config.",
+            setup.target_mode == Some(StartupIndexTargetMode::Common),
+            Message::StartupIndexTargetModeSelected(StartupIndexTargetMode::Common),
+        ),
+        selectable_choice_row(
+            "Custom selection",
+            "Choose folders or files from Home.",
+            setup.target_mode == Some(StartupIndexTargetMode::Custom),
+            Message::StartupIndexTargetModeSelected(StartupIndexTargetMode::Custom),
+        ),
+    ]
+    .spacing(6)
+}
+
+fn startup_index_capability_choices(setup: &StartupIndexSetupState) -> Column<'static, Message> {
+    column![
+        selectable_choice_row(
+            "Filenames",
+            "Filename and path catalog.",
+            setup.capability == Some(StartupIndexCapability::Filenames),
+            Message::StartupIndexCapabilitySelected(StartupIndexCapability::Filenames),
+        ),
+        selectable_choice_row(
+            "Filenames + text",
+            "Filename and text content catalog.",
+            setup.capability == Some(StartupIndexCapability::Text),
+            Message::StartupIndexCapabilitySelected(StartupIndexCapability::Text),
+        ),
+        selectable_choice_row(
+            "Filenames + text + images",
+            "Filename, text content, and image metadata catalog.",
+            setup.capability == Some(StartupIndexCapability::TextAndImageMetadata),
+            Message::StartupIndexCapabilitySelected(StartupIndexCapability::TextAndImageMetadata),
+        ),
+    ]
+    .spacing(6)
+}
+
+fn startup_index_common_roots_listing(setup: &StartupIndexSetupState) -> Column<'static, Message> {
+    let mut listing = Column::new().spacing(4).width(Length::Fill);
+    if setup.common_roots.is_empty() {
+        return listing.push(readable_text("No common locations found").size(13));
+    }
+    for root in &setup.common_roots {
+        listing = listing.push(
+            container(
+                row![
+                    readable_text(&root.label).size(13).width(Length::Fill),
+                    readable_text(format_middle_ellipsized_text(
+                        &root.path.to_string_lossy(),
+                        STARTUP_INDEX_STATUS_MAX_CHARS,
+                    ))
+                    .size(11),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .padding([2, 4])
+            .width(Length::Fill),
+        );
+    }
+    listing
 }
 
 fn startup_index_tree_listing(setup: &StartupIndexSetupState) -> Column<'static, Message> {
@@ -150,33 +221,30 @@ fn startup_index_tree_entry_row(entry: &StartupIndexTreeEntry) -> Element<'stati
     ));
     let toggle = startup_index_directory_toggle(entry);
     let entry_id = entry.id;
-    let selector = checkbox(entry.selection.is_selected())
-        .on_toggle(move |_| Message::StartupIndexEntryToggled(entry_id));
-    let label = mouse_area(
-        container(
-            row![
-                themed_icon(
-                    preview_entry_icon_symbol(entry.kind, &entry.name),
-                    IconTone::Normal,
-                    STARTUP_INDEX_ICON_SIZE,
-                ),
-                readable_text(name).size(14).width(Length::Fill),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill),
+    let selector = checkbox(entry.selection.is_selected());
+    let label = container(
+        row![
+            themed_icon(
+                preview_entry_icon_symbol(entry.kind, &entry.name),
+                IconTone::Normal,
+                STARTUP_INDEX_ICON_SIZE,
+            ),
+            readable_text(name).size(14).width(Length::Fill),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
     )
-    .on_press(Message::StartupIndexEntryToggled(entry_id))
-    .interaction(iced::mouse::Interaction::Pointer);
+    .width(Length::Fill);
 
     let row_content = row![indent, toggle, selector, label]
         .spacing(4)
         .align_y(Alignment::Center);
 
-    container(row_content)
-        .padding([1, 4])
-        .width(Length::Fill)
+    mouse_area(container(row_content).padding([1, 4]).width(Length::Fill))
+        .on_press(Message::StartupIndexEntryPressed(entry_id))
+        .on_enter(Message::StartupIndexEntryEntered(entry_id))
+        .on_release(Message::StartupIndexEntrySelectionDragFinished)
+        .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }
 

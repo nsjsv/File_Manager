@@ -6,7 +6,9 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
+use crate::search::{watchable_search_directories, DirectoryErrorPolicy, SearchCrawlOptions};
 use crate::IndexError;
+use file_core::ScanWarning;
 
 const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(750);
 
@@ -18,31 +20,71 @@ pub(crate) struct IndexFileChangeBatch {
 pub(crate) struct IndexWatcher {
     _watcher: RecommendedWatcher,
     changes: mpsc::UnboundedReceiver<IndexFileChangeBatch>,
+    registration_warnings: Vec<ScanWarning>,
 }
 
 impl IndexWatcher {
     pub(crate) async fn recv(&mut self) -> Option<IndexFileChangeBatch> {
         self.changes.recv().await
     }
+
+    pub(crate) fn registration_warnings(&self) -> &[ScanWarning] {
+        &self.registration_warnings
+    }
 }
 
-pub(crate) fn watch_index_root(root: &Path) -> Result<IndexWatcher, IndexError> {
-    watch_index_root_with_debounce(root, DEFAULT_DEBOUNCE)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WatchIndexRootOptions {
+    pub(crate) include_hidden: bool,
+    pub(crate) exclude_patterns: Vec<String>,
+    pub(crate) directory_error_policy: DirectoryErrorPolicy,
+    pub(crate) excluded_index_dir: Option<PathBuf>,
+}
+
+impl Default for WatchIndexRootOptions {
+    fn default() -> Self {
+        Self {
+            include_hidden: false,
+            exclude_patterns: Vec::new(),
+            directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+            excluded_index_dir: None,
+        }
+    }
+}
+
+pub(crate) fn watch_index_root(
+    root: &Path,
+    options: WatchIndexRootOptions,
+) -> Result<IndexWatcher, IndexError> {
+    watch_index_root_with_debounce(root, options, DEFAULT_DEBOUNCE)
 }
 
 #[cfg(test)]
 pub(crate) fn watch_index_root_for_test(
     root: &Path,
+    options: WatchIndexRootOptions,
     debounce: Duration,
 ) -> Result<IndexWatcher, IndexError> {
-    watch_index_root_with_debounce(root, debounce)
+    watch_index_root_with_debounce(root, options, debounce)
 }
 
 fn watch_index_root_with_debounce(
     root: &Path,
+    options: WatchIndexRootOptions,
     debounce: Duration,
 ) -> Result<IndexWatcher, IndexError> {
     let root = root.to_path_buf();
+    let (directories, mut registration_warnings) = watchable_search_directories(
+        &root,
+        &SearchCrawlOptions {
+            include_hidden: options.include_hidden,
+            exclude_patterns: options.exclude_patterns.clone(),
+            directory_error_policy: options.directory_error_policy,
+            excluded_index_dir: options.excluded_index_dir.clone(),
+            throttle: false,
+            cancel: None,
+        },
+    )?;
     let (raw_tx, raw_rx) = mpsc::unbounded_channel();
     let (change_tx, change_rx) = mpsc::unbounded_channel();
     let callback_root = root.clone();
@@ -63,15 +105,24 @@ fn watch_index_root_with_debounce(
     })
     .map_err(|error| IndexError::store(&root, error))?;
 
-    watcher
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|error| IndexError::store(&root, error))?;
+    for directory in directories {
+        if let Err(error) = watcher.watch(&directory, RecursiveMode::NonRecursive) {
+            if directory == root || options.directory_error_policy == DirectoryErrorPolicy::Abort {
+                return Err(IndexError::store(&directory, error));
+            }
+            registration_warnings.push(ScanWarning {
+                path: directory,
+                message: error.to_string(),
+            });
+        }
+    }
 
     tokio::spawn(coalesce_index_changes(raw_rx, change_tx, debounce));
 
     Ok(IndexWatcher {
         _watcher: watcher,
         changes: change_rx,
+        registration_warnings,
     })
 }
 
@@ -120,7 +171,12 @@ mod tests {
     #[tokio::test]
     async fn watcher_coalesces_create_and_modify_paths() {
         let dir = tempdir().unwrap();
-        let mut watcher = watch_index_root_for_test(dir.path(), Duration::from_millis(50)).unwrap();
+        let mut watcher = watch_index_root_for_test(
+            dir.path(),
+            WatchIndexRootOptions::default(),
+            Duration::from_millis(50),
+        )
+        .unwrap();
         let path = dir.path().join("note.txt");
 
         std::fs::write(&path, "one").unwrap();
@@ -131,5 +187,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(batch.paths.iter().any(|changed| changed == &path));
+    }
+
+    #[tokio::test]
+    async fn watcher_does_not_emit_changes_from_excluded_existing_directories() {
+        let dir = tempdir().unwrap();
+        let ignored = dir.path().join("node_modules");
+        std::fs::create_dir_all(&ignored).unwrap();
+        let mut watcher = watch_index_root_for_test(
+            dir.path(),
+            WatchIndexRootOptions {
+                exclude_patterns: vec!["node_modules/".to_owned()],
+                ..WatchIndexRootOptions::default()
+            },
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        std::fs::write(ignored.join("package.json"), "{}").unwrap();
+        let ignored_event = tokio::time::timeout(Duration::from_millis(250), watcher.recv()).await;
+        assert!(ignored_event.is_err());
+
+        let visible = dir.path().join("note.txt");
+        std::fs::write(&visible, "one").unwrap();
+        let batch = tokio::time::timeout(Duration::from_secs(5), watcher.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(batch.paths.iter().any(|changed| changed == &visible));
     }
 }

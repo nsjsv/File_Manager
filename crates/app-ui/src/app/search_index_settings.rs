@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use file_index::IndexProfile;
-use file_index::{FileSearchIndexMode, FileSearchIndexStatus};
+use file_index::{FileSearchIndexMode, MediaMetadataScope};
 use iced::Task;
 
 use super::FileBrowser;
@@ -10,17 +10,18 @@ use crate::commands::{
     clear_search_index_failures_command, default_search_index_profile, default_search_profile_id,
     remove_search_index_command, search_index_daemon_restart_command,
     search_index_daemon_status_command, search_index_profile_delete_command,
-    search_index_profile_save_command, search_index_status_command,
+    search_index_profile_save_command,
 };
 use crate::config::normalize_search_index_exclude_patterns;
 use crate::model::{
     Message, SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
-    SearchIndexPathRuleSelection, SettingsCategory,
+    SearchIndexPathRuleSelection, SearchIndexProfileSaveReason, SettingsCategory,
 };
 use crate::operation_queue::QueuedFileOperation;
 
 mod maintenance;
 mod path_rules;
+mod status;
 #[cfg(test)]
 mod tests;
 use path_rules::{
@@ -68,7 +69,7 @@ impl FileBrowser {
         for root in &self.search_index.indexing_roots {
             push_unique_root(&mut roots, &mut seen, root.clone());
         }
-        for root in self.search_index.errors.keys() {
+        for root in self.search_index.root_errors.keys() {
             push_unique_root(&mut roots, &mut seen, root.clone());
         }
 
@@ -117,34 +118,6 @@ impl FileBrowser {
         }
     }
 
-    pub(crate) fn refresh_search_index_status_for_root(&mut self, root: PathBuf) -> Task<Message> {
-        if self.user_config.search_mode != crate::config::SearchBackendMode::Indexed {
-            return Task::none();
-        }
-        if self.search_index.status_loading_roots.contains(&root) {
-            return Task::none();
-        }
-
-        self.search_index.status_loading_roots.insert(root.clone());
-        search_index_status_command(
-            root,
-            self.user_config.clone(),
-            self.search_index.profile_id.clone(),
-        )
-    }
-
-    pub(super) fn refresh_search_index_statuses(&mut self) -> Task<Message> {
-        if self.user_config.search_mode != crate::config::SearchBackendMode::Indexed {
-            return Task::none();
-        }
-        let roots = self.search_index_setting_roots();
-        let tasks = roots
-            .into_iter()
-            .map(|root| self.refresh_search_index_status_for_root(root))
-            .collect::<Vec<_>>();
-        Task::batch(tasks)
-    }
-
     pub(super) fn refresh_search_index_settings_statuses(&mut self) -> Task<Message> {
         Task::batch([
             self.refresh_search_index_daemon_status(),
@@ -187,25 +160,6 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn accept_search_index_status(
-        &mut self,
-        root: PathBuf,
-        outcome: Result<FileSearchIndexStatus, String>,
-    ) -> Task<Message> {
-        self.search_index.status_loading_roots.remove(&root);
-        match outcome {
-            Ok(status) => {
-                self.search_index.errors.remove(&root);
-                self.search_index.statuses.insert(root.clone(), status);
-            }
-            Err(error) => {
-                self.search_index.errors.insert(root.clone(), error);
-            }
-        }
-        self.sync_search_index_status_for_active_search(&root);
-        Task::none()
-    }
-
     pub(super) fn request_search_index_manual_build(
         &mut self,
         root: PathBuf,
@@ -224,7 +178,7 @@ impl FileBrowser {
         }
 
         self.search_index.indexing_roots.insert(root.clone());
-        self.search_index.errors.remove(&root);
+        self.search_index.root_errors.remove(&root);
         self.sync_search_index_status_for_active_search(&root);
         if !self.search_index.profile_roots.contains(&root) {
             self.search_index.sync_path_rule_order_with_current_rules();
@@ -251,13 +205,17 @@ impl FileBrowser {
             return Task::none();
         }
         if self.search_index.indexing_roots.contains(&root)
-            || self.search_index.status_loading_roots.contains(&root)
+            || self.search_index.status_loading_roots.contains_key(&root)
         {
             return Task::none();
         }
 
-        self.search_index.status_loading_roots.insert(root.clone());
+        self.search_index.status_generation = self.search_index.status_generation.wrapping_add(1);
+        self.search_index
+            .status_loading_roots
+            .insert(root.clone(), self.search_index.status_generation);
         remove_search_index_command(
+            self.search_index.status_generation,
             root,
             self.user_config.clone(),
             self.search_index.profile_id.clone(),
@@ -268,12 +226,16 @@ impl FileBrowser {
         if self.user_config.search_mode != crate::config::SearchBackendMode::Indexed {
             return Task::none();
         }
-        if self.search_index.status_loading_roots.contains(&root) {
+        if self.search_index.status_loading_roots.contains_key(&root) {
             return Task::none();
         }
 
-        self.search_index.status_loading_roots.insert(root.clone());
+        self.search_index.status_generation = self.search_index.status_generation.wrapping_add(1);
+        self.search_index
+            .status_loading_roots
+            .insert(root.clone(), self.search_index.status_generation);
         clear_search_index_failures_command(
+            self.search_index.status_generation,
             root,
             self.user_config.clone(),
             self.search_index.profile_id.clone(),
@@ -326,12 +288,15 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn toggle_search_index_media(&mut self, enabled: bool) -> Task<Message> {
-        if self.search_index.media_index_enabled == enabled {
+    pub(super) fn select_search_index_media_scope(
+        &mut self,
+        scope: MediaMetadataScope,
+    ) -> Task<Message> {
+        if self.search_index.media_metadata_scope == scope {
             return Task::none();
         }
-        self.search_index.media_index_enabled = enabled;
-        self.user_config.search_index_media_enabled = enabled;
+        self.search_index.media_metadata_scope = scope;
+        self.user_config.search_index_media_scope = scope;
         Task::batch([
             self.persist_user_config_command(),
             self.save_current_search_index_profile(),
@@ -361,7 +326,7 @@ impl FileBrowser {
                 self.user_config.search_index_directory_error_policy =
                     profile.directory_error_policy;
                 self.user_config.search_index_content_enabled = profile.content.enabled;
-                self.user_config.search_index_media_enabled = profile.media.enabled;
+                self.user_config.search_index_media_scope = profile.media.scope;
                 self.search_index.apply_profile(&profile);
                 let save_profile_task =
                     if profile.roots != loaded_roots || profile_missing_configured_excludes {
@@ -386,14 +351,24 @@ impl FileBrowser {
 
     pub(super) fn accept_search_index_profile_save(
         &mut self,
+        reason: SearchIndexProfileSaveReason,
         outcome: Result<IndexProfile, String>,
     ) -> Task<Message> {
         match outcome {
             Ok(profile) => {
                 self.search_index.apply_profile(&profile);
-                self.refresh_search_index_statuses()
+                let startup_index_task =
+                    if reason == SearchIndexProfileSaveReason::StartupIndexSetup {
+                        self.enqueue_pending_startup_index_builds()
+                    } else {
+                        Task::none()
+                    };
+                Task::batch([startup_index_task, self.refresh_search_index_statuses()])
             }
             Err(error) => {
+                if reason == SearchIndexProfileSaveReason::StartupIndexSetup {
+                    self.search_index.pending_startup_index_builds.clear();
+                }
                 self.search_index.profile_error = Some(error);
                 Task::none()
             }
@@ -408,7 +383,7 @@ impl FileBrowser {
             Ok(_) => {
                 self.search_index.profile_roots.clear();
                 self.search_index.statuses.clear();
-                self.search_index.errors.clear();
+                self.search_index.root_errors.clear();
                 self.search_index.sync_path_rule_order_with_current_rules();
                 self.search_index.profile_error = None;
                 self.search_index.service_generation =
@@ -468,7 +443,7 @@ impl FileBrowser {
             &mut self.search_index.profile_roots,
             &mut self.search_index.exclude_pattern_inputs,
             &mut self.search_index.statuses,
-            &mut self.search_index.errors,
+            &mut self.search_index.root_errors,
             &selection,
             &input,
             kind,
@@ -564,7 +539,7 @@ impl FileBrowser {
             &mut self.search_index.profile_roots,
             &mut self.search_index.exclude_pattern_inputs,
             &mut self.search_index.statuses,
-            &mut self.search_index.errors,
+            &mut self.search_index.root_errors,
             &selection,
         );
         self.search_index
@@ -620,7 +595,7 @@ impl FileBrowser {
             &mut self.search_index.profile_roots,
             &mut self.search_index.exclude_pattern_inputs,
             &mut self.search_index.statuses,
-            &mut self.search_index.errors,
+            &mut self.search_index.root_errors,
             &selection,
             &input,
             kind,
@@ -738,7 +713,7 @@ impl FileBrowser {
 
     pub(super) fn sync_search_index_status_for_active_search(&mut self, root: &Path) {
         let is_indexing = self.search_index.indexing_roots.contains(root);
-        let index_error = self.search_index.errors.get(root).cloned();
+        let index_error = self.search_index.root_errors.get(root).cloned();
         if let Some(search) = self.active_search_mut_for_root(root) {
             search.is_indexing = is_indexing;
             search.index_error = index_error;
@@ -764,7 +739,11 @@ impl FileBrowser {
         if profile.id.is_empty() {
             profile.id = default_search_profile_id().to_owned();
         }
-        search_index_profile_save_command(profile, self.user_config.clone())
+        search_index_profile_save_command(
+            profile,
+            self.user_config.clone(),
+            SearchIndexProfileSaveReason::General,
+        )
     }
 }
 

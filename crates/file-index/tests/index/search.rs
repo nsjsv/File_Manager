@@ -492,6 +492,67 @@ async fn file_search_index_queries_image_exif_when_enabled() {
 }
 
 #[tokio::test]
+async fn file_search_index_media_scope_limits_audio_to_all() {
+    let dir = tempdir().unwrap();
+    let off_index_dir = tempdir().unwrap();
+    let images_index_dir = tempdir().unwrap();
+    let all_index_dir = tempdir().unwrap();
+    let photo = dir.path().join("holiday-photo.png");
+    let audio = dir.path().join("holiday-song.mp3");
+    image::RgbImage::new(2, 2).save(&photo).unwrap();
+    fs::write(&audio, b"audio placeholder").unwrap();
+
+    build_file_search_index(dir.path(), off_index_dir.path(), index_options(true))
+        .await
+        .unwrap();
+    let off_search = search_file_index(
+        off_index_dir.path(),
+        dir.path(),
+        "holiday",
+        media_search_options_with_scope(true, 10, file_index::MediaMetadataScope::Off),
+    )
+    .await
+    .unwrap();
+    assert!(off_search.matches.is_empty());
+
+    build_file_search_index(
+        dir.path(),
+        images_index_dir.path(),
+        media_index_options_with_scope(true, file_index::MediaMetadataScope::Images),
+    )
+    .await
+    .unwrap();
+    let images_search = search_file_index(
+        images_index_dir.path(),
+        dir.path(),
+        "holiday",
+        media_search_options_with_scope(true, 10, file_index::MediaMetadataScope::Images),
+    )
+    .await
+    .unwrap();
+    assert_eq!(images_search.matches.len(), 1);
+    assert_eq!(images_search.matches[0].path, photo);
+
+    build_file_search_index(
+        dir.path(),
+        all_index_dir.path(),
+        media_index_options_with_scope(true, file_index::MediaMetadataScope::All),
+    )
+    .await
+    .unwrap();
+    let all_search = search_file_index(
+        all_index_dir.path(),
+        dir.path(),
+        "holiday-song",
+        media_search_options_with_scope(true, 10, file_index::MediaMetadataScope::All),
+    )
+    .await
+    .unwrap();
+    assert_eq!(all_search.matches.len(), 1);
+    assert_eq!(all_search.matches[0].path, audio);
+}
+
+#[tokio::test]
 async fn file_search_index_all_mode_merges_duplicate_sources() {
     let dir = tempdir().unwrap();
     let index_dir = tempdir().unwrap();
@@ -605,9 +666,17 @@ fn content_search_options(include_hidden: bool, limit: usize) -> FileSearchOptio
 }
 
 fn media_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
+    media_search_options_with_scope(include_hidden, limit, file_index::MediaMetadataScope::All)
+}
+
+fn media_search_options_with_scope(
+    include_hidden: bool,
+    limit: usize,
+    media_metadata_scope: file_index::MediaMetadataScope,
+) -> FileSearchOptions {
     FileSearchOptions {
         mode: file_index::SearchMode::Media,
-        media_index_enabled: true,
+        media_metadata_scope,
         ..search_options(include_hidden, limit)
     }
 }
@@ -617,7 +686,7 @@ fn all_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
         mode: file_index::SearchMode::All,
         content_index_enabled: true,
         content_max_file_bytes: 16 * 1024 * 1024,
-        media_index_enabled: true,
+        media_metadata_scope: file_index::MediaMetadataScope::All,
         ..search_options(include_hidden, limit)
     }
 }
@@ -638,8 +707,15 @@ fn content_index_options(include_hidden: bool) -> FileSearchIndexOptions {
 }
 
 fn media_index_options(include_hidden: bool) -> FileSearchIndexOptions {
+    media_index_options_with_scope(include_hidden, file_index::MediaMetadataScope::All)
+}
+
+fn media_index_options_with_scope(
+    include_hidden: bool,
+    media_metadata_scope: file_index::MediaMetadataScope,
+) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
-        media_index_enabled: true,
+        media_metadata_scope,
         ..index_options(include_hidden)
     }
 }
@@ -648,7 +724,7 @@ fn all_index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         content_index_enabled: true,
         content_max_file_bytes: 16 * 1024 * 1024,
-        media_index_enabled: true,
+        media_metadata_scope: file_index::MediaMetadataScope::All,
         ..index_options(include_hidden)
     }
 }

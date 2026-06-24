@@ -18,6 +18,7 @@ use super::types::{
     FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome,
     FileSearchIndexProgress,
 };
+use crate::profile::MediaMetadataScope;
 use crate::IndexError;
 
 enum SearchIndexBuildScope {
@@ -30,6 +31,14 @@ struct PreviousSearchIndex {
     records: Vec<SearchCatalogRecord>,
     failures: Vec<FileSearchIndexFailure>,
 }
+
+fn crawl_excluded_index_dir(options: &FileSearchIndexOptions, index_dir: &Path) -> PathBuf {
+    options
+        .excluded_index_dir
+        .clone()
+        .unwrap_or_else(|| index_dir.to_path_buf())
+}
+
 pub(super) fn build_file_search_index_blocking(
     root: &Path,
     index_dir: &Path,
@@ -54,7 +63,7 @@ pub(super) fn build_file_search_index_blocking(
             include_hidden: options.include_hidden,
             exclude_patterns: options.exclude_patterns.clone(),
             directory_error_policy: options.directory_error_policy,
-            excluded_index_dir: Some(index_dir.to_path_buf()),
+            excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
             throttle: true,
             cancel: None,
         },
@@ -65,7 +74,7 @@ pub(super) fn build_file_search_index_blocking(
         &records,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
     )?);
     let failures = warnings_to_failures(&skipped);
     let mut manifest = SearchIndexManifest::new(
@@ -75,7 +84,7 @@ pub(super) fn build_file_search_index_blocking(
         options.directory_error_policy,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
         records.len(),
         failures.len(),
         None,
@@ -94,7 +103,7 @@ pub(super) fn build_file_search_index_blocking(
         options.directory_error_policy,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
         &manifest,
         catalog,
     );
@@ -155,7 +164,7 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
             include_hidden: options.include_hidden,
             exclude_patterns: options.exclude_patterns.clone(),
             directory_error_policy: options.directory_error_policy,
-            excluded_index_dir: Some(index_dir.to_path_buf()),
+            excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
             throttle: true,
             cancel,
         },
@@ -173,7 +182,7 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
         &records,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
     )?);
     let failures = warnings_to_failures(&skipped);
     let mut manifest = SearchIndexManifest::new(
@@ -183,7 +192,7 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
         options.directory_error_policy,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
         records.len(),
         failures.len(),
         None,
@@ -202,7 +211,7 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
         options.directory_error_policy,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
         &manifest,
         catalog,
     );
@@ -234,7 +243,7 @@ fn build_file_search_index_incremental_blocking(
         options.directory_error_policy,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
     );
     let built_at_ms = previous.as_ref().map(|index| index.manifest.built_at_ms);
     let previous_records = previous
@@ -255,7 +264,7 @@ fn build_file_search_index_incremental_blocking(
                     include_hidden: options.include_hidden,
                     exclude_patterns: options.exclude_patterns.clone(),
                     directory_error_policy: options.directory_error_policy,
-                    excluded_index_dir: Some(index_dir.to_path_buf()),
+                    excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
                     throttle: true,
                     cancel,
                 },
@@ -280,7 +289,7 @@ fn build_file_search_index_incremental_blocking(
                     include_hidden: options.include_hidden,
                     exclude_patterns: options.exclude_patterns.clone(),
                     directory_error_policy: options.directory_error_policy,
-                    excluded_index_dir: Some(index_dir.to_path_buf()),
+                    excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
                     throttle: true,
                     cancel,
                 },
@@ -320,7 +329,7 @@ fn build_file_search_index_incremental_blocking(
         indexed_count,
         options.content_index_enabled,
         options.content_max_file_bytes,
-        options.media_index_enabled,
+        options.media_metadata_scope,
         options.directory_error_policy,
     )
 }
@@ -333,7 +342,7 @@ fn previous_search_index(
     directory_error_policy: super::types::DirectoryErrorPolicy,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
 ) -> Option<PreviousSearchIndex> {
     let (manifest, records) = store::load_catalog(
         index_dir,
@@ -343,7 +352,7 @@ fn previous_search_index(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     )
     .ok()?;
     let failures = store::read_failures(index_dir).unwrap_or_default();
@@ -367,7 +376,7 @@ fn write_records_to_index(
     indexed_count: usize,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
     directory_error_policy: super::types::DirectoryErrorPolicy,
 ) -> Result<FileSearchIndexOutcome, IndexError> {
     let pending_index_dir = index_dir.with_extension("building");
@@ -378,7 +387,7 @@ fn write_records_to_index(
         &records,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     )?);
     let failures = merge_scan_failures(&skipped, previous_failures, rescanned_roots);
     let mut manifest = SearchIndexManifest::new(
@@ -388,7 +397,7 @@ fn write_records_to_index(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
         records.len(),
         failures.len(),
         built_at_ms,
@@ -406,7 +415,7 @@ fn write_records_to_index(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
         &manifest,
         catalog,
     );

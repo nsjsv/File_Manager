@@ -22,6 +22,10 @@ async fn daemon_client_configures_builds_and_queries_profile() {
     }));
     let client = IndexClient::new(index_base_dir.clone(), socket_path.clone());
     wait_for_daemon(&client).await;
+    assert!(
+        !index_base_dir.exists(),
+        "ping should not open the daemon core or create the control DB directory"
+    );
     let profile = IndexProfile {
         id: "main".to_owned(),
         roots: vec![root.clone()],
@@ -66,6 +70,54 @@ async fn daemon_client_configures_builds_and_queries_profile() {
 
     assert_eq!(outcome.matches.len(), 1);
     assert_eq!(outcome.matches[0].name.to_string_lossy(), "needle.txt");
+    daemon.abort();
+}
+
+#[tokio::test]
+async fn daemon_subscribe_observes_until_explicit_start_maintenance() {
+    let dir = tempdir().unwrap();
+    let socket_path = dir.path().join("file-indexd.sock");
+    let index_base_dir = dir.path().join("index-base");
+    let root = dir.path().join("root");
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let daemon = tokio::spawn(run(IndexDaemonConfig {
+        socket_path: socket_path.clone(),
+    }));
+    let client = IndexClient::new(index_base_dir, socket_path);
+    wait_for_daemon(&client).await;
+    client
+        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile {
+            id: "main".to_owned(),
+            roots: vec![root.clone()],
+            include_hidden: false,
+            exclude_patterns: Vec::new(),
+            directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+            content: Default::default(),
+            media: Default::default(),
+        }))
+        .await
+        .unwrap();
+    let mut subscription = client.subscribe_maintenance("main").await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), subscription.next_event())
+            .await
+            .is_err(),
+        "subscription must not start maintenance by itself"
+    );
+
+    let started = client
+        .execute(IndexServiceCommand::StartMaintenance {
+            profile_id: "main".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        started,
+        IndexServiceEvent::MaintenanceStarted {
+            profile_id: "main".to_owned()
+        }
+    );
+    wait_for_subscription_watch_started(&mut subscription, &root).await;
     daemon.abort();
 }
 
@@ -115,13 +167,9 @@ async fn daemon_restart_loads_stored_profile() {
 
 async fn wait_for_daemon(client: &IndexClient) {
     for _ in 0..50 {
-        match client
-            .execute(IndexServiceCommand::LoadProfile(
-                "__daemon_probe__".to_owned(),
-            ))
-            .await
-        {
-            Ok(_) => return,
+        match client.execute(IndexServiceCommand::Ping).await {
+            Ok(IndexServiceEvent::Pong) => return,
+            Ok(event) => panic!("daemon ping returned unexpected event: {event:?}"),
             Err(IndexClientError::Connect { .. }) => {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -129,4 +177,21 @@ async fn wait_for_daemon(client: &IndexClient) {
         }
     }
     panic!("daemon socket was not created");
+}
+
+async fn wait_for_subscription_watch_started(
+    subscription: &mut file_index::IndexMaintenanceSubscription,
+    root: &std::path::Path,
+) {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), subscription.next_event())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if matches!(event, IndexServiceEvent::WatchStarted { root: event_root, .. } if event_root == root)
+        {
+            return;
+        }
+    }
 }

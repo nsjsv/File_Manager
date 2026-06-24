@@ -8,6 +8,7 @@ use super::manifest::{SearchCatalogIdentity, SearchIndexManifest};
 use super::path_encoding::path_storage_key;
 use super::store;
 use super::types::DirectoryErrorPolicy;
+use crate::profile::MediaMetadataScope;
 use crate::IndexError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -19,7 +20,7 @@ struct CatalogCacheKey {
     directory_error_policy: DirectoryErrorPolicy,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
 }
 
 static LOADED_CATALOGS: OnceLock<Mutex<HashMap<CatalogCacheKey, Arc<SearchCatalog>>>> =
@@ -33,7 +34,7 @@ pub(crate) fn catalog_for_index(
     directory_error_policy: DirectoryErrorPolicy,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
 ) -> Result<Arc<SearchCatalog>, IndexError> {
     let manifest = store::read_manifest(index_dir)?;
     manifest.validate_for(
@@ -44,7 +45,7 @@ pub(crate) fn catalog_for_index(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     )?;
     let key = CatalogCacheKey::new(
         index_dir,
@@ -54,7 +55,7 @@ pub(crate) fn catalog_for_index(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     );
     if let Some(catalog) = cached_catalog(&key, &manifest.identity()) {
         return Ok(catalog);
@@ -68,7 +69,7 @@ pub(crate) fn catalog_for_index(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     )?;
     let catalog = Arc::new(SearchCatalog::from_records(
         root.to_path_buf(),
@@ -87,7 +88,7 @@ pub(crate) fn cache_built_catalog(
     directory_error_policy: DirectoryErrorPolicy,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
     manifest: &SearchIndexManifest,
     catalog: SearchCatalog,
 ) {
@@ -99,7 +100,7 @@ pub(crate) fn cache_built_catalog(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     );
     let catalog = Arc::new(catalog);
     if catalog.identity() == Some(&manifest.identity()) {
@@ -139,7 +140,7 @@ impl CatalogCacheKey {
         directory_error_policy: DirectoryErrorPolicy,
         content_index_enabled: bool,
         content_max_file_bytes: u64,
-        media_index_enabled: bool,
+        media_metadata_scope: MediaMetadataScope,
     ) -> Self {
         Self {
             index_dir: index_dir.to_path_buf(),
@@ -149,7 +150,7 @@ impl CatalogCacheKey {
             directory_error_policy,
             content_index_enabled,
             content_max_file_bytes,
-            media_index_enabled,
+            media_metadata_scope,
         }
     }
 }

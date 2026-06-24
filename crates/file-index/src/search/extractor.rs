@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use super::catalog::SearchCatalogRecord;
 use super::types::{MediaExifField, MediaSearchKind, MediaSearchMetadata};
+use crate::profile::MediaMetadataScope;
 
 const BINARY_SNIFF_BYTES: usize = 8192;
 const FFMPEG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -52,11 +53,12 @@ pub(crate) fn extract_text_documents(
 
 pub(crate) fn extract_media_documents(
     records: &[SearchCatalogRecord],
+    scope: MediaMetadataScope,
 ) -> (Vec<ExtractedMediaDocument>, Vec<ScanWarning>) {
     let mut documents = Vec::new();
     let mut warnings = Vec::new();
     for record in records {
-        match extract_media_document(record) {
+        match extract_media_document(record, scope) {
             Ok(Some(document)) => documents.push(document),
             Ok(None) => {}
             Err(warning) => warnings.push(warning),
@@ -143,6 +145,7 @@ fn looks_binary(bytes: &[u8]) -> bool {
 
 fn extract_media_document(
     record: &SearchCatalogRecord,
+    scope: MediaMetadataScope,
 ) -> Result<Option<ExtractedMediaDocument>, ScanWarning> {
     if record.kind != FileKind::File {
         return Ok(None);
@@ -150,6 +153,9 @@ fn extract_media_document(
     let Some(media_kind) = supported_media_kind_for_path(&record.path) else {
         return Ok(None);
     };
+    if scope == MediaMetadataScope::Images && media_kind != SupportedMediaKind::Image {
+        return Ok(None);
+    }
     let Some(mut metadata) =
         media_metadata_for_path(&record.path, media_kind).map_err(|error| ScanWarning {
             path: record.path.clone(),
@@ -158,14 +164,16 @@ fn extract_media_document(
     else {
         return Ok(None);
     };
-    let ffprobe = ffprobe_metadata(&record.path);
-    if let Some(ffprobe) = ffprobe {
-        metadata.width = metadata.width.or(ffprobe.width);
-        metadata.height = metadata.height.or(ffprobe.height);
-        metadata.duration_ms = metadata.duration_ms.or(ffprobe.duration_ms);
-        metadata.codec = metadata.codec.or(ffprobe.codec);
-        metadata.title = metadata.title.or(ffprobe.title);
-        metadata.artist = metadata.artist.or(ffprobe.artist);
+    if scope == MediaMetadataScope::All {
+        let ffprobe = ffprobe_metadata(&record.path);
+        if let Some(ffprobe) = ffprobe {
+            metadata.width = metadata.width.or(ffprobe.width);
+            metadata.height = metadata.height.or(ffprobe.height);
+            metadata.duration_ms = metadata.duration_ms.or(ffprobe.duration_ms);
+            metadata.codec = metadata.codec.or(ffprobe.codec);
+            metadata.title = metadata.title.or(ffprobe.title);
+            metadata.artist = metadata.artist.or(ffprobe.artist);
+        }
     }
     let name = record.name.to_string_lossy().into_owned();
     let searchable_text = media_search_text(&name, &metadata);

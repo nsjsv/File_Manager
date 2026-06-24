@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use file_core::FileKind;
 
-use crate::profile::{ContentIndexPolicy, IndexProfile, MediaMetadataPolicy};
+use crate::profile::{ContentIndexPolicy, IndexProfile, MediaMetadataPolicy, MediaMetadataScope};
 use crate::search::{
     DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexStatus,
     FileSearchMatch, FileSearchOutcome, MediaExifField, MediaSearchKind, MediaSearchMetadata,
@@ -11,6 +11,33 @@ use crate::search::{
 use crate::service::{IndexServiceCommand, IndexServiceEvent};
 
 use super::{IndexRequest, IndexRequestCommand, IndexResponse, WirePath};
+
+#[test]
+fn protocol_version_changes_when_wire_schema_changes() {
+    assert_eq!(super::INDEX_PROTOCOL_VERSION, 2);
+}
+
+#[test]
+fn new_command_variants_are_appended_after_version_one_commands() {
+    assert_eq!(
+        command_discriminant(&IndexRequestCommand::LoadProfile("main".to_owned())),
+        1
+    );
+    assert_eq!(
+        command_discriminant(&IndexRequestCommand::Status {
+            profile_id: "main".to_owned(),
+            root: WirePath::from_path(PathBuf::from("/tmp/root").as_path()),
+        }),
+        5
+    );
+    assert_eq!(command_discriminant(&IndexRequestCommand::Ping), 12);
+    assert_eq!(
+        command_discriminant(&IndexRequestCommand::StartMaintenance {
+            profile_id: "main".to_owned(),
+        }),
+        13
+    );
+}
 
 #[test]
 fn command_round_trip_preserves_profile_paths() {
@@ -24,7 +51,9 @@ fn command_round_trip_preserves_profile_paths() {
             enabled: true,
             max_file_bytes: 4096,
         },
-        media: MediaMetadataPolicy { enabled: true },
+        media: MediaMetadataPolicy {
+            scope: MediaMetadataScope::All,
+        },
     });
 
     let request = IndexRequest::from_command("/cache/index", command.clone());
@@ -105,7 +134,7 @@ fn status_response_round_trip_preserves_readiness_and_failures() {
         include_hidden: true,
         content_index_enabled: true,
         content_max_file_bytes: 4096,
-        media_index_enabled: true,
+        media_metadata_scope: MediaMetadataScope::All,
         record_count: 7,
         index_size_bytes: 2048,
         built_at_ms: Some(11),
@@ -145,4 +174,9 @@ fn assert_response_event_round_trips(event: IndexServiceEvent) {
     };
 
     assert_eq!(decoded_event.into_domain(), event);
+}
+
+fn command_discriminant(command: &IndexRequestCommand) -> u32 {
+    let encoded = bincode::serialize(command).unwrap();
+    u32::from_le_bytes(encoded[0..4].try_into().unwrap())
 }

@@ -91,11 +91,19 @@ impl IndexDaemonState {
             return Ok(());
         }
 
+        if matches!(request.command, IndexRequestCommand::Ping) {
+            write_frame(
+                &mut stream,
+                &IndexResponse::from_event(&IndexServiceEvent::Pong),
+            )
+            .await?;
+            return Ok(());
+        }
+
         let core = self.core_for(request.index_base_dir()).await?;
         match request.command {
             IndexRequestCommand::SubscribeMaintenance { profile_id } => {
                 let events = core.service.status_stream();
-                core.ensure_profile_maintenance(&profile_id);
                 stream_maintenance_events(profile_id, stream, events).await
             }
             IndexRequestCommand::BuildSelectedPaths(request) => {
@@ -140,20 +148,15 @@ impl IndexDaemonCore {
             manual_build_queue: AsyncMutex::new(()),
             maintenance_handles: Mutex::new(HashMap::new()),
         };
-        core.start_stored_maintenance()?;
         Ok(core)
     }
 
     async fn execute(&self, command: IndexServiceCommand) -> Result<IndexServiceEvent, IndexError> {
         match command {
             IndexServiceCommand::ConfigureProfile(profile) => {
-                let profile_id = profile.id.clone();
-                let event = self
-                    .service
+                self.service
                     .execute(IndexServiceCommand::ConfigureProfile(profile))
-                    .await?;
-                self.start_profile_maintenance(&profile_id);
-                Ok(event)
+                    .await
             }
             IndexServiceCommand::DeleteProfile(profile_id) => {
                 let event = self
@@ -166,6 +169,16 @@ impl IndexDaemonCore {
             IndexServiceCommand::Rebuild { .. } => {
                 let _manual_build = self.manual_build_queue.lock().await;
                 self.service.execute(command).await
+            }
+            IndexServiceCommand::StartMaintenance { profile_id } => {
+                let event = self
+                    .service
+                    .execute(IndexServiceCommand::StartMaintenance {
+                        profile_id: profile_id.clone(),
+                    })
+                    .await?;
+                self.start_profile_maintenance(&profile_id);
+                Ok(event)
             }
             command => self.service.execute(command).await,
         }
@@ -183,13 +196,6 @@ impl IndexDaemonCore {
             .await
     }
 
-    fn start_stored_maintenance(&self) -> Result<(), IndexError> {
-        for profile in self.service.load_profiles()? {
-            self.start_profile_maintenance(&profile.id);
-        }
-        Ok(())
-    }
-
     fn start_profile_maintenance(&self, profile_id: &str) {
         let handle = self.service.maintain_profile(profile_id.to_owned());
         let mut handles = self
@@ -197,20 +203,6 @@ impl IndexDaemonCore {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         handles.insert(profile_id.to_owned(), handle);
-    }
-
-    fn ensure_profile_maintenance(&self, profile_id: &str) {
-        let mut handles = self
-            .maintenance_handles
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if handles.contains_key(profile_id) {
-            return;
-        }
-        handles.insert(
-            profile_id.to_owned(),
-            self.service.maintain_profile(profile_id.to_owned()),
-        );
     }
 
     fn stop_profile_maintenance(&self, profile_id: &str) {
@@ -286,10 +278,13 @@ async fn stream_maintenance_events(
 fn maintenance_event_matches(event: &IndexServiceEvent, profile_id: &str) -> bool {
     matches!(
         event,
-        IndexServiceEvent::WatchStarted {
-            profile_id: event_profile_id,
-            ..
-        }
+            IndexServiceEvent::WatchStarted {
+                profile_id: event_profile_id,
+                ..
+            }
+            | IndexServiceEvent::MaintenanceStarted {
+                profile_id: event_profile_id,
+            }
             | IndexServiceEvent::WatchFailed {
                 profile_id: event_profile_id,
                 ..

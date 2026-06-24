@@ -295,6 +295,7 @@ async fn run_queued_search_index(
         .map_err(|error| error.to_string())?;
 
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let expected_index_base_dir = index_base_dir.clone();
     let mut build = Box::pin(search_index_daemon::build_selected_paths_with_progress(
         index_base_dir,
         BuildSelectedPathsRequest {
@@ -323,6 +324,8 @@ async fn run_queued_search_index(
                 let IndexServiceEvent::RebuildFinished(outcome) = event else {
                     return Err(format!("unexpected search index event: {event:?}"));
                 };
+                let outcome =
+                    super::ensure_search_index_outcome_matches_root(&expected_index_base_dir, outcome)?;
                 send_file_operation_progress(
                     output,
                     task_id,
@@ -744,7 +747,7 @@ async fn send_search_index_progress(
             send_file_operation_progress(
                 output,
                 task_id,
-                FileOperationProgressUpdate::Items {
+                FileOperationProgressUpdate::SearchIndexItems {
                     completed: completed_paths,
                     total: total_paths,
                 },

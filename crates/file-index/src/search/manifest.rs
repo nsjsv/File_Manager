@@ -11,6 +11,7 @@ use super::types::{
     DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexStatus, EXTRACTOR_VERSION,
     IGNORE_POLICY_VERSION, INDEX_FORMAT_VERSION,
 };
+use crate::profile::MediaMetadataScope;
 use crate::IndexError;
 
 const MANIFEST_FORMAT_VERSION: &str = "format_version";
@@ -30,6 +31,7 @@ const MANIFEST_EXTRACTOR_VERSION: &str = "extractor_version";
 const MANIFEST_CONTENT_INDEX_ENABLED: &str = "content_index_enabled";
 const MANIFEST_CONTENT_MAX_FILE_BYTES: &str = "content_max_file_bytes";
 const MANIFEST_MEDIA_INDEX_ENABLED: &str = "media_index_enabled";
+const MANIFEST_MEDIA_METADATA_SCOPE: &str = "media_metadata_scope";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchCatalogIdentity {
@@ -55,7 +57,7 @@ pub(crate) struct SearchIndexManifest {
     pub(crate) extractor_version: u32,
     pub(crate) content_index_enabled: bool,
     pub(crate) content_max_file_bytes: u64,
-    pub(crate) media_index_enabled: bool,
+    pub(crate) media_metadata_scope: MediaMetadataScope,
 }
 
 impl SearchIndexManifest {
@@ -66,7 +68,7 @@ impl SearchIndexManifest {
         directory_error_policy: DirectoryErrorPolicy,
         content_index_enabled: bool,
         content_max_file_bytes: u64,
-        media_index_enabled: bool,
+        media_metadata_scope: MediaMetadataScope,
         record_count: usize,
         failed_count: usize,
         built_at_ms: Option<i64>,
@@ -96,7 +98,7 @@ impl SearchIndexManifest {
             extractor_version: EXTRACTOR_VERSION,
             content_index_enabled,
             content_max_file_bytes,
-            media_index_enabled,
+            media_metadata_scope,
         }
     }
 
@@ -116,7 +118,7 @@ impl SearchIndexManifest {
         directory_error_policy: DirectoryErrorPolicy,
         content_index_enabled: bool,
         content_max_file_bytes: u64,
-        media_index_enabled: bool,
+        media_metadata_scope: MediaMetadataScope,
     ) -> Result<(), IndexError> {
         if let Some(reason) = self.stale_reason_for(
             root,
@@ -125,7 +127,7 @@ impl SearchIndexManifest {
             directory_error_policy,
             content_index_enabled,
             content_max_file_bytes,
-            media_index_enabled,
+            media_metadata_scope,
         ) {
             return Err(search_index_error(index_dir, reason));
         }
@@ -140,7 +142,7 @@ impl SearchIndexManifest {
         directory_error_policy: DirectoryErrorPolicy,
         content_index_enabled: bool,
         content_max_file_bytes: u64,
-        media_index_enabled: bool,
+        media_metadata_scope: MediaMetadataScope,
     ) -> Option<String> {
         if self.format_version != INDEX_FORMAT_VERSION {
             return Some("search index format is outdated".to_owned());
@@ -171,7 +173,7 @@ impl SearchIndexManifest {
         if self.content_max_file_bytes != content_max_file_bytes {
             return Some("search index content size policy is outdated".to_owned());
         }
-        if self.media_index_enabled != media_index_enabled {
+        if self.media_metadata_scope != media_metadata_scope {
             return Some("search index media policy is outdated".to_owned());
         }
         None
@@ -193,7 +195,7 @@ impl SearchIndexManifest {
             include_hidden: self.include_hidden,
             content_index_enabled: self.content_index_enabled,
             content_max_file_bytes: self.content_max_file_bytes,
-            media_index_enabled: self.media_index_enabled,
+            media_metadata_scope: self.media_metadata_scope,
             record_count: self.record_count,
             index_size_bytes,
             built_at_ms: Some(self.built_at_ms),
@@ -239,8 +241,8 @@ impl SearchIndexManifest {
                 self.content_max_file_bytes.to_string(),
             ),
             (
-                MANIFEST_MEDIA_INDEX_ENABLED,
-                self.media_index_enabled.to_string(),
+                MANIFEST_MEDIA_METADATA_SCOPE,
+                self.media_metadata_scope.config_value().to_string(),
             ),
         ]
     }
@@ -313,12 +315,8 @@ pub(crate) fn read_manifest_from_connection(
             MANIFEST_CONTENT_MAX_FILE_BYTES,
         )?
         .unwrap_or(16 * 1024 * 1024),
-        media_index_enabled: optional_manifest_bool(
-            index_dir,
-            &values,
-            MANIFEST_MEDIA_INDEX_ENABLED,
-        )?
-        .unwrap_or(false),
+        media_metadata_scope: optional_manifest_media_metadata_scope(index_dir, &values)?
+            .unwrap_or(MediaMetadataScope::Off),
     })
 }
 
@@ -418,6 +416,29 @@ fn optional_manifest_bool(
                 .map_err(|error| search_index_error(index_dir, error))
         })
         .transpose()
+}
+
+fn optional_manifest_media_metadata_scope(
+    index_dir: &Path,
+    values: &HashMap<String, String>,
+) -> Result<Option<MediaMetadataScope>, IndexError> {
+    if let Some(value) = values.get(MANIFEST_MEDIA_METADATA_SCOPE) {
+        return MediaMetadataScope::from_config_value(value)
+            .ok_or_else(|| {
+                search_index_error(index_dir, format!("unknown media metadata scope {value}"))
+            })
+            .map(Some);
+    }
+
+    optional_manifest_bool(index_dir, values, MANIFEST_MEDIA_INDEX_ENABLED).map(|legacy| {
+        legacy.map(|enabled| {
+            if enabled {
+                MediaMetadataScope::All
+            } else {
+                MediaMetadataScope::Off
+            }
+        })
+    })
 }
 
 fn optional_manifest_directory_error_policy(

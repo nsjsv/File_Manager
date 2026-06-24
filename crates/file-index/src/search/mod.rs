@@ -16,13 +16,14 @@ use std::path::{Path, PathBuf};
 
 use cache::catalog_for_index;
 use catalog::{SearchCatalog, SearchCatalogRecord};
-use crawl::{crawl_search_records, SearchCrawlOptions};
+use crawl::crawl_search_records;
 use engine::search_index_catalog_and_tantivy;
 use store::{clear_failures, read_index_status, remove_catalog_dir};
 use tokio_util::sync::CancellationToken;
 
 use crate::IndexError;
 
+pub(crate) use crawl::{watchable_search_directories, SearchCrawlOptions};
 pub use ignore_policy::default_search_index_exclude_patterns;
 pub(crate) use types::EXTRACTOR_VERSION;
 pub use types::{
@@ -169,7 +170,7 @@ pub async fn search_file_index(
             options.directory_error_policy,
             options.content_index_enabled,
             options.content_max_file_bytes,
-            options.media_index_enabled,
+            options.media_metadata_scope,
         )?;
         let matches = search_index_catalog_and_tantivy(&index_dir, &catalog, &query, &options)?;
         Ok(FileSearchOutcome {
@@ -204,7 +205,7 @@ pub async fn file_search_index_status(
             options.directory_error_policy,
             options.content_index_enabled,
             options.content_max_file_bytes,
-            options.media_index_enabled,
+            options.media_metadata_scope,
         )
     })
     .await
@@ -229,7 +230,7 @@ pub async fn file_search_index_snapshot(
             options.directory_error_policy,
             options.content_index_enabled,
             options.content_max_file_bytes,
-            options.media_index_enabled,
+            options.media_metadata_scope,
         )?;
         let records = records
             .iter()

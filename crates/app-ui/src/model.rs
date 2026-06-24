@@ -10,7 +10,7 @@ use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreE
 pub(crate) use file_index::SearchMode;
 use file_index::{
     DirectoryErrorPolicy, FileSearchIndexMode, FileSearchIndexOutcome, FileSearchIndexStatus,
-    FileSearchOutcome, IndexProfile, IndexServiceEvent,
+    FileSearchOutcome, IndexProfile, IndexServiceEvent, MediaMetadataScope,
 };
 use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
@@ -34,8 +34,8 @@ use crate::thumbnail_cache::ThumbnailLoadOutcome;
 use file_core::FileOperationVerification;
 
 pub(crate) use crate::startup_index_tree::{
-    StartupIndexDirectoryChildren, StartupIndexEntrySelection, StartupIndexRootSeed,
-    StartupIndexSetupState, StartupIndexTreeEntry,
+    StartupIndexCapability, StartupIndexDirectoryChildren, StartupIndexEntrySelection,
+    StartupIndexRootSeed, StartupIndexSetupState, StartupIndexTargetMode, StartupIndexTreeEntry,
 };
 pub(crate) use crate::text_preview::{
     MarkdownPreviewMode, TextPreviewChunk, TextPreviewDocument, TextPreviewFormat,
@@ -73,13 +73,16 @@ pub(crate) use preview::{
 mod search;
 pub(crate) use search::{
     SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
-    SearchIndexPathRuleSelection, SearchIndexRuntime, SearchRequest, SearchScope, SearchState,
+    SearchIndexPathRuleSelection, SearchIndexProfileSaveReason, SearchIndexRuntime, SearchRequest,
+    SearchScope, SearchState,
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SearchModePromptState;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SearchModePromptState {
+    pub(crate) selected_mode: Option<SearchBackendMode>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ScrollbarRegion {
@@ -286,9 +289,9 @@ pub(crate) enum Message {
     SearchFocusRequested,
     SearchMatchesLoaded(SearchRequest, Result<FileSearchOutcome, String>),
     SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
-    SearchIndexStatusLoaded(PathBuf, Result<FileSearchIndexStatus, String>),
+    SearchIndexStatusLoaded(u64, PathBuf, Result<FileSearchIndexStatus, String>),
     SearchIndexProfileLoaded(Result<Option<IndexProfile>, String>),
-    SearchIndexProfileSaved(Result<IndexProfile, String>),
+    SearchIndexProfileSaved(SearchIndexProfileSaveReason, Result<IndexProfile, String>),
     SearchIndexProfileDeleted(Result<String, String>),
     SearchIndexDaemonStatusLoaded(Result<SearchIndexDaemonStatus, String>),
     SearchIndexDaemonRestartRequested,
@@ -311,19 +314,22 @@ pub(crate) enum Message {
     SearchIndexPathRuleUpdated,
     SearchIndexDirectoryErrorPolicySelected(DirectoryErrorPolicy),
     SearchIndexContentEnabledToggled(bool),
-    SearchIndexMediaEnabledToggled(bool),
+    SearchIndexMediaScopeSelected(MediaMetadataScope),
     SearchBackendModeSelected(SearchBackendMode),
-    SearchModePromptSimpleSelected,
-    SearchModePromptIndexedSelected,
+    SearchModePromptModeSelected(SearchBackendMode),
+    SearchModePromptNextPressed,
     SearchMatchSelected(PathBuf),
     SearchActivated,
+    StartupIndexTargetModeSelected(StartupIndexTargetMode),
     StartupIndexHiddenContentVisibilityToggled,
-    StartupIndexEntryToggled(usize),
+    StartupIndexCapabilitySelected(StartupIndexCapability),
+    StartupIndexEntryPressed(usize),
+    StartupIndexEntryEntered(usize),
+    StartupIndexEntrySelectionDragFinished,
     StartupIndexDirectoryToggled(usize),
     StartupIndexTreeAnimationTick,
     StartupIndexDirectoryChildrenLoaded(u64, PathBuf, Result<Vec<DirectoryEntry>, String>),
     StartupIndexAccepted,
-    StartupIndexSkipped,
     ExpandedDirectoryLoadBatch(ExpandedDirectoryLoadRequest, DirectoryScanBatch),
     ExpandedDirectoryLoaded(ExpandedDirectoryLoadRequest, Result<DirectoryScan, String>),
     ObservedDirectoryChanged(PathBuf),

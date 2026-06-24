@@ -9,6 +9,7 @@ use super::extractor::{extract_media_documents, extract_text_documents};
 use super::full_text::{search_tantivy_index, write_tantivy_index, FullTextSearchHit};
 use super::query;
 use super::types::{FileSearchMatch, FileSearchOptions, SearchResultSource};
+use crate::profile::MediaMetadataScope;
 use crate::{IndexError, SearchMode};
 
 pub(crate) fn write_search_documents(
@@ -16,7 +17,7 @@ pub(crate) fn write_search_documents(
     records: &[SearchCatalogRecord],
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
 ) -> Result<Vec<ScanWarning>, IndexError> {
     let mut warnings = Vec::new();
     let text_documents = if content_index_enabled {
@@ -27,8 +28,8 @@ pub(crate) fn write_search_documents(
     let (text_documents, text_warnings) = text_documents;
     warnings.extend(text_warnings);
 
-    let media_documents = if media_index_enabled {
-        extract_media_documents(records)
+    let media_documents = if media_metadata_scope.includes_media() {
+        extract_media_documents(records, media_metadata_scope)
     } else {
         (Vec::new(), Vec::new())
     };
@@ -58,7 +59,7 @@ pub(crate) fn search_index_catalog_and_tantivy(
             index_dir,
             query,
             SearchResultSource::Media,
-            options.media_index_enabled,
+            options.media_metadata_scope.includes_media(),
             options.limit,
         ),
         SearchMode::All => {
@@ -71,7 +72,7 @@ pub(crate) fn search_index_catalog_and_tantivy(
                     options.limit,
                 )?));
             }
-            if options.media_index_enabled {
+            if options.media_metadata_scope.includes_media() {
                 matches.extend(full_text_hits_to_matches(search_tantivy_index(
                     index_dir,
                     query,

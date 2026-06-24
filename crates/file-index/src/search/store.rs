@@ -14,6 +14,7 @@ use super::types::{
     file_kind_from_key, file_kind_key, DirectoryErrorPolicy, FileSearchIndexFailure,
     FileSearchIndexStatus,
 };
+use crate::profile::MediaMetadataScope;
 use crate::IndexError;
 use file_core::FileKind;
 
@@ -164,7 +165,7 @@ pub(crate) fn load_catalog(
     directory_error_policy: DirectoryErrorPolicy,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
 ) -> Result<(SearchIndexManifest, Vec<SearchCatalogRecord>), IndexError> {
     let connection = open_catalog_connection(index_dir)?;
     let manifest = read_manifest_from_connection(index_dir, &connection)?;
@@ -176,7 +177,7 @@ pub(crate) fn load_catalog(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     )?;
     let mut statement = connection
         .prepare("SELECT path, kind, mtime_ms, size_bytes FROM entries ORDER BY id")
@@ -224,7 +225,7 @@ pub(crate) fn read_index_status(
     directory_error_policy: DirectoryErrorPolicy,
     content_index_enabled: bool,
     content_max_file_bytes: u64,
-    media_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
 ) -> Result<FileSearchIndexStatus, IndexError> {
     let connection = match open_catalog_connection(index_dir) {
         Ok(connection) => connection,
@@ -235,7 +236,7 @@ pub(crate) fn read_index_status(
                 include_hidden,
                 content_index_enabled,
                 content_max_file_bytes,
-                media_index_enabled,
+                media_metadata_scope,
             ));
         }
     };
@@ -247,7 +248,7 @@ pub(crate) fn read_index_status(
         directory_error_policy,
         content_index_enabled,
         content_max_file_bytes,
-        media_index_enabled,
+        media_metadata_scope,
     ) {
         return Ok(FileSearchIndexStatus::stale(
             root.to_path_buf(),
@@ -255,7 +256,7 @@ pub(crate) fn read_index_status(
             include_hidden,
             content_index_enabled,
             content_max_file_bytes,
-            media_index_enabled,
+            media_metadata_scope,
             reason,
         ));
     }

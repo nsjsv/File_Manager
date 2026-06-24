@@ -453,18 +453,7 @@ impl FileBrowser {
             Message::ShortcutCaptureStarted(binding_id) => self.start_shortcut_capture(binding_id),
             Message::ShortcutCaptureCanceled => self.cancel_shortcut_capture(),
             Message::ShortcutBindingReset(binding_id) => self.reset_shortcut_binding(binding_id),
-            Message::DragSelectionFinished => {
-                self.finish_tab_drag();
-                self.finish_pane_drag();
-                self.finish_batch_rename_preview_drag();
-                Task::batch([
-                    self.finish_sidebar_bookmark_drag(),
-                    self.finish_sidebar_resize_drag_command(),
-                    self.finish_column_resize_drag_command(),
-                    self.finish_drag_selection(None),
-                    self.schedule_thumbnail_refresh(),
-                ])
-            }
+            Message::DragSelectionFinished => self.finish_pointer_drag_interactions(),
             Message::DismissFloating => self.dismiss_floating(),
             Message::ArchiveCreation(message) => self.handle_archive_creation_message(message),
             Message::ArchiveExtraction(message) => self.handle_archive_extraction_message(message),
@@ -518,9 +507,9 @@ impl FileBrowser {
             | Message::SearchFocusRequested
             | Message::SearchMatchesLoaded(_, _)
             | Message::SearchIndexBuilt(_, _)
-            | Message::SearchIndexStatusLoaded(_, _)
+            | Message::SearchIndexStatusLoaded(_, _, _)
             | Message::SearchIndexProfileLoaded(_)
-            | Message::SearchIndexProfileSaved(_)
+            | Message::SearchIndexProfileSaved(_, _)
             | Message::SearchIndexProfileDeleted(_)
             | Message::SearchIndexDaemonStatusLoaded(_)
             | Message::SearchIndexDaemonRestartRequested
@@ -543,17 +532,27 @@ impl FileBrowser {
             | Message::SearchIndexPathRuleUpdated
             | Message::SearchIndexDirectoryErrorPolicySelected(_)
             | Message::SearchIndexContentEnabledToggled(_)
-            | Message::SearchIndexMediaEnabledToggled(_)
+            | Message::SearchIndexMediaScopeSelected(_)
             | Message::SearchBackendModeSelected(_)
-            | Message::SearchModePromptSimpleSelected
-            | Message::SearchModePromptIndexedSelected
+            | Message::SearchModePromptModeSelected(_)
+            | Message::SearchModePromptNextPressed
             | Message::SearchMatchSelected(_)
             | Message::SearchActivated => self.handle_search_message(message),
+            Message::StartupIndexTargetModeSelected(target_mode) => {
+                self.select_startup_index_target_mode(target_mode)
+            }
             Message::StartupIndexHiddenContentVisibilityToggled => {
                 self.toggle_startup_index_hidden_content_visibility()
             }
-            Message::StartupIndexEntryToggled(entry_id) => {
-                self.toggle_startup_index_entry(entry_id)
+            Message::StartupIndexCapabilitySelected(capability) => {
+                self.select_startup_index_capability(capability)
+            }
+            Message::StartupIndexEntryPressed(entry_id) => self.press_startup_index_entry(entry_id),
+            Message::StartupIndexEntryEntered(entry_id) => {
+                self.enter_startup_index_entry_during_selection_drag(entry_id)
+            }
+            Message::StartupIndexEntrySelectionDragFinished => {
+                self.finish_startup_index_entry_selection_drag()
             }
             Message::StartupIndexDirectoryToggled(entry_id) => {
                 self.toggle_startup_index_directory(entry_id)
@@ -569,7 +568,6 @@ impl FileBrowser {
                 children_outcome,
             ),
             Message::StartupIndexAccepted => self.accept_startup_index_setup(),
-            Message::StartupIndexSkipped => self.skip_startup_index_setup(),
             Message::ExpandedDirectoryLoadBatch(request, batch) => {
                 self.accept_expanded_directory_batch(request, batch)
             }
@@ -683,18 +681,7 @@ impl FileBrowser {
                 self.reorder_dragged_tab(pane_id, tab_id);
                 Task::none()
             }
-            Message::TabDragFinished => {
-                self.finish_tab_drag();
-                self.finish_pane_drag();
-                self.finish_batch_rename_preview_drag();
-                Task::batch([
-                    self.finish_sidebar_bookmark_drag(),
-                    self.finish_sidebar_resize_drag_command(),
-                    self.finish_column_resize_drag_command(),
-                    self.finish_drag_selection(None),
-                    self.schedule_thumbnail_refresh(),
-                ])
-            }
+            Message::TabDragFinished => self.finish_pointer_drag_interactions(),
             Message::NavigateTo(path) => Task::batch([
                 self.commit_rename_if_active(),
                 self.navigate_to(path, NavigationMode::RecordHistory),
@@ -786,5 +773,19 @@ impl FileBrowser {
             }
             Message::SelectAll => self.select_all_in_file_selection_scope(),
         }
+    }
+
+    fn finish_pointer_drag_interactions(&mut self) -> Task<Message> {
+        self.finish_tab_drag();
+        self.finish_pane_drag();
+        self.finish_batch_rename_preview_drag();
+        Task::batch([
+            self.finish_startup_index_entry_selection_drag(),
+            self.finish_sidebar_bookmark_drag(),
+            self.finish_sidebar_resize_drag_command(),
+            self.finish_column_resize_drag_command(),
+            self.finish_drag_selection(None),
+            self.schedule_thumbnail_refresh(),
+        ])
     }
 }

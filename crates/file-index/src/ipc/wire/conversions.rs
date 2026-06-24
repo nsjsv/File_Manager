@@ -20,9 +20,9 @@ use super::{
     WireContentIndexPolicy, WireDirectoryErrorPolicy, WireFileKind, WireFileSearchIndexFailure,
     WireFileSearchIndexMode, WireFileSearchIndexOutcome, WireFileSearchIndexStatus,
     WireFileSearchMatch, WireFileSearchOutcome, WireIndexProfile, WireIndexServiceEvent,
-    WireMediaExifField, WireMediaMetadataPolicy, WireMediaSearchKind, WireMediaSearchMetadata,
-    WireOsString, WirePath, WireScanWarning, WireSearchMode, WireSearchQuery,
-    WireSearchResultSource, INDEX_PROTOCOL_VERSION,
+    WireMediaExifField, WireMediaMetadataPolicy, WireMediaMetadataScope, WireMediaSearchKind,
+    WireMediaSearchMetadata, WireOsString, WirePath, WireScanWarning, WireSearchMode,
+    WireSearchQuery, WireSearchResultSource, INDEX_PROTOCOL_VERSION,
 };
 
 impl IndexRequest {
@@ -55,6 +55,7 @@ impl IndexRequest {
 impl IndexRequestCommand {
     pub fn into_service_command(self) -> Option<IndexServiceCommand> {
         Some(match self {
+            Self::Ping => IndexServiceCommand::Ping,
             Self::ConfigureProfile(profile) => {
                 IndexServiceCommand::ConfigureProfile(profile.into_domain())
             }
@@ -81,6 +82,9 @@ impl IndexRequestCommand {
             },
             Self::Pause => IndexServiceCommand::Pause,
             Self::Resume => IndexServiceCommand::Resume,
+            Self::StartMaintenance { profile_id } => {
+                IndexServiceCommand::StartMaintenance { profile_id }
+            }
             Self::DeleteProfile(profile_id) => IndexServiceCommand::DeleteProfile(profile_id),
             Self::SubscribeMaintenance { .. } => return None,
         })
@@ -90,6 +94,7 @@ impl IndexRequestCommand {
 impl From<IndexServiceCommand> for IndexRequestCommand {
     fn from(command: IndexServiceCommand) -> Self {
         match command {
+            IndexServiceCommand::Ping => Self::Ping,
             IndexServiceCommand::ConfigureProfile(profile) => {
                 Self::ConfigureProfile(WireIndexProfile::from_domain(&profile))
             }
@@ -116,6 +121,9 @@ impl From<IndexServiceCommand> for IndexRequestCommand {
             },
             IndexServiceCommand::Pause => Self::Pause,
             IndexServiceCommand::Resume => Self::Resume,
+            IndexServiceCommand::StartMaintenance { profile_id } => {
+                Self::StartMaintenance { profile_id }
+            }
             IndexServiceCommand::DeleteProfile(profile_id) => Self::DeleteProfile(profile_id),
         }
     }
@@ -172,7 +180,7 @@ impl WireIndexProfile {
                 max_file_bytes: profile.content.max_file_bytes,
             },
             media: WireMediaMetadataPolicy {
-                enabled: profile.media.enabled,
+                scope: WireMediaMetadataScope::from(profile.media.scope),
             },
         }
     }
@@ -193,7 +201,7 @@ impl WireIndexProfile {
                 max_file_bytes: self.content.max_file_bytes,
             },
             media: MediaMetadataPolicy {
-                enabled: self.media.enabled,
+                scope: self.media.scope.into(),
             },
         }
     }
@@ -252,6 +260,7 @@ impl WireBuildSelectedPathsRequest {
 impl WireIndexServiceEvent {
     pub fn from_domain(event: &IndexServiceEvent) -> Self {
         match event {
+            IndexServiceEvent::Pong => Self::Pong,
             IndexServiceEvent::ProfileConfigured(id) => Self::ProfileConfigured(id.clone()),
             IndexServiceEvent::ProfileLoaded(profile) => {
                 Self::ProfileLoaded(profile.as_ref().map(WireIndexProfile::from_domain))
@@ -298,6 +307,9 @@ impl WireIndexServiceEvent {
             },
             IndexServiceEvent::Paused => Self::Paused,
             IndexServiceEvent::Resumed => Self::Resumed,
+            IndexServiceEvent::MaintenanceStarted { profile_id } => Self::MaintenanceStarted {
+                profile_id: profile_id.clone(),
+            },
             IndexServiceEvent::ProfileDeleted(id) => Self::ProfileDeleted(id.clone()),
             IndexServiceEvent::WatchStarted { profile_id, root } => Self::WatchStarted {
                 profile_id: profile_id.clone(),
@@ -317,6 +329,7 @@ impl WireIndexServiceEvent {
 
     pub fn into_domain(self) -> IndexServiceEvent {
         match self {
+            Self::Pong => IndexServiceEvent::Pong,
             Self::ProfileConfigured(id) => IndexServiceEvent::ProfileConfigured(id),
             Self::ProfileLoaded(profile) => {
                 IndexServiceEvent::ProfileLoaded(profile.map(WireIndexProfile::into_domain))
@@ -357,6 +370,9 @@ impl WireIndexServiceEvent {
             },
             Self::Paused => IndexServiceEvent::Paused,
             Self::Resumed => IndexServiceEvent::Resumed,
+            Self::MaintenanceStarted { profile_id } => {
+                IndexServiceEvent::MaintenanceStarted { profile_id }
+            }
             Self::ProfileDeleted(id) => IndexServiceEvent::ProfileDeleted(id),
             Self::WatchStarted { profile_id, root } => IndexServiceEvent::WatchStarted {
                 profile_id,
@@ -537,7 +553,7 @@ impl WireFileSearchIndexStatus {
             include_hidden: status.include_hidden,
             content_index_enabled: status.content_index_enabled,
             content_max_file_bytes: status.content_max_file_bytes,
-            media_index_enabled: status.media_index_enabled,
+            media_metadata_scope: WireMediaMetadataScope::from(status.media_metadata_scope),
             record_count: status.record_count,
             index_size_bytes: status.index_size_bytes,
             built_at_ms: status.built_at_ms,
@@ -563,7 +579,7 @@ impl WireFileSearchIndexStatus {
             include_hidden: self.include_hidden,
             content_index_enabled: self.content_index_enabled,
             content_max_file_bytes: self.content_max_file_bytes,
-            media_index_enabled: self.media_index_enabled,
+            media_metadata_scope: self.media_metadata_scope.into(),
             record_count: self.record_count,
             index_size_bytes: self.index_size_bytes,
             built_at_ms: self.built_at_ms,

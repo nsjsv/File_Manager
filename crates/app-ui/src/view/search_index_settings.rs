@@ -3,6 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use file_index::{
     DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexStatus,
+    MediaMetadataScope,
 };
 use iced::widget::{
     button, column, container, mouse_area, radio, row, text, text_input, Button, Column, Space,
@@ -151,10 +152,23 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
             browser.search_index.content_index_enabled,
             Message::SearchIndexContentEnabledToggled(!browser.search_index.content_index_enabled),
         ),
-        profile_switch_row(
-            "Media",
-            browser.search_index.media_index_enabled,
-            Message::SearchIndexMediaEnabledToggled(!browser.search_index.media_index_enabled),
+        media_scope_row(
+            "No media metadata",
+            "Filename search only for images, audio, and video.",
+            browser.search_index.media_metadata_scope == MediaMetadataScope::Off,
+            MediaMetadataScope::Off,
+        ),
+        media_scope_row(
+            "Image metadata",
+            "Image dimensions and EXIF, without audio or video probing.",
+            browser.search_index.media_metadata_scope == MediaMetadataScope::Images,
+            MediaMetadataScope::Images,
+        ),
+        media_scope_row(
+            "All media metadata",
+            "Image metadata plus audio and video metadata.",
+            browser.search_index.media_metadata_scope == MediaMetadataScope::All,
+            MediaMetadataScope::All,
         ),
     ];
 
@@ -209,6 +223,20 @@ fn directory_error_policy_row(
     .spacing(8)
     .align_y(Alignment::Center)
     .into()
+}
+
+fn media_scope_row(
+    title: &'static str,
+    description: &'static str,
+    selected: bool,
+    scope: MediaMetadataScope,
+) -> Element<'static, Message> {
+    selectable_choice_row(
+        title,
+        description,
+        selected,
+        Message::SearchIndexMediaScopeSelected(scope),
+    )
 }
 
 fn profile_switch_row(
@@ -453,10 +481,13 @@ fn root_statuses_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
 }
 
 fn root_status_card<'a>(browser: &'a FileBrowser, root: PathBuf) -> Element<'a, Message> {
-    let is_loading = browser.search_index.status_loading_roots.contains(&root);
+    let is_loading = browser
+        .search_index
+        .status_loading_roots
+        .contains_key(&root);
     let is_indexing = browser.search_index.indexing_roots.contains(&root);
     let status = browser.search_index.statuses.get(&root);
-    let error = browser.search_index.errors.get(&root);
+    let error = browser.search_index.root_errors.get(&root);
     let index_dir = file_index::search_index_dir_for_root(&browser.search_index.base_dir, &root);
 
     let root_label = root.to_string_lossy();
@@ -477,7 +508,7 @@ fn root_status_card<'a>(browser: &'a FileBrowser, root: PathBuf) -> Element<'a, 
     }
 
     if let Some(error) = error {
-        details = details.push(readable_text(format!("Status error: {error}")).size(12));
+        details = details.push(readable_text(format!("Index error: {error}")).size(12));
     }
 
     details = match status {

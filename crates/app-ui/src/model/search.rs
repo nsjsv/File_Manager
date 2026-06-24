@@ -2,9 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use file_index::{
-    DirectoryErrorPolicy, FileSearchIndexStatus, FileSearchMatch, IndexProfile, SearchMode,
+    DirectoryErrorPolicy, FileSearchIndexStatus, FileSearchMatch, IndexProfile, MediaMetadataScope,
+    SearchMode,
 };
 use tokio_util::sync::CancellationToken;
+
+use crate::startup_index_tree::StartupIndexBuildRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchScope {
@@ -80,6 +83,12 @@ pub(crate) enum SearchIndexPathRuleEditMode {
     Modifying(SearchIndexPathRuleSelection),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchIndexProfileSaveReason {
+    General,
+    StartupIndexSetup,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SearchIndexDaemonStatus {
     Reachable,
@@ -96,12 +105,14 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) profile_error: Option<String>,
     pub(crate) maintenance_paused: bool,
     pub(crate) service_generation: u64,
+    pub(crate) status_generation: u64,
     pub(crate) daemon_status: Option<SearchIndexDaemonStatus>,
     pub(crate) daemon_status_loading: bool,
     pub(crate) indexing_roots: HashSet<PathBuf>,
-    pub(crate) errors: HashMap<PathBuf, String>,
+    pub(crate) pending_startup_index_builds: Vec<StartupIndexBuildRequest>,
+    pub(crate) root_errors: HashMap<PathBuf, String>,
     pub(crate) statuses: HashMap<PathBuf, FileSearchIndexStatus>,
-    pub(crate) status_loading_roots: HashSet<PathBuf>,
+    pub(crate) status_loading_roots: HashMap<PathBuf, u64>,
     pub(crate) exclude_pattern_inputs: Vec<String>,
     path_rule_order: Vec<SearchIndexPathRuleOrderEntry>,
     pub(crate) selected_path_rule: Option<SearchIndexPathRuleSelection>,
@@ -110,7 +121,7 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) path_rule_kind: SearchIndexPathRuleKind,
     pub(crate) directory_error_policy: DirectoryErrorPolicy,
     pub(crate) content_index_enabled: bool,
-    pub(crate) media_index_enabled: bool,
+    pub(crate) media_metadata_scope: MediaMetadataScope,
 }
 
 impl SearchIndexRuntime {
@@ -124,12 +135,14 @@ impl SearchIndexRuntime {
             profile_error: None,
             maintenance_paused: false,
             service_generation: 0,
+            status_generation: 0,
             daemon_status: None,
             daemon_status_loading: false,
             indexing_roots: HashSet::new(),
-            errors: HashMap::new(),
+            pending_startup_index_builds: Vec::new(),
+            root_errors: HashMap::new(),
             statuses: HashMap::new(),
-            status_loading_roots: HashSet::new(),
+            status_loading_roots: HashMap::new(),
             exclude_pattern_inputs: Vec::new(),
             path_rule_order: Vec::new(),
             selected_path_rule: None,
@@ -138,7 +151,7 @@ impl SearchIndexRuntime {
             path_rule_kind: SearchIndexPathRuleKind::Indexed,
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
             content_index_enabled: false,
-            media_index_enabled: false,
+            media_metadata_scope: MediaMetadataScope::Off,
         }
     }
 
@@ -147,7 +160,7 @@ impl SearchIndexRuntime {
         self.profile_roots = profile.roots.clone();
         self.directory_error_policy = profile.directory_error_policy;
         self.content_index_enabled = profile.content.enabled;
-        self.media_index_enabled = profile.media.enabled;
+        self.media_metadata_scope = profile.media.scope;
         self.profile_loading = false;
         self.profile_error = None;
         self.service_generation = self.service_generation.wrapping_add(1);

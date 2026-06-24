@@ -80,6 +80,9 @@ pub(crate) use search_index_profile::{
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
 
+#[cfg(test)]
+mod tests;
+
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const SEARCH_MATCH_LIMIT: usize = 50;
 const THUMBNAIL_REFRESH_DELAY: Duration = Duration::from_millis(400);
@@ -201,6 +204,7 @@ pub(crate) fn search_index_command(
 }
 
 pub(crate) fn search_index_status_command(
+    generation: u64,
     root: PathBuf,
     config: config::UserConfig,
     profile_id: String,
@@ -208,11 +212,12 @@ pub(crate) fn search_index_status_command(
     let issued_root = root.clone();
     Task::perform(
         load_search_index_status(root, config, profile_id),
-        move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
+        move |status| Message::SearchIndexStatusLoaded(generation, issued_root.clone(), status),
     )
 }
 
 pub(crate) fn clear_search_index_failures_command(
+    generation: u64,
     root: PathBuf,
     config: config::UserConfig,
     profile_id: String,
@@ -220,11 +225,12 @@ pub(crate) fn clear_search_index_failures_command(
     let issued_root = root.clone();
     Task::perform(
         clear_search_index_failures(root, config, profile_id),
-        move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
+        move |status| Message::SearchIndexStatusLoaded(generation, issued_root.clone(), status),
     )
 }
 
 pub(crate) fn remove_search_index_command(
+    generation: u64,
     root: PathBuf,
     config: config::UserConfig,
     profile_id: String,
@@ -232,7 +238,7 @@ pub(crate) fn remove_search_index_command(
     let issued_root = root.clone();
     Task::perform(
         remove_search_index(root, config, profile_id),
-        move |status| Message::SearchIndexStatusLoaded(issued_root.clone(), status),
+        move |status| Message::SearchIndexStatusLoaded(generation, issued_root.clone(), status),
     )
 }
 
@@ -603,7 +609,7 @@ async fn load_search_tree_matches(
             mode: request.mode,
             content_index_enabled: false,
             content_max_file_bytes: 16 * 1024 * 1024,
-            media_index_enabled: false,
+            media_metadata_scope: file_index::MediaMetadataScope::Off,
         },
         cancellation,
     )
@@ -617,6 +623,7 @@ async fn build_search_index(
     profile_id: String,
     mode: FileSearchIndexMode,
 ) -> Result<FileSearchIndexOutcome, String> {
+    let index_base_dir = config.search_index_dir.clone();
     let command = if mode == FileSearchIndexMode::Incremental {
         IndexServiceCommand::BuildSelectedPaths(BuildSelectedPathsRequest {
             profile_id,
@@ -630,8 +637,25 @@ async fn build_search_index(
     let event =
         search_index_daemon::execute_index_command(config.search_index_dir, command).await?;
     match event {
-        IndexServiceEvent::RebuildFinished(outcome) => Ok(outcome),
+        IndexServiceEvent::RebuildFinished(outcome) => {
+            ensure_search_index_outcome_matches_root(&index_base_dir, outcome)
+        }
         event => Err(format!("unexpected search index event: {event:?}")),
+    }
+}
+
+pub(crate) fn ensure_search_index_outcome_matches_root(
+    index_base_dir: &Path,
+    outcome: FileSearchIndexOutcome,
+) -> Result<FileSearchIndexOutcome, String> {
+    let expected_index_dir = file_index::search_index_dir_for_root(index_base_dir, &outcome.root);
+    if outcome.index_dir == expected_index_dir {
+        Ok(outcome)
+    } else {
+        Err(format!(
+            "search index daemon wrote catalog to {:?}, expected {:?}",
+            outcome.index_dir, expected_index_dir
+        ))
     }
 }
 

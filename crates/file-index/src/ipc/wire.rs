@@ -6,7 +6,7 @@ mod tests;
 
 use serde::{Deserialize, Serialize};
 
-pub const INDEX_PROTOCOL_VERSION: u16 = 1;
+pub const INDEX_PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexRequest {
@@ -29,6 +29,8 @@ pub enum IndexRequestCommand {
     Resume,
     DeleteProfile(String),
     SubscribeMaintenance { profile_id: String },
+    Ping,
+    StartMaintenance { profile_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +93,13 @@ pub enum WireMediaSearchKind {
     Video,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireMediaMetadataScope {
+    Off,
+    Images,
+    All,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireContentIndexPolicy {
     pub enabled: bool,
@@ -99,7 +108,7 @@ pub struct WireContentIndexPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireMediaMetadataPolicy {
-    pub enabled: bool,
+    pub scope: WireMediaMetadataScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +173,10 @@ pub enum WireIndexServiceEvent {
         profile_id: String,
         root: WirePath,
         message: String,
+    },
+    Pong,
+    MaintenanceStarted {
+        profile_id: String,
     },
 }
 
@@ -240,7 +253,7 @@ pub struct WireFileSearchIndexStatus {
     pub include_hidden: bool,
     pub content_index_enabled: bool,
     pub content_max_file_bytes: u64,
-    pub media_index_enabled: bool,
+    pub media_metadata_scope: WireMediaMetadataScope,
     pub record_count: usize,
     pub index_size_bytes: u64,
     pub built_at_ms: Option<i64>,

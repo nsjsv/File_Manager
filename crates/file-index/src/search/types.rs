@@ -3,11 +3,11 @@ use std::path::PathBuf;
 
 use file_core::{FileKind, ScanWarning};
 
-use crate::profile::SearchMode;
+use crate::profile::{MediaMetadataScope, SearchMode};
 
 pub(crate) const DEFAULT_SEARCH_LIMIT: usize = 50;
 pub(crate) const EXTRACTOR_VERSION: u32 = 2;
-pub(crate) const INDEX_FORMAT_VERSION: u32 = 5;
+pub(crate) const INDEX_FORMAT_VERSION: u32 = 7;
 pub(crate) const IGNORE_POLICY_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub struct FileSearchOptions {
     pub mode: SearchMode,
     pub content_max_file_bytes: u64,
     pub content_index_enabled: bool,
-    pub media_index_enabled: bool,
+    pub media_metadata_scope: MediaMetadataScope,
 }
 
 impl Default for FileSearchOptions {
@@ -32,7 +32,7 @@ impl Default for FileSearchOptions {
             mode: SearchMode::Files,
             content_max_file_bytes: 16 * 1024 * 1024,
             content_index_enabled: false,
-            media_index_enabled: false,
+            media_metadata_scope: MediaMetadataScope::Off,
         }
     }
 }
@@ -49,10 +49,11 @@ pub struct FileSearchIndexOptions {
     pub include_hidden: bool,
     pub exclude_patterns: Vec<String>,
     pub directory_error_policy: DirectoryErrorPolicy,
+    pub excluded_index_dir: Option<PathBuf>,
     pub mode: FileSearchIndexMode,
     pub content_index_enabled: bool,
     pub content_max_file_bytes: u64,
-    pub media_index_enabled: bool,
+    pub media_metadata_scope: MediaMetadataScope,
 }
 
 impl Default for FileSearchIndexOptions {
@@ -61,10 +62,11 @@ impl Default for FileSearchIndexOptions {
             include_hidden: false,
             exclude_patterns: Vec::new(),
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+            excluded_index_dir: None,
             mode: FileSearchIndexMode::FullRebuild,
             content_index_enabled: false,
             content_max_file_bytes: 16 * 1024 * 1024,
-            media_index_enabled: false,
+            media_metadata_scope: MediaMetadataScope::Off,
         }
     }
 }
@@ -174,7 +176,7 @@ pub struct FileSearchIndexStatus {
     pub include_hidden: bool,
     pub content_index_enabled: bool,
     pub content_max_file_bytes: u64,
-    pub media_index_enabled: bool,
+    pub media_metadata_scope: MediaMetadataScope,
     pub record_count: usize,
     pub index_size_bytes: u64,
     pub built_at_ms: Option<i64>,
@@ -192,7 +194,7 @@ impl FileSearchIndexStatus {
         include_hidden: bool,
         content_index_enabled: bool,
         content_max_file_bytes: u64,
-        media_index_enabled: bool,
+        media_metadata_scope: MediaMetadataScope,
     ) -> Self {
         Self {
             root,
@@ -203,7 +205,7 @@ impl FileSearchIndexStatus {
             include_hidden,
             content_index_enabled,
             content_max_file_bytes,
-            media_index_enabled,
+            media_metadata_scope,
             record_count: 0,
             index_size_bytes: 0,
             built_at_ms: None,
@@ -221,7 +223,7 @@ impl FileSearchIndexStatus {
         include_hidden: bool,
         content_index_enabled: bool,
         content_max_file_bytes: u64,
-        media_index_enabled: bool,
+        media_metadata_scope: MediaMetadataScope,
         reason: String,
     ) -> Self {
         Self {
@@ -233,7 +235,7 @@ impl FileSearchIndexStatus {
             include_hidden,
             content_index_enabled,
             content_max_file_bytes,
-            media_index_enabled,
+            media_metadata_scope,
             record_count: 0,
             index_size_bytes: 0,
             built_at_ms: None,

@@ -1,6 +1,6 @@
 use file_core::FileKind;
 
-use crate::profile::SearchMode;
+use crate::profile::{MediaMetadataScope, SearchMode};
 use crate::search::{
     DirectoryErrorPolicy, FileSearchIndexMode, FileSearchIndexProgress, MediaSearchKind,
     SearchResultSource,
@@ -8,7 +8,7 @@ use crate::search::{
 
 use super::{
     WireDirectoryErrorPolicy, WireFileKind, WireFileSearchIndexMode, WireFileSearchIndexProgress,
-    WireMediaSearchKind, WireSearchMode, WireSearchResultSource,
+    WireMediaMetadataScope, WireMediaSearchKind, WireSearchMode, WireSearchResultSource,
 };
 
 impl From<SearchMode> for WireSearchMode {
@@ -159,6 +159,26 @@ impl From<WireMediaSearchKind> for MediaSearchKind {
             WireMediaSearchKind::Image => Self::Image,
             WireMediaSearchKind::Audio => Self::Audio,
             WireMediaSearchKind::Video => Self::Video,
+        }
+    }
+}
+
+impl From<MediaMetadataScope> for WireMediaMetadataScope {
+    fn from(scope: MediaMetadataScope) -> Self {
+        match scope {
+            MediaMetadataScope::Off => Self::Off,
+            MediaMetadataScope::Images => Self::Images,
+            MediaMetadataScope::All => Self::All,
+        }
+    }
+}
+
+impl From<WireMediaMetadataScope> for MediaMetadataScope {
+    fn from(scope: WireMediaMetadataScope) -> Self {
+        match scope {
+            WireMediaMetadataScope::Off => Self::Off,
+            WireMediaMetadataScope::Images => Self::Images,
+            WireMediaMetadataScope::All => Self::All,
         }
     }
 }

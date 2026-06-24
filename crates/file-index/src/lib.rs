@@ -39,7 +39,7 @@ pub use ipc::{
 pub use layout::search_index_dir_for_root;
 pub use profile::{
     ContentIndexPolicy, IndexProfile, IndexTaskPhase, IndexTaskStatus, MediaMetadataPolicy,
-    ProfileStore, SearchMode,
+    MediaMetadataScope, ProfileStore, SearchMode,
 };
 pub use search::{
     build_file_search_index, build_file_search_index_for_paths,

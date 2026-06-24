@@ -2,11 +2,8 @@ use iced::widget::{button, container, row, Button, Column};
 use iced::{Alignment, Background, Border, Color, Element, Length, Shadow, Theme, Vector};
 
 use crate::appearance::{base_text_color, is_dark_theme, muted_text_color, subtle_border_color};
-use crate::icons::IconSymbol;
 use crate::model::Message;
 use crate::typography::readable_text;
-
-use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const SEGMENTED_CHOICE_HEIGHT: f32 = 30.0;
 const ACTION_CHOICE_HEIGHT: f32 = 58.0;
@@ -28,30 +25,6 @@ pub(super) fn segmented_choice_row(choices: Vec<SegmentedChoice>) -> Element<'st
         .width(Length::Fill)
         .style(segmented_choice_group_style)
         .into()
-}
-
-pub(super) fn action_choice_row(
-    title: &'static str,
-    description: &'static str,
-    message: Message,
-) -> Button<'static, Message> {
-    let labels = Column::new()
-        .spacing(2)
-        .push(readable_text(title).size(13).width(Length::Fill))
-        .push(readable_text(description).size(11).width(Length::Fill));
-    let content = row![
-        labels.width(Length::Fill),
-        themed_icon(IconSymbol::ArrowRight, IconTone::Normal, MENU_ICON_SIZE),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-
-    button(content)
-        .on_press(message)
-        .padding([7, 10])
-        .width(Length::Fill)
-        .height(Length::Fixed(ACTION_CHOICE_HEIGHT))
-        .style(action_choice_button_style())
 }
 
 pub(super) fn selectable_choice_row(
@@ -160,28 +133,6 @@ fn segmented_choice_button_style(
             },
             ..button::Style::default()
         }
-    }
-}
-
-fn action_choice_button_style() -> fn(&Theme, button::Status) -> button::Style {
-    action_choice_button_appearance
-}
-
-fn action_choice_button_appearance(theme: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Hovered | button::Status::Pressed => hover_background_color(theme),
-        button::Status::Active | button::Status::Disabled => panel_background_color(theme),
-    };
-
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color: base_text_color(theme),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..button::Style::default()
     }
 }
 

@@ -398,7 +398,8 @@ fn index_radio_click_keeps_row_position_after_profile_save_roundtrip() {
     let mut saved_profile =
         file_index::IndexProfile::new("default", browser.search_index.profile_roots.clone());
     saved_profile.exclude_patterns = browser.search_index.exclude_pattern_inputs.clone();
-    let _task = browser.accept_search_index_profile_save(Ok(saved_profile));
+    let _task = browser
+        .accept_search_index_profile_save(SearchIndexProfileSaveReason::General, Ok(saved_profile));
 
     assert_eq!(
         path_rule_selections(&browser),
@@ -454,12 +455,122 @@ fn daemon_status_error_stays_in_search_index_settings_state() {
     assert!(browser.error.is_none());
 }
 
+#[test]
+fn stale_status_response_after_forced_refresh_is_ignored() {
+    let mut browser = browser_with_search_index_home();
+    let root = PathBuf::from("/home/user");
+    browser
+        .search_index
+        .root_errors
+        .insert(root.clone(), "search catalog is not ready".to_owned());
+    let stale_generation = browser.search_index.status_generation;
+
+    let _task = browser.force_refresh_search_index_status_for_root(root.clone());
+    let _task = browser.accept_search_index_status(
+        stale_generation,
+        root.clone(),
+        Err("search catalog is not ready".to_owned()),
+    );
+
+    assert_eq!(
+        browser
+            .search_index
+            .root_errors
+            .get(&root)
+            .map(String::as_str),
+        Some("search catalog is not ready")
+    );
+
+    let fresh_status = missing_status(root.clone(), PathBuf::from("/tmp/index"));
+    let _task = browser.accept_search_index_status(
+        browser.search_index.status_generation,
+        root.clone(),
+        Ok(fresh_status),
+    );
+
+    assert!(!browser.search_index.root_errors.contains_key(&root));
+    assert!(browser.search_index.statuses.contains_key(&root));
+}
+
+#[test]
+fn stale_status_response_keeps_newer_status_request_loading() {
+    let mut browser = browser_with_search_index_home();
+    let root = PathBuf::from("/home/user");
+    let stale_generation = browser.search_index.status_generation;
+
+    let _task = browser.force_refresh_search_index_status_for_root(root.clone());
+    let fresh_generation = browser.search_index.status_generation;
+    let _task = browser.accept_search_index_status(
+        stale_generation,
+        root.clone(),
+        Err("search catalog is not ready".to_owned()),
+    );
+
+    assert_eq!(
+        browser
+            .search_index
+            .status_loading_roots
+            .get(&root)
+            .copied(),
+        Some(fresh_generation)
+    );
+}
+
+#[test]
+fn status_response_for_other_root_survives_unrelated_forced_refresh() {
+    let mut browser = browser_with_search_index_home();
+    let first_root = PathBuf::from("/home/user");
+    let second_root = PathBuf::from("/home/user/Documents");
+    browser.search_index.profile_roots = vec![first_root.clone(), second_root.clone()];
+
+    let _task = browser.refresh_search_index_status_for_root(second_root.clone());
+    let second_root_generation = browser.search_index.status_generation;
+    let _task = browser.force_refresh_search_index_status_for_root(first_root.clone());
+    let second_root_status =
+        missing_status(second_root.clone(), PathBuf::from("/tmp/index-documents"));
+
+    let _task = browser.accept_search_index_status(
+        second_root_generation,
+        second_root.clone(),
+        Ok(second_root_status),
+    );
+
+    assert!(!browser
+        .search_index
+        .status_loading_roots
+        .contains_key(&second_root));
+    assert!(browser.search_index.statuses.contains_key(&second_root));
+}
+
 fn browser_with_search_index_home() -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+    browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
     browser.current_dir = PathBuf::from("/mnt/project");
     browser.search_index.home_dir = PathBuf::from("/home/user");
     browser.search_index.profile_roots = vec![PathBuf::from("/home/user")];
     browser
+}
+
+fn missing_status(root: PathBuf, index_dir: PathBuf) -> file_index::FileSearchIndexStatus {
+    file_index::FileSearchIndexStatus {
+        root,
+        index_dir,
+        exists: false,
+        stale: false,
+        reason: None,
+        include_hidden: false,
+        content_index_enabled: false,
+        content_max_file_bytes: 16 * 1024 * 1024,
+        media_metadata_scope: file_index::MediaMetadataScope::Off,
+        record_count: 0,
+        index_size_bytes: 0,
+        built_at_ms: None,
+        updated_at_ms: None,
+        failed_count: 0,
+        exclude_rules_hash: None,
+        extractor_version: None,
+        failures: Vec::new(),
+    }
 }
 
 fn search_index_roots_with_added_root(existing_roots: &[PathBuf], root: PathBuf) -> Vec<PathBuf> {

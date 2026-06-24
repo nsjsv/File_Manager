@@ -33,11 +33,11 @@ impl FileBrowser {
         }
         match event {
             IndexServiceEvent::WatchStarted { root, .. } => {
-                self.search_index.errors.remove(&root);
+                self.search_index.root_errors.remove(&root);
                 self.refresh_search_index_status_for_root(root)
             }
             IndexServiceEvent::WatchFailed { root, message, .. } => {
-                self.search_index.errors.insert(root, message);
+                self.search_index.root_errors.insert(root, message);
                 Task::none()
             }
             IndexServiceEvent::IncrementalUpdateStarted { root, .. } => {
@@ -48,16 +48,16 @@ impl FileBrowser {
             IndexServiceEvent::IncrementalUpdateFinished { outcome, .. } => {
                 let root = outcome.root.clone();
                 self.search_index.indexing_roots.remove(&root);
-                self.search_index.errors.remove(&root);
+                self.search_index.root_errors.remove(&root);
                 self.sync_search_index_status_for_active_search(&root);
                 Task::batch([
-                    self.refresh_search_index_status_for_root(root),
+                    self.force_refresh_search_index_status_for_root(root),
                     self.load_search_matches(),
                 ])
             }
             IndexServiceEvent::IncrementalUpdateFailed { root, message, .. } => {
                 self.search_index.indexing_roots.remove(&root);
-                self.search_index.errors.insert(root.clone(), message);
+                self.search_index.root_errors.insert(root.clone(), message);
                 self.sync_search_index_status_for_active_search(&root);
                 Task::none()
             }

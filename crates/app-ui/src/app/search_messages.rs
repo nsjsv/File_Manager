@@ -34,12 +34,12 @@ impl FileBrowser {
                 self.accept_search_matches(request, search)
             }
             Message::SearchIndexBuilt(root, outcome) => self.accept_search_index(root, outcome),
-            Message::SearchIndexStatusLoaded(root, outcome) => {
-                self.accept_search_index_status(root, outcome)
+            Message::SearchIndexStatusLoaded(generation, root, outcome) => {
+                self.accept_search_index_status(generation, root, outcome)
             }
             Message::SearchIndexProfileLoaded(outcome) => self.accept_search_index_profile(outcome),
-            Message::SearchIndexProfileSaved(outcome) => {
-                self.accept_search_index_profile_save(outcome)
+            Message::SearchIndexProfileSaved(reason, outcome) => {
+                self.accept_search_index_profile_save(reason, outcome)
             }
             Message::SearchIndexProfileDeleted(outcome) => {
                 self.accept_search_index_profile_delete(outcome)
@@ -97,12 +97,14 @@ impl FileBrowser {
             Message::SearchIndexContentEnabledToggled(enabled) => {
                 self.toggle_search_index_content(enabled)
             }
-            Message::SearchIndexMediaEnabledToggled(enabled) => {
-                self.toggle_search_index_media(enabled)
+            Message::SearchIndexMediaScopeSelected(scope) => {
+                self.select_search_index_media_scope(scope)
             }
             Message::SearchBackendModeSelected(mode) => self.select_search_backend_mode(mode),
-            Message::SearchModePromptSimpleSelected => self.select_simple_search_from_prompt(),
-            Message::SearchModePromptIndexedSelected => self.select_indexed_search_from_prompt(),
+            Message::SearchModePromptModeSelected(mode) => {
+                self.select_search_mode_prompt_mode(mode)
+            }
+            Message::SearchModePromptNextPressed => self.accept_search_mode_prompt(),
             Message::SearchMatchSelected(path) => self.activate_search_match(path),
             Message::SearchActivated => self.activate_selected_search_match(),
             _ => Task::none(),
@@ -122,7 +124,7 @@ fn search_index_message_commits_path_rule_editor(message: &Message) -> bool {
             | Message::SearchIndexFailuresClearRequested(_)
             | Message::SearchIndexDirectoryErrorPolicySelected(_)
             | Message::SearchIndexContentEnabledToggled(_)
-            | Message::SearchIndexMediaEnabledToggled(_)
+            | Message::SearchIndexMediaScopeSelected(_)
             | Message::SearchBackendModeSelected(_)
     )
 }

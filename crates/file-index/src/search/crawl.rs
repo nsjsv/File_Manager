@@ -88,10 +88,11 @@ pub(crate) fn crawl_search_records(
             }
         };
 
-        records.push(SearchCatalogRecord::from_path(
+        records.push(SearchCatalogRecord::from_path_with_metadata(
             root,
             path,
             file_kind_from_metadata(&metadata),
+            &metadata,
         ));
 
         if options.throttle && records.len() % INDEX_THROTTLE_EVERY == 0 {
@@ -121,7 +122,10 @@ pub(crate) fn crawl_selected_search_records_with_progress(
 
     for (index, selected_path) in selected_paths.into_iter().enumerate() {
         options.ensure_not_cancelled()?;
-        if selected_path_is_hidden(&selected_path) && !options.include_hidden {
+        if selected_path != catalog_root
+            && selected_path_is_hidden(&selected_path)
+            && !options.include_hidden
+        {
             progress(index + 1, records.len());
             continue;
         }
@@ -150,7 +154,12 @@ pub(crate) fn crawl_selected_search_records_with_progress(
         }
         if selected_path != catalog_root {
             push_unique_record(
-                SearchCatalogRecord::from_path(catalog_root, selected_path.clone(), kind),
+                SearchCatalogRecord::from_path_with_metadata(
+                    catalog_root,
+                    selected_path.clone(),
+                    kind,
+                    &metadata,
+                ),
                 &mut records,
                 &mut seen_keys,
             );
@@ -219,7 +228,12 @@ fn crawl_selected_directory_children(
             }
         };
         push_unique_record(
-            SearchCatalogRecord::from_path(catalog_root, path, file_kind_from_metadata(&metadata)),
+            SearchCatalogRecord::from_path_with_metadata(
+                catalog_root,
+                path,
+                file_kind_from_metadata(&metadata),
+                &metadata,
+            ),
             records,
             seen_keys,
         );
@@ -272,6 +286,61 @@ fn search_walk_builder(
                 )
         });
     builder
+}
+
+pub(crate) fn watchable_search_directories(
+    root: &Path,
+    options: &SearchCrawlOptions,
+) -> Result<(Vec<PathBuf>, Vec<ScanWarning>), IndexError> {
+    std_fs::read_dir(root).map_err(|source| IndexError::ReadDirectory {
+        path: root.to_path_buf(),
+        source,
+    })?;
+
+    let mut directories = vec![root.to_path_buf()];
+    let mut skipped = Vec::new();
+    let mut skipped_roots = Vec::new();
+    let mut discarded_records = Vec::new();
+
+    for result in search_walk_builder(root, root, options).build() {
+        options.ensure_not_cancelled()?;
+        let dir_entry = match result {
+            Ok(dir_entry) => dir_entry,
+            Err(error) => {
+                let skipped_root = record_walk_error(
+                    root,
+                    error,
+                    options,
+                    &mut discarded_records,
+                    &mut skipped,
+                    &mut skipped_roots,
+                )?;
+                directories.retain(|directory| !directory.starts_with(&skipped_root));
+                continue;
+            }
+        };
+        if dir_entry.depth() == 0 {
+            continue;
+        }
+
+        let path = dir_entry.path();
+        if skipped_roots
+            .iter()
+            .any(|skipped| path.starts_with(skipped))
+        {
+            continue;
+        }
+        if dir_entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_dir())
+        {
+            directories.push(path.to_path_buf());
+        }
+    }
+
+    directories.sort_unstable();
+    directories.dedup();
+    Ok((directories, skipped))
 }
 
 fn custom_exclude_matcher(root: &Path, patterns: &[String]) -> Option<Gitignore> {
@@ -334,7 +403,7 @@ fn record_walk_error(
     records: &mut Vec<SearchCatalogRecord>,
     skipped: &mut Vec<ScanWarning>,
     skipped_roots: &mut Vec<PathBuf>,
-) -> Result<(), IndexError> {
+) -> Result<PathBuf, IndexError> {
     let error_path = ignore_error_path(&error)
         .map(Path::to_path_buf)
         .unwrap_or_else(|| fallback_root.to_path_buf());
@@ -354,11 +423,11 @@ fn record_walk_error(
     }
     if !skipped.iter().any(|warning| warning.path == error_path) {
         skipped.push(ScanWarning {
-            path: error_path,
+            path: error_path.clone(),
             message: error.to_string(),
         });
     }
-    Ok(())
+    Ok(error_path)
 }
 
 fn selected_path_is_hidden(path: &Path) -> bool {
@@ -407,4 +476,157 @@ fn ignore_error_io(error: ignore::Error) -> std::io::Error {
     error
         .into_io_error()
         .unwrap_or_else(|| std::io::Error::other("search index walk failed"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn watchable_search_directories_respects_profile_boundaries() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let visible = root.join("src");
+        let hidden = root.join(".cache");
+        let excluded = root.join("node_modules/pkg");
+        let index_dir = root.join(".file-index");
+        let pending_index_dir = index_dir.with_extension("building");
+        std_fs::create_dir_all(&visible).unwrap();
+        std_fs::create_dir_all(&hidden).unwrap();
+        std_fs::create_dir_all(&excluded).unwrap();
+        std_fs::create_dir_all(&index_dir).unwrap();
+        std_fs::create_dir_all(&pending_index_dir).unwrap();
+
+        let (directories, skipped) = watchable_search_directories(
+            root,
+            &SearchCrawlOptions {
+                include_hidden: false,
+                exclude_patterns: vec!["node_modules/".to_owned()],
+                directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+                excluded_index_dir: Some(index_dir.clone()),
+                throttle: false,
+                cancel: None,
+            },
+        )
+        .unwrap();
+
+        assert!(skipped.is_empty());
+        assert!(directories.iter().any(|directory| directory == root));
+        assert!(directories.contains(&visible));
+        assert!(!directories.contains(&hidden));
+        assert!(!directories
+            .iter()
+            .any(|directory| directory.starts_with(&excluded)));
+        assert!(!directories
+            .iter()
+            .any(|directory| directory.starts_with(&index_dir)));
+        assert!(!directories
+            .iter()
+            .any(|directory| directory.starts_with(&pending_index_dir)));
+    }
+
+    #[test]
+    fn selected_hidden_catalog_root_is_scanned_without_including_hidden_children() {
+        let dir = tempdir().unwrap();
+        let hidden_root = dir.path().join(".config");
+        let visible_file = hidden_root.join("settings.toml");
+        let hidden_child = hidden_root.join(".secret");
+        std_fs::create_dir_all(&hidden_root).unwrap();
+        std_fs::write(&visible_file, b"visible").unwrap();
+        std_fs::write(&hidden_child, b"hidden").unwrap();
+
+        let (records, skipped) = crawl_selected_search_records_with_progress(
+            &hidden_root,
+            std::slice::from_ref(&hidden_root),
+            &SearchCrawlOptions {
+                include_hidden: false,
+                exclude_patterns: Vec::new(),
+                directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+                excluded_index_dir: None,
+                throttle: false,
+                cancel: None,
+            },
+            |_, _| {},
+        )
+        .unwrap();
+
+        assert!(skipped.is_empty());
+        assert!(records.iter().any(|record| record.path == visible_file));
+        assert!(!records.iter().any(|record| record.path == hidden_child));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchable_search_directories_records_unreadable_child_when_skipping() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let visible = root.join("visible");
+        let blocked = root.join("blocked");
+        std_fs::create_dir_all(&visible).unwrap();
+        std_fs::create_dir_all(blocked.join("child")).unwrap();
+        let original_permissions = std_fs::metadata(&blocked).unwrap().permissions();
+        std_fs::set_permissions(&blocked, std_fs::Permissions::from_mode(0o000)).unwrap();
+        if std_fs::read_dir(&blocked).is_ok() {
+            std_fs::set_permissions(&blocked, original_permissions).unwrap();
+            return;
+        }
+
+        let outcome = watchable_search_directories(
+            root,
+            &SearchCrawlOptions {
+                include_hidden: false,
+                exclude_patterns: Vec::new(),
+                directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+                excluded_index_dir: None,
+                throttle: false,
+                cancel: None,
+            },
+        );
+        std_fs::set_permissions(&blocked, original_permissions).unwrap();
+        let (directories, skipped) = outcome.unwrap();
+
+        assert!(directories.contains(&visible));
+        assert!(!directories
+            .iter()
+            .any(|directory| directory.starts_with(&blocked)));
+        assert!(skipped.iter().any(|warning| warning.path == blocked));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watchable_search_directories_fails_unreadable_child_when_abort_policy_is_used() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let blocked = root.join("blocked");
+        std_fs::create_dir_all(blocked.join("child")).unwrap();
+        let original_permissions = std_fs::metadata(&blocked).unwrap().permissions();
+        std_fs::set_permissions(&blocked, std_fs::Permissions::from_mode(0o000)).unwrap();
+        if std_fs::read_dir(&blocked).is_ok() {
+            std_fs::set_permissions(&blocked, original_permissions).unwrap();
+            return;
+        }
+
+        let outcome = watchable_search_directories(
+            root,
+            &SearchCrawlOptions {
+                include_hidden: false,
+                exclude_patterns: Vec::new(),
+                directory_error_policy: DirectoryErrorPolicy::Abort,
+                excluded_index_dir: None,
+                throttle: false,
+                cancel: None,
+            },
+        );
+        std_fs::set_permissions(&blocked, original_permissions).unwrap();
+
+        assert!(matches!(
+            outcome,
+            Err(IndexError::ReadDirectory { path, .. }) if path == blocked
+        ));
+    }
 }

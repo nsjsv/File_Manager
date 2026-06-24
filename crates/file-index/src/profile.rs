@@ -30,12 +30,44 @@ impl Default for ContentIndexPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaMetadataPolicy {
-    pub enabled: bool,
+    pub scope: MediaMetadataScope,
 }
 
 impl Default for MediaMetadataPolicy {
     fn default() -> Self {
-        Self { enabled: false }
+        Self {
+            scope: MediaMetadataScope::Off,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MediaMetadataScope {
+    Off,
+    Images,
+    All,
+}
+
+impl MediaMetadataScope {
+    pub fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "images" => Some(Self::Images),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Images => "images",
+            Self::All => "all",
+        }
+    }
+
+    pub fn includes_media(self) -> bool {
+        self != Self::Off
     }
 }
 

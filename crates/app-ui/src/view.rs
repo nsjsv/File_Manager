@@ -145,30 +145,41 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 }
 
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
-    let pane_layer: Element<'_, Message> = container(
-        row![
-            Space::new().width(Length::Fixed(browser.sidebar_width)),
-            container(panes_view(browser))
-                .width(Length::Fill)
-                .height(Length::Fill),
-        ]
+    let onboarding_active =
+        browser.search_mode_prompt.is_some() || browser.startup_index_setup.is_some();
+    let content: Element<'_, Message> = if onboarding_active {
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(app_content_style)
+            .into()
+    } else {
+        let pane_layer: Element<'_, Message> = container(
+            row![
+                Space::new().width(Length::Fixed(browser.sidebar_width)),
+                container(panes_view(browser))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill),
+        )
         .width(Length::Fill)
-        .height(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(app_content_style)
-    .into();
-    let content = stack([pane_layer, opaque(sidebar_view(browser))])
-        .width(Length::Fill)
-        .height(Length::Fill);
+        .height(Length::Fill)
+        .style(app_content_style)
+        .into();
+        stack([pane_layer, opaque(sidebar_view(browser))])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    };
 
     let mut floating = Vec::new();
     let mut floating_input = BrowserFloatingInput::Plain;
-    if browser.search_mode_prompt.is_some() {
+    if let Some(prompt) = &browser.search_mode_prompt {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
-            element: search_mode_prompt_panel(),
+            element: search_mode_prompt_panel(prompt),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(startup_index_setup) = &browser.startup_index_setup {
@@ -300,7 +311,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if browser.operation_queue.is_panel_open() {
+    if !onboarding_active && browser.operation_queue.is_panel_open() {
         let queue_dismissal = match browser.operation_queue_panel_mode {
             OperationQueuePanelMode::PassivePreview => BrowserFloatingInput::DismissiblePassThrough,
             OperationQueuePanelMode::InteractiveList => BrowserFloatingInput::DismissibleBlocking,
@@ -318,15 +329,17 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if let Some(indicator) = operation_queue_indicator(&browser.operation_queue) {
-        floating.push(FloatingContent {
-            element: indicator,
-            placement: FloatingPlacement::BottomRightInArea {
-                area_width: browser.sidebar_width,
-                right: OPERATION_QUEUE_INDICATOR_RIGHT,
-                bottom: OPERATION_QUEUE_INDICATOR_BOTTOM,
-            },
-        });
+    if !onboarding_active {
+        if let Some(indicator) = operation_queue_indicator(&browser.operation_queue) {
+            floating.push(FloatingContent {
+                element: indicator,
+                placement: FloatingPlacement::BottomRightInArea {
+                    area_width: browser.sidebar_width,
+                    right: OPERATION_QUEUE_INDICATOR_RIGHT,
+                    bottom: OPERATION_QUEUE_INDICATOR_BOTTOM,
+                },
+            });
+        }
     }
 
     match floating_input {

@@ -10,8 +10,8 @@ use file_index::{
     build_file_search_index, default_search_index_exclude_patterns, BuildSelectedPathsRequest,
     ContentIndexPolicy, DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode,
     FileSearchIndexOptions, IndexProfile, IndexService, IndexServiceCommand, IndexServiceEvent,
-    IndexTaskPhase, MediaMetadataPolicy, ProfileStore, SearchIndexFileRecord, SearchMode,
-    SearchQuery,
+    IndexTaskPhase, MediaMetadataPolicy, MediaMetadataScope, ProfileStore, SearchIndexFileRecord,
+    SearchMode, SearchQuery,
 };
 use tempfile::tempdir;
 
@@ -32,7 +32,9 @@ fn profile_store_preserves_explicit_roots_and_policies() {
             enabled: true,
             max_file_bytes: 1024,
         },
-        media: MediaMetadataPolicy { enabled: true },
+        media: MediaMetadataPolicy {
+            scope: MediaMetadataScope::All,
+        },
     };
 
     store.save_profile(&profile).unwrap();
@@ -349,6 +351,82 @@ async fn index_service_execute_publishes_status_events() {
 }
 
 #[tokio::test]
+async fn index_service_read_only_commands_do_not_start_maintenance() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let service = IndexService::open(
+        dir.path().join("control.sqlite"),
+        dir.path().join("indexes"),
+    )
+    .unwrap();
+    let mut events = service.status_stream();
+
+    service
+        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile::new(
+            "main",
+            vec![root.clone()],
+        )))
+        .await
+        .unwrap();
+    service
+        .execute(IndexServiceCommand::LoadProfile("main".to_owned()))
+        .await
+        .unwrap();
+    service
+        .execute(IndexServiceCommand::Status {
+            profile_id: "main".to_owned(),
+            root,
+        })
+        .await
+        .unwrap();
+
+    assert_no_watch_started(&mut events).await;
+}
+
+#[tokio::test]
+async fn index_service_start_maintenance_command_validates_profile_without_starting_watcher() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let service = IndexService::open(
+        dir.path().join("control.sqlite"),
+        dir.path().join("indexes"),
+    )
+    .unwrap();
+    let mut events = service.status_stream();
+    service
+        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile::new(
+            "main",
+            vec![root],
+        )))
+        .await
+        .unwrap();
+
+    let event = service
+        .execute(IndexServiceCommand::StartMaintenance {
+            profile_id: "main".to_owned(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        event,
+        IndexServiceEvent::MaintenanceStarted {
+            profile_id: "main".to_owned()
+        }
+    );
+    assert_no_watch_started(&mut events).await;
+    let error = service
+        .execute(IndexServiceCommand::StartMaintenance {
+            profile_id: "missing".to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("missing profile missing"));
+}
+
+#[tokio::test]
 async fn index_service_command_covers_build_status_clear_failures_remove_root_and_delete_profile() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("root");
@@ -471,6 +549,37 @@ async fn index_service_rebuild_mirrors_catalog_metadata_to_control_db() {
 }
 
 #[tokio::test]
+async fn index_service_rebuild_excludes_index_base_inside_hidden_root() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("note.txt"), "ordinary file").unwrap();
+    let index_base = root.join(".cache/file-manager/search-index");
+    std::fs::create_dir_all(&index_base).unwrap();
+    let service = IndexService::open(index_base.join("control.sqlite"), &index_base).unwrap();
+    let mut profile = IndexProfile::new("main", vec![root.clone()]);
+    profile.include_hidden = true;
+    service.configure_profile(profile).unwrap();
+
+    service.rebuild("main", root.clone()).await.unwrap();
+    let event = service
+        .query(SearchQuery {
+            profile_id: "main".to_owned(),
+            root,
+            text: "control".to_owned(),
+            mode: SearchMode::Files,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    let IndexServiceEvent::QueryFinished(outcome) = event else {
+        panic!("expected query result");
+    };
+
+    assert!(outcome.matches.is_empty());
+}
+
+#[tokio::test]
 async fn index_service_maintains_root_after_file_create_modify_and_delete() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("root");
@@ -534,7 +643,7 @@ async fn index_service_maintains_root_after_file_rename() {
 }
 
 #[tokio::test]
-async fn index_service_reconciles_changes_missed_while_stopped() {
+async fn index_service_maintenance_does_not_reconcile_changes_missed_while_stopped() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -557,9 +666,8 @@ async fn index_service_reconciles_changes_missed_while_stopped() {
     let mut events = service.status_stream();
     let _maintenance = service.maintain_profile("main");
     wait_for_watch_started(&mut events, &root).await;
-    wait_for_incremental_finish(&mut events, &root).await;
 
-    assert_file_query_count(&service, &root, "offline", 1).await;
+    assert_file_query_count(&service, &root, "offline", 0).await;
 }
 
 fn root_key_for_test(root: &PathBuf) -> String {
@@ -609,6 +717,21 @@ async fn wait_for_incremental_finish(
             } if outcome.root == *root
         ) {
             return;
+        }
+    }
+}
+
+async fn assert_no_watch_started(events: &mut tokio::sync::broadcast::Receiver<IndexServiceEvent>) {
+    loop {
+        match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
+            Ok(Ok(event)) => {
+                assert!(
+                    !matches!(event, IndexServiceEvent::WatchStarted { .. }),
+                    "unexpected watch start event: {event:?}"
+                );
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => return,
         }
     }
 }
