@@ -3,9 +3,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use iced::advanced::widget as advanced_widget;
-use iced::advanced::{layout, renderer, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{layout, overlay, renderer, Clipboard, Layout, Shell, Widget};
 use iced::widget::scrollable;
-use iced::{mouse, Element, Event, Length, Rectangle, Size, Task};
+use iced::{mouse, Element, Event, Length, Rectangle, Size, Task, Vector};
 
 use super::FileBrowser;
 use crate::model::{Message, ScrollbarRegion};
@@ -334,6 +334,23 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SmoothScrollArea<'_> {
             cursor,
             viewport,
         );
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut advanced_widget::Tree,
+        layout: Layout<'a>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 }
 
