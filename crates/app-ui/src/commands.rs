@@ -20,7 +20,7 @@ use file_index::{
     FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome,
     IndexServiceCommand, IndexServiceEvent, SearchQuery,
 };
-use file_operation_store::TaskQueueStore;
+use file_operation_store::{StoreError, TaskQueueStore};
 use iced::Task;
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +43,7 @@ pub(crate) use archive_creation::check_archive_target_command;
 mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
 mod batch_rename_operation;
+mod browser_session;
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
 mod network_connections;
@@ -128,6 +129,16 @@ pub(crate) fn save_column_width_overrides_command(
     Task::perform(
         persist_column_width_overrides(task_queue_store, column_width_overrides),
         Message::ColumnWidthOverrideSaved,
+    )
+}
+
+pub(crate) fn save_browser_session_command(
+    task_queue_store: TaskQueueStore,
+    snapshot: crate::model::BrowserSessionSnapshot,
+) -> Task<Message> {
+    Task::perform(
+        browser_session::persist_browser_session(task_queue_store, snapshot),
+        Message::BrowserSessionSaved,
     )
 }
 
@@ -465,6 +476,11 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
     let store_outcome = tokio::task::spawn_blocking(move || {
         let store = TaskQueueStore::new(path)?;
         let restored_tasks = store.read_tasks()?;
+        let browser_session = match store.read_browser_session() {
+            Ok(session) => session.and_then(crate::model::snapshot_from_stored),
+            Err(StoreError::Json(_)) => None,
+            Err(error) => return Err(error),
+        };
         let column_width_overrides = store
             .read_column_widths()?
             .into_iter()
@@ -475,6 +491,7 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
         Ok::<LoadedOperationStore, file_operation_store::StoreError>(LoadedOperationStore {
             task_queue_store: store,
             column_width_overrides,
+            browser_session,
             restored_tasks,
         })
     })

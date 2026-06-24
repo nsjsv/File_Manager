@@ -35,9 +35,12 @@ impl FileBrowser {
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
         self.selected_settings_category = category;
         if category == SettingsCategory::SearchIndex {
-            self.prepare_search_index_settings()
+            Task::batch([
+                self.prepare_search_index_settings(),
+                self.request_browser_session_save(),
+            ])
         } else {
-            Task::none()
+            self.request_browser_session_save()
         }
     }
 

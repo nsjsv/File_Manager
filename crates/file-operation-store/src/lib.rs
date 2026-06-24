@@ -14,6 +14,14 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+mod browser_session;
+pub use browser_session::{
+    StoredBrowserPane, StoredBrowserPaneLayout, StoredBrowserSession, StoredBrowserTab,
+    StoredBrowserViewMode, StoredColumnViewport, StoredFilePropertiesCategory,
+    StoredPropertiesSession, StoredSearchMode, StoredSearchScope, StoredSearchSession,
+    StoredSettingsCategory, StoredSplitAxis,
+};
+
 #[cfg(test)]
 mod tests;
 
@@ -33,9 +41,16 @@ CREATE TABLE IF NOT EXISTS ui_column_view_preferences (
     preference_key TEXT PRIMARY KEY,
     value_real REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS browser_session (
+    session_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
 "#;
 
 const COLUMN_WIDTH_PREFERENCE_PREFIX: &str = "column_width.";
+const BROWSER_SESSION_KEY: &str = "main";
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -539,6 +554,53 @@ impl TaskQueueStore {
                 StoredTaskStatus::Paused.as_str(),
                 StoredTaskStatus::Canceling.as_str(),
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn read_browser_session(&self) -> StoreResult<Option<StoredBrowserSession>> {
+        let connection = self.connection()?;
+        let payload_json = connection
+            .query_row(
+                "SELECT payload_json FROM browser_session WHERE session_key = ?1",
+                params![BROWSER_SESSION_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match payload_json {
+            Some(payload_json) => match serde_json::from_str(&payload_json) {
+                Ok(session) => Ok(Some(session)),
+                Err(error) => {
+                    connection.execute(
+                        "DELETE FROM browser_session WHERE session_key = ?1",
+                        params![BROWSER_SESSION_KEY],
+                    )?;
+                    Err(StoreError::Json(error))
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
+    pub fn replace_browser_session(&self, session: &StoredBrowserSession) -> StoreResult<()> {
+        let connection = self.connection()?;
+        let payload_json = serde_json::to_string(session)?;
+        connection.execute(
+            "INSERT INTO browser_session (session_key, payload_json, updated_at_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_key) DO UPDATE SET
+                 payload_json = excluded.payload_json,
+                 updated_at_ms = excluded.updated_at_ms",
+            params![BROWSER_SESSION_KEY, payload_json, current_time_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_browser_session(&self) -> StoreResult<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            "DELETE FROM browser_session WHERE session_key = ?1",
+            params![BROWSER_SESSION_KEY],
         )?;
         Ok(())
     }

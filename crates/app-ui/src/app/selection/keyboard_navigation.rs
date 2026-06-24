@@ -255,7 +255,11 @@ impl FileBrowser {
             expanded.is_expanded = true;
             expanded.is_collapsing = false;
             expanded.animation_progress = 1.0;
-            return self.focus_latest_column();
+            self.sync_active_tab_state();
+            return Task::batch([
+                self.focus_latest_column(),
+                self.request_browser_session_save(),
+            ]);
         }
 
         let mut expanded = ExpandedDirectory {
@@ -273,9 +277,11 @@ impl FileBrowser {
             &mut expanded,
         );
         self.expanded_directories.insert(path, expanded);
+        self.sync_active_tab_state();
         Task::batch([
             load_expanded_directory_command(request, self.options.clone(), cancellation),
             self.focus_latest_column(),
+            self.request_browser_session_save(),
         ])
     }
 
@@ -323,13 +329,18 @@ impl FileBrowser {
             return Task::batch([
                 close_window_command,
                 animated_image_preview_command(path, generation),
+                self.request_browser_session_save(),
             ]);
         }
         if is_image_preview {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.error = None;
-            return Task::batch([close_window_command, image_preview_dimensions_command(path)]);
+            return Task::batch([
+                close_window_command,
+                image_preview_dimensions_command(path),
+                self.request_browser_session_save(),
+            ]);
         }
         if is_video_preview {
             let close_window_command = self.close_preview_window();
@@ -343,6 +354,7 @@ impl FileBrowser {
                     self.options.clone(),
                     self.max_preview_file_bytes(),
                 ),
+                self.request_browser_session_save(),
             ]);
         }
 
@@ -366,6 +378,7 @@ impl FileBrowser {
                     self.max_preview_file_bytes(),
                 ),
                 start_audio_preview_command(path),
+                self.request_browser_session_save(),
             ]);
         }
         Task::batch([
@@ -376,6 +389,7 @@ impl FileBrowser {
                 self.options.clone(),
                 self.max_preview_file_bytes(),
             ),
+            self.request_browser_session_save(),
         ])
     }
 

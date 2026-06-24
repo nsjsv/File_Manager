@@ -284,10 +284,11 @@ impl FileBrowser {
             self.commit_rename_if_active(),
             self.prepare_search_index_settings_if_selected(),
             self.ensure_settings_window(),
+            self.request_browser_session_save(),
         ])
     }
 
-    fn ensure_settings_window(&mut self) -> Task<Message> {
+    pub(super) fn ensure_settings_window(&mut self) -> Task<Message> {
         if let Some(window) = self.settings_window {
             self.focused_window = window;
             return window::gain_focus(window);
@@ -307,7 +308,7 @@ impl FileBrowser {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        window::close(window)
+        Task::batch([window::close(window), self.request_browser_session_save()])
     }
 
     pub(super) fn ensure_properties_window(&mut self) -> Task<Message> {
@@ -330,7 +331,7 @@ impl FileBrowser {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        window::close(window)
+        Task::batch([window::close(window), self.request_browser_session_save()])
     }
 
     pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
@@ -429,7 +430,7 @@ impl FileBrowser {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        window::close(window)
+        Task::batch([window::close(window), self.request_browser_session_save()])
     }
 
     pub(super) fn handle_window_focused(&mut self, window: window::Id) -> Task<Message> {
@@ -596,24 +597,29 @@ impl FileBrowser {
         self.clear_preview();
         self.pending_preview_resize = None;
 
-        let mut commands = Vec::with_capacity(6);
+        let mut auxiliary_close_commands = Vec::with_capacity(4);
         if let Some(window) = self.search_window.take() {
-            commands.push(window::close(window));
+            auxiliary_close_commands.push(window::close(window));
         }
         if let Some(window) = self.settings_window.take() {
-            commands.push(window::close(window));
+            auxiliary_close_commands.push(window::close(window));
         }
         if let Some(window) = self.properties_window.take() {
-            commands.push(window::close(window));
+            auxiliary_close_commands.push(window::close(window));
         }
         if let Some(window) = self.preview_window.take() {
-            commands.push(window::close(window));
+            auxiliary_close_commands.push(window::close(window));
         }
-        commands.push(window::close(self.main_window));
-        // Iced daemons keep running without windows unless update returns an exit task.
-        commands.push(iced::exit());
 
-        Task::batch(commands)
+        let close_main_window_and_exit = Task::batch([
+            window::close(self.main_window),
+            // Iced daemon 没有窗口后仍会运行，主窗口关闭时必须显式退出运行时。
+            iced::exit(),
+        ]);
+        Task::batch(auxiliary_close_commands).chain(shutdown_after_browser_session_save(
+            self.flush_browser_session_save(),
+            close_main_window_and_exit,
+        ))
     }
 
     fn clear_search_state(&mut self) {
@@ -677,94 +683,12 @@ impl FileBrowser {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const FLOAT_TOLERANCE: f32 = 0.01;
-
-    fn clamped_image_size(width: u32, height: u32) -> PreviewSize {
-        clamp_preview_size_to_minimum(
-            PreviewWindowProfile::Image,
-            image_preview_size_from_dimensions(width, height),
-        )
-    }
-
-    fn clamped_video_size(width: u32, height: u32) -> PreviewSize {
-        clamp_preview_size_to_minimum(
-            PreviewWindowProfile::Video,
-            video_preview_size_from_frame(width, height),
-        )
-    }
-
-    fn assert_close(actual: f32, expected: f32) {
-        assert!(
-            (actual - expected).abs() <= FLOAT_TOLERANCE,
-            "expected {actual} to be within {FLOAT_TOLERANCE} of {expected}"
-        );
-    }
-
-    #[test]
-    fn image_preview_size_fits_large_landscape_to_max_width() {
-        let size = clamped_image_size(3_000, 1_000);
-        let max_size = image_preview_initial_fit_max_size();
-
-        assert_close(size.width, max_size.width);
-        assert!(size.height < max_size.height);
-        assert_close(size.width / size.height, 3.0);
-    }
-
-    #[test]
-    fn image_preview_size_fits_large_portrait_to_max_height() {
-        let size = clamped_image_size(1_000, 2_000);
-        let max_size = image_preview_initial_fit_max_size();
-
-        assert!(size.width < max_size.width);
-        assert_close(size.height, max_size.height);
-        assert_close(size.height / size.width, 2.0);
-    }
-
-    #[test]
-    fn image_preview_size_clamps_small_images_to_minimum_window() {
-        let size = clamped_image_size(64, 32);
-        let min_size = preview_min_size(PreviewWindowProfile::Image);
-
-        assert_close(size.width, min_size.width);
-        assert_close(size.height, min_size.height);
-    }
-
-    #[test]
-    fn image_preview_size_keeps_medium_landscape_tight() {
-        let size = clamped_image_size(748, 499);
-
-        assert_close(size.width, 748.0);
-        assert_close(size.height, 499.0);
-    }
-
-    #[test]
-    fn image_preview_size_keeps_medium_portrait_tight() {
-        let size = clamped_image_size(400, 600);
-
-        assert_close(size.width, 400.0);
-        assert_close(size.height, 600.0);
-    }
-
-    #[test]
-    fn video_preview_size_keeps_medium_frame_plus_controls_tight() {
-        let size = clamped_video_size(640, 360);
-
-        assert_close(size.width, 640.0);
-        assert_close(size.height, 360.0 + VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT);
-    }
-
-    #[test]
-    fn video_preview_size_fits_large_portrait_frame_to_max_height() {
-        let size = clamped_video_size(720, 1280);
-        let max_size = video_preview_initial_fit_max_size();
-        let frame_height = size.height - VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT;
-
-        assert!(size.width < max_size.width);
-        assert_close(size.height, max_size.height);
-        assert_close(frame_height / size.width, 1280.0 / 720.0);
-    }
+fn shutdown_after_browser_session_save(
+    browser_session_save: Task<Message>,
+    close_main_window_and_exit: Task<Message>,
+) -> Task<Message> {
+    browser_session_save.chain(close_main_window_and_exit)
 }
+
+#[cfg(test)]
+mod tests;

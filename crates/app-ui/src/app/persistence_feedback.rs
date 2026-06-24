@@ -22,6 +22,13 @@ impl FileBrowser {
         self.accept_persistence_result(result, "Failed to save sidebar favorites")
     }
 
+    pub(super) fn accept_browser_session_saved(
+        &mut self,
+        result: Result<(), String>,
+    ) -> Task<Message> {
+        self.accept_persistence_result(result, "Failed to save browser session")
+    }
+
     fn accept_persistence_result(
         &mut self,
         result: Result<(), String>,

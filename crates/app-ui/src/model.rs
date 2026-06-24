@@ -78,6 +78,12 @@ pub(crate) use search::{
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
+mod session;
+pub(crate) use session::{
+    pane_session_from_live, search_session_from_live, snapshot_from_stored, snapshot_to_stored,
+    BrowserPaneSession, BrowserSessionSnapshot, BrowserTabSession, PropertiesSessionSnapshot,
+    RestoredAuxiliarySession, SearchSessionSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct SearchModePromptState {
@@ -110,6 +116,7 @@ pub(crate) enum ScrollbarRegion {
 pub(crate) struct LoadedOperationStore {
     pub(crate) task_queue_store: TaskQueueStore,
     pub(crate) column_width_overrides: HashMap<usize, f32>,
+    pub(crate) browser_session: Option<BrowserSessionSnapshot>,
     pub(crate) restored_tasks: Vec<StoredTask>,
 }
 
@@ -339,6 +346,12 @@ pub(crate) enum Message {
     NetworkListThumbnailDownloadsToggled,
     MaxPreviewFileMibInputChanged(String),
     MaxPreviewFileMibInputCommitted,
+    StartupLocationPolicySelected(crate::config::StartupLocationPolicy),
+    StartupCustomDirectoryInputChanged(String),
+    StartupCustomDirectoryCommitted,
+    SaveViewStateToggled,
+    BrowserSessionSaved(Result<(), String>),
+    BrowserSessionSaveDelayElapsed,
     FileOperationVerificationSelected(FileOperationVerification),
     TerminalEmulatorSelected(TerminalEmulator),
     RenderingGpuPreferenceSelected(RenderingGpuPreference),

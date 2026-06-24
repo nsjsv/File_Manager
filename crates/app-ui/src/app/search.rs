@@ -89,7 +89,10 @@ impl FileBrowser {
         }
 
         search.is_loading = true;
-        search_input_stabilization_command(request)
+        Task::batch([
+            search_input_stabilization_command(request),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn load_stable_search_matches(&mut self, request: SearchRequest) -> Task<Message> {
@@ -132,6 +135,7 @@ impl FileBrowser {
             index_command,
             self.load_search_matches(),
             iced::widget::operation::focus(search_input_id()),
+            self.request_browser_session_save(),
         ])
     }
 
@@ -156,7 +160,10 @@ impl FileBrowser {
         search.skipped_count = 0;
         search.error = None;
         search.index_error = None;
-        self.load_search_matches()
+        Task::batch([
+            self.load_search_matches(),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn accept_search_matches(

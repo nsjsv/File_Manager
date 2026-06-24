@@ -230,6 +230,21 @@ fn column_single_click_still_opens_child_column() {
 }
 
 #[test]
+fn column_single_click_requests_session_save_when_enabled() {
+    let directory = PathBuf::from("/workspace/project");
+    let mut user_config = config::default_user_config();
+    user_config.save_view_state = true;
+    let (mut browser, _) = FileBrowser::new(user_config);
+    browser.current_dir = PathBuf::from("/workspace");
+    browser.is_loading = false;
+    browser.entries = vec![test_entry(directory, FileKind::Directory)];
+
+    drop(browser.handle_column_entry_clicked(PathBuf::from("/workspace/project")));
+
+    assert!(browser.pending_browser_session_save);
+}
+
+#[test]
 fn right_arrow_enters_loaded_child_column_and_remembers_return_target() {
     let parent = PathBuf::from("/workspace/project");
     let first_child = PathBuf::from("/workspace/project/a.txt");

@@ -280,7 +280,7 @@ impl FileBrowser {
         Some(bounds)
     }
 
-    fn capture_active_pane_snapshot(&self) -> BrowserPane {
+    pub(super) fn capture_active_pane_snapshot(&self) -> BrowserPane {
         BrowserPane {
             id: self.active_pane_id(),
             current_dir: self.current_dir.clone(),

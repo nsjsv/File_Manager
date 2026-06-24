@@ -195,6 +195,7 @@ impl FileBrowser {
         Task::batch([
             command,
             delayed_thumbnail_refresh_command(request.pane_id, self.current_dir.clone()),
+            self.request_browser_session_save(),
         ])
     }
 
@@ -249,7 +250,10 @@ impl FileBrowser {
         self.is_loading = false;
         self.error = None;
         self.sync_active_tab_state();
-        delayed_thumbnail_refresh_command(pane_id, self.current_dir.clone())
+        Task::batch([
+            delayed_thumbnail_refresh_command(pane_id, self.current_dir.clone()),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
@@ -277,7 +281,10 @@ impl FileBrowser {
         self.sync_active_tab_state();
         let request = self.next_directory_load_request(path);
         let cancellation = self.directory_load_cancellation(&request);
-        load_directory_command(request, self.options.clone(), cancellation)
+        Task::batch([
+            load_directory_command(request, self.options.clone(), cancellation),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
@@ -304,7 +311,10 @@ impl FileBrowser {
         self.error = None;
         self.cancel_active_directory_load();
         self.sync_active_tab_state();
-        load_trash_command(pane_id, self.options.clone())
+        Task::batch([
+            load_trash_command(pane_id, self.options.clone()),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn reload_current(&mut self) -> Task<Message> {

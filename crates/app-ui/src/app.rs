@@ -26,6 +26,8 @@ mod search_backend_mode;
 pub(crate) mod search_index_settings;
 mod search_messages;
 mod selection;
+mod session_persistence;
+mod session_restore;
 mod shortcuts;
 mod sidebar_bookmarks;
 mod sidebar_devices;
@@ -33,6 +35,7 @@ mod sidebar_resize;
 pub(crate) mod smooth_scroll;
 mod startup;
 mod startup_index_setup;
+mod startup_settings;
 mod tabs;
 mod text_input_shortcuts;
 mod thumbnailing;
@@ -178,6 +181,8 @@ pub(crate) struct FileBrowser {
     user_config: config::UserConfig,
     pub(crate) max_preview_file_mib_input: String,
     pub(crate) max_preview_file_mib_error: Option<String>,
+    pub(crate) startup_custom_directory_input: String,
+    pub(crate) startup_custom_directory_error: Option<String>,
     pub(crate) rendering_gpu_preference: config::RenderingGpuPreference,
     pub(crate) renderer_restart_notice_visible: bool,
     pub(super) pending_renderer_restart_environment:
@@ -213,6 +218,8 @@ pub(crate) struct FileBrowser {
     operation_history: FileOperationHistory,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
+    pending_browser_session_save: bool,
+    last_browser_session_save: Option<std::time::Instant>,
     scrollbar: ScrollbarState,
     smooth_scroll: MosScrollState,
     pending_search_reveal: Option<PathBuf>,
@@ -232,6 +239,10 @@ pub(crate) struct PendingKeyboardColumnFocus {
 }
 
 impl FileBrowser {
+    pub(crate) fn user_config(&self) -> &config::UserConfig {
+        &self.user_config
+    }
+
     pub(crate) fn file_operation_verification(&self) -> file_core::FileOperationVerification {
         self.user_config.file_operation_verification
     }
@@ -375,6 +386,11 @@ impl FileBrowser {
             )
             .to_string(),
             max_preview_file_mib_error: None,
+            startup_custom_directory_input: user_config
+                .startup_custom_directory
+                .to_string_lossy()
+                .into_owned(),
+            startup_custom_directory_error: None,
             rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
             pending_renderer_restart_environment: None,
@@ -409,6 +425,8 @@ impl FileBrowser {
             operation_history: FileOperationHistory::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
+            pending_browser_session_save: false,
+            last_browser_session_save: None,
             scrollbar: ScrollbarState::default(),
             smooth_scroll: MosScrollState::default(),
             pending_search_reveal: None,

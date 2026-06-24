@@ -28,4 +28,5 @@ tracing-subscriber.workspace = true
 zip = "8.6.0"
 
 [dev-dependencies]
+iced_runtime = "0.14"
 tempfile.workspace = true

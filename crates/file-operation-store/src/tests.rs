@@ -192,6 +192,67 @@ fn clear_tasks_keeps_column_widths() {
 }
 
 #[test]
+fn browser_session_roundtrip_replace_and_clear() {
+    let (store, root) = test_store();
+    let first = StoredBrowserSession {
+        panes: vec![StoredBrowserPane {
+            id: 0,
+            tabs: vec![StoredBrowserTab {
+                id: 0,
+                directory: StoredPath::from_path(Path::new("/home/user")),
+                is_trash_view: false,
+                selected: Some(StoredPath::from_path(Path::new("/home/user/file.txt"))),
+                selected_paths: vec![StoredPath::from_path(Path::new("/home/user/file.txt"))],
+                deepest_open_column_directory: Some(StoredPath::from_path(Path::new(
+                    "/home/user/Documents",
+                ))),
+                expanded_directories: vec![StoredPath::from_path(Path::new("/home/user/Projects"))],
+                view_mode: StoredBrowserViewMode::List,
+                back_stack: vec![StoredPath::from_path(Path::new("/home/user/Downloads"))],
+                forward_stack: Vec::new(),
+            }],
+            active_tab_id: 0,
+            column_viewports: vec![StoredColumnViewport {
+                directory: StoredPath::from_path(Path::new("/home/user")),
+                offset_y: 2.0,
+                height: 400.0,
+            }],
+        }],
+        layout: StoredBrowserPaneLayout::Single { active: 0 },
+        search: Some(StoredSearchSession {
+            scope: StoredSearchScope::CurrentDirectory,
+            mode: StoredSearchMode::Files,
+            root: StoredPath::from_path(Path::new("/home/user")),
+            query: "notes".to_owned(),
+        }),
+        preview_path: Some(StoredPath::from_path(Path::new("/home/user/file.txt"))),
+        properties: Some(StoredPropertiesSession {
+            path: StoredPath::from_path(Path::new("/home/user/file.txt")),
+            category: StoredFilePropertiesCategory::Permissions,
+        }),
+        settings_category: Some(StoredSettingsCategory::General),
+    };
+
+    store.replace_browser_session(&first).unwrap();
+    assert_eq!(store.read_browser_session().unwrap(), Some(first.clone()));
+
+    let second = StoredBrowserSession {
+        panes: Vec::new(),
+        layout: StoredBrowserPaneLayout::Single { active: 0 },
+        search: None,
+        preview_path: None,
+        properties: None,
+        settings_category: None,
+    };
+    store.replace_browser_session(&second).unwrap();
+    assert_eq!(store.read_browser_session().unwrap(), Some(second));
+
+    store.clear_browser_session().unwrap();
+    assert_eq!(store.read_browser_session().unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn unreadable_old_task_payload_rows_are_deleted_on_read() {
     let (store, root) = test_store();
     let connection = Connection::open(store.db_path()).unwrap();
@@ -238,6 +299,52 @@ fn non_utf8_unix_path_roundtrips_through_json_and_database() {
     };
     assert_eq!(
         paths[0].to_path_buf().as_os_str().as_bytes(),
+        path.as_os_str().as_bytes()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn browser_session_preserves_non_utf8_unix_paths() {
+    let (store, root) = test_store();
+    let path = PathBuf::from(OsString::from_vec(b"/tmp/session-\xFF".to_vec()));
+    let session = StoredBrowserSession {
+        panes: vec![StoredBrowserPane {
+            id: 0,
+            tabs: vec![StoredBrowserTab {
+                id: 0,
+                directory: StoredPath::from_path(&path),
+                is_trash_view: false,
+                selected: None,
+                selected_paths: Vec::new(),
+                deepest_open_column_directory: None,
+                expanded_directories: Vec::new(),
+                view_mode: StoredBrowserViewMode::Columns,
+                back_stack: Vec::new(),
+                forward_stack: Vec::new(),
+            }],
+            active_tab_id: 0,
+            column_viewports: Vec::new(),
+        }],
+        layout: StoredBrowserPaneLayout::Single { active: 0 },
+        search: None,
+        preview_path: Some(StoredPath::from_path(&path)),
+        properties: None,
+        settings_category: None,
+    };
+
+    store.replace_browser_session(&session).unwrap();
+
+    let restored = store.read_browser_session().unwrap().unwrap();
+    let restored_path = restored.panes[0].tabs[0].directory.to_path_buf();
+    assert_eq!(
+        restored_path.as_os_str().as_bytes(),
+        path.as_os_str().as_bytes()
+    );
+    let preview_path = restored.preview_path.unwrap().to_path_buf();
+    assert_eq!(
+        preview_path.as_os_str().as_bytes(),
         path.as_os_str().as_bytes()
     );
     let _ = fs::remove_dir_all(root);

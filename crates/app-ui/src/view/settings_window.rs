@@ -1,7 +1,7 @@
 use std::fmt;
 
 use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
-use iced::widget::{button, column, container, pick_list, row, Button, Column, Space};
+use iced::widget::{button, column, container, pick_list, row, text_input, Button, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::app::FileBrowser;
@@ -14,6 +14,7 @@ use super::auxiliary_window_layout::{
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
 use super::network_settings::network_settings_content;
+use super::option_controls::selectable_choice_row;
 use super::rendering_settings::rendering_gpu_preference_button;
 use super::search_index_settings::search_index_settings_content;
 use super::shortcut_settings::shortcut_settings_section;
@@ -79,18 +80,36 @@ fn general_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
-    settings_detail_scroller(
+    let show_custom_directory = browser.user_config().startup_location_policy
+        == crate::config::StartupLocationPolicy::CustomDirectory;
+    let content = if show_custom_directory {
         column![
             readable_text("General").size(20),
             readable_text("File display").size(13),
             hidden_files_visibility_button(browser),
+            readable_text("Startup").size(13),
+            startup_location_options(browser),
+            startup_custom_directory_input(browser),
+            save_view_state_button(browser),
             readable_text("Terminal").size(13),
             terminal_emulator_options(browser.terminal_emulator),
         ]
-        .spacing(10)
-        .width(Length::Fill),
-        scrollbar_visibility,
-    )
+    } else {
+        column![
+            readable_text("General").size(20),
+            readable_text("File display").size(13),
+            hidden_files_visibility_button(browser),
+            readable_text("Startup").size(13),
+            startup_location_options(browser),
+            save_view_state_button(browser),
+            readable_text("Terminal").size(13),
+            terminal_emulator_options(browser.terminal_emulator),
+        ]
+    }
+    .spacing(10)
+    .width(Length::Fill);
+
+    settings_detail_scroller(content, scrollbar_visibility)
 }
 
 fn network_settings_detail(
@@ -195,6 +214,82 @@ fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Mess
 
     button(container(label).padding([5, 8]).width(Length::Fill))
         .on_press(Message::ShowHiddenFilesToggled)
+        .width(Length::Fill)
+        .style(context_menu_button_style())
+}
+
+fn startup_location_options(browser: &FileBrowser) -> Element<'_, Message> {
+    let policy = browser.user_config().startup_location_policy;
+    column![
+        selectable_choice_row(
+            "Home directory",
+            "Open your home directory on startup.",
+            policy == crate::config::StartupLocationPolicy::Home,
+            Message::StartupLocationPolicySelected(crate::config::StartupLocationPolicy::Home),
+        ),
+        selectable_choice_row(
+            "Custom directory",
+            "Open the configured directory on startup.",
+            policy == crate::config::StartupLocationPolicy::CustomDirectory,
+            Message::StartupLocationPolicySelected(
+                crate::config::StartupLocationPolicy::CustomDirectory,
+            ),
+        ),
+        selectable_choice_row(
+            "Previous state",
+            "Start in the state from the last close, preserving views and directories.",
+            policy == crate::config::StartupLocationPolicy::PreviousSession,
+            Message::StartupLocationPolicySelected(
+                crate::config::StartupLocationPolicy::PreviousSession,
+            ),
+        ),
+    ]
+    .spacing(6)
+    .into()
+}
+
+fn startup_custom_directory_input(browser: &FileBrowser) -> Element<'_, Message> {
+    let input = text_input("Directory", &browser.startup_custom_directory_input)
+        .on_input(Message::StartupCustomDirectoryInputChanged)
+        .on_submit(Message::StartupCustomDirectoryCommitted)
+        .padding([6, 8])
+        .size(12)
+        .width(Length::Fill);
+    let save = button(container(readable_text("Save").size(12)).padding([6, 10]))
+        .on_press(Message::StartupCustomDirectoryCommitted)
+        .style(context_menu_button_style());
+    let mut content = column![row![
+        readable_text("Custom Startup Directory")
+            .size(12)
+            .width(Length::FillPortion(2)),
+        input,
+        save,
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)]
+    .spacing(3);
+    if let Some(error) = &browser.startup_custom_directory_error {
+        content = content.push(readable_text(error).size(11).width(Length::Fill));
+    }
+    container(content)
+        .padding([5, 8])
+        .width(Length::Fill)
+        .into()
+}
+
+fn save_view_state_button(browser: &FileBrowser) -> Button<'static, Message> {
+    let enabled = browser.user_config().save_view_state;
+    let label = row![
+        readable_text("Save View State")
+            .size(12)
+            .width(Length::Fill),
+        switch_control(enabled),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    button(container(label).padding([5, 8]).width(Length::Fill))
+        .on_press(Message::SaveViewStateToggled)
         .width(Length::Fill)
         .style(context_menu_button_style())
 }

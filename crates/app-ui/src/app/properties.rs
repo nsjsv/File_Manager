@@ -50,6 +50,7 @@ impl FileBrowser {
             self.commit_rename_if_active(),
             self.ensure_properties_window(),
             file_properties_command(request, cancellation),
+            self.request_browser_session_save(),
         ])
     }
 
@@ -60,7 +61,7 @@ impl FileBrowser {
         self.properties = None;
     }
 
-    fn next_file_properties_request(
+    pub(super) fn next_file_properties_request(
         &mut self,
         path: PathBuf,
     ) -> (FilePropertiesRequest, CancellationToken) {
@@ -164,7 +165,7 @@ impl FileBrowser {
         if let Some(properties) = self.properties.as_mut() {
             properties.selected_category = category;
         }
-        Task::none()
+        self.request_browser_session_save()
     }
 
     pub(super) fn toggle_file_properties_permission(

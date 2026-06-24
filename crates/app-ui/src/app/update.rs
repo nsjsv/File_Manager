@@ -501,6 +501,10 @@ impl FileBrowser {
             Message::UserConfigSaved(result) => self.accept_user_config_saved(result),
             Message::ColumnWidthOverrideSaved(result) => self.accept_column_width_saved(result),
             Message::SidebarBookmarksSaved(result) => self.accept_sidebar_bookmarks_saved(result),
+            Message::BrowserSessionSaved(result) => self.accept_browser_session_saved(result),
+            Message::BrowserSessionSaveDelayElapsed => {
+                self.maybe_flush_pending_browser_session_save()
+            }
             Message::SearchInputChanged(_)
             | Message::SearchModeSelected(_)
             | Message::SearchInputStabilized(_)
@@ -585,6 +589,16 @@ impl FileBrowser {
                 self.update_max_preview_file_mib_input(value)
             }
             Message::MaxPreviewFileMibInputCommitted => self.commit_max_preview_file_mib_input(),
+            Message::StartupLocationPolicySelected(policy) => {
+                self.select_startup_location_policy(policy)
+            }
+            Message::StartupCustomDirectoryInputChanged(value) => {
+                self.update_startup_custom_directory_input(value)
+            }
+            Message::StartupCustomDirectoryCommitted => {
+                self.commit_startup_custom_directory_input()
+            }
+            Message::SaveViewStateToggled => self.toggle_save_view_state(),
             Message::FileOperationVerificationSelected(verification) => {
                 self.user_config.file_operation_verification = verification;
                 self.persist_user_config_command()
@@ -773,19 +787,5 @@ impl FileBrowser {
             }
             Message::SelectAll => self.select_all_in_file_selection_scope(),
         }
-    }
-
-    fn finish_pointer_drag_interactions(&mut self) -> Task<Message> {
-        self.finish_tab_drag();
-        self.finish_pane_drag();
-        self.finish_batch_rename_preview_drag();
-        Task::batch([
-            self.finish_startup_index_entry_selection_drag(),
-            self.finish_sidebar_bookmark_drag(),
-            self.finish_sidebar_resize_drag_command(),
-            self.finish_column_resize_drag_command(),
-            self.finish_drag_selection(None),
-            self.schedule_thumbnail_refresh(),
-        ])
     }
 }

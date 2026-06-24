@@ -142,6 +142,7 @@ impl FileBrowser {
             rename_command,
             action_command,
             self.schedule_thumbnail_refresh(),
+            self.request_browser_session_save(),
         ])
     }
 
@@ -280,7 +281,7 @@ impl FileBrowser {
         self.file_drag = None;
         self.focus_column_blank_context_or_clear_selection(directory);
 
-        rename_command
+        Task::batch([rename_command, self.request_browser_session_save()])
     }
 
     pub(super) fn handle_column_placeholder_pressed(&mut self) -> Task<Message> {

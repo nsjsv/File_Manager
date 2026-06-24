@@ -30,6 +30,9 @@ terminal_emulator = "ghostty"
 rendering_backend = "gpu"
 file_operation_verification = "strong"
 browser_view_mode = "list"
+startup_location = "custom"
+startup_custom_directory = "/workspace"
+save_view_state = true
 "#,
         default_user_config(),
     );
@@ -57,6 +60,12 @@ browser_view_mode = "list"
         FileOperationVerification::Strong
     );
     assert_eq!(parsed.browser_view_mode, BrowserViewMode::List);
+    assert_eq!(
+        parsed.startup_location_policy,
+        StartupLocationPolicy::CustomDirectory
+    );
+    assert_eq!(parsed.startup_custom_directory, PathBuf::from("/workspace"));
+    assert!(parsed.save_view_state);
 }
 
 #[test]
@@ -108,6 +117,9 @@ terminal_emulator = "missing"
 rendering_backend = "metal"
 file_operation_verification = "maybe"
 browser_view_mode = "cover-flow"
+startup_location = "moon"
+startup_custom_directory = ""
+save_view_state = "maybe"
 "#,
         default.clone(),
     );
@@ -134,6 +146,15 @@ browser_view_mode = "cover-flow"
         DEFAULT_FILE_OPERATION_VERIFICATION
     );
     assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
+    assert_eq!(
+        parsed.startup_location_policy,
+        default.startup_location_policy
+    );
+    assert_eq!(
+        parsed.startup_custom_directory,
+        default.startup_custom_directory
+    );
+    assert_eq!(parsed.save_view_state, default.save_view_state);
 }
 
 #[test]
@@ -166,6 +187,9 @@ fn writes_toml_user_config_without_column_width_overrides() {
     assert!(content.contains("rendering_backend = \"gpu\"\n"));
     assert!(content.contains("file_operation_verification = \"basic_metadata\"\n"));
     assert!(content.contains("browser_view_mode = \"columns\"\n"));
+    assert!(content.contains("startup_location = \"home\"\n"));
+    assert!(content.contains("startup_custom_directory = "));
+    assert!(content.contains("save_view_state = false\n"));
     assert!(!content.contains("[column_width_overrides]"));
 
     let parsed = parse_toml_user_config(&content, default_user_config());
@@ -178,6 +202,8 @@ fn writes_toml_user_config_without_column_width_overrides() {
         DEFAULT_FILE_OPERATION_VERIFICATION
     );
     assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
+    assert_eq!(parsed.startup_location_policy, StartupLocationPolicy::Home);
+    assert!(!parsed.save_view_state);
 }
 
 #[test]
@@ -191,6 +217,26 @@ fn default_search_mode_is_simple_with_pending_prompt() {
         config.max_preview_file_bytes,
         DEFAULT_MAX_PREVIEW_FILE_BYTES
     );
+    assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
+    assert!(!config.save_view_state);
+}
+
+#[test]
+fn startup_settings_round_trip_through_toml() {
+    let mut config = default_user_config();
+    config.startup_location_policy = StartupLocationPolicy::PreviousSession;
+    config.startup_custom_directory = PathBuf::from("/srv/work");
+    config.save_view_state = true;
+
+    let content = toml_user_config_content(&config).unwrap();
+    let parsed = parse_toml_user_config(&content, default_user_config());
+
+    assert_eq!(
+        parsed.startup_location_policy,
+        StartupLocationPolicy::PreviousSession
+    );
+    assert_eq!(parsed.startup_custom_directory, PathBuf::from("/srv/work"));
+    assert!(parsed.save_view_state);
 }
 
 #[test]

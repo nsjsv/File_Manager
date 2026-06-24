@@ -156,6 +156,7 @@ dependencies = [
  "flate2",
  "gif 0.14.2",
  "iced",
+ "iced_runtime",
  "image",
  "pulldown-cmark",
  "regex",

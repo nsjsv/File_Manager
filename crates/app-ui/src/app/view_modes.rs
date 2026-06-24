@@ -35,6 +35,7 @@ impl FileBrowser {
         Task::batch([
             self.persist_user_config_command(),
             self.schedule_thumbnail_refresh(),
+            self.request_browser_session_save(),
         ])
     }
 
@@ -149,7 +150,10 @@ impl FileBrowser {
             expanded.animation_progress = expanded.animation_progress.clamp(0.0, 1.0);
         }
         self.sync_active_tab_state();
-        self.schedule_thumbnail_refresh()
+        Task::batch([
+            self.schedule_thumbnail_refresh(),
+            self.request_browser_session_save(),
+        ])
     }
 
     fn open_list_directory(&mut self, path: PathBuf) -> Task<Message> {
@@ -158,7 +162,10 @@ impl FileBrowser {
             expanded.is_collapsing = false;
             expanded.animation_progress = expanded.animation_progress.clamp(0.0, 1.0);
             self.sync_active_tab_state();
-            return self.schedule_thumbnail_refresh();
+            return Task::batch([
+                self.schedule_thumbnail_refresh(),
+                self.request_browser_session_save(),
+            ]);
         }
 
         let mut expanded = ExpandedDirectory {
@@ -180,6 +187,7 @@ impl FileBrowser {
         Task::batch([
             load_expanded_directory_command(request, self.options.clone(), cancellation),
             self.schedule_thumbnail_refresh(),
+            self.request_browser_session_save(),
         ])
     }
 

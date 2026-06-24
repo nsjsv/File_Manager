@@ -116,7 +116,10 @@ impl FileBrowser {
         self.active_tab_id = tab_id;
         self.back_stack.clear();
         self.forward_stack.clear();
-        self.navigate_to(directory, NavigationMode::KeepHistory)
+        Task::batch([
+            self.navigate_to(directory, NavigationMode::KeepHistory),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn open_trash_in_new_tab(&mut self) -> Task<Message> {
@@ -133,7 +136,10 @@ impl FileBrowser {
         self.active_tab_id = tab_id;
         self.back_stack.clear();
         self.forward_stack.clear();
-        self.open_trash_view(NavigationMode::KeepHistory)
+        Task::batch([
+            self.open_trash_view(NavigationMode::KeepHistory),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn select_tab(&mut self, tab_id: usize) -> Task<Message> {
@@ -165,7 +171,7 @@ impl FileBrowser {
         self.back_stack = tab.back_stack;
         self.forward_stack = tab.forward_stack;
         self.current_dir = tab.directory;
-        self.reload_current()
+        Task::batch([self.reload_current(), self.request_browser_session_save()])
     }
 
     pub(super) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
@@ -195,7 +201,10 @@ impl FileBrowser {
         let Some(adjacent_tab_id) = self.adjacent_open_tab_id(closing_index, tab_id) else {
             return Task::none();
         };
-        self.select_tab(adjacent_tab_id)
+        Task::batch([
+            self.select_tab(adjacent_tab_id),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn start_tab_drag(&mut self, pane_id: BrowserPaneId, tab_id: usize) {

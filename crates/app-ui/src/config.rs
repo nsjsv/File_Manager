@@ -11,6 +11,9 @@ use crate::model::BrowserViewMode;
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
 
+pub(crate) mod startup;
+pub(crate) use startup::StartupLocationPolicy;
+
 const APP_DIR_NAME: &str = "file-manager";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
@@ -211,6 +214,9 @@ pub(crate) struct UserConfig {
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) startup_location_policy: StartupLocationPolicy,
+    pub(crate) startup_custom_directory: PathBuf,
+    pub(crate) save_view_state: bool,
     pub(crate) shortcuts: ShortcutConfig,
 }
 
@@ -252,7 +258,7 @@ pub(crate) fn default_state_database_path() -> PathBuf {
 pub(crate) fn default_user_config() -> UserConfig {
     let fallback_base = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let cache_base = dirs::cache_dir()
-        .unwrap_or(fallback_base)
+        .unwrap_or_else(|| fallback_base.clone())
         .join(APP_DIR_NAME);
     UserConfig {
         search_index_dir: cache_base.join("search-index"),
@@ -273,6 +279,9 @@ pub(crate) fn default_user_config() -> UserConfig {
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        startup_location_policy: StartupLocationPolicy::Home,
+        startup_custom_directory: fallback_base.clone(),
+        save_view_state: false,
         shortcuts: ShortcutConfig::defaults(),
     }
 }
@@ -297,6 +306,9 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        startup_location_policy: StartupLocationPolicy::Home,
+        startup_custom_directory: PathBuf::new(),
+        save_view_state: false,
         shortcuts: ShortcutConfig::defaults(),
     }
 }
@@ -462,13 +474,14 @@ fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
             config.browser_view_mode = view_mode;
         }
     }
+    startup::apply_toml_startup_config(&mut config, &document);
     if let Some(table) = document.get(SHORTCUTS_KEY).and_then(toml::Value::as_table) {
         config.shortcuts.apply_toml_table(table);
     }
     config
 }
 
-fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'a str> {
+pub(crate) fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'a str> {
     document
         .get(key)
         .and_then(toml::Value::as_str)
@@ -584,6 +597,7 @@ fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Er
         BROWSER_VIEW_MODE_KEY.to_string(),
         toml::Value::String(browser_view_mode_config_value(config.browser_view_mode).to_string()),
     );
+    startup::insert_toml_startup_config(&mut document, config);
     document.insert(
         SHORTCUTS_KEY.to_string(),
         toml::Value::Table(config.shortcuts.toml_table()),
