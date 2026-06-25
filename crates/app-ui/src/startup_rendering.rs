@@ -115,7 +115,7 @@ impl StartupRenderingEnvironmentStatus {
 }
 
 pub(crate) fn apply_fast_startup_environment() {
-    let preference = config::load_user_config().rendering_gpu_preference;
+    let preference = config::load_app_config().rendering_gpu_preference;
     let environment = StartupRenderingEnvironment::without_display_probe(preference);
     environment.apply_to_current_process();
     startup_trace::mark("startup_rendering_environment_ready");

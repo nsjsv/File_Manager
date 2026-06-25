@@ -16,7 +16,7 @@ impl FileBrowser {
         }
         self.user_config.startup_location_policy = policy;
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.request_browser_session_save(),
         ])
     }
@@ -45,12 +45,12 @@ impl FileBrowser {
             .to_string_lossy()
             .into_owned();
         self.startup_custom_directory_error = None;
-        self.persist_user_config_command()
+        self.persist_user_preferences_command()
     }
 
     pub(super) fn toggle_save_view_state(&mut self) -> Task<Message> {
         self.user_config.save_view_state = !self.user_config.save_view_state;
-        let persist_config = self.persist_user_config_command();
+        let persist_config = self.persist_user_preferences_command();
         let persist_session = self.request_browser_session_save();
         Task::batch([persist_config, persist_session])
     }

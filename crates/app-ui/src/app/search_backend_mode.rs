@@ -45,7 +45,7 @@ impl FileBrowser {
         self.user_config.search_mode = SearchBackendMode::Simple;
         self.user_config.search_mode_prompt = SearchModePromptStatus::Completed;
         self.search_index.service_generation = self.search_index.service_generation.wrapping_add(1);
-        self.persist_user_config_command()
+        self.persist_user_preferences_command()
     }
 
     pub(super) fn select_indexed_search_from_prompt(&mut self) -> Task<Message> {
@@ -74,10 +74,10 @@ impl FileBrowser {
             SearchBackendMode::Simple => {
                 self.startup_index_setup = None;
                 self.clear_indexed_search_state();
-                self.persist_user_config_command()
+                self.persist_user_preferences_command()
             }
             SearchBackendMode::Indexed => Task::batch([
-                self.persist_user_config_command(),
+                self.persist_user_preferences_command(),
                 self.load_search_index_profile_for_mode(),
                 self.refresh_search_index_statuses(),
             ]),

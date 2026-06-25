@@ -498,9 +498,9 @@ impl FileBrowser {
                 self.theme = theme;
                 Task::none()
             }
-            Message::UserConfigSaved(result) => self.accept_user_config_saved(result),
+            Message::UserPreferencesSaved(result) => self.accept_user_preferences_saved(result),
+            Message::AppConfigSaved(result) => self.accept_app_config_saved(result),
             Message::ColumnWidthOverrideSaved(result) => self.accept_column_width_saved(result),
-            Message::SidebarBookmarksSaved(result) => self.accept_sidebar_bookmarks_saved(result),
             Message::BrowserSessionSaved(result) => self.accept_browser_session_saved(result),
             Message::BrowserSessionSaveDelayElapsed => {
                 self.maybe_flush_pending_browser_session_save()
@@ -601,12 +601,12 @@ impl FileBrowser {
             Message::SaveViewStateToggled => self.toggle_save_view_state(),
             Message::FileOperationVerificationSelected(verification) => {
                 self.user_config.file_operation_verification = verification;
-                self.persist_user_config_command()
+                self.persist_user_preferences_command()
             }
             Message::TerminalEmulatorSelected(terminal_emulator) => {
                 self.terminal_emulator = terminal_emulator;
                 self.user_config.terminal_emulator = terminal_emulator;
-                self.persist_user_config_command()
+                self.persist_user_preferences_command()
             }
             Message::RenderingGpuPreferenceSelected(preference) => {
                 self.select_rendering_gpu_preference(preference)

@@ -33,7 +33,7 @@ impl FileBrowser {
         self.user_config.browser_view_mode = view_mode;
         self.sync_active_tab_state();
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.schedule_thumbnail_refresh(),
             self.request_browser_session_save(),
         ])

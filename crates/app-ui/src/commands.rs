@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -31,7 +30,7 @@ use crate::model::{
     TransferConflictState,
 };
 use crate::operation_queue::QueuedTransfer;
-use crate::sidebar::{home_sidebar_location, save_gtk_bookmark_locations, sidebar_locations};
+use crate::sidebar::{home_sidebar_location, sidebar_locations};
 use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
 use crate::startup_trace;
 use crate::thumbnail_cache::{
@@ -44,6 +43,8 @@ mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
 mod batch_rename_operation;
 mod browser_session;
+mod config_persistence;
+pub(crate) use config_persistence::{save_app_config_command, save_user_preferences_command};
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
 mod network_connections;
@@ -118,10 +119,6 @@ pub(crate) fn delayed_thumbnail_refresh_command(
     })
 }
 
-pub(crate) fn save_user_config_command(user_config: config::UserConfig) -> Task<Message> {
-    Task::perform(persist_user_config(user_config), Message::UserConfigSaved)
-}
-
 pub(crate) fn save_column_width_overrides_command(
     task_queue_store: TaskQueueStore,
     column_width_overrides: HashMap<usize, f32>,
@@ -139,13 +136,6 @@ pub(crate) fn save_browser_session_command(
     Task::perform(
         browser_session::persist_browser_session(task_queue_store, snapshot),
         Message::BrowserSessionSaved,
-    )
-}
-
-pub(crate) fn save_sidebar_bookmarks_command(bookmarks: Vec<SidebarLocation>) -> Task<Message> {
-    Task::perform(
-        persist_sidebar_bookmarks(bookmarks),
-        Message::SidebarBookmarksSaved,
     )
 }
 
@@ -422,7 +412,8 @@ async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
 async fn load_startup_environment() -> StartupEnvironment {
     startup_trace::mark_once("startup_environment_started");
     tokio::task::spawn_blocking(|| {
-        let user_config = config::load_user_config();
+        let app_config = config::load_app_config();
+        let user_config = config::load_user_config_for_app_config(app_config);
         let rendering_environment_status = StartupRenderingEnvironmentStatus::for_loaded_config(
             user_config.rendering_gpu_preference,
         );
@@ -447,25 +438,6 @@ async fn load_startup_environment() -> StartupEnvironment {
 async fn delayed_thumbnail_refresh(directory: PathBuf) -> PathBuf {
     tokio::time::sleep(THUMBNAIL_REFRESH_DELAY).await;
     directory
-}
-
-async fn persist_user_config(user_config: config::UserConfig) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || config::save_user_config(&user_config))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
-}
-
-async fn persist_sidebar_bookmarks(bookmarks: Vec<SidebarLocation>) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let home = dirs::home_dir().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "home directory is unavailable")
-        })?;
-        save_gtk_bookmark_locations(&home, &bookmarks)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
 }
 
 async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, String> {

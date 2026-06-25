@@ -254,7 +254,7 @@ impl FileBrowser {
 
         self.user_config.search_index_exclude_patterns = normalized;
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.save_current_search_index_profile(),
             self.refresh_search_index_statuses(),
         ])
@@ -270,7 +270,7 @@ impl FileBrowser {
         self.search_index.directory_error_policy = policy;
         self.user_config.search_index_directory_error_policy = policy;
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.save_current_search_index_profile(),
             self.refresh_search_index_statuses(),
         ])
@@ -283,7 +283,7 @@ impl FileBrowser {
         self.search_index.content_index_enabled = enabled;
         self.user_config.search_index_content_enabled = enabled;
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.save_current_search_index_profile(),
         ])
     }
@@ -298,7 +298,7 @@ impl FileBrowser {
         self.search_index.media_metadata_scope = scope;
         self.user_config.search_index_media_scope = scope;
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.save_current_search_index_profile(),
         ])
     }
@@ -334,7 +334,7 @@ impl FileBrowser {
                     } else {
                         Task::none()
                     };
-                self.persist_user_config_command()
+                self.persist_user_preferences_command()
                     .chain(save_profile_task)
                     .chain(self.refresh_search_index_statuses())
             }

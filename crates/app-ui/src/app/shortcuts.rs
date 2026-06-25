@@ -156,7 +156,7 @@ impl FileBrowser {
 
         self.user_config.shortcuts.set_binding(binding_id, binding);
         self.shortcut_capture = None;
-        self.persist_user_config_command()
+        self.persist_user_preferences_command()
     }
 
     pub(super) fn reject_unsupported_shortcut_capture(&mut self) -> Task<Message> {
@@ -185,7 +185,7 @@ impl FileBrowser {
 
         self.user_config.shortcuts.reset_binding(binding_id);
         self.shortcut_capture = None;
-        self.persist_user_config_command()
+        self.persist_user_preferences_command()
     }
 }
 

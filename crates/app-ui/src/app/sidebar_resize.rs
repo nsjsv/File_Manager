@@ -45,7 +45,7 @@ impl FileBrowser {
         }
 
         self.user_config.sidebar_width = self.sidebar_width;
-        self.persist_user_config_command()
+        self.persist_user_preferences_command()
     }
 
     pub(crate) fn sidebar_width_for_window(&self, width: f32) -> f32 {

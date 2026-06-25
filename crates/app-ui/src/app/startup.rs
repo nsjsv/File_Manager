@@ -13,7 +13,7 @@ use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
 };
 use crate::operation_queue::QueuedFileOperation;
-use crate::sidebar::home_sidebar_location;
+use crate::sidebar::{home_sidebar_location, sidebar_favorite_configs};
 use crate::startup_trace;
 
 impl FileBrowser {
@@ -78,14 +78,28 @@ impl FileBrowser {
         &mut self,
         sidebar_locations: Vec<SidebarLocation>,
     ) -> Task<Message> {
+        let imported_favorites = if self.user_config.sidebar_favorites.is_none() {
+            Some(sidebar_favorite_configs(&sidebar_locations))
+        } else {
+            None
+        };
         self.sidebar_locations = sidebar_locations;
+        let persist_imported_favorites = if let Some(favorites) = imported_favorites {
+            self.user_config.sidebar_favorites = Some(favorites);
+            self.persist_user_preferences_command()
+        } else {
+            Task::none()
+        };
         if self.startup_index_setup.is_some()
             || (self.user_config.search_mode == SearchBackendMode::Indexed
                 && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed)
         {
-            self.refresh_startup_index_setup_choices()
+            Task::batch([
+                persist_imported_favorites,
+                self.refresh_startup_index_setup_choices(),
+            ])
         } else {
-            Task::none()
+            persist_imported_favorites
         }
     }
 
@@ -211,7 +225,7 @@ mod tests {
     use crate::model::{
         BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
         BrowserTabSession, BrowserViewMode, ColumnBrowserViewport, ExpandedDirectoryStatus,
-        LoadedOperationStore, SplitAxis, StartupEnvironment,
+        LoadedOperationStore, SidebarLocation, SidebarLocationKind, SplitAxis, StartupEnvironment,
     };
     use crate::network_connections::SavedNetworkConnection;
     use crate::startup_rendering::{
@@ -284,6 +298,36 @@ mod tests {
 
         assert!(!browser.renderer_restart_notice_visible);
         assert!(browser.pending_renderer_restart_environment.is_none());
+    }
+
+    #[test]
+    fn imported_sidebar_locations_become_configured_preferences() {
+        let mut user_config = config::default_user_config();
+        user_config.sidebar_favorites = None;
+        let (mut browser, _) = FileBrowser::new(user_config);
+        let home = PathBuf::from("/home/user");
+        let projects = PathBuf::from("/srv/projects");
+
+        drop(browser.accept_sidebar_locations(vec![
+            SidebarLocation {
+                label: "Home".to_owned(),
+                path: home,
+                kind: SidebarLocationKind::Home,
+            },
+            SidebarLocation {
+                label: "Projects".to_owned(),
+                path: projects.clone(),
+                kind: SidebarLocationKind::Bookmark,
+            },
+        ]));
+
+        assert_eq!(
+            browser.user_config.sidebar_favorites,
+            Some(vec![config::SidebarFavoriteConfig {
+                label: "Projects".to_owned(),
+                path: projects,
+            }])
+        );
     }
 
     #[test]

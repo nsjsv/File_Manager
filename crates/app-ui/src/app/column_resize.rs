@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use iced::{Point, Task};
 
 use crate::app::FileBrowser;
-use crate::commands::{save_column_width_overrides_command, save_user_config_command};
+use crate::commands::save_column_width_overrides_command;
 use crate::config;
 use crate::model::Message;
 use crate::three_column_view::{COLUMN_RESIZE_DIVIDER_WIDTH, DEFAULT_VISIBLE_COLUMN_COUNT};
@@ -120,14 +120,10 @@ impl FileBrowser {
         save_column_width_overrides_command(task_queue_store, self.column_width_overrides.clone())
     }
 
-    pub(super) fn persist_user_config_command(&self) -> Task<Message> {
-        save_user_config_command(self.user_config.clone())
-    }
-
     pub(super) fn toggle_show_hidden_files(&mut self) -> Task<Message> {
         self.options.include_hidden = !self.options.include_hidden;
         self.user_config.show_hidden_files = self.options.include_hidden;
-        let persist_command = self.persist_user_config_command();
+        let persist_command = self.persist_user_preferences_command();
         let reload_command = self.reload_current();
         Task::batch([persist_command, reload_command])
     }

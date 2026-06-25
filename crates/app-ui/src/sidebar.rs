@@ -1,5 +1,4 @@
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::config::SidebarFavoriteConfig;
@@ -75,19 +74,6 @@ fn configured_sidebar_favorite_locations(
         push_sidebar_location(&mut locations, &label, favorite.path.clone(), kind);
     }
     locations
-}
-
-pub(crate) fn save_gtk_bookmark_locations(
-    home: &Path,
-    locations: &[SidebarLocation],
-) -> io::Result<()> {
-    let content = gtk_bookmarks_content(locations);
-    for version in ["gtk-3.0", "gtk-4.0"] {
-        let directory = home.join(".config").join(version);
-        fs::create_dir_all(&directory)?;
-        fs::write(directory.join("bookmarks"), &content)?;
-    }
-    Ok(())
 }
 
 fn default_user_directory_locations(
@@ -207,44 +193,6 @@ fn sidebar_favorite_kind(home: &Path, path: &Path) -> SidebarLocationKind {
         .unwrap_or(SidebarLocationKind::Bookmark)
 }
 
-fn gtk_bookmarks_content(locations: &[SidebarLocation]) -> String {
-    let mut content = locations
-        .iter()
-        .map(gtk_bookmark_line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !content.is_empty() {
-        content.push('\n');
-    }
-    content
-}
-
-fn gtk_bookmark_line(location: &SidebarLocation) -> String {
-    let uri = format!(
-        "file://{}",
-        percent_encode_path(&location.path.to_string_lossy())
-    );
-    let label = location.label.replace(['\n', '\r'], " ");
-    if label.trim().is_empty() {
-        uri
-    } else {
-        format!("{uri} {label}")
-    }
-}
-
-fn percent_encode_path(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    for byte in value.as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                output.push(*byte as char)
-            }
-            _ => output.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    output
-}
-
 fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
@@ -351,28 +299,5 @@ mod tests {
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].path, downloads);
-    }
-
-    #[test]
-    fn writes_gtk_bookmarks_to_both_versions() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let bookmarks = vec![SidebarLocation {
-            label: "Project Folder".to_owned(),
-            path: PathBuf::from("/home/user/My Folder"),
-            kind: SidebarLocationKind::Bookmark,
-        }];
-
-        save_gtk_bookmark_locations(home, &bookmarks).unwrap();
-
-        let expected = "file:///home/user/My%20Folder Project Folder\n";
-        assert_eq!(
-            fs::read_to_string(home.join(".config/gtk-3.0/bookmarks")).unwrap(),
-            expected
-        );
-        assert_eq!(
-            fs::read_to_string(home.join(".config/gtk-4.0/bookmarks")).unwrap(),
-            expected
-        );
     }
 }

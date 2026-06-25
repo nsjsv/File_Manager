@@ -14,7 +14,7 @@ impl FileBrowser {
         }
 
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             self.schedule_thumbnail_refresh(),
         ])
     }
@@ -49,7 +49,7 @@ impl FileBrowser {
         }
 
         self.user_config.max_preview_file_bytes = bytes;
-        self.persist_user_config_command()
+        self.persist_user_preferences_command()
     }
 
     fn remove_pending_network_thumbnail_generations(&mut self) {

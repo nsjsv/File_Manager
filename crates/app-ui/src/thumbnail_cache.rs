@@ -207,6 +207,9 @@ impl ThumbnailCache {
         load_policy: ThumbnailLoadPolicy,
         scope: Option<ThumbnailScope>,
     ) {
+        if self.request_is_inside_cache_dir(&request) {
+            return;
+        }
         let key = request.key();
         if !self.thumbnail_can_be_queued(&key, load_policy) {
             return;
@@ -283,6 +286,9 @@ impl ThumbnailCache {
         max_edge: u32,
     ) -> Option<&ThumbnailHandleEntry> {
         let request = request_for_entry(entry, max_edge)?;
+        if self.request_is_inside_cache_dir(&request) {
+            return None;
+        }
         self.ready.get(&request.key())
     }
 
@@ -316,6 +322,10 @@ impl ThumbnailCache {
         !self.ready.contains_key(key)
             && !self.inflight.contains_key(key)
             && (load_policy == ThumbnailLoadPolicy::CacheOnly || !self.failure_is_active(key))
+    }
+
+    fn request_is_inside_cache_dir(&self, request: &ThumbnailRequest) -> bool {
+        thumbnails::path_is_in_thumbnail_cache(&self.cache_dir, &request.source)
     }
 
     fn take_highest_priority_work(&mut self) -> Option<ThumbnailWork> {
@@ -516,5 +526,31 @@ mod tests {
         assert!(sources.contains(&kept_request.source));
         assert!(sources.contains(&preview_request.source));
         assert!(!sources.contains(&PathBuf::from("stale.png")));
+    }
+
+    #[test]
+    fn queue_rejects_sources_inside_thumbnail_cache_dir() {
+        let mut cache = ThumbnailCache::new(PathBuf::from("/cache/thumbnails"));
+        cache.enqueue_request(
+            thumbnail_request("/cache/thumbnails/generated.png", 1),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Visible,
+        );
+        cache.enqueue_request(
+            thumbnail_request("/cache/thumbnails/nested/generated.png", 2),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Visible,
+        );
+        let sibling_request = thumbnail_request("/cache/thumbnails-extra/photo.png", 3);
+        cache.enqueue_request(
+            sibling_request.clone(),
+            ThumbnailPurpose::List,
+            ThumbnailPriority::Visible,
+        );
+
+        let batch = cache.take_next_batch();
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].request, sibling_request);
     }
 }

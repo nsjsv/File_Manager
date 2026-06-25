@@ -3,7 +3,8 @@ use std::path::Path;
 use thumbnails::{
     generate_image_thumbnail, is_supported_thumbnail_path, is_supported_video_path,
     load_cached_thumbnail, load_image_dimensions, load_or_generate_image_thumbnail,
-    ThumbnailOptions, ThumbnailRequest, ThumbnailSourceMetadata,
+    load_or_generate_thumbnail, path_is_in_thumbnail_cache, ThumbnailError, ThumbnailOptions,
+    ThumbnailRequest, ThumbnailSourceMetadata,
 };
 
 #[tokio::test]
@@ -86,6 +87,28 @@ async fn load_cached_thumbnail_miss_does_not_create_cache() {
 
     assert!(cached.is_none());
     assert!(!cache_dir.exists());
+}
+
+#[tokio::test]
+async fn load_or_generate_thumbnail_rejects_cache_directory_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let source = cache_dir.join("generated.png");
+    let image = image::RgbImage::new(64, 32);
+    image.save(&source).unwrap();
+    let request = thumbnail_request(&source, 16);
+
+    let error = load_or_generate_thumbnail(&cache_dir, request)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ThumbnailError::SourceInsideCacheDirectory { path, cache_dir: rejected_cache_dir }
+            if path == source && rejected_cache_dir == cache_dir
+    ));
+    assert_eq!(std::fs::read_dir(&cache_dir).unwrap().count(), 1);
 }
 
 #[tokio::test]
@@ -192,6 +215,25 @@ fn supported_thumbnail_path_includes_images_and_videos() {
     assert!(is_supported_thumbnail_path("clip.MP4"));
     assert!(is_supported_video_path("movie.webm"));
     assert!(!is_supported_thumbnail_path("notes.txt"));
+}
+
+#[test]
+fn thumbnail_cache_path_matches_cache_dir_descendants_only() {
+    let cache_dir = Path::new("/tmp/file-manager/thumbnails");
+
+    assert!(path_is_in_thumbnail_cache(
+        cache_dir,
+        "/tmp/file-manager/thumbnails"
+    ));
+    assert!(path_is_in_thumbnail_cache(
+        cache_dir,
+        "/tmp/file-manager/thumbnails/generated.png"
+    ));
+    assert!(!path_is_in_thumbnail_cache(
+        cache_dir,
+        "/tmp/file-manager/thumbnails-extra/generated.png"
+    ));
+    assert!(!path_is_in_thumbnail_cache("", "generated.png"));
 }
 
 fn thumbnail_request(source: &Path, max_edge: u32) -> ThumbnailRequest {

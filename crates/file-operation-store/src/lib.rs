@@ -19,6 +19,10 @@ pub use browser_session::{
     StoredBrowserPane, StoredBrowserPaneLayout, StoredBrowserSession, StoredBrowserTab,
     StoredBrowserViewMode, StoredColumnBrowserViewport, StoredColumnViewport, StoredSplitAxis,
 };
+mod user_preferences;
+pub use user_preferences::{
+    StoredNetworkConnection, StoredShortcutBinding, StoredSidebarFavorite, StoredUserPreferences,
+};
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +46,12 @@ CREATE TABLE IF NOT EXISTS ui_column_view_preferences (
 
 CREATE TABLE IF NOT EXISTS browser_session (
     session_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    preference_key TEXT PRIMARY KEY,
     payload_json TEXT NOT NULL,
     updated_at_ms INTEGER NOT NULL
 );

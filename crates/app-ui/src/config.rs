@@ -1,9 +1,6 @@
-use std::path::{Path, PathBuf};
-use std::{fs, io};
+use std::path::PathBuf;
 
-use desktop_linux::{
-    DisplayRendererGpu, NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator,
-};
+use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::FileOperationVerification;
 use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy, MediaMetadataScope};
 
@@ -11,40 +8,19 @@ use crate::model::BrowserViewMode;
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
 
+mod app_config;
+pub(crate) use app_config::{load_app_config, save_app_config, AppConfig};
+mod legacy_toml;
 pub(crate) mod startup;
 pub(crate) use startup::StartupLocationPolicy;
+mod user_preferences;
+pub(crate) use user_preferences::{
+    load_user_config_for_app_config, save_user_preferences, UserPreferences,
+};
 
 const APP_DIR_NAME: &str = "file-manager";
-const CONFIG_FILE_NAME: &str = "config.toml";
+pub(super) const CONFIG_FILE_NAME: &str = "config.toml";
 const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
-const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
-const SEARCH_INDEX_EXCLUDE_PATTERNS_KEY: &str = "search_index_exclude_patterns";
-const SEARCH_INDEX_CONTENT_ENABLED_KEY: &str = "search_index_content_enabled";
-const SEARCH_INDEX_MEDIA_SCOPE_KEY: &str = "search_index_media_scope";
-const SEARCH_INDEX_MEDIA_ENABLED_KEY: &str = "search_index_media_enabled";
-const SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY: &str = "search_index_directory_error_policy";
-const SEARCH_MODE_KEY: &str = "search_mode";
-const SEARCH_MODE_PROMPT_KEY: &str = "search_mode_prompt";
-const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
-const NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY: &str =
-    "network_list_thumbnail_downloads_enabled";
-const MAX_PREVIEW_FILE_BYTES_KEY: &str = "max_preview_file_bytes";
-const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
-const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
-const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
-const SIDEBAR_FAVORITE_LABEL_KEY: &str = "label";
-const SIDEBAR_FAVORITE_PATH_KEY: &str = "path";
-const NETWORK_CONNECTIONS_KEY: &str = "network_connections";
-const NETWORK_CONNECTION_ID_KEY: &str = "id";
-const NETWORK_CONNECTION_LABEL_KEY: &str = "label";
-const NETWORK_CONNECTION_PROTOCOL_KEY: &str = "protocol";
-const NETWORK_CONNECTION_URI_KEY: &str = "uri";
-const NETWORK_CONNECTION_AUTO_CONNECT_KEY: &str = "auto_connect";
-const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
-const RENDERING_BACKEND_KEY: &str = "rendering_backend";
-const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
-const BROWSER_VIEW_MODE_KEY: &str = "browser_view_mode";
-const SHORTCUTS_KEY: &str = "shortcuts";
 
 pub(crate) const DEFAULT_TERMINAL_EMULATOR: TerminalEmulator = TerminalEmulator::Automatic;
 pub(crate) const DEFAULT_RENDERING_GPU_PREFERENCE: RenderingGpuPreference =
@@ -226,25 +202,6 @@ pub(crate) struct SidebarFavoriteConfig {
     pub(crate) path: PathBuf,
 }
 
-pub(crate) fn load_user_config() -> UserConfig {
-    let default = default_user_config();
-    let Some(config_dir) = app_config_dir_path() else {
-        return default;
-    };
-
-    load_user_config_from_dir(&config_dir, default)
-}
-
-pub(crate) fn save_user_config(config: &UserConfig) -> io::Result<()> {
-    let config_file = config_file_path().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "user configuration directory is unavailable",
-        )
-    })?;
-    write_user_config(&config_file, config)
-}
-
 pub(crate) fn default_state_database_path() -> PathBuf {
     let fallback_base = dirs::home_dir()
         .or_else(|| std::env::current_dir().ok())
@@ -257,11 +214,10 @@ pub(crate) fn default_state_database_path() -> PathBuf {
 
 pub(crate) fn default_user_config() -> UserConfig {
     let fallback_base = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let cache_base = dirs::cache_dir()
-        .unwrap_or_else(|| fallback_base.clone())
-        .join(APP_DIR_NAME);
+    let cache_base = dirs::cache_dir().unwrap_or_else(|| fallback_base.clone());
+    let app_cache_base = cache_base.join(APP_DIR_NAME);
     UserConfig {
-        search_index_dir: cache_base.join("search-index"),
+        search_index_dir: app_cache_base.join("search-index"),
         search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
         search_index_content_enabled: false,
         search_index_media_scope: MediaMetadataScope::Off,
@@ -362,123 +318,8 @@ pub(crate) fn max_preview_file_bytes_from_mib(mib: u64) -> Option<u64> {
         .map(normalize_max_preview_file_bytes)
 }
 
-fn app_config_dir_path() -> Option<PathBuf> {
+pub(super) fn app_config_dir_path() -> Option<PathBuf> {
     dirs::config_dir().map(|path| path.join(APP_DIR_NAME))
-}
-
-fn config_file_path() -> Option<PathBuf> {
-    app_config_dir_path().map(|path| path.join(CONFIG_FILE_NAME))
-}
-
-fn load_user_config_from_dir(config_dir: &Path, default: UserConfig) -> UserConfig {
-    let config_file = config_dir.join(CONFIG_FILE_NAME);
-    match fs::read_to_string(&config_file) {
-        Ok(content) => parse_toml_user_config(&content, default),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => default,
-        Err(_) => default,
-    }
-}
-
-fn parse_toml_user_config(content: &str, default: UserConfig) -> UserConfig {
-    let Ok(document) = content.parse::<toml::Table>() else {
-        return default;
-    };
-
-    let mut config = default;
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_DIR_KEY) {
-        config.search_index_dir = PathBuf::from(value);
-    }
-    if let Some(patterns) = toml_string_array(&document, SEARCH_INDEX_EXCLUDE_PATTERNS_KEY) {
-        config.search_index_exclude_patterns = normalize_search_index_exclude_patterns(patterns);
-    }
-    if let Some(value) = document
-        .get(SEARCH_INDEX_CONTENT_ENABLED_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.search_index_content_enabled = value;
-    }
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_MEDIA_SCOPE_KEY) {
-        if let Some(scope) = MediaMetadataScope::from_config_value(value) {
-            config.search_index_media_scope = scope;
-        }
-    } else if let Some(value) = document
-        .get(SEARCH_INDEX_MEDIA_ENABLED_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.search_index_media_scope = if value {
-            MediaMetadataScope::All
-        } else {
-            MediaMetadataScope::Off
-        };
-    }
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY) {
-        if let Some(policy) = DirectoryErrorPolicy::from_config_value(value) {
-            config.search_index_directory_error_policy = policy;
-        }
-    }
-    if let Some(value) = toml_string(&document, SEARCH_MODE_KEY) {
-        if let Some(search_mode) = SearchBackendMode::from_config_value(value) {
-            config.search_mode = search_mode;
-        }
-    }
-    if let Some(value) = toml_string(&document, SEARCH_MODE_PROMPT_KEY) {
-        if let Some(status) = SearchModePromptStatus::from_config_value(value) {
-            config.search_mode_prompt = status;
-        }
-    }
-    if let Some(value) = toml_string(&document, THUMBNAIL_CACHE_DIR_KEY) {
-        config.thumbnail_cache_dir = PathBuf::from(value);
-    }
-    if let Some(value) = document
-        .get(NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.network_list_thumbnail_downloads_enabled = value;
-    }
-    if let Some(bytes) = document
-        .get(MAX_PREVIEW_FILE_BYTES_KEY)
-        .and_then(toml_positive_integer_as_u64)
-    {
-        config.max_preview_file_bytes = normalize_max_preview_file_bytes(bytes);
-    }
-    if let Some(value) = document
-        .get(SHOW_HIDDEN_FILES_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.show_hidden_files = value;
-    }
-    if let Some(width) = document.get(SIDEBAR_WIDTH_KEY).and_then(toml_number_as_f32) {
-        config.sidebar_width = normalize_sidebar_width(width);
-    }
-    if let Some(favorites) = parse_toml_sidebar_favorites(&document) {
-        config.sidebar_favorites = Some(favorites);
-    }
-    config.network_connections = parse_toml_network_connections(&document);
-    if let Some(value) = toml_string(&document, TERMINAL_EMULATOR_KEY) {
-        if let Some(terminal_emulator) = TerminalEmulator::from_config_value(value) {
-            config.terminal_emulator = terminal_emulator;
-        }
-    }
-    if let Some(value) = toml_string(&document, RENDERING_BACKEND_KEY) {
-        if let Some(preference) = RenderingGpuPreference::from_config_value(value) {
-            config.rendering_gpu_preference = preference;
-        }
-    }
-    if let Some(value) = toml_string(&document, FILE_OPERATION_VERIFICATION_KEY) {
-        if let Some(verification) = file_operation_verification_from_config_value(value) {
-            config.file_operation_verification = verification;
-        }
-    }
-    if let Some(value) = toml_string(&document, BROWSER_VIEW_MODE_KEY) {
-        if let Some(view_mode) = browser_view_mode_from_config_value(value) {
-            config.browser_view_mode = view_mode;
-        }
-    }
-    startup::apply_toml_startup_config(&mut config, &document);
-    if let Some(table) = document.get(SHORTCUTS_KEY).and_then(toml::Value::as_table) {
-        config.shortcuts.apply_toml_table(table);
-    }
-    config
 }
 
 pub(crate) fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'a str> {
@@ -486,276 +327,6 @@ pub(crate) fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'
         .get(key)
         .and_then(toml::Value::as_str)
         .filter(|value| !value.is_empty())
-}
-
-fn toml_string_array(document: &toml::Table, key: &str) -> Option<Vec<String>> {
-    let values = document.get(key)?.as_array()?;
-    Some(
-        values
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect(),
-    )
-}
-
-fn write_user_config(path: &Path, config: &UserConfig) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if let Some(parent) = config.search_index_dir.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Some(parent) = config.thumbnail_cache_dir.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let content = toml_user_config_content(config).map_err(io::Error::other)?;
-    fs::write(path, content)
-}
-
-fn toml_user_config_content(config: &UserConfig) -> Result<String, toml::ser::Error> {
-    let mut document = toml::Table::new();
-    document.insert(
-        SEARCH_INDEX_DIR_KEY.to_string(),
-        toml::Value::String(config.search_index_dir.to_string_lossy().into_owned()),
-    );
-    document.insert(
-        SEARCH_INDEX_EXCLUDE_PATTERNS_KEY.to_string(),
-        toml::Value::Array(
-            config
-                .search_index_exclude_patterns
-                .iter()
-                .cloned()
-                .map(toml::Value::String)
-                .collect(),
-        ),
-    );
-    document.insert(
-        SEARCH_INDEX_CONTENT_ENABLED_KEY.to_string(),
-        toml::Value::Boolean(config.search_index_content_enabled),
-    );
-    document.insert(
-        SEARCH_INDEX_MEDIA_SCOPE_KEY.to_string(),
-        toml::Value::String(config.search_index_media_scope.config_value().to_string()),
-    );
-    document.insert(
-        SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY.to_string(),
-        toml::Value::String(
-            config
-                .search_index_directory_error_policy
-                .config_value()
-                .to_string(),
-        ),
-    );
-    document.insert(
-        SEARCH_MODE_KEY.to_string(),
-        toml::Value::String(config.search_mode.config_value().to_string()),
-    );
-    document.insert(
-        SEARCH_MODE_PROMPT_KEY.to_string(),
-        toml::Value::String(config.search_mode_prompt.config_value().to_string()),
-    );
-    document.insert(
-        THUMBNAIL_CACHE_DIR_KEY.to_string(),
-        toml::Value::String(config.thumbnail_cache_dir.to_string_lossy().into_owned()),
-    );
-    document.insert(
-        NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY.to_string(),
-        toml::Value::Boolean(config.network_list_thumbnail_downloads_enabled),
-    );
-    document.insert(
-        MAX_PREVIEW_FILE_BYTES_KEY.to_string(),
-        toml::Value::Integer(
-            normalize_max_preview_file_bytes(config.max_preview_file_bytes).min(i64::MAX as u64)
-                as i64,
-        ),
-    );
-    document.insert(
-        SHOW_HIDDEN_FILES_KEY.to_string(),
-        toml::Value::Boolean(config.show_hidden_files),
-    );
-    document.insert(
-        SIDEBAR_WIDTH_KEY.to_string(),
-        toml::Value::Float(normalize_sidebar_width(config.sidebar_width) as f64),
-    );
-    document.insert(
-        TERMINAL_EMULATOR_KEY.to_string(),
-        toml::Value::String(config.terminal_emulator.config_value().to_string()),
-    );
-    document.insert(
-        RENDERING_BACKEND_KEY.to_string(),
-        toml::Value::String(config.rendering_gpu_preference.config_value().to_string()),
-    );
-    document.insert(
-        FILE_OPERATION_VERIFICATION_KEY.to_string(),
-        toml::Value::String(
-            file_operation_verification_config_value(config.file_operation_verification)
-                .to_string(),
-        ),
-    );
-    document.insert(
-        BROWSER_VIEW_MODE_KEY.to_string(),
-        toml::Value::String(browser_view_mode_config_value(config.browser_view_mode).to_string()),
-    );
-    startup::insert_toml_startup_config(&mut document, config);
-    document.insert(
-        SHORTCUTS_KEY.to_string(),
-        toml::Value::Table(config.shortcuts.toml_table()),
-    );
-    if let Some(favorites) = &config.sidebar_favorites {
-        document.insert(
-            SIDEBAR_FAVORITES_KEY.to_string(),
-            toml::Value::Array(toml_sidebar_favorite_values(favorites)),
-        );
-    }
-    document.insert(
-        NETWORK_CONNECTIONS_KEY.to_string(),
-        toml::Value::Array(toml_network_connection_values(&config.network_connections)),
-    );
-
-    let content = toml::to_string_pretty(&document)?;
-    Ok(format!("# File Manager user configuration\n{content}"))
-}
-
-fn parse_toml_sidebar_favorites(document: &toml::Table) -> Option<Vec<SidebarFavoriteConfig>> {
-    let entries = document.get(SIDEBAR_FAVORITES_KEY)?.as_array()?;
-    let mut favorites = Vec::new();
-    for entry in entries {
-        let Some(table) = entry.as_table() else {
-            continue;
-        };
-        let Some(path) = toml_string(table, SIDEBAR_FAVORITE_PATH_KEY) else {
-            continue;
-        };
-        let path = PathBuf::from(path);
-        if path.as_os_str().is_empty() {
-            continue;
-        }
-        let label = toml_string(table, SIDEBAR_FAVORITE_LABEL_KEY)
-            .map(str::trim)
-            .filter(|label| !label.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| sidebar_favorite_label_from_path(&path));
-        favorites.push(SidebarFavoriteConfig { label, path });
-    }
-    Some(favorites)
-}
-
-fn toml_sidebar_favorite_values(favorites: &[SidebarFavoriteConfig]) -> Vec<toml::Value> {
-    favorites
-        .iter()
-        .map(|favorite| {
-            let mut table = toml::Table::new();
-            table.insert(
-                SIDEBAR_FAVORITE_LABEL_KEY.to_string(),
-                toml::Value::String(favorite.label.clone()),
-            );
-            table.insert(
-                SIDEBAR_FAVORITE_PATH_KEY.to_string(),
-                toml::Value::String(favorite.path.to_string_lossy().into_owned()),
-            );
-            toml::Value::Table(table)
-        })
-        .collect()
-}
-
-fn parse_toml_network_connections(document: &toml::Table) -> Vec<SavedNetworkConnection> {
-    let Some(entries) = document
-        .get(NETWORK_CONNECTIONS_KEY)
-        .and_then(toml::Value::as_array)
-    else {
-        return Vec::new();
-    };
-
-    let mut connections = Vec::new();
-    for entry in entries {
-        let Some(table) = entry.as_table() else {
-            continue;
-        };
-        let Some(id) = toml_string(table, NETWORK_CONNECTION_ID_KEY) else {
-            continue;
-        };
-        let Some(protocol) = toml_string(table, NETWORK_CONNECTION_PROTOCOL_KEY)
-            .and_then(NetworkProtocol::from_config_value)
-        else {
-            continue;
-        };
-        let Some(uri) = toml_string(table, NETWORK_CONNECTION_URI_KEY) else {
-            continue;
-        };
-        let label = table
-            .get(NETWORK_CONNECTION_LABEL_KEY)
-            .and_then(toml::Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
-        if id.trim().is_empty() {
-            continue;
-        }
-        let auto_connect = table
-            .get(NETWORK_CONNECTION_AUTO_CONNECT_KEY)
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(false);
-        if let Ok(connection) =
-            NetworkConnection::new(NetworkConnectionId::new(id.trim()), label, protocol, uri)
-        {
-            connections.push(SavedNetworkConnection::new(connection, auto_connect));
-        }
-    }
-    connections
-}
-
-fn toml_network_connection_values(connections: &[SavedNetworkConnection]) -> Vec<toml::Value> {
-    connections
-        .iter()
-        .map(|saved| {
-            let connection = &saved.connection;
-            let mut table = toml::Table::new();
-            table.insert(
-                NETWORK_CONNECTION_ID_KEY.to_string(),
-                toml::Value::String(connection.id.as_str().to_owned()),
-            );
-            table.insert(
-                NETWORK_CONNECTION_LABEL_KEY.to_string(),
-                toml::Value::String(connection.label.clone()),
-            );
-            table.insert(
-                NETWORK_CONNECTION_PROTOCOL_KEY.to_string(),
-                toml::Value::String(connection.protocol.config_value().to_owned()),
-            );
-            table.insert(
-                NETWORK_CONNECTION_URI_KEY.to_string(),
-                toml::Value::String(connection.uri.clone()),
-            );
-            table.insert(
-                NETWORK_CONNECTION_AUTO_CONNECT_KEY.to_string(),
-                toml::Value::Boolean(saved.auto_connect),
-            );
-            toml::Value::Table(table)
-        })
-        .collect()
-}
-
-fn sidebar_favorite_label_from_path(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|label| !label.is_empty())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
-}
-
-fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
-    match value {
-        toml::Value::Float(value) => Some(*value as f32),
-        toml::Value::Integer(value) => Some(*value as f32),
-        _ => None,
-    }
-}
-
-fn toml_positive_integer_as_u64(value: &toml::Value) -> Option<u64> {
-    match value {
-        toml::Value::Integer(value) => (*value > 0).then_some(*value as u64),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

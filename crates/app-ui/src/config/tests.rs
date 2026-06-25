@@ -7,14 +7,17 @@ use desktop_linux::{
 };
 use file_core::FileOperationVerification;
 use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
+use file_operation_store::{StoredNetworkConnection, TaskQueueStore};
 
+use crate::model::BrowserViewMode;
 use crate::network_connections::SavedNetworkConnection;
+use crate::shortcuts::ShortcutBindingId;
 
 use super::*;
 
 #[test]
-fn parses_toml_user_config() {
-    let parsed = parse_toml_user_config(
+fn parses_legacy_toml_user_config_for_migration() {
+    let parsed = legacy_toml::parse_toml_user_config(
         r#"
 search_index_dir = "/tmp/search-index"
 search_index_directory_error_policy = "abort"
@@ -33,6 +36,16 @@ browser_view_mode = "list"
 startup_location = "custom"
 startup_custom_directory = "/workspace"
 save_view_state = true
+shortcuts = { focus_path_input = "Ctrl+Alt+L" }
+sidebar_favorites = [
+  { label = "Downloads", path = "/home/user/Downloads" },
+  { path = "/srv/projects" },
+]
+network_connections = [
+  { id = "nas", label = "NAS", protocol = "smb", uri = "smb://server/share" },
+  { id = "docs", label = "", protocol = "webdav", uri = "https://user@example.test/docs", auto_connect = true },
+  { id = "sftp", label = "SFTP", protocol = "sftp", uri = "sftp://user@sftp.example.test/srv/share" },
+]
 "#,
         default_user_config(),
     );
@@ -66,46 +79,285 @@ save_view_state = true
     );
     assert_eq!(parsed.startup_custom_directory, PathBuf::from("/workspace"));
     assert!(parsed.save_view_state);
-}
-
-#[test]
-fn removed_off_verification_value_falls_back_to_default() {
-    let parsed_toml = parse_toml_user_config(
-        "file_operation_verification = \"off\"\n",
-        default_user_config(),
-    );
-
     assert_eq!(
-        parsed_toml.file_operation_verification,
-        default_user_config().file_operation_verification
+        parsed
+            .shortcuts
+            .binding(ShortcutBindingId::FocusPathInput)
+            .config_value(),
+        "Ctrl+Alt+L"
     );
+    assert_eq!(parsed.sidebar_favorites.as_ref().map(Vec::len), Some(2));
+    assert_eq!(parsed.network_connections.len(), 3);
+    assert_eq!(
+        parsed.network_connections[1].connection.uri,
+        "davs://user@example.test/docs"
+    );
+    assert!(parsed.network_connections[1].auto_connect);
 }
 
 #[test]
-fn serializes_basic_metadata_verification() {
+fn app_config_toml_contains_only_startup_level_keys() {
+    let app_config = AppConfig {
+        search_index_dir: PathBuf::from("/tmp/search-index"),
+        thumbnail_cache_dir: PathBuf::from("/tmp/thumbnails"),
+        rendering_gpu_preference: RenderingGpuPreference::HighPerformanceGpu,
+    };
+
+    let content = app_config::toml_app_config_content(&app_config).unwrap();
+    let document = content.parse::<toml::Table>().unwrap();
+
+    assert_eq!(document.len(), 3);
+    assert_eq!(
+        document
+            .get("search_index_dir")
+            .and_then(toml::Value::as_str),
+        Some("/tmp/search-index")
+    );
+    assert_eq!(
+        document
+            .get("thumbnail_cache_dir")
+            .and_then(toml::Value::as_str),
+        Some("/tmp/thumbnails")
+    );
+    assert_eq!(
+        document
+            .get("rendering_backend")
+            .and_then(toml::Value::as_str),
+        Some("gpu")
+    );
+    for key in [
+        "show_hidden_files",
+        "sidebar_width",
+        "sidebar_favorites",
+        "network_connections",
+        "shortcuts",
+        "startup_location",
+        "search_mode",
+        "max_preview_file_bytes",
+    ] {
+        assert!(
+            !document.contains_key(key),
+            "app config must not contain {key}"
+        );
+    }
+
+    let parsed = app_config::parse_toml_app_config(&content, app_config::default_app_config());
+    assert_eq!(parsed, app_config);
+}
+
+#[test]
+fn writes_app_config_without_user_preferences() {
+    let temp_dir = tempfile::tempdir().expect("create temp config dir");
+    let path = temp_dir.path().join("config.toml");
+    let app_config = AppConfig {
+        search_index_dir: temp_dir.path().join("search-index"),
+        thumbnail_cache_dir: temp_dir.path().join("thumbnails"),
+        rendering_gpu_preference: RenderingGpuPreference::DisplayGpu,
+    };
+
+    app_config::write_app_config(&path, &app_config).expect("write app config");
+
+    let content = fs::read_to_string(path).expect("read app config");
+    assert!(content.starts_with("# File Manager application configuration\n"));
+    assert!(content.contains("rendering_backend = \"display\""));
+    assert!(!content.contains("show_hidden_files"));
+    assert!(!content.contains("shortcuts"));
+}
+
+#[test]
+fn user_preferences_round_trip_through_sqlite() {
+    let temp_dir = tempfile::tempdir().expect("create temp state dir");
+    let state_database_path = temp_dir.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&state_database_path).expect("create state store");
+    let app_config = AppConfig {
+        search_index_dir: PathBuf::from("/var/lib/file-manager/search"),
+        thumbnail_cache_dir: PathBuf::from("/var/cache/file-manager/thumbs"),
+        rendering_gpu_preference: RenderingGpuPreference::HighPerformanceGpu,
+    };
     let mut config = default_user_config();
-    config.file_operation_verification = FileOperationVerification::BasicMetadata;
+    config.show_hidden_files = true;
+    config.sidebar_width = 245.0;
+    config.sidebar_favorites = Some(vec![SidebarFavoriteConfig {
+        label: "Projects".to_owned(),
+        path: PathBuf::from("/srv/projects"),
+    }]);
+    config.network_connections = vec![SavedNetworkConnection::new(
+        NetworkConnection::new(
+            NetworkConnectionId::new("nas"),
+            "NAS",
+            NetworkProtocol::Smb,
+            "smb://server/share",
+        )
+        .unwrap(),
+        true,
+    )];
+    config.startup_location_policy = StartupLocationPolicy::PreviousSession;
+    config.startup_custom_directory = PathBuf::from("/workspace");
+    config.save_view_state = true;
+    config.browser_view_mode = BrowserViewMode::List;
+    config.terminal_emulator = TerminalEmulator::Ghostty;
+    config.file_operation_verification = FileOperationVerification::Strong;
+    config.search_mode = SearchBackendMode::Indexed;
+    config.search_mode_prompt = SearchModePromptStatus::Completed;
+    config.search_index_content_enabled = true;
+    config.search_index_media_scope = MediaMetadataScope::Images;
+    config.search_index_directory_error_policy = DirectoryErrorPolicy::Abort;
+    config.network_list_thumbnail_downloads_enabled = true;
+    config.max_preview_file_bytes = 8 * 1024 * 1024;
+    let mut shortcut_table = toml::Table::new();
+    shortcut_table.insert(
+        "focus_path_input".to_owned(),
+        toml::Value::String("Ctrl+Alt+L".to_owned()),
+    );
+    config.shortcuts.apply_toml_table(&shortcut_table);
 
-    let content = toml_user_config_content(&config).unwrap();
+    save_user_preferences(&store, &config.user_preferences()).expect("save preferences");
 
-    assert!(content.contains("file_operation_verification = \"basic_metadata\""));
-    assert!(!content.contains("file_operation_verification = \"off\""));
-}
+    let loaded = user_preferences::load_user_config_from_sources(
+        app_config.clone(),
+        &state_database_path,
+        None,
+    );
 
-#[test]
-fn parses_display_gpu_preference() {
-    let parsed = parse_toml_user_config("rendering_backend = \"display\"\n", default_user_config());
-
+    assert_eq!(loaded.search_index_dir, app_config.search_index_dir);
+    assert_eq!(loaded.thumbnail_cache_dir, app_config.thumbnail_cache_dir);
     assert_eq!(
-        parsed.rendering_gpu_preference,
-        RenderingGpuPreference::DisplayGpu
+        loaded.rendering_gpu_preference,
+        app_config.rendering_gpu_preference
+    );
+    assert!(loaded.show_hidden_files);
+    assert_eq!(loaded.sidebar_width, 245.0);
+    assert_eq!(loaded.sidebar_favorites, config.sidebar_favorites);
+    assert_eq!(loaded.network_connections, config.network_connections);
+    assert_eq!(
+        loaded.startup_location_policy,
+        StartupLocationPolicy::PreviousSession
+    );
+    assert_eq!(loaded.startup_custom_directory, PathBuf::from("/workspace"));
+    assert!(loaded.save_view_state);
+    assert_eq!(loaded.browser_view_mode, BrowserViewMode::List);
+    assert_eq!(loaded.terminal_emulator, TerminalEmulator::Ghostty);
+    assert_eq!(
+        loaded.file_operation_verification,
+        FileOperationVerification::Strong
+    );
+    assert_eq!(loaded.search_mode, SearchBackendMode::Indexed);
+    assert_eq!(loaded.search_mode_prompt, SearchModePromptStatus::Completed);
+    assert!(loaded.search_index_content_enabled);
+    assert_eq!(loaded.search_index_media_scope, MediaMetadataScope::Images);
+    assert_eq!(
+        loaded.search_index_directory_error_policy,
+        DirectoryErrorPolicy::Abort
+    );
+    assert!(loaded.network_list_thumbnail_downloads_enabled);
+    assert_eq!(loaded.max_preview_file_bytes, 8 * 1024 * 1024);
+    assert_eq!(
+        loaded
+            .shortcuts
+            .binding(ShortcutBindingId::FocusPathInput)
+            .config_value(),
+        "Ctrl+Alt+L"
     );
 }
 
 #[test]
-fn invalid_values_fall_back_to_defaults() {
+fn stored_preferences_skip_password_bearing_network_connections() {
     let default = default_user_config();
-    let parsed = parse_toml_user_config(
+    let mut stored = default.user_preferences().to_stored();
+    stored.network_connections = vec![
+        StoredNetworkConnection {
+            id: "bad".to_owned(),
+            label: "Bad".to_owned(),
+            protocol: "webdav".to_owned(),
+            uri: "davs://user:secret@example.test/docs".to_owned(),
+            auto_connect: true,
+        },
+        StoredNetworkConnection {
+            id: "good".to_owned(),
+            label: "Good".to_owned(),
+            protocol: "smb".to_owned(),
+            uri: "smb://server/share".to_owned(),
+            auto_connect: false,
+        },
+    ];
+
+    let preferences = UserPreferences::from_stored(stored, &default);
+
+    assert_eq!(preferences.network_connections.len(), 1);
+    assert_eq!(
+        preferences.network_connections[0].connection.id.as_str(),
+        "good"
+    );
+}
+
+#[test]
+fn migrates_legacy_toml_preferences_to_sqlite_once() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let config_dir = temp_dir.path().join("config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join(CONFIG_FILE_NAME),
+        r#"
+search_index_dir = "/tmp/search-index"
+thumbnail_cache_dir = "/tmp/thumbnails"
+rendering_backend = "gpu"
+show_hidden_files = true
+sidebar_width = 250.0
+startup_location = "previous_session"
+startup_custom_directory = "/workspace"
+save_view_state = true
+shortcuts = { focus_path_input = "Ctrl+Alt+L" }
+sidebar_favorites = [{ label = "Projects", path = "/srv/projects" }]
+network_connections = [
+  { id = "bad", label = "Bad", protocol = "webdav", uri = "davs://user:secret@example.test/docs", auto_connect = true },
+  { id = "good", label = "Good", protocol = "smb", uri = "smb://server/share" },
+]
+"#,
+    )
+    .expect("write legacy config");
+    let app_config =
+        app_config::load_app_config_from_dir(&config_dir, app_config::default_app_config());
+    let state_database_path = temp_dir.path().join("state.sqlite");
+
+    let loaded = user_preferences::load_user_config_from_sources(
+        app_config,
+        &state_database_path,
+        Some(&config_dir),
+    );
+
+    assert!(loaded.show_hidden_files);
+    assert_eq!(loaded.sidebar_width, 250.0);
+    assert_eq!(
+        loaded.startup_location_policy,
+        StartupLocationPolicy::PreviousSession
+    );
+    assert_eq!(loaded.startup_custom_directory, PathBuf::from("/workspace"));
+    assert!(loaded.save_view_state);
+    assert_eq!(loaded.sidebar_favorites.as_ref().map(Vec::len), Some(1));
+    assert_eq!(loaded.network_connections.len(), 1);
+    assert_eq!(loaded.network_connections[0].connection.id.as_str(), "good");
+    assert_eq!(
+        loaded
+            .shortcuts
+            .binding(ShortcutBindingId::FocusPathInput)
+            .config_value(),
+        "Ctrl+Alt+L"
+    );
+
+    let store = TaskQueueStore::new(&state_database_path).expect("open migrated store");
+    let stored = store
+        .read_user_preferences()
+        .expect("read migrated preferences")
+        .expect("migrated preferences");
+    assert_eq!(stored.network_connections.len(), 1);
+    assert_eq!(stored.network_connections[0].id, "good");
+    assert!(!stored.network_connections[0].uri.contains("secret"));
+}
+
+#[test]
+fn invalid_legacy_values_fall_back_to_defaults() {
+    let default = default_user_config();
+    let parsed = legacy_toml::parse_toml_user_config(
         r#"
 show_hidden_files = "maybe"
 network_list_thumbnail_downloads_enabled = "maybe"
@@ -136,16 +388,16 @@ save_view_state = "maybe"
     assert_eq!(parsed.search_mode, default.search_mode);
     assert_eq!(parsed.search_mode_prompt, default.search_mode_prompt);
     assert_eq!(parsed.sidebar_width, default.sidebar_width);
-    assert_eq!(parsed.terminal_emulator, DEFAULT_TERMINAL_EMULATOR);
+    assert_eq!(parsed.terminal_emulator, default.terminal_emulator);
     assert_eq!(
         parsed.rendering_gpu_preference,
-        DEFAULT_RENDERING_GPU_PREFERENCE
+        default.rendering_gpu_preference
     );
     assert_eq!(
         parsed.file_operation_verification,
-        DEFAULT_FILE_OPERATION_VERIFICATION
+        default.file_operation_verification
     );
-    assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
+    assert_eq!(parsed.browser_view_mode, default.browser_view_mode);
     assert_eq!(
         parsed.startup_location_policy,
         default.startup_location_policy
@@ -158,56 +410,7 @@ save_view_state = "maybe"
 }
 
 #[test]
-fn legacy_search_index_media_enabled_reads_as_all_scope() {
-    let parsed =
-        parse_toml_user_config("search_index_media_enabled = true\n", default_user_config());
-
-    assert_eq!(parsed.search_index_media_scope, MediaMetadataScope::All);
-}
-
-#[test]
-fn writes_toml_user_config_without_column_width_overrides() {
-    let temp_dir = tempfile::tempdir().expect("create temp config dir");
-    let path = temp_dir.path().join("config.toml");
-    let mut config = default_user_config();
-    config.rendering_gpu_preference = RenderingGpuPreference::HighPerformanceGpu;
-
-    write_user_config(&path, &config).expect("write user config");
-
-    let content = fs::read_to_string(path).expect("read user config");
-    assert!(content.starts_with("# File Manager user configuration\n"));
-    assert!(content.contains("sidebar_width = 180.0\n"));
-    assert!(content.contains("network_list_thumbnail_downloads_enabled = false\n"));
-    assert!(content.contains("max_preview_file_bytes = 3145728\n"));
-    assert!(content.contains("search_mode = \"simple\"\n"));
-    assert!(content.contains("search_mode_prompt = \"pending\"\n"));
-    assert!(content.contains("search_index_directory_error_policy = \"skip_unreadable\"\n"));
-    assert!(content.contains("search_index_media_scope = \"off\"\n"));
-    assert!(!content.contains("search_index_media_enabled"));
-    assert!(content.contains("rendering_backend = \"gpu\"\n"));
-    assert!(content.contains("file_operation_verification = \"basic_metadata\"\n"));
-    assert!(content.contains("browser_view_mode = \"columns\"\n"));
-    assert!(content.contains("startup_location = \"home\"\n"));
-    assert!(content.contains("startup_custom_directory = "));
-    assert!(content.contains("save_view_state = false\n"));
-    assert!(!content.contains("[column_width_overrides]"));
-
-    let parsed = parse_toml_user_config(&content, default_user_config());
-    assert_eq!(
-        parsed.rendering_gpu_preference,
-        RenderingGpuPreference::HighPerformanceGpu
-    );
-    assert_eq!(
-        parsed.file_operation_verification,
-        DEFAULT_FILE_OPERATION_VERIFICATION
-    );
-    assert_eq!(parsed.browser_view_mode, BrowserViewMode::Columns);
-    assert_eq!(parsed.startup_location_policy, StartupLocationPolicy::Home);
-    assert!(!parsed.save_view_state);
-}
-
-#[test]
-fn default_search_mode_is_simple_with_pending_prompt() {
+fn default_user_config_keeps_expected_search_and_preview_defaults() {
     let config = default_user_config();
 
     assert_eq!(config.search_mode, SearchBackendMode::Simple);
@@ -219,43 +422,8 @@ fn default_search_mode_is_simple_with_pending_prompt() {
     );
     assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
     assert!(!config.save_view_state);
-}
-
-#[test]
-fn startup_settings_round_trip_through_toml() {
-    let mut config = default_user_config();
-    config.startup_location_policy = StartupLocationPolicy::PreviousSession;
-    config.startup_custom_directory = PathBuf::from("/srv/work");
-    config.save_view_state = true;
-
-    let content = toml_user_config_content(&config).unwrap();
-    let parsed = parse_toml_user_config(&content, default_user_config());
-
     assert_eq!(
-        parsed.startup_location_policy,
-        StartupLocationPolicy::PreviousSession
-    );
-    assert_eq!(parsed.startup_custom_directory, PathBuf::from("/srv/work"));
-    assert!(parsed.save_view_state);
-}
-
-#[test]
-fn search_mode_round_trips_through_toml() {
-    let mut config = default_user_config();
-    config.search_mode = SearchBackendMode::Indexed;
-    config.search_mode_prompt = SearchModePromptStatus::Completed;
-
-    let content = toml_user_config_content(&config).unwrap();
-    let parsed = parse_toml_user_config(&content, default_user_config());
-
-    assert_eq!(parsed.search_mode, SearchBackendMode::Indexed);
-    assert_eq!(parsed.search_mode_prompt, SearchModePromptStatus::Completed);
-}
-
-#[test]
-fn default_user_config_stores_default_search_index_excludes_as_editable_config() {
-    assert_eq!(
-        default_user_config().search_index_exclude_patterns,
+        config.search_index_exclude_patterns,
         file_index::default_search_index_exclude_patterns()
             .iter()
             .map(|pattern| (*pattern).to_owned())
@@ -264,169 +432,12 @@ fn default_user_config_stores_default_search_index_excludes_as_editable_config()
 }
 
 #[test]
-fn parses_empty_search_index_excludes_as_empty_config() {
-    let parsed = parse_toml_user_config(
-        "search_index_exclude_patterns = []\n",
-        default_user_config(),
-    );
-
-    assert!(parsed.search_index_exclude_patterns.is_empty());
-}
-
-#[test]
-fn normalizes_sidebar_width_from_config() {
-    let narrow = parse_toml_user_config("sidebar_width = 20\n", default_user_config());
-    let wide = parse_toml_user_config("sidebar_width = 1200\n", default_user_config());
+fn normalizes_legacy_sidebar_width_from_config() {
+    let narrow = legacy_toml::parse_toml_user_config("sidebar_width = 20\n", default_user_config());
+    let wide = legacy_toml::parse_toml_user_config("sidebar_width = 1200\n", default_user_config());
 
     assert_eq!(narrow.sidebar_width, MIN_SIDEBAR_WIDTH);
     assert_eq!(wide.sidebar_width, MAX_SIDEBAR_WIDTH);
-}
-
-#[test]
-fn parses_sidebar_favorites_from_toml() {
-    let parsed = parse_toml_user_config(
-        r#"
-sidebar_favorites = [
-  { label = "Downloads", path = "/home/user/Downloads" },
-  { path = "/srv/projects" },
-]
-"#,
-        default_user_config(),
-    );
-
-    let favorites = parsed.sidebar_favorites.expect("sidebar favorites");
-    assert_eq!(favorites.len(), 2);
-    assert_eq!(favorites[0].label, "Downloads");
-    assert_eq!(favorites[0].path, PathBuf::from("/home/user/Downloads"));
-    assert_eq!(favorites[1].label, "projects");
-    assert_eq!(favorites[1].path, PathBuf::from("/srv/projects"));
-}
-
-#[test]
-fn writes_sidebar_favorites_to_toml() {
-    let temp_dir = tempfile::tempdir().expect("create temp config dir");
-    let path = temp_dir.path().join("config.toml");
-    let mut config = default_user_config();
-    config.sidebar_favorites = Some(vec![SidebarFavoriteConfig {
-        label: "Projects".to_owned(),
-        path: PathBuf::from("/srv/projects"),
-    }]);
-
-    write_user_config(&path, &config).expect("write user config");
-
-    let content = fs::read_to_string(path).expect("read user config");
-    assert!(content.contains("sidebar_favorites"));
-    let parsed = parse_toml_user_config(&content, default_user_config());
-    assert_eq!(parsed.sidebar_favorites, config.sidebar_favorites);
-}
-
-#[test]
-fn parses_network_connections_from_toml() {
-    let parsed = parse_toml_user_config(
-        r#"
-network_connections = [
-  { id = "nas", label = "NAS", protocol = "smb", uri = "smb://server/share" },
-  { id = "docs", label = "", protocol = "webdav", uri = "https://user@example.test/docs", auto_connect = true },
-  { id = "sftp", label = "SFTP", protocol = "sftp", uri = "sftp://user@sftp.example.test/srv/share" },
-]
-"#,
-        default_user_config(),
-    );
-
-    assert_eq!(parsed.network_connections.len(), 3);
-    assert_eq!(parsed.network_connections[0].connection.id.as_str(), "nas");
-    assert_eq!(parsed.network_connections[0].connection.label, "NAS");
-    assert_eq!(
-        parsed.network_connections[0].connection.protocol,
-        NetworkProtocol::Smb
-    );
-    assert_eq!(
-        parsed.network_connections[0].connection.uri,
-        "smb://server/share"
-    );
-    assert!(!parsed.network_connections[0].auto_connect);
-    assert_eq!(
-        parsed.network_connections[1].connection.protocol,
-        NetworkProtocol::WebDav
-    );
-    assert_eq!(
-        parsed.network_connections[1].connection.uri,
-        "davs://user@example.test/docs"
-    );
-    assert!(parsed.network_connections[1].auto_connect);
-    assert_eq!(
-        parsed.network_connections[2].connection.protocol,
-        NetworkProtocol::Sftp
-    );
-    assert_eq!(
-        parsed.network_connections[2].connection.uri,
-        "sftp://user@sftp.example.test/srv/share"
-    );
-    assert!(!parsed.network_connections[2].auto_connect);
-}
-
-#[test]
-fn skips_password_bearing_network_connections() {
-    let parsed = parse_toml_user_config(
-        r#"
-network_connections = [
-  { id = "bad", label = "Bad", protocol = "webdav", uri = "davs://user:secret@example.test/docs" },
-  { id = "good", label = "Good", protocol = "smb", uri = "smb://server/share" },
-]
-"#,
-        default_user_config(),
-    );
-
-    assert_eq!(parsed.network_connections.len(), 1);
-    assert_eq!(parsed.network_connections[0].connection.id.as_str(), "good");
-}
-
-#[test]
-fn writes_network_connections_without_password_fields() {
-    let mut config = default_user_config();
-    config.network_connections = vec![SavedNetworkConnection::new(
-        NetworkConnection::new(
-            NetworkConnectionId::new("nas"),
-            "",
-            NetworkProtocol::Smb,
-            "smb://server/share",
-        )
-        .unwrap(),
-        true,
-    )];
-
-    let content = toml_user_config_content(&config).unwrap();
-
-    assert!(content.contains("network_connections"));
-    assert!(content.contains("protocol = \"smb\""));
-    assert!(content.contains("uri = \"smb://server/share\""));
-    assert!(content.contains("auto_connect = true"));
-    assert!(!content.contains("password"));
-    let parsed = parse_toml_user_config(&content, default_user_config());
-    assert_eq!(parsed.network_connections, config.network_connections);
-}
-
-#[test]
-fn writes_sftp_network_connection_protocol() {
-    let mut config = default_user_config();
-    config.network_connections = vec![SavedNetworkConnection::new(
-        NetworkConnection::new(
-            NetworkConnectionId::new("sftp"),
-            "SFTP",
-            NetworkProtocol::Sftp,
-            "sftp://user@sftp.example.test/srv/share",
-        )
-        .unwrap(),
-        false,
-    )];
-
-    let content = toml_user_config_content(&config).unwrap();
-
-    assert!(content.contains("protocol = \"sftp\""));
-    assert!(content.contains("uri = \"sftp://user@sftp.example.test/srv/share\""));
-    assert!(!content.contains("password"));
-    let parsed = parse_toml_user_config(&content, default_user_config());
-    assert_eq!(parsed.network_connections, config.network_connections);
 }
 
 #[test]

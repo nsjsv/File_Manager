@@ -4,8 +4,15 @@ use super::FileBrowser;
 use crate::model::Message;
 
 impl FileBrowser {
-    pub(super) fn accept_user_config_saved(&mut self, result: Result<(), String>) -> Task<Message> {
-        self.accept_persistence_result(result, "Failed to save user configuration")
+    pub(super) fn accept_user_preferences_saved(
+        &mut self,
+        result: Result<(), String>,
+    ) -> Task<Message> {
+        self.accept_persistence_result(result, "Failed to save user preferences")
+    }
+
+    pub(super) fn accept_app_config_saved(&mut self, result: Result<(), String>) -> Task<Message> {
+        self.accept_persistence_result(result, "Failed to save application configuration")
     }
 
     pub(super) fn accept_column_width_saved(
@@ -13,13 +20,6 @@ impl FileBrowser {
         result: Result<(), String>,
     ) -> Task<Message> {
         self.accept_persistence_result(result, "Failed to save column width")
-    }
-
-    pub(super) fn accept_sidebar_bookmarks_saved(
-        &mut self,
-        result: Result<(), String>,
-    ) -> Task<Message> {
-        self.accept_persistence_result(result, "Failed to save sidebar favorites")
     }
 
     pub(super) fn accept_browser_session_saved(

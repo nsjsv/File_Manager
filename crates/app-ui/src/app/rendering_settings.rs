@@ -20,7 +20,7 @@ impl FileBrowser {
             StartupRenderingEnvironment::without_display_probe(preference),
         );
         self.renderer_restart_notice_visible = true;
-        self.persist_user_config_command()
+        self.persist_app_config_command()
     }
 
     pub(super) fn restart_with_selected_renderer(&mut self) -> Task<Message> {

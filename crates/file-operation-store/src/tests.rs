@@ -241,6 +241,84 @@ fn browser_session_roundtrip_replace_and_clear() {
 }
 
 #[test]
+fn user_preferences_roundtrip_replace() {
+    let (store, root) = test_store();
+    assert_eq!(store.read_user_preferences().unwrap(), None);
+    let first = StoredUserPreferences {
+        search_index_exclude_patterns: vec!["target".to_owned(), ".git".to_owned()],
+        search_index_content_enabled: true,
+        search_index_media_scope: "images".to_owned(),
+        search_index_directory_error_policy: "abort".to_owned(),
+        search_mode: "indexed".to_owned(),
+        search_mode_prompt: "completed".to_owned(),
+        network_list_thumbnail_downloads_enabled: true,
+        max_preview_file_bytes: 8 * 1024 * 1024,
+        show_hidden_files: true,
+        sidebar_width: 248.0,
+        sidebar_favorites: Some(vec![StoredSidebarFavorite {
+            label: "Projects".to_owned(),
+            path: StoredPath::from_path(Path::new("/srv/projects")),
+        }]),
+        network_connections: vec![StoredNetworkConnection {
+            id: "nas".to_owned(),
+            label: "NAS".to_owned(),
+            protocol: "smb".to_owned(),
+            uri: "smb://server/share".to_owned(),
+            auto_connect: true,
+        }],
+        terminal_emulator: "ghostty".to_owned(),
+        file_operation_verification: "strong".to_owned(),
+        browser_view_mode: "list".to_owned(),
+        startup_location: "previous_session".to_owned(),
+        startup_custom_directory: StoredPath::from_path(Path::new("/workspace")),
+        save_view_state: true,
+        shortcuts: vec![StoredShortcutBinding {
+            action_key: "focus_path_input".to_owned(),
+            binding: "Ctrl+Alt+L".to_owned(),
+        }],
+    };
+
+    store.replace_user_preferences(&first).unwrap();
+    assert_eq!(store.read_user_preferences().unwrap(), Some(first.clone()));
+
+    let second = StoredUserPreferences {
+        show_hidden_files: false,
+        sidebar_favorites: Some(Vec::new()),
+        network_connections: Vec::new(),
+        shortcuts: Vec::new(),
+        ..first
+    };
+    store.replace_user_preferences(&second).unwrap();
+
+    assert_eq!(store.read_user_preferences().unwrap(), Some(second));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn unreadable_user_preferences_payload_is_deleted_on_read() {
+    let (store, root) = test_store();
+    let connection = Connection::open(store.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO user_preferences (preference_key, payload_json, updated_at_ms)
+             VALUES (?1, ?2, ?3)",
+            params![user_preferences::USER_PREFERENCES_KEY, "{", 1_i64],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(store.read_user_preferences().is_err());
+    let connection = Connection::open(store.db_path()).unwrap();
+    let preference_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM user_preferences", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(preference_count, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn browser_session_missing_column_browser_viewport_defaults_to_start() {
     let (store, root) = test_store();
     let session = StoredBrowserSession {

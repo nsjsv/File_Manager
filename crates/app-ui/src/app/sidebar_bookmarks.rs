@@ -5,7 +5,6 @@ use file_core::FileKind;
 use iced::{Point, Task};
 
 use super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
-use crate::commands::save_sidebar_bookmarks_command;
 use crate::model::{
     ContextMenuState, FileDragPhase, FileDragTarget, Message, NavigationMode,
     SidebarBookmarkContextMenuState, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
@@ -408,10 +407,7 @@ impl FileBrowser {
     fn save_sidebar_favorites(&mut self) -> Task<Message> {
         let favorites = self.sidebar_favorite_locations();
         self.user_config.sidebar_favorites = Some(sidebar_favorite_configs(&favorites));
-        Task::batch([
-            save_sidebar_bookmarks_command(favorites),
-            self.persist_user_config_command(),
-        ])
+        self.persist_user_preferences_command()
     }
 
     fn clear_sidebar_bookmark_drop_target(&mut self) {

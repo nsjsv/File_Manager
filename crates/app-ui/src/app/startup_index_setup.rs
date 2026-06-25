@@ -232,7 +232,7 @@ impl FileBrowser {
         self.search_index.pending_startup_index_builds = index_requests;
 
         Task::batch([
-            self.persist_user_config_command(),
+            self.persist_user_preferences_command(),
             search_index_profile_save_command(
                 default_search_index_profile(&self.user_config, profile_roots),
                 self.user_config.clone(),

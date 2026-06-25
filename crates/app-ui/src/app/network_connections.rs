@@ -262,7 +262,7 @@ impl FileBrowser {
                     .unwrap_or_else(Task::none);
                 self.network_connections.remove(&id);
                 self.user_config.network_connections = self.network_connections.saved_connections();
-                Task::batch([self.persist_user_config_command(), clear_command])
+                Task::batch([self.persist_user_preferences_command(), clear_command])
             }
         }
     }
@@ -571,7 +571,7 @@ impl FileBrowser {
         self.network_connection_editor = None;
         if should_connect {
             Task::batch([
-                self.persist_user_config_command(),
+                self.persist_user_preferences_command(),
                 clear_old_credentials_command,
                 self.start_network_connection_mount(
                     connection,
@@ -581,7 +581,7 @@ impl FileBrowser {
             ])
         } else {
             Task::batch([
-                self.persist_user_config_command(),
+                self.persist_user_preferences_command(),
                 clear_old_credentials_command,
                 self.refresh_network_mount_states(),
             ])

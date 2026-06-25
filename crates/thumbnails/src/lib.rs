@@ -12,6 +12,10 @@ mod svg;
 const CACHE_FORMAT_EXTENSION: &str = "png";
 const THUMBNAILER_VERSION: u8 = 3;
 const VIDEO_THUMBNAIL_SEEK_TIME: &str = "00:00:01";
+const THUMBNAIL_NORMAL_DIR: &str = "normal";
+const THUMBNAIL_LARGE_DIR: &str = "large";
+const THUMBNAIL_X_LARGE_DIR: &str = "x-large";
+const THUMBNAIL_XX_LARGE_DIR: &str = "xx-large";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThumbnailMediaKind {
@@ -108,6 +112,8 @@ pub struct CachedThumbnail {
 pub enum ThumbnailError {
     #[error("unsupported thumbnail format for {path:?}")]
     UnsupportedFormat { path: PathBuf },
+    #[error("thumbnail source {path:?} is inside thumbnail cache directory {cache_dir:?}")]
+    SourceInsideCacheDirectory { path: PathBuf, cache_dir: PathBuf },
     #[error("could not create thumbnail cache directory {path:?}: {source}")]
     CreateCacheDirectory {
         path: PathBuf,
@@ -198,6 +204,11 @@ pub fn is_supported_thumbnail_path(path: impl AsRef<Path>) -> bool {
     thumbnail_media_kind_for_path(path.as_ref()).is_some()
 }
 
+pub fn path_is_in_thumbnail_cache(cache_dir: impl AsRef<Path>, path: impl AsRef<Path>) -> bool {
+    let cache_dir = cache_dir.as_ref();
+    !cache_dir.as_os_str().is_empty() && path.as_ref().starts_with(cache_dir)
+}
+
 pub async fn load_or_generate_thumbnail(
     cache_dir: impl AsRef<Path>,
     request: ThumbnailRequest,
@@ -219,8 +230,15 @@ pub async fn load_cached_thumbnail(
             path: request.source.clone(),
         }
     })?;
+    let cache_dir = cache_dir.as_ref();
+    if path_is_in_thumbnail_cache(cache_dir, &request.source) {
+        return Err(ThumbnailError::SourceInsideCacheDirectory {
+            path: request.source,
+            cache_dir: cache_dir.to_path_buf(),
+        });
+    }
     let key = thumbnail_key(&request, media_kind);
-    let output = cached_thumbnail_output_path(cache_dir.as_ref(), &key);
+    let output = cached_thumbnail_output_path(cache_dir, &key, request.max_edge);
     match cached_thumbnail_dimensions(output.clone()).await {
         Ok((width, height)) => Ok(Some(CachedThumbnail {
             key,
@@ -252,8 +270,15 @@ async fn load_or_generate_thumbnail_with_kind(
     media_kind: ThumbnailMediaKind,
 ) -> Result<CachedThumbnail, ThumbnailError> {
     let started_at = Instant::now();
+    let cache_dir = cache_dir.as_ref();
+    if path_is_in_thumbnail_cache(cache_dir, &request.source) {
+        return Err(ThumbnailError::SourceInsideCacheDirectory {
+            path: request.source,
+            cache_dir: cache_dir.to_path_buf(),
+        });
+    }
     let key = thumbnail_key(&request, media_kind);
-    let output = cached_thumbnail_output_path(cache_dir.as_ref(), &key);
+    let output = cached_thumbnail_output_path(cache_dir, &key, request.max_edge);
     tracing::debug!(
         target: "thumbnails",
         source = ?request.source,
@@ -313,8 +338,19 @@ async fn load_or_generate_thumbnail_with_kind(
     generated
 }
 
-fn cached_thumbnail_output_path(cache_dir: &Path, key: &ThumbnailKey) -> PathBuf {
-    cache_dir.join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION))
+fn cached_thumbnail_output_path(cache_dir: &Path, key: &ThumbnailKey, max_edge: u32) -> PathBuf {
+    cache_dir
+        .join(thumbnail_bucket_dir(max_edge))
+        .join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION))
+}
+
+fn thumbnail_bucket_dir(max_edge: u32) -> &'static str {
+    match max_edge {
+        0..=128 => THUMBNAIL_NORMAL_DIR,
+        129..=256 => THUMBNAIL_LARGE_DIR,
+        257..=512 => THUMBNAIL_X_LARGE_DIR,
+        _ => THUMBNAIL_XX_LARGE_DIR,
+    }
 }
 
 pub async fn generate_image_thumbnail(

@@ -4,6 +4,7 @@ pub(crate) mod archive_password;
 mod batch_rename;
 mod column_resize;
 mod column_scroll;
+mod config_persistence;
 mod events;
 mod file_operations;
 mod navigation;
