@@ -46,8 +46,9 @@ pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 mod browser_panes;
 pub(crate) use browser_panes::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
-    DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, SplitAxis, SplitRegion,
+    ColumnBrowserViewport, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
+    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, SplitAxis,
+    SplitRegion,
 };
 mod batch_rename;
 pub(crate) use batch_rename::{
@@ -80,9 +81,8 @@ mod settings;
 pub(crate) use settings::SettingsCategory;
 mod session;
 pub(crate) use session::{
-    pane_session_from_live, search_session_from_live, snapshot_from_stored, snapshot_to_stored,
-    BrowserPaneSession, BrowserSessionSnapshot, BrowserTabSession, PropertiesSessionSnapshot,
-    RestoredAuxiliarySession, SearchSessionSnapshot,
+    pane_session_from_live, snapshot_from_stored, snapshot_to_stored, BrowserPaneSession,
+    BrowserSessionSnapshot, BrowserTabSession,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -371,6 +371,7 @@ pub(crate) enum Message {
     BatchRenamePreviewScrolled,
     PreviewDirectoryScrolled,
     PreviewArchiveScrolled,
+    ColumnBrowserScrolled(BrowserPaneId, f32, f32),
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
     ListScrolled(BrowserPaneId, f32, f32),
     ColumnResizeStarted(BrowserPaneId, usize),

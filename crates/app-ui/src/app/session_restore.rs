@@ -1,18 +1,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use file_core::FileKind;
-use file_index::SearchMode;
 use iced::Task;
 
 use super::paths::path_text;
 use super::FileBrowser;
-use crate::commands::{file_properties_command, load_directory_command, preview_command};
+use crate::commands::load_directory_command;
 use crate::config::StartupLocationPolicy;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-    BrowserTabSession, FilePropertiesState, Message, RestoredAuxiliarySession,
-    SearchSessionSnapshot, SearchState, TRASH_LOCATION_LABEL,
+    BrowserTabSession, ColumnBrowserViewport, Message, TRASH_LOCATION_LABEL,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -103,6 +100,7 @@ impl FileBrowser {
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
+        self.column_browser_viewport = ColumnBrowserViewport::default();
         self.column_viewports.clear();
         self.back_stack.clear();
         self.forward_stack.clear();
@@ -128,14 +126,7 @@ impl FileBrowser {
         session: BrowserSessionSnapshot,
         home: &Path,
     ) -> Task<Message> {
-        let BrowserSessionSnapshot {
-            panes,
-            layout,
-            search,
-            preview_path,
-            properties,
-            settings_category,
-        } = session;
+        let BrowserSessionSnapshot { panes, layout } = session;
         let restored_panes = panes
             .into_iter()
             .filter_map(restored_pane_from_session)
@@ -164,91 +155,9 @@ impl FileBrowser {
         self.error = None;
         self.sync_active_pane_state();
 
-        let mut commands = vec![self.reload_visible_panes()];
-        commands.push(self.restore_auxiliary_session(RestoredAuxiliarySession {
-            search,
-            preview_path,
-            properties,
-            settings_category,
-        }));
-        Task::batch(commands)
-    }
-
-    fn restore_auxiliary_session(&mut self, session: RestoredAuxiliarySession) -> Task<Message> {
-        let mut commands = Vec::new();
-        if let Some(search) = session.search {
-            commands.push(self.restore_search_session(search));
-        }
-        if let Some(path) = session.preview_path {
-            commands.push(self.restore_preview_session(path));
-        }
-        if let Some(properties) = session.properties {
-            commands.push(self.restore_properties_session(properties));
-        }
-        if let Some(category) = session.settings_category {
-            self.selected_settings_category = category;
-            commands.push(self.ensure_settings_window());
-        }
-        Task::batch(commands)
-    }
-
-    fn restore_search_session(&mut self, session: SearchSessionSnapshot) -> Task<Message> {
-        let SearchSessionSnapshot {
-            scope,
-            mode,
-            root,
-            query,
-        } = session;
-        self.search = Some(SearchState {
-            scope,
-            mode: if self.user_config.search_mode == crate::config::SearchBackendMode::Simple {
-                SearchMode::Files
-            } else {
-                mode
-            },
-            root: root.clone(),
-            query,
-            request_generation: 0,
-            search_cancel: None,
-            matches: Vec::new(),
-            selected_match: None,
-            is_loading: false,
-            is_indexing: false,
-            skipped_count: 0,
-            error: None,
-            index_error: None,
-        });
-        Task::batch([self.ensure_search_window(), self.load_search_matches()])
-    }
-
-    fn restore_preview_session(&mut self, path: PathBuf) -> Task<Message> {
-        self.preview = Some(crate::model::PreviewState::Loading(path.clone()));
         Task::batch([
-            self.ensure_preview_window(crate::model::PreviewWindowProfile::Regular),
-            preview_command(
-                path,
-                FileKind::Other,
-                self.options.clone(),
-                self.max_preview_file_bytes(),
-            ),
-        ])
-    }
-
-    fn restore_properties_session(
-        &mut self,
-        properties: crate::model::PropertiesSessionSnapshot,
-    ) -> Task<Message> {
-        let (request, cancellation) = self.next_file_properties_request(properties.path);
-        self.properties = Some(FilePropertiesState::loading(
-            request.clone(),
-            cancellation.clone(),
-        ));
-        if let Some(state) = self.properties.as_mut() {
-            state.selected_category = properties.category;
-        }
-        Task::batch([
-            self.ensure_properties_window(),
-            file_properties_command(request, cancellation),
+            self.reload_visible_panes(),
+            self.restore_visible_column_browser_viewports(),
         ])
     }
 }
@@ -299,6 +208,7 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
         deepest_open_column_directory: active_tab.deepest_open_column_directory,
         expanded_directories: active_expanded_directories,
         view_mode: active_tab.view_mode,
+        column_browser_viewport: sanitize_column_browser_viewport(pane.column_browser_viewport),
         column_viewports: sanitize_column_viewports(pane.column_viewports),
         tabs,
         active_tab_id: active_tab.id,
@@ -314,6 +224,16 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
     };
     browser_pane.sync_active_tab_state();
     Some(browser_pane)
+}
+
+fn sanitize_column_browser_viewport(viewport: ColumnBrowserViewport) -> ColumnBrowserViewport {
+    if viewport.offset_x.is_finite() && viewport.width.is_finite() {
+        return ColumnBrowserViewport {
+            offset_x: viewport.offset_x.max(0.0),
+            width: viewport.width.max(1.0),
+        };
+    }
+    ColumnBrowserViewport::default()
 }
 
 fn sanitize_column_viewports(

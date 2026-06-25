@@ -212,6 +212,10 @@ fn browser_session_roundtrip_replace_and_clear() {
                 forward_stack: Vec::new(),
             }],
             active_tab_id: 0,
+            column_browser_viewport: StoredColumnBrowserViewport {
+                offset_x: 320.0,
+                width: 900.0,
+            },
             column_viewports: vec![StoredColumnViewport {
                 directory: StoredPath::from_path(Path::new("/home/user")),
                 offset_y: 2.0,
@@ -219,18 +223,6 @@ fn browser_session_roundtrip_replace_and_clear() {
             }],
         }],
         layout: StoredBrowserPaneLayout::Single { active: 0 },
-        search: Some(StoredSearchSession {
-            scope: StoredSearchScope::CurrentDirectory,
-            mode: StoredSearchMode::Files,
-            root: StoredPath::from_path(Path::new("/home/user")),
-            query: "notes".to_owned(),
-        }),
-        preview_path: Some(StoredPath::from_path(Path::new("/home/user/file.txt"))),
-        properties: Some(StoredPropertiesSession {
-            path: StoredPath::from_path(Path::new("/home/user/file.txt")),
-            category: StoredFilePropertiesCategory::Permissions,
-        }),
-        settings_category: Some(StoredSettingsCategory::General),
     };
 
     store.replace_browser_session(&first).unwrap();
@@ -239,16 +231,64 @@ fn browser_session_roundtrip_replace_and_clear() {
     let second = StoredBrowserSession {
         panes: Vec::new(),
         layout: StoredBrowserPaneLayout::Single { active: 0 },
-        search: None,
-        preview_path: None,
-        properties: None,
-        settings_category: None,
     };
     store.replace_browser_session(&second).unwrap();
     assert_eq!(store.read_browser_session().unwrap(), Some(second));
 
     store.clear_browser_session().unwrap();
     assert_eq!(store.read_browser_session().unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn browser_session_missing_column_browser_viewport_defaults_to_start() {
+    let (store, root) = test_store();
+    let session = StoredBrowserSession {
+        panes: vec![StoredBrowserPane {
+            id: 0,
+            tabs: vec![StoredBrowserTab {
+                id: 0,
+                directory: StoredPath::from_path(Path::new("/home/user")),
+                is_trash_view: false,
+                selected: None,
+                selected_paths: Vec::new(),
+                deepest_open_column_directory: None,
+                expanded_directories: Vec::new(),
+                view_mode: StoredBrowserViewMode::Columns,
+                back_stack: Vec::new(),
+                forward_stack: Vec::new(),
+            }],
+            active_tab_id: 0,
+            column_browser_viewport: StoredColumnBrowserViewport {
+                offset_x: 480.0,
+                width: 900.0,
+            },
+            column_viewports: Vec::new(),
+        }],
+        layout: StoredBrowserPaneLayout::Single { active: 0 },
+    };
+    let mut payload = serde_json::to_value(&session).unwrap();
+    payload["panes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("column_browser_viewport");
+    let payload_json = serde_json::to_string(&payload).unwrap();
+    let connection = Connection::open(store.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO browser_session (session_key, payload_json, updated_at_ms)
+             VALUES (?1, ?2, ?3)",
+            params![BROWSER_SESSION_KEY, payload_json, 1_i64],
+        )
+        .unwrap();
+    drop(connection);
+
+    let restored = store.read_browser_session().unwrap().unwrap();
+
+    assert_eq!(
+        restored.panes[0].column_browser_viewport,
+        StoredColumnBrowserViewport::default()
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -325,13 +365,10 @@ fn browser_session_preserves_non_utf8_unix_paths() {
                 forward_stack: Vec::new(),
             }],
             active_tab_id: 0,
+            column_browser_viewport: StoredColumnBrowserViewport::default(),
             column_viewports: Vec::new(),
         }],
         layout: StoredBrowserPaneLayout::Single { active: 0 },
-        search: None,
-        preview_path: Some(StoredPath::from_path(&path)),
-        properties: None,
-        settings_category: None,
     };
 
     store.replace_browser_session(&session).unwrap();
@@ -340,11 +377,6 @@ fn browser_session_preserves_non_utf8_unix_paths() {
     let restored_path = restored.panes[0].tabs[0].directory.to_path_buf();
     assert_eq!(
         restored_path.as_os_str().as_bytes(),
-        path.as_os_str().as_bytes()
-    );
-    let preview_path = restored.preview_path.unwrap().to_path_buf();
-    assert_eq!(
-        preview_path.as_os_str().as_bytes(),
         path.as_os_str().as_bytes()
     );
     let _ = fs::remove_dir_all(root);

@@ -6,7 +6,7 @@ use iced::widget::scrollable;
 use iced::{Rectangle, Task, Vector};
 
 use super::FileBrowser;
-use crate::model::Message;
+use crate::model::{BrowserPaneId, ColumnBrowserViewport, Message};
 use crate::three_column_view::{
     column_directories, sidebar_underlay_width_for_pane, COLUMN_RESIZE_DIVIDER_WIDTH,
 };
@@ -73,6 +73,62 @@ impl Operation<Message> for ColumnBrowserRevealColumn {
 }
 
 impl FileBrowser {
+    pub(super) fn handle_column_browser_scrolled(
+        &mut self,
+        pane_id: BrowserPaneId,
+        offset_x: f32,
+        width: f32,
+    ) -> Task<Message> {
+        let Some(viewport) = column_browser_viewport_from_scroll(offset_x, width) else {
+            return Task::none();
+        };
+        if pane_id == self.active_pane_id() {
+            self.column_browser_viewport = viewport;
+        } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
+            pane.column_browser_viewport = viewport;
+        } else {
+            return Task::none();
+        }
+        self.request_browser_session_save()
+    }
+
+    pub(super) fn restore_visible_column_browser_viewports(&self) -> Task<Message> {
+        let commands = self
+            .pane_layout
+            .visible_pane_ids()
+            .into_iter()
+            .map(|pane_id| self.restore_column_browser_viewport(pane_id))
+            .collect::<Vec<_>>();
+        Task::batch(commands)
+    }
+
+    fn restore_column_browser_viewport(&self, pane_id: BrowserPaneId) -> Task<Message> {
+        let Some(viewport) = self.column_browser_viewport_for_pane(pane_id) else {
+            return Task::none();
+        };
+        if viewport.offset_x <= f32::EPSILON || !viewport.offset_x.is_finite() {
+            return Task::none();
+        }
+        iced::widget::operation::scroll_to(
+            column_browser_scroll_id(pane_id),
+            scrollable::AbsoluteOffset {
+                x: viewport.offset_x,
+                y: 0.0,
+            },
+        )
+    }
+
+    fn column_browser_viewport_for_pane(
+        &self,
+        pane_id: BrowserPaneId,
+    ) -> Option<ColumnBrowserViewport> {
+        if pane_id == self.active_pane_id() {
+            return Some(self.column_browser_viewport);
+        }
+        self.pane_by_id(pane_id)
+            .map(|pane| pane.column_browser_viewport)
+    }
+
     pub(super) fn focus_latest_column(&self) -> Task<Message> {
         let real_column_count = column_directories(self).len();
         self.reveal_column_index(real_column_count.saturating_sub(1), real_column_count)
@@ -176,9 +232,37 @@ fn programmatic_viewport_width(scrollable_bounds_width: f32, viewport_underlay_w
     (scrollable_bounds_width - viewport_underlay_width).max(0.0)
 }
 
+fn column_browser_viewport_from_scroll(offset_x: f32, width: f32) -> Option<ColumnBrowserViewport> {
+    if !offset_x.is_finite() || !width.is_finite() {
+        return None;
+    }
+    Some(ColumnBrowserViewport {
+        offset_x: offset_x.max(0.0),
+        width: width.max(1.0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn column_browser_scroll_updates_viewport_and_requests_session_save() {
+        let mut config = crate::config::ui_thread_startup_config();
+        config.save_view_state = true;
+        let (mut browser, _) = FileBrowser::new(config);
+
+        drop(browser.handle_column_browser_scrolled(BrowserPaneId::PRIMARY, 245.0, 820.0));
+
+        assert_eq!(
+            browser.column_browser_viewport,
+            ColumnBrowserViewport {
+                offset_x: 245.0,
+                width: 820.0,
+            }
+        );
+        assert!(browser.pending_browser_session_save);
+    }
 
     #[test]
     fn real_column_content_width_counts_only_real_columns_and_dividers() {

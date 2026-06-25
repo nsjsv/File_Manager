@@ -210,9 +210,8 @@ mod tests {
     use crate::config::{self, SearchBackendMode, SearchModePromptStatus, StartupLocationPolicy};
     use crate::model::{
         BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-        BrowserTabSession, BrowserViewMode, ExpandedDirectoryStatus, FilePropertiesCategory,
-        LoadedOperationStore, PreviewState, PropertiesSessionSnapshot, SearchScope,
-        SearchSessionSnapshot, SettingsCategory, SplitAxis, StartupEnvironment,
+        BrowserTabSession, BrowserViewMode, ColumnBrowserViewport, ExpandedDirectoryStatus,
+        LoadedOperationStore, SplitAxis, StartupEnvironment,
     };
     use crate::network_connections::SavedNetworkConnection;
     use crate::startup_rendering::{
@@ -221,7 +220,6 @@ mod tests {
     use desktop_linux::{
         NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
     };
-    use file_index::SearchMode;
     use file_operation_store::TaskQueueStore;
     use tempfile::TempDir;
 
@@ -382,15 +380,12 @@ mod tests {
                 id: BrowserPaneId::PRIMARY,
                 tabs: vec![tab_session(0, previous, BrowserViewMode::List)],
                 active_tab_id: 0,
+                column_browser_viewport: ColumnBrowserViewport::default(),
                 column_viewports: HashMap::new(),
             }],
             layout: BrowserPaneLayout::Single {
                 active: BrowserPaneId::PRIMARY,
             },
-            search: None,
-            preview_path: None,
-            properties: None,
-            settings_category: None,
         };
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
@@ -426,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_session_restores_browser_tabs_panes_and_auxiliary_state() {
+    fn previous_session_restores_browser_tabs_and_panes_only() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let home = create_directory(&temp_dir, "home");
         let left = create_directory(&temp_dir, "left");
@@ -434,8 +429,6 @@ mod tests {
         let right = create_directory(&temp_dir, "right");
         let expanded = left_second.join("expanded");
         fs::create_dir_all(&expanded).expect("create expanded child directory");
-        let preview_path = temp_dir.path().join("preview.txt");
-        let properties_path = temp_dir.path().join("properties.txt");
         let selected_path = left_second.join("selected.txt");
         let mut active_left_tab = tab_session(2, left_second.clone(), BrowserViewMode::Columns);
         active_left_tab.selected = Some(selected_path.clone());
@@ -455,6 +448,10 @@ mod tests {
                         active_left_tab,
                     ],
                     active_tab_id: 2,
+                    column_browser_viewport: ColumnBrowserViewport {
+                        offset_x: 365.0,
+                        width: 920.0,
+                    },
                     column_viewports: HashMap::from([(
                         expanded.clone(),
                         crate::thumbnail_cache::ColumnViewport {
@@ -467,6 +464,7 @@ mod tests {
                     id: BrowserPaneId(1),
                     tabs: vec![right_tab],
                     active_tab_id: 3,
+                    column_browser_viewport: ColumnBrowserViewport::default(),
                     column_viewports: HashMap::new(),
                 },
             ],
@@ -476,23 +474,10 @@ mod tests {
                 second: BrowserPaneId(1),
                 active: BrowserPaneId(1),
             },
-            search: Some(SearchSessionSnapshot {
-                scope: SearchScope::HomeDirectory,
-                mode: SearchMode::Contents,
-                root: home.clone(),
-                query: "invoice".to_owned(),
-            }),
-            preview_path: Some(preview_path.clone()),
-            properties: Some(PropertiesSessionSnapshot {
-                path: properties_path.clone(),
-                category: FilePropertiesCategory::Permissions,
-            }),
-            settings_category: Some(SettingsCategory::SearchIndex),
         };
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
         user_config.save_view_state = true;
-        user_config.search_mode = SearchBackendMode::Indexed;
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
         drop(browser.accept_startup_environment(startup_environment(
@@ -523,35 +508,26 @@ mod tests {
         assert_eq!(left_pane.tabs.len(), 2);
         assert!(left_pane.expanded_directories.contains_key(&expanded));
         assert_eq!(
+            left_pane.column_browser_viewport,
+            ColumnBrowserViewport {
+                offset_x: 365.0,
+                width: 920.0,
+            }
+        );
+        assert_eq!(
             left_pane
                 .column_viewports
                 .get(&expanded)
                 .map(|viewport| (viewport.offset_y, viewport.height)),
             Some((12.0, 240.0))
         );
-        let search = browser.search.as_ref().expect("search restored");
-        assert_eq!(search.scope, SearchScope::HomeDirectory);
-        assert_eq!(search.mode, SearchMode::Contents);
-        assert_eq!(search.root, home);
-        assert_eq!(search.query, "invoice");
-        assert!(matches!(
-            browser.preview.as_ref(),
-            Some(PreviewState::Loading(path)) if path == &preview_path
-        ));
-        let properties = browser.properties.as_ref().expect("properties restored");
-        assert_eq!(properties.path, properties_path);
-        assert_eq!(
-            properties.selected_category,
-            FilePropertiesCategory::Permissions
-        );
-        assert_eq!(
-            browser.selected_settings_category,
-            SettingsCategory::SearchIndex
-        );
-        assert!(browser.search_window.is_some());
-        assert!(browser.preview_window.is_some());
-        assert!(browser.properties_window.is_some());
-        assert!(browser.settings_window.is_some());
+        assert!(browser.search.is_none());
+        assert!(browser.preview.is_none());
+        assert!(browser.properties.is_none());
+        assert!(browser.search_window.is_none());
+        assert!(browser.preview_window.is_none());
+        assert!(browser.properties_window.is_none());
+        assert!(browser.settings_window.is_none());
     }
 
     #[test]
@@ -571,15 +547,12 @@ mod tests {
                 id: BrowserPaneId::PRIMARY,
                 tabs: vec![active_tab],
                 active_tab_id: 1,
+                column_browser_viewport: ColumnBrowserViewport::default(),
                 column_viewports: HashMap::new(),
             }],
             layout: BrowserPaneLayout::Single {
                 active: BrowserPaneId::PRIMARY,
             },
-            search: None,
-            preview_path: None,
-            properties: None,
-            settings_category: None,
         };
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
@@ -625,15 +598,12 @@ mod tests {
                 id: BrowserPaneId::PRIMARY,
                 tabs: vec![tab_session(0, missing, BrowserViewMode::List)],
                 active_tab_id: 0,
+                column_browser_viewport: ColumnBrowserViewport::default(),
                 column_viewports: HashMap::new(),
             }],
             layout: BrowserPaneLayout::Single {
                 active: BrowserPaneId::PRIMARY,
             },
-            search: None,
-            preview_path: None,
-            properties: None,
-            settings_category: None,
         };
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;

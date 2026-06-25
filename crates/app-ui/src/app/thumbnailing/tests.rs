@@ -267,6 +267,7 @@ fn browser_with_inactive_pane_image(
         deepest_open_column_directory: None,
         expanded_directories: HashMap::new(),
         view_mode: crate::model::BrowserViewMode::Columns,
+        column_browser_viewport: Default::default(),
         column_viewports: HashMap::from([(
             inactive_dir.clone(),
             ColumnViewport {

@@ -111,6 +111,12 @@ pub(crate) enum BrowserViewMode {
     List,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct ColumnBrowserViewport {
+    pub(crate) offset_x: f32,
+    pub(crate) width: f32,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DirectoryLoadingPlaceholderEntry {
     pub(crate) entry: DirectoryEntry,
@@ -132,6 +138,7 @@ pub(crate) struct BrowserPane {
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) view_mode: BrowserViewMode,
+    pub(crate) column_browser_viewport: ColumnBrowserViewport,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) tabs: Vec<BrowserTab>,
     pub(crate) active_tab_id: usize,

@@ -1,18 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use file_index::SearchMode;
 use file_operation_store::{
     StoredBrowserPane, StoredBrowserPaneLayout, StoredBrowserSession, StoredBrowserTab,
-    StoredBrowserViewMode, StoredColumnViewport, StoredFilePropertiesCategory, StoredPath,
-    StoredPropertiesSession, StoredSearchMode, StoredSearchScope, StoredSearchSession,
-    StoredSettingsCategory, StoredSplitAxis,
+    StoredBrowserViewMode, StoredColumnBrowserViewport, StoredColumnViewport, StoredPath,
+    StoredSplitAxis,
 };
 
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode, ExpandedDirectory,
-    ExpandedDirectoryStatus, FilePropertiesCategory, SearchScope, SearchState, SettingsCategory,
-    SplitAxis,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
+    ColumnBrowserViewport, ExpandedDirectory, ExpandedDirectoryStatus, SplitAxis,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -20,10 +17,6 @@ use crate::thumbnail_cache::ColumnViewport;
 pub(crate) struct BrowserSessionSnapshot {
     pub(crate) panes: Vec<BrowserPaneSession>,
     pub(crate) layout: BrowserPaneLayout,
-    pub(crate) search: Option<SearchSessionSnapshot>,
-    pub(crate) preview_path: Option<PathBuf>,
-    pub(crate) properties: Option<PropertiesSessionSnapshot>,
-    pub(crate) settings_category: Option<SettingsCategory>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +24,7 @@ pub(crate) struct BrowserPaneSession {
     pub(crate) id: BrowserPaneId,
     pub(crate) tabs: Vec<BrowserTabSession>,
     pub(crate) active_tab_id: usize,
+    pub(crate) column_browser_viewport: ColumnBrowserViewport,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
 }
 
@@ -46,28 +40,6 @@ pub(crate) struct BrowserTabSession {
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SearchSessionSnapshot {
-    pub(crate) scope: SearchScope,
-    pub(crate) mode: SearchMode,
-    pub(crate) root: PathBuf,
-    pub(crate) query: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PropertiesSessionSnapshot {
-    pub(crate) path: PathBuf,
-    pub(crate) category: FilePropertiesCategory,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RestoredAuxiliarySession {
-    pub(crate) search: Option<SearchSessionSnapshot>,
-    pub(crate) preview_path: Option<PathBuf>,
-    pub(crate) properties: Option<PropertiesSessionSnapshot>,
-    pub(crate) settings_category: Option<SettingsCategory>,
 }
 
 impl BrowserTabSession {
@@ -119,10 +91,6 @@ pub(crate) fn snapshot_from_stored(stored: StoredBrowserSession) -> Option<Brows
     Some(BrowserSessionSnapshot {
         panes,
         layout: layout_from_stored(stored.layout),
-        search: stored.search.map(search_from_stored),
-        preview_path: stored.preview_path.map(|path| path.to_path_buf()),
-        properties: stored.properties.map(properties_from_stored),
-        settings_category: stored.settings_category.map(settings_category_from_stored),
     })
 }
 
@@ -135,10 +103,6 @@ pub(crate) fn snapshot_to_stored(snapshot: BrowserSessionSnapshot) -> Option<Sto
     Some(StoredBrowserSession {
         panes,
         layout: layout_to_stored(snapshot.layout),
-        search: snapshot.search.map(search_to_stored),
-        preview_path: snapshot.preview_path.as_deref().map(StoredPath::from_path),
-        properties: snapshot.properties.map(properties_to_stored),
-        settings_category: snapshot.settings_category.map(settings_category_to_stored),
     })
 }
 
@@ -147,6 +111,7 @@ pub(crate) fn pane_session_from_live(pane: &BrowserPane) -> BrowserPaneSession {
         id: pane.id,
         tabs: pane.tabs.iter().map(tab_session_from_live).collect(),
         active_tab_id: pane.active_tab_id,
+        column_browser_viewport: pane.column_browser_viewport,
         column_viewports: pane.column_viewports.clone(),
     }
 }
@@ -163,15 +128,6 @@ pub(crate) fn tab_session_from_live(tab: &BrowserTab) -> BrowserTabSession {
         view_mode: tab.view_mode,
         back_stack: tab.back_stack.clone(),
         forward_stack: tab.forward_stack.clone(),
-    }
-}
-
-pub(crate) fn search_session_from_live(search: &SearchState) -> SearchSessionSnapshot {
-    SearchSessionSnapshot {
-        scope: search.scope,
-        mode: search.mode,
-        root: search.root.clone(),
-        query: search.query.clone(),
     }
 }
 
@@ -203,6 +159,10 @@ fn pane_from_stored(stored: StoredBrowserPane) -> Option<BrowserPaneSession> {
         id,
         tabs,
         active_tab_id,
+        column_browser_viewport: ColumnBrowserViewport {
+            offset_x: stored.column_browser_viewport.offset_x,
+            width: stored.column_browser_viewport.width,
+        },
         column_viewports,
     })
 }
@@ -249,6 +209,10 @@ fn pane_to_stored(pane: BrowserPaneSession) -> Option<StoredBrowserPane> {
             .map(tab_to_stored)
             .collect::<Option<Vec<_>>>()?,
         active_tab_id: u64::try_from(pane.active_tab_id).ok()?,
+        column_browser_viewport: StoredColumnBrowserViewport {
+            offset_x: pane.column_browser_viewport.offset_x,
+            width: pane.column_browser_viewport.width,
+        },
         column_viewports: pane
             .column_viewports
             .into_iter()
@@ -350,82 +314,6 @@ fn view_mode_to_stored(view_mode: BrowserViewMode) -> StoredBrowserViewMode {
     match view_mode {
         BrowserViewMode::Columns => StoredBrowserViewMode::Columns,
         BrowserViewMode::List => StoredBrowserViewMode::List,
-    }
-}
-
-fn search_from_stored(search: StoredSearchSession) -> SearchSessionSnapshot {
-    SearchSessionSnapshot {
-        scope: match search.scope {
-            StoredSearchScope::CurrentDirectory => SearchScope::CurrentDirectory,
-            StoredSearchScope::HomeDirectory => SearchScope::HomeDirectory,
-        },
-        mode: match search.mode {
-            StoredSearchMode::Files => SearchMode::Files,
-            StoredSearchMode::Contents => SearchMode::Contents,
-            StoredSearchMode::Media => SearchMode::Media,
-            StoredSearchMode::All => SearchMode::All,
-        },
-        root: search.root.to_path_buf(),
-        query: search.query,
-    }
-}
-
-fn search_to_stored(search: SearchSessionSnapshot) -> StoredSearchSession {
-    StoredSearchSession {
-        scope: match search.scope {
-            SearchScope::CurrentDirectory => StoredSearchScope::CurrentDirectory,
-            SearchScope::HomeDirectory => StoredSearchScope::HomeDirectory,
-        },
-        mode: match search.mode {
-            SearchMode::Files => StoredSearchMode::Files,
-            SearchMode::Contents => StoredSearchMode::Contents,
-            SearchMode::Media => StoredSearchMode::Media,
-            SearchMode::All => StoredSearchMode::All,
-        },
-        root: StoredPath::from_path(&search.root),
-        query: search.query,
-    }
-}
-
-fn properties_from_stored(properties: StoredPropertiesSession) -> PropertiesSessionSnapshot {
-    PropertiesSessionSnapshot {
-        path: properties.path.to_path_buf(),
-        category: match properties.category {
-            StoredFilePropertiesCategory::Information => FilePropertiesCategory::Information,
-            StoredFilePropertiesCategory::Permissions => FilePropertiesCategory::Permissions,
-        },
-    }
-}
-
-fn properties_to_stored(properties: PropertiesSessionSnapshot) -> StoredPropertiesSession {
-    StoredPropertiesSession {
-        path: StoredPath::from_path(&properties.path),
-        category: match properties.category {
-            FilePropertiesCategory::Information => StoredFilePropertiesCategory::Information,
-            FilePropertiesCategory::Permissions => StoredFilePropertiesCategory::Permissions,
-        },
-    }
-}
-
-fn settings_category_from_stored(category: StoredSettingsCategory) -> SettingsCategory {
-    match category {
-        StoredSettingsCategory::General => SettingsCategory::General,
-        StoredSettingsCategory::Network => SettingsCategory::Network,
-        StoredSettingsCategory::SearchIndex => SettingsCategory::SearchIndex,
-        StoredSettingsCategory::FileOperations => SettingsCategory::FileOperations,
-        StoredSettingsCategory::Rendering => SettingsCategory::Rendering,
-        StoredSettingsCategory::Shortcuts => SettingsCategory::Shortcuts,
-    }
-}
-
-fn settings_category_to_stored(category: SettingsCategory) -> StoredSettingsCategory {
-    match category {
-        SettingsCategory::General => StoredSettingsCategory::General,
-        SettingsCategory::Network => StoredSettingsCategory::Network,
-        SettingsCategory::SearchIndex => StoredSettingsCategory::SearchIndex,
-        SettingsCategory::FileOperations => StoredSettingsCategory::FileOperations,
-        SettingsCategory::Rendering => StoredSettingsCategory::Rendering,
-        SettingsCategory::Shortcuts => StoredSettingsCategory::Shortcuts,
     }
 }
 

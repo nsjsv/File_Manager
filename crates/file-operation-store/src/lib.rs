@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 mod browser_session;
 pub use browser_session::{
     StoredBrowserPane, StoredBrowserPaneLayout, StoredBrowserSession, StoredBrowserTab,
-    StoredBrowserViewMode, StoredColumnViewport, StoredFilePropertiesCategory,
-    StoredPropertiesSession, StoredSearchMode, StoredSearchScope, StoredSearchSession,
-    StoredSettingsCategory, StoredSplitAxis,
+    StoredBrowserViewMode, StoredColumnBrowserViewport, StoredColumnViewport, StoredSplitAxis,
 };
 
 #[cfg(test)]

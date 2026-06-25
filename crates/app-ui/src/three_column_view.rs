@@ -101,6 +101,11 @@ pub(crate) fn column_browser_view<'a>(
     .style(auto_hide_scrollbar_style(scrollbar_visibility))
     .width(Length::Fill)
     .height(Length::Fill)
+    .on_scroll(move |viewport| {
+        let offset = viewport.absolute_offset();
+        let bounds = viewport.bounds();
+        Message::ColumnBrowserScrolled(pane.id, offset.x, bounds.width)
+    })
     .into();
     let column_content = if sidebar_underlay_width > f32::EPSILON {
         translated_with_width_overflow(

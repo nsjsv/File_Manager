@@ -296,6 +296,7 @@ impl FileBrowser {
             deepest_open_column_directory: self.deepest_open_column_directory.clone(),
             expanded_directories: self.expanded_directories.clone(),
             view_mode: self.view_mode,
+            column_browser_viewport: self.column_browser_viewport,
             column_viewports: self.column_viewports.clone(),
             tabs: self.tabs.clone(),
             active_tab_id: self.active_tab_id,
@@ -323,6 +324,7 @@ impl FileBrowser {
         self.deepest_open_column_directory = pane.deepest_open_column_directory;
         self.expanded_directories = pane.expanded_directories;
         self.view_mode = pane.view_mode;
+        self.column_browser_viewport = pane.column_browser_viewport;
         self.column_viewports = pane.column_viewports;
         self.tabs = pane.tabs;
         self.active_tab_id = pane.active_tab_id;

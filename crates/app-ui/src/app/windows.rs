@@ -284,7 +284,6 @@ impl FileBrowser {
             self.commit_rename_if_active(),
             self.prepare_search_index_settings_if_selected(),
             self.ensure_settings_window(),
-            self.request_browser_session_save(),
         ])
     }
 
@@ -308,7 +307,7 @@ impl FileBrowser {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        Task::batch([window::close(window), self.request_browser_session_save()])
+        window::close(window)
     }
 
     pub(super) fn ensure_properties_window(&mut self) -> Task<Message> {
@@ -331,7 +330,7 @@ impl FileBrowser {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        Task::batch([window::close(window), self.request_browser_session_save()])
+        window::close(window)
     }
 
     pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
@@ -430,7 +429,7 @@ impl FileBrowser {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        Task::batch([window::close(window), self.request_browser_session_save()])
+        window::close(window)
     }
 
     pub(super) fn handle_window_focused(&mut self, window: window::Id) -> Task<Message> {

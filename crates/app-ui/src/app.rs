@@ -79,13 +79,13 @@ use crate::commands::{file_operation_subscription, startup_environment_command};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
-    BrowserTab, BrowserViewMode, ContextMenuState, DestructiveActionConfirmation,
-    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, FilePropertiesState,
-    Message, OperationQueuePanelMode, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState,
-    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
-    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
-    TransferConflictState, VideoPreviewPlayback,
+    BrowserTab, BrowserViewMode, ColumnBrowserViewport, ContextMenuState,
+    DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
+    FileDragState, FilePropertiesState, Message, OperationQueuePanelMode, PaneDragState,
+    PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarRegion,
+    SearchIndexRuntime, SearchModePromptState, SearchState, SelectionMarquee, SettingsCategory,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState,
+    TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -138,6 +138,7 @@ pub(crate) struct FileBrowser {
     preview_window: Option<window::Id>,
     focused_window: window::Id,
     pub(crate) thumbnail_cache: ThumbnailCache,
+    pub(crate) column_browser_viewport: ColumnBrowserViewport,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) open_with: Option<OpenWithState>,
@@ -294,6 +295,7 @@ impl FileBrowser {
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             view_mode: initial_view_mode,
+            column_browser_viewport: ColumnBrowserViewport::default(),
             column_viewports: HashMap::new(),
             tabs: vec![initial_tab.clone()],
             active_tab_id: initial_tab.id,
@@ -338,6 +340,7 @@ impl FileBrowser {
             preview_window: None,
             focused_window: main_window,
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
+            column_browser_viewport: ColumnBrowserViewport::default(),
             column_viewports: HashMap::new(),
             context_menu: None,
             open_with: None,

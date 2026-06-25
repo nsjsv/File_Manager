@@ -7,9 +7,9 @@ use iced::Task;
 use super::paths::path_text;
 use super::FileBrowser;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, FileDragPhase, Message,
-    NavigationMode, SplitAxis, SplitRegion, TabDragMode, TabDragState, TabSplitTarget,
-    TRASH_LOCATION_LABEL,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, ColumnBrowserViewport,
+    FileDragPhase, Message, NavigationMode, SplitAxis, SplitRegion, TabDragMode, TabDragState,
+    TabSplitTarget, TRASH_LOCATION_LABEL,
 };
 
 mod animation;
@@ -630,6 +630,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         deepest_open_column_directory: tab.deepest_open_column_directory.clone(),
         expanded_directories: tab.expanded_directories.clone(),
         view_mode: tab.view_mode,
+        column_browser_viewport: ColumnBrowserViewport::default(),
         column_viewports: HashMap::new(),
         tabs: vec![tab.clone()],
         active_tab_id: tab.id,

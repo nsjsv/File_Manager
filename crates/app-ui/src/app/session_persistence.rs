@@ -4,10 +4,7 @@ use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::save_browser_session_command;
-use crate::model::{
-    pane_session_from_live, search_session_from_live, BrowserSessionSnapshot,
-    FilePropertiesLoadState, FilePropertiesState, Message, PreviewContent, PreviewState,
-};
+use crate::model::{pane_session_from_live, BrowserSessionSnapshot, Message};
 
 const SESSION_SAVE_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -22,12 +19,6 @@ impl FileBrowser {
         BrowserSessionSnapshot {
             panes,
             layout: self.pane_layout,
-            search: self.search.as_ref().map(search_session_from_live),
-            preview_path: active_preview_path(self.preview.as_ref()),
-            properties: self.properties.as_ref().map(properties_session_from_live),
-            settings_category: self
-                .settings_window
-                .map(|_| self.selected_settings_category),
         }
     }
 
@@ -85,36 +76,4 @@ fn browser_session_save_delay_command() -> Task<Message> {
         },
         |_| Message::BrowserSessionSaveDelayElapsed,
     )
-}
-
-fn active_preview_path(preview: Option<&PreviewState>) -> Option<std::path::PathBuf> {
-    match preview? {
-        PreviewState::Loading(path) => Some(path.clone()),
-        PreviewState::DownloadingNetworkFile(download) => Some(download.source_path.clone()),
-        PreviewState::Ready(content) => preview_content_path(content),
-        PreviewState::Error(_) => None,
-    }
-}
-
-fn preview_content_path(content: &PreviewContent) -> Option<std::path::PathBuf> {
-    match content {
-        PreviewContent::Text { path, .. }
-        | PreviewContent::Image { path, .. }
-        | PreviewContent::Audio { path, .. }
-        | PreviewContent::Video { path, .. } => Some(path.clone()),
-        PreviewContent::AnimatedImage(preview) => Some(preview.path().to_path_buf()),
-        PreviewContent::Directory { .. } | PreviewContent::Archive { .. } => None,
-    }
-}
-
-fn properties_session_from_live(
-    properties: &FilePropertiesState,
-) -> crate::model::PropertiesSessionSnapshot {
-    let category = properties.selected_category;
-    let path = match &properties.load_state {
-        FilePropertiesLoadState::Loading
-        | FilePropertiesLoadState::Loaded(_)
-        | FilePropertiesLoadState::Failed(_) => properties.path.clone(),
-    };
-    crate::model::PropertiesSessionSnapshot { path, category }
 }

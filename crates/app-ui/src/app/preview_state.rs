@@ -78,7 +78,7 @@ impl FileBrowser {
                 };
                 self.preview = Some(PreviewState::Ready(preview));
                 self.error = None;
-                Task::batch([command, self.request_browser_session_save()])
+                command
             }
             Err(error) => {
                 self.text_preview_document = None;
@@ -86,12 +86,9 @@ impl FileBrowser {
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Error(error));
                 if self.preview_window.is_none() {
-                    Task::batch([
-                        self.ensure_preview_window(PreviewWindowProfile::Video),
-                        self.request_browser_session_save(),
-                    ])
+                    self.ensure_preview_window(PreviewWindowProfile::Video)
                 } else {
-                    self.request_browser_session_save()
+                    Task::none()
                 }
             }
         }

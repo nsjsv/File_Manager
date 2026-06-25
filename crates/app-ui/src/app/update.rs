@@ -655,16 +655,22 @@ impl FileBrowser {
             Message::PreviewArchiveScrolled => {
                 self.show_scrollbars_temporarily(Region::PreviewArchive)
             }
+            Message::ColumnBrowserScrolled(pane_id, offset_x, width) => Task::batch([
+                self.show_scrollbars_temporarily(Region::ColumnBrowser(pane_id)),
+                self.handle_column_browser_scrolled(pane_id, offset_x, width),
+            ]),
             Message::ColumnScrolled(pane_id, directory, offset_y, height) => Task::batch([
                 self.show_scrollbars_temporarily(Region::Column {
                     pane_id,
                     directory: directory.clone(),
                 }),
                 self.handle_column_scrolled(pane_id, directory, offset_y, height),
+                self.request_browser_session_save(),
             ]),
             Message::ListScrolled(pane_id, offset_y, height) => Task::batch([
                 self.show_scrollbars_temporarily(Region::PaneList(pane_id)),
                 self.handle_list_scrolled(pane_id, offset_y, height),
+                self.request_browser_session_save(),
             ]),
             Message::ColumnResizeStarted(pane_id, column_index) => {
                 self.activate_pane(pane_id);

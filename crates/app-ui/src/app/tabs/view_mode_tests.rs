@@ -6,8 +6,9 @@ use file_core::{DirectoryEntry, EntryMetadata, FileKind};
 use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode, ExpandedDirectory,
-    ExpandedDirectoryStatus, SplitAxis, StartupEnvironment,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
+    ColumnBrowserViewport, ExpandedDirectory, ExpandedDirectoryStatus, SplitAxis,
+    StartupEnvironment,
 };
 use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
 use crate::thumbnail_cache::ColumnViewport;
@@ -53,6 +54,7 @@ fn pane_from_tab_for_test(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPan
         deepest_open_column_directory: tab.deepest_open_column_directory.clone(),
         expanded_directories: tab.expanded_directories.clone(),
         view_mode: tab.view_mode,
+        column_browser_viewport: ColumnBrowserViewport::default(),
         column_viewports: HashMap::<PathBuf, ColumnViewport>::new(),
         tabs: vec![tab.clone()],
         active_tab_id: tab.id,

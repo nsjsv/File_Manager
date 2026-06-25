@@ -274,6 +274,7 @@ impl FileBrowser {
         self.deepest_open_column_directory = None;
         self.cancel_active_expanded_directory_loads();
         self.expanded_directories.clear();
+        self.column_browser_viewport = Default::default();
         self.column_viewports.clear();
         self.clear_selection_context();
         self.is_loading = true;
@@ -305,6 +306,7 @@ impl FileBrowser {
         self.deepest_open_column_directory = None;
         self.cancel_active_expanded_directory_loads();
         self.expanded_directories.clear();
+        self.column_browser_viewport = Default::default();
         self.column_viewports.clear();
         self.clear_selection_context();
         self.is_loading = true;
