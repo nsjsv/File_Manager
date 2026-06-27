@@ -57,6 +57,52 @@ fn visible_logical_lines_keep_late_file_rows_viewport_local() {
 }
 
 #[test]
+fn visible_logical_lines_omit_partial_bottom_row() {
+    let content = (0..10)
+        .map(|line_number| format!("line {line_number}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let editor = preview_editor_for_text(&content, 400.0, 120.0);
+    let line_height = editor.buffer().metrics().line_height;
+    let viewport_height = line_height * 4.5;
+    let complete_height = complete_line_viewport_height(viewport_height, line_height);
+
+    let visible_lines = visible_logical_lines(&editor, viewport_height);
+
+    assert_eq!(visible_lines.len(), 4);
+    assert!(visible_lines
+        .iter()
+        .all(|line| line.y >= 0.0 && line.y + line.height <= complete_height + 0.5));
+}
+
+#[test]
+fn bounded_scroll_bottom_keeps_first_visible_row_complete() {
+    let content = (0..100)
+        .map(|line_number| format!("line {line_number}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let editor = preview_editor_for_text(&content, 400.0, 120.0);
+    let line_height = editor.buffer().metrics().line_height;
+    let viewport_height = line_height * 6.5;
+    let complete_height = complete_line_viewport_height(viewport_height, line_height);
+    let mut state = TextPreviewViewerState {
+        editor,
+        ..Default::default()
+    };
+
+    assert_ne!(
+        apply_bounded_scroll_lines(&mut state, 10_000, viewport_height),
+        0
+    );
+    let visible_lines = visible_logical_lines(&state.editor, viewport_height);
+
+    assert!(visible_lines.first().is_some_and(|line| line.y >= 0.0));
+    assert!(visible_lines
+        .iter()
+        .all(|line| line.y + line.height <= complete_height + 0.5));
+}
+
+#[test]
 fn bounded_scroll_rejects_overscroll_at_file_edges() {
     let content = (0..100)
         .map(|line_number| format!("line {line_number}"))
@@ -67,13 +113,13 @@ fn bounded_scroll_rejects_overscroll_at_file_edges() {
         ..Default::default()
     };
 
-    assert!(!apply_bounded_scroll_lines(&mut state, -10, 120.0));
+    assert_eq!(apply_bounded_scroll_lines(&mut state, -10, 120.0), 0);
     assert_eq!(editor_scroll_y(&state.editor), 0.0);
 
-    assert!(apply_bounded_scroll_lines(&mut state, 10_000, 120.0));
+    assert_ne!(apply_bounded_scroll_lines(&mut state, 10_000, 120.0), 0);
     let bottom_scroll_y = editor_scroll_y(&state.editor);
     assert!(bottom_scroll_y <= max_editor_scroll_y(&state.editor, 120.0));
-    assert!(!apply_bounded_scroll_lines(&mut state, 10_000, 120.0));
+    assert_eq!(apply_bounded_scroll_lines(&mut state, 10_000, 120.0), 0);
     assert_eq!(editor_scroll_y(&state.editor), bottom_scroll_y);
 }
 

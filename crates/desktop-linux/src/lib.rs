@@ -43,6 +43,7 @@ pub use storage_devices::{
     StorageDeviceMountState,
 };
 pub use wayland_dnd::{
-    spawn_wayland_file_dnd, WaylandDndCommandError, WaylandDndController, WaylandDndError,
-    WaylandDndEvent, WaylandDndWindowHandle,
+    spawn_wayland_file_dnd, WaylandDndCommandError, WaylandDndController, WaylandDndDropOrigin,
+    WaylandDndDropPosition, WaylandDndError, WaylandDndEvent, WaylandDndFileDrop,
+    WaylandDndWindowHandle,
 };

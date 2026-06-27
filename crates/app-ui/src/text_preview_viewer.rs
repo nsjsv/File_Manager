@@ -10,11 +10,16 @@ use iced::advanced::{graphics, layout, renderer, text, widget, Clipboard, Layout
 use iced::keyboard;
 use iced::widget::text_editor;
 use iced::{
-    alignment, mouse, Color, Element, Event, Font, Length, Padding, Pixels, Point, Rectangle, Size,
-    Theme,
+    alignment, mouse, Element, Event, Font, Length, Padding, Pixels, Point, Rectangle, Size, Theme,
 };
 
 use crate::text_preview::{TextPreviewDocument, TEXT_PREVIEW_LINE_HEIGHT, TEXT_PREVIEW_TEXT_SIZE};
+
+mod style;
+
+use style::{
+    divider_color, placeholder_color, selection_color, text_color, viewer_background_color,
+};
 
 const TEXT_PREVIEW_VIEWER_PADDING: f32 = 8.0;
 const TEXT_PREVIEW_GUTTER_HORIZONTAL_PADDING: f32 = 6.0;
@@ -29,6 +34,7 @@ type PreviewParagraph = graphics::text::Paragraph;
 pub(crate) fn text_preview_viewer<'a, Message>(
     document: &'a TextPreviewDocument,
     scroll_height: f32,
+    on_scroll: impl Fn(i32) -> Message + 'a,
 ) -> Element<'a, Message>
 where
     Message: 'a + 'static,
@@ -36,12 +42,14 @@ where
     Element::new(TextPreviewViewer {
         document,
         scroll_height,
+        on_scroll: Box::new(on_scroll),
     })
 }
 
-struct TextPreviewViewer<'a> {
+struct TextPreviewViewer<'a, Message> {
     document: &'a TextPreviewDocument,
     scroll_height: f32,
+    on_scroll: Box<dyn Fn(i32) -> Message + 'a>,
 }
 
 #[derive(Default)]
@@ -83,7 +91,7 @@ struct VisibleLogicalLine {
     height: f32,
 }
 
-impl<Message> Widget<Message, Theme, iced::Renderer> for TextPreviewViewer<'_>
+impl<Message> Widget<Message, Theme, iced::Renderer> for TextPreviewViewer<'_, Message>
 where
     Message: 'static,
 {
@@ -185,9 +193,12 @@ where
                 let lines = text_preview_scroll_lines(*delta) + state.partial_scroll;
                 let line_count = lines as i32;
                 if line_count != 0 {
-                    if apply_bounded_scroll_lines(state, line_count, text_bounds.height) {
+                    let scroll_lines =
+                        apply_bounded_scroll_lines(state, line_count, text_bounds.height);
+                    if scroll_lines != 0 {
                         state.partial_scroll = lines.fract();
                         update_retained_visible_content(state, self.document, bounds);
+                        shell.publish((self.on_scroll)(scroll_lines));
                         shell.request_redraw();
                     } else {
                         state.partial_scroll = 0.0;
@@ -359,7 +370,10 @@ fn update_editor(
     let padding = Padding::new(TEXT_PREVIEW_VIEWER_PADDING);
     let editor_size = Size::new(
         (content_width - padding.x()).max(0.0),
-        (scroll_height - padding.y()).max(0.0),
+        complete_line_viewport_height(
+            (scroll_height - padding.y()).max(0.0),
+            TEXT_PREVIEW_TEXT_SIZE * TEXT_PREVIEW_LINE_HEIGHT,
+        ),
     );
     state.editor.update(
         editor_size,
@@ -369,6 +383,14 @@ fn update_editor(
         text::Wrapping::WordOrGlyph,
         &mut PlainText,
     );
+    if needs_source_update {
+        state.editor.perform(text_editor::Action::Scroll {
+            lines: document
+                .visual_scroll_line_offset()
+                .try_into()
+                .unwrap_or(i32::MAX),
+        });
+    }
     clamp_editor_scroll_to_bounds(state, editor_size.height);
     update_retained_text_lines_for_size(state, editor_size.width, editor_size.height);
     update_retained_line_numbers_for_size(
@@ -572,18 +594,18 @@ fn apply_bounded_scroll_lines(
     state: &mut TextPreviewViewerState,
     requested_lines: i32,
     viewport_height: f32,
-) -> bool {
+) -> i32 {
     clamp_editor_scroll_to_bounds(state, viewport_height);
     let scroll_lines = bounded_scroll_lines(&state.editor, requested_lines, viewport_height);
     if scroll_lines == 0 {
-        return false;
+        return 0;
     }
 
     state.editor.perform(text_editor::Action::Scroll {
         lines: scroll_lines,
     });
     clamp_editor_scroll_to_bounds(state, viewport_height);
-    true
+    scroll_lines
 }
 
 fn clamp_editor_scroll_to_bounds(state: &mut TextPreviewViewerState, viewport_height: f32) {
@@ -635,7 +657,18 @@ fn bounded_scroll_lines(editor: &PreviewEditor, requested_lines: i32, viewport_h
 }
 
 fn max_editor_scroll_y(editor: &PreviewEditor, viewport_height: f32) -> f32 {
+    let viewport_height =
+        complete_line_viewport_height(viewport_height, editor.buffer().metrics().line_height);
     (editor_content_height(editor) - viewport_height).max(0.0)
+}
+
+fn complete_line_viewport_height(viewport_height: f32, line_height: f32) -> f32 {
+    let complete_lines = (viewport_height / line_height).floor();
+    if complete_lines >= 1.0 && complete_lines.is_finite() {
+        complete_lines * line_height
+    } else {
+        viewport_height
+    }
 }
 
 fn editor_content_height(editor: &PreviewEditor) -> f32 {
@@ -714,8 +747,10 @@ fn line_number_offsets(editor: &PreviewEditor, scroll_height: f32) -> Vec<(usize
 fn visible_logical_lines(editor: &PreviewEditor, scroll_height: f32) -> Vec<VisibleLogicalLine> {
     let buffer = editor.buffer();
     let metrics = buffer.metrics();
+    let scroll_height = complete_line_viewport_height(scroll_height, metrics.line_height);
     let mut offsets = Vec::new();
-    let scroll_offset = buffer.scroll().vertical;
+    let raw_scroll_offset = buffer.scroll().vertical.max(0.0);
+    let mut top_y = None;
     let mut y = 0.0;
 
     for (line_index, line) in buffer.lines.iter().enumerate() {
@@ -729,16 +764,26 @@ fn visible_logical_lines(editor: &PreviewEditor, scroll_height: f32) -> Vec<Visi
             })
             .unwrap_or(metrics.line_height);
 
-        let visible_y = y - scroll_offset;
-        if visible_y + line_height >= 0.0 {
+        let line_bottom = y + line_height;
+        if line_bottom <= raw_scroll_offset {
+            y = line_bottom;
+            continue;
+        }
+
+        let visible_y = y - *top_y.get_or_insert(y);
+        if visible_y >= scroll_height {
+            break;
+        }
+        let fully_visible = visible_y >= 0.0 && visible_y + line_height <= scroll_height + 0.5;
+        let taller_than_viewport = line_height > scroll_height
+            && visible_y < scroll_height
+            && visible_y + line_height > 0.0;
+        if fully_visible || taller_than_viewport {
             offsets.push(VisibleLogicalLine {
                 line_index,
                 y: visible_y,
                 height: line_height,
             });
-        }
-        if visible_y > scroll_height {
-            break;
         }
 
         y += line_height;
@@ -749,51 +794,6 @@ fn visible_logical_lines(editor: &PreviewEditor, scroll_height: f32) -> Vec<Visi
 
 fn editor_scroll_y(editor: &PreviewEditor) -> f32 {
     editor.buffer().scroll().vertical
-}
-
-fn is_dark_theme(theme: &Theme) -> bool {
-    let background = theme.palette().background;
-    background.r * 0.299 + background.g * 0.587 + background.b * 0.114 < 0.5
-}
-
-fn viewer_background_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(20, 27, 38)
-    } else {
-        Color::from_rgb8(250, 251, 253)
-    }
-}
-
-fn divider_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(62, 76, 101)
-    } else {
-        Color::from_rgb8(211, 219, 232)
-    }
-}
-
-fn text_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(236, 244, 255)
-    } else {
-        Color::from_rgb8(24, 42, 72)
-    }
-}
-
-fn placeholder_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(137, 146, 159)
-    } else {
-        Color::from_rgb8(119, 127, 139)
-    }
-}
-
-fn selection_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgba8(85, 135, 205, 0.42)
-    } else {
-        Color::from_rgba8(150, 190, 255, 0.62)
-    }
 }
 
 #[cfg(test)]

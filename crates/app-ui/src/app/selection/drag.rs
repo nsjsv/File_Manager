@@ -5,19 +5,19 @@ use iced::Task;
 use super::super::paths::{self, PasteTargetMode};
 use super::super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
 use crate::model::{
-    BrowserPaneId, FileDragPhase, FileDragState, FileDragTarget, Message, SelectionMarqueeSource,
-    TransferConflictMode,
+    BrowserPaneId, FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, Message,
+    SelectionMarqueeSource, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 
 impl FileBrowser {
-    pub(crate) fn update_file_drag(&mut self, position: iced::Point) {
-        let drag_sources = {
+    pub(crate) fn update_file_drag(&mut self, position: iced::Point) -> Task<Message> {
+        {
             let Some(file_drag) = &mut self.file_drag else {
-                return;
+                return Task::none();
             };
             let FileDragPhase::WaitingForMovement { origin } = file_drag.phase else {
-                return;
+                return Task::none();
             };
 
             let delta_x = position.x - origin.x;
@@ -25,14 +25,33 @@ impl FileBrowser {
             if delta_x * delta_x + delta_y * delta_y
                 < POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE
             {
-                return;
+                return Task::none();
             }
 
             file_drag.phase = FileDragPhase::Dragging;
-            file_drag.sources.clone()
+        }
+
+        crate::column_entry_bounds::column_entry_bounds_command()
+    }
+
+    pub(crate) fn request_file_drag_wayland_dnd_on_window_exit(&mut self) -> Task<Message> {
+        let drag_sources = self
+            .file_drag
+            .as_ref()
+            .filter(|file_drag| file_drag.can_request_wayland_dnd())
+            .map(|file_drag| file_drag.sources.clone());
+        let Some(drag_sources) = drag_sources else {
+            return Task::none();
         };
 
-        self.request_wayland_file_drag(drag_sources);
+        if self.request_wayland_file_drag(drag_sources) {
+            if let Some(file_drag) = &mut self.file_drag {
+                file_drag.phase = FileDragPhase::Dragging;
+                file_drag.native_dnd = FileDragNativeDndState::WaylandRequested;
+            }
+        }
+
+        Task::none()
     }
 
     pub(crate) fn finish_drag_selection(
@@ -104,6 +123,7 @@ impl FileBrowser {
             phase: FileDragPhase::WaitingForMovement {
                 origin: self.cursor_position,
             },
+            native_dnd: FileDragNativeDndState::NotRequested,
             column_directories_snapshot,
         });
     }
@@ -154,6 +174,24 @@ impl FileBrowser {
         directory: PathBuf,
     ) -> Option<PathBuf> {
         self.pane_accepts_file_drag(pane_id).then_some(directory)
+    }
+
+    pub(crate) fn file_drag_release_directory_at_position(
+        &self,
+        position: iced::Point,
+    ) -> Option<PathBuf> {
+        for entry_bounds in self.file_entry_bounds.iter().rev() {
+            if !entry_bounds.bounds.contains(position) {
+                continue;
+            }
+            return self
+                .file_drag_release_directory_for_entry(entry_bounds.pane_id, &entry_bounds.path);
+        }
+
+        let pane_id = self.pane_id_at_position(position)?;
+        self.pane_view(pane_id)
+            .filter(|pane| !pane.is_trash_view)
+            .map(|pane| pane.current_dir.clone())
     }
 
     fn file_drag_drop_directory_at_cursor(&self) -> Option<PathBuf> {

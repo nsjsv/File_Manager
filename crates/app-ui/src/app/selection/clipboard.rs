@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use desktop_linux::{
     ClipboardImage, DesktopClipboardContent, FileClipboardOperation, FileClipboardSelection,
+    WaylandDndDropOrigin, WaylandDndDropPosition, WaylandDndFileDrop,
 };
-use iced::Task;
+use iced::{Point, Task};
 
 use crate::app::paths::{self, PasteTargetMode};
 use crate::app::FileBrowser;
@@ -240,20 +241,61 @@ impl FileBrowser {
 
     pub(in crate::app) fn accept_wayland_file_drop(
         &mut self,
-        result: Result<FileClipboardSelection, String>,
+        result: Result<WaylandDndFileDrop, String>,
     ) -> Task<Message> {
         if self.is_trash_view {
             return Task::none();
         }
         match result {
-            Ok(selection) => {
-                let paste_directory = self.paste_target_directory();
-                self.request_file_drop_prompt(paste_directory, selection.paths)
-            }
+            Ok(drop) => match drop.origin {
+                WaylandDndDropOrigin::External => self.accept_external_wayland_file_drop(drop),
+                WaylandDndDropOrigin::Internal => self.accept_internal_wayland_file_drop(drop),
+            },
             Err(error) => {
                 self.error = Some(error);
                 Task::none()
             }
+        }
+    }
+
+    fn accept_external_wayland_file_drop(&mut self, drop: WaylandDndFileDrop) -> Task<Message> {
+        let position = wayland_drop_position(drop.position);
+        if let Some(position) = position {
+            self.cursor_position = position;
+        }
+        let paste_directory = self.paste_target_directory_for_wayland_drop(position);
+        self.request_file_drop_prompt(paste_directory, drop.selection.paths)
+    }
+
+    fn accept_internal_wayland_file_drop(&mut self, drop: WaylandDndFileDrop) -> Task<Message> {
+        if !self.active_file_drag_matches_wayland_drop(&drop.selection.paths) {
+            return Task::none();
+        }
+
+        let position = wayland_drop_position(drop.position);
+        let release_directory = position.and_then(|position| {
+            self.cursor_position = position;
+            self.refresh_file_drag_target_at_position(position);
+            self.file_drag_release_directory_at_position(position)
+        });
+
+        Task::batch([
+            self.finish_drag_selection(release_directory),
+            self.schedule_thumbnail_refresh(),
+        ])
+    }
+
+    fn active_file_drag_matches_wayland_drop(&self, paths: &[PathBuf]) -> bool {
+        self.file_drag
+            .as_ref()
+            .is_some_and(|file_drag| file_drag.is_dragging() && file_drag.sources == paths)
+    }
+
+    fn refresh_file_drag_target_at_position(&mut self, position: Point) {
+        if position.x <= self.sidebar_width {
+            drop(self.update_sidebar_bookmark_drop_slot(position));
+        } else {
+            drop(self.clear_sidebar_bookmark_drop_slot());
         }
     }
 
@@ -405,6 +447,36 @@ impl FileBrowser {
             .or_else(|| self.cursor_paste_directory.clone())
             .unwrap_or_else(|| self.current_dir.clone())
     }
+
+    fn paste_target_directory_for_wayland_drop(&self, position: Option<Point>) -> PathBuf {
+        if let Some(position) = position {
+            for entry_bounds in self.file_entry_bounds.iter().rev() {
+                if entry_bounds.bounds.contains(position) {
+                    if let Some(directory) = self.cursor_paste_directory_for_entry_in_pane(
+                        entry_bounds.pane_id,
+                        &entry_bounds.path,
+                    ) {
+                        return directory;
+                    }
+                }
+            }
+
+            if let Some(directory) = self
+                .pane_id_at_position(position)
+                .and_then(|pane_id| self.pane_view(pane_id))
+                .filter(|pane| !pane.is_trash_view)
+                .map(|pane| pane.current_dir.clone())
+            {
+                return directory;
+            }
+        }
+
+        self.paste_target_directory()
+    }
+}
+
+fn wayland_drop_position(position: Option<WaylandDndDropPosition>) -> Option<Point> {
+    position.map(|position| Point::new(position.x as f32, position.y as f32))
 }
 
 #[cfg(test)]
@@ -423,7 +495,9 @@ mod tests {
 
     use super::*;
     use crate::config;
-    use crate::model::TransferConflictItem;
+    use crate::model::{
+        FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, TransferConflictItem,
+    };
 
     fn test_entry(path: &Path) -> DirectoryEntry {
         DirectoryEntry::new(
@@ -447,6 +521,18 @@ mod tests {
         browser.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
         browser.selected = paths.first().cloned();
         browser
+    }
+
+    fn wayland_file_drop(
+        operation: FileClipboardOperation,
+        paths: Vec<PathBuf>,
+        origin: WaylandDndDropOrigin,
+    ) -> WaylandDndFileDrop {
+        WaylandDndFileDrop {
+            selection: FileClipboardSelection::new(operation, paths),
+            origin,
+            position: None,
+        }
     }
 
     fn mount_network_connection(browser: &mut FileBrowser, mount_path: PathBuf) {
@@ -496,12 +582,11 @@ mod tests {
         let mut browser = browser_with_entries(&[]);
         browser.cursor_paste_directory = Some(PathBuf::from("/workspace/project"));
 
-        drop(
-            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
-                FileClipboardOperation::Copy,
-                vec![source.clone()],
-            ))),
-        );
+        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+            FileClipboardOperation::Copy,
+            vec![source.clone()],
+            WaylandDndDropOrigin::External,
+        ))));
 
         assert!(matches!(
             &browser.file_drop_prompt,
@@ -519,18 +604,16 @@ mod tests {
         let second_source = PathBuf::from("/outside/second.txt");
         let mut browser = browser_with_entries(&[]);
 
-        drop(
-            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
-                FileClipboardOperation::Move,
-                vec![first_source.clone()],
-            ))),
-        );
-        drop(
-            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
-                FileClipboardOperation::Move,
-                vec![second_source],
-            ))),
-        );
+        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+            FileClipboardOperation::Move,
+            vec![first_source.clone()],
+            WaylandDndDropOrigin::External,
+        ))));
+        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+            FileClipboardOperation::Move,
+            vec![second_source],
+            WaylandDndDropOrigin::External,
+        ))));
 
         assert!(matches!(
             &browser.file_drop_prompt,
@@ -552,12 +635,11 @@ mod tests {
         let mut browser = browser_with_entries(&[]);
         browser.current_dir = destination.clone();
 
-        drop(
-            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
-                FileClipboardOperation::Move,
-                vec![source.clone()],
-            ))),
-        );
+        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+            FileClipboardOperation::Move,
+            vec![source.clone()],
+            WaylandDndDropOrigin::External,
+        ))));
 
         let (mode, transfers, conflicts) = transfer_conflict_check_message(
             browser.apply_file_drop_operation(FileClipboardOperation::Copy),
@@ -573,17 +655,52 @@ mod tests {
         assert!(conflicts.is_empty());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn internal_wayland_file_drop_finishes_active_file_drag() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let destination = temp_dir.path().join("destination");
+        let source = temp_dir.path().join("report.txt");
+        fs::create_dir_all(&destination).expect("create destination");
+        fs::write(&source, b"report").expect("write source");
+        let mut browser = browser_with_entries(&[source.clone()]);
+        browser.file_drag = Some(FileDragState {
+            sources: vec![source.clone()],
+            pressed_path: source.clone(),
+            target: Some(FileDragTarget::Directory(destination.clone())),
+            phase: FileDragPhase::Dragging,
+            native_dnd: FileDragNativeDndState::NotRequested,
+            column_directories_snapshot: Vec::new(),
+        });
+
+        let (mode, transfers, conflicts) = transfer_conflict_check_message(
+            browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+                FileClipboardOperation::Move,
+                vec![source.clone()],
+                WaylandDndDropOrigin::Internal,
+            ))),
+        )
+        .await;
+
+        assert!(browser.file_drop_prompt.is_none());
+        assert!(browser.file_drag.is_none());
+        assert_eq!(mode, TransferConflictMode::Move);
+        assert_eq!(
+            transfers,
+            vec![QueuedTransfer::new(source, destination.join("report.txt"))]
+        );
+        assert!(conflicts.is_empty());
+    }
+
     #[test]
     fn cancelled_file_drop_clears_prompt() {
         let source = PathBuf::from("/outside/report.txt");
         let mut browser = browser_with_entries(&[]);
 
-        drop(
-            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
-                FileClipboardOperation::Move,
-                vec![source],
-            ))),
-        );
+        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+            FileClipboardOperation::Move,
+            vec![source],
+            WaylandDndDropOrigin::External,
+        ))));
         drop(browser.cancel_file_drop());
 
         assert!(browser.file_drop_prompt.is_none());

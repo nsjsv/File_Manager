@@ -168,7 +168,7 @@ mod tests {
         ));
 
         let document = browser.text_preview_document.as_ref().expect("document");
-        assert!(!document.content().text().contains("stale"));
+        assert!(!document.content_text().contains("stale"));
     }
 
     #[test]
@@ -189,6 +189,6 @@ mod tests {
         ));
 
         let document = browser.text_preview_document.as_ref().expect("document");
-        assert!(!document.content().text().contains("stale"));
+        assert!(!document.content_text().contains("stale"));
     }
 }

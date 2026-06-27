@@ -32,7 +32,6 @@ mod startup_index_tree;
 mod startup_rendering;
 mod startup_trace;
 mod text_preview;
-mod text_preview_gutter;
 mod text_preview_loading;
 mod text_preview_viewer;
 mod three_column_view;

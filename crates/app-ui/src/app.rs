@@ -83,7 +83,7 @@ use crate::commands::{
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
-    BrowserTab, BrowserViewMode, ColumnBrowserViewport, ContextMenuState,
+    BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
     PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
@@ -185,6 +185,7 @@ pub(crate) struct FileBrowser {
     pane_drag: Option<PaneDragState>,
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
+    file_entry_bounds: Vec<ColumnEntryBounds>,
     pub(crate) options: ScanOptions,
     user_config: config::UserConfig,
     pub(crate) max_preview_file_mib_input: String,
@@ -390,6 +391,7 @@ impl FileBrowser {
             pane_drag: None,
             selection_marquee: None,
             file_drag: None,
+            file_entry_bounds: Vec::new(),
             options: options.clone(),
             user_config: user_config.clone(),
             max_preview_file_mib_input: config::max_preview_file_mib(

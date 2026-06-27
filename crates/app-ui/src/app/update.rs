@@ -398,16 +398,12 @@ impl FileBrowser {
             Message::SidebarBookmarkReleased => self.finish_sidebar_bookmark_drag(),
             Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
             Message::SidebarResizeStarted => self.start_sidebar_resize_drag(),
-            Message::CursorMoved(position) => {
-                self.cursor_position = position;
-                self.update_tab_drag(position);
-                self.update_pane_drag(position);
-                self.update_file_drag(position);
-                self.update_sidebar_bookmark_drag(position);
-                self.update_sidebar_resize_drag(position);
-                self.update_column_resize_drag(position);
-                if self.update_selection_marquee(position) {
-                    crate::column_entry_bounds::column_entry_bounds_command()
+            Message::CursorMoved { window, position } => {
+                self.update_pointer_motion(window, position)
+            }
+            Message::CursorLeft(window) => {
+                if window == self.main_window {
+                    self.request_file_drag_wayland_dnd_on_window_exit()
                 } else {
                     Task::none()
                 }

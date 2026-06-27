@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use desktop_linux::{
-    DesktopClipboardContent, FileClipboardOperation, FileClipboardSelection,
-    OpenWithApplicationList, StorageDevice, StorageDeviceId, TerminalEmulator,
-    WaylandDndWindowHandle,
+    DesktopClipboardContent, FileClipboardOperation, OpenWithApplicationList, StorageDevice,
+    StorageDeviceId, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 pub(crate) use file_index::SearchMode;
@@ -87,9 +86,9 @@ pub(crate) use session::{
 };
 mod drag;
 pub(crate) use drag::{
-    FileDragPhase, FileDragState, FileDragTarget, LastActivationClick, PaneDragState,
-    PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode, TabDragState,
-    TabSplitTarget,
+    FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, LastActivationClick,
+    PaneDragState, PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode,
+    TabDragState, TabSplitTarget,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -256,7 +255,11 @@ pub(crate) enum Message {
     SidebarBookmarkReleased,
     SidebarBookmarkDeleteRequested(PathBuf),
     SidebarResizeStarted,
-    CursorMoved(Point),
+    CursorMoved {
+        window: window::Id,
+        position: Point,
+    },
+    CursorLeft(window::Id),
     ColumnBrowserCursorEntered(BrowserPaneId),
     ColumnBrowserCursorExited(BrowserPaneId),
     ColumnEntryBoundsMeasured(Vec<ColumnEntryBounds>),
@@ -418,7 +421,7 @@ pub(crate) enum Message {
     },
     ClipboardFileCreated(Result<PathBuf, String>),
     WaylandDndWindowHandleLoaded(Result<Option<WaylandDndWindowHandle>, String>),
-    WaylandFilesDropped(Result<FileClipboardSelection, String>),
+    WaylandFilesDropped(Result<WaylandDndFileDrop, String>),
     FileDropOperationSelected(FileClipboardOperation),
     FileDropCancelled,
     TransferConflictsChecked {

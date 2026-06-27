@@ -1,14 +1,10 @@
-use iced::mouse;
 use iced::widget::{column, text_editor, Column};
-use iced::{Element, Font, Length};
+use iced::Element;
 
-use crate::appearance::text_preview_editor_style;
 use crate::model::{
     MarkdownPreviewMode, Message, ScrollbarVisibility, TextPreviewDocument, TextPreviewFormat,
     TextPreviewLineLimitNotice,
 };
-use crate::text_preview::{TEXT_PREVIEW_LINE_HEIGHT, TEXT_PREVIEW_TEXT_SIZE};
-use crate::text_preview_gutter::text_preview_with_gutter;
 use crate::text_preview_viewer::text_preview_viewer;
 use crate::typography::readable_text;
 
@@ -19,11 +15,6 @@ const MARKDOWN_MODE_SWITCH_RESERVED_HEIGHT: f32 = 40.0;
 const MARKDOWN_MIN_BODY_SCROLL_HEIGHT: f32 = 120.0;
 const TEXT_PREVIEW_LIMIT_NOTICE_RESERVED_HEIGHT: f32 = 30.0;
 const TEXT_PREVIEW_MIN_BODY_SCROLL_HEIGHT: f32 = 120.0;
-const TEXT_PREVIEW_EDITOR_PADDING: u16 = 8;
-const TEXT_PREVIEW_GUTTER_HORIZONTAL_PADDING: u16 = 6;
-const TEXT_PREVIEW_GUTTER_DIGIT_WIDTH: f32 = 10.0;
-const TEXT_PREVIEW_GUTTER_MIN_WIDTH: f32 = 30.0;
-const TEXT_PREVIEW_GUTTER_SPACING: f32 = 4.0;
 
 pub(super) fn text_preview_panel<'a>(
     rendered: &'a str,
@@ -75,68 +66,14 @@ fn plain_text_preview_body<'a>(
     scroll_height: f32,
 ) -> Element<'a, Message> {
     if let Some(document) = document {
-        text_preview_viewer(document, scroll_height)
-    } else {
-        readable_text("Text preview is not ready").size(14).into()
-    }
-}
-
-fn markdown_raw_text_preview_body<'a>(
-    document: Option<&'a TextPreviewDocument>,
-    scroll_height: f32,
-) -> Element<'a, Message> {
-    if let Some(document) = document {
-        let editor = text_editor(document.content())
-            .placeholder("(empty file)")
-            .height(Length::Fixed(scroll_height))
-            .font(Font::MONOSPACE)
-            .size(TEXT_PREVIEW_TEXT_SIZE)
-            .line_height(TEXT_PREVIEW_LINE_HEIGHT)
-            .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-            .padding(TEXT_PREVIEW_EDITOR_PADDING)
-            .style(text_preview_editor_style())
-            .on_action(move |action| Message::TextPreviewAction {
-                action,
+        text_preview_viewer(document, scroll_height, move |lines| {
+            Message::TextPreviewAction {
+                action: text_editor::Action::Scroll { lines },
                 viewport_height: scroll_height,
-            });
-
-        text_preview_with_gutter(
-            document,
-            editor,
-            scroll_height,
-            text_preview_line_number_gutter_width(document),
-            TEXT_PREVIEW_GUTTER_SPACING,
-            move |delta| Message::TextPreviewAction {
-                action: text_preview_scroll_action(delta),
-                viewport_height: scroll_height,
-            },
-        )
-    } else {
-        readable_text("Text preview is not ready").size(14).into()
-    }
-}
-
-fn text_preview_line_number_gutter_width(document: &TextPreviewDocument) -> f32 {
-    let digit_width = document.line_number_digit_count() as f32 * TEXT_PREVIEW_GUTTER_DIGIT_WIDTH;
-    let padding_width = f32::from(TEXT_PREVIEW_GUTTER_HORIZONTAL_PADDING) * 2.0;
-
-    (digit_width + padding_width).max(TEXT_PREVIEW_GUTTER_MIN_WIDTH)
-}
-
-fn text_preview_scroll_action(delta: mouse::ScrollDelta) -> text_editor::Action {
-    let lines = match delta {
-        mouse::ScrollDelta::Lines { y, .. } => {
-            if y.abs() > 0.0 {
-                y.signum() * -(y.abs() * 4.0).max(1.0)
-            } else {
-                0.0
             }
-        }
-        mouse::ScrollDelta::Pixels { y, .. } => -y / 4.0,
-    };
-
-    text_editor::Action::Scroll {
-        lines: lines as i32,
+        })
+    } else {
+        readable_text("Text preview is not ready").size(14).into()
     }
 }
 
@@ -186,7 +123,7 @@ fn markdown_text_preview_body<'a>(
             body_height,
             scrollbar_visibility,
         ),
-        MarkdownPreviewMode::Raw => markdown_raw_text_preview_body(Some(document), body_height),
+        MarkdownPreviewMode::Raw => plain_text_preview_body(Some(document), body_height),
     };
 
     column![markdown_preview_mode_switch(mode), body]

@@ -1,4 +1,4 @@
-use iced::widget::{button, scrollable, svg, text_editor};
+use iced::widget::{button, scrollable, svg};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
 mod container {
@@ -157,10 +157,6 @@ pub(crate) fn navigation_icon_button_style() -> fn(&Theme, button::Status) -> bu
 
 pub(crate) fn context_menu_button_style() -> fn(&Theme, button::Status) -> button::Style {
     transparent_button_style
-}
-
-pub(crate) fn text_preview_editor_style() -> fn(&Theme, text_editor::Status) -> text_editor::Style {
-    transparent_text_preview_editor_style
 }
 
 pub(crate) fn auto_hide_scrollbar_style(
@@ -705,28 +701,6 @@ fn mac_scrollbar_scroller_color(theme: &Theme, opacity: f32) -> Color {
         Color::from_rgba8(255, 255, 255, 0.42 * opacity)
     } else {
         Color::from_rgba8(20, 24, 31, 0.32 * opacity)
-    }
-}
-
-fn transparent_text_preview_editor_style(
-    theme: &Theme,
-    status: text_editor::Status,
-) -> text_editor::Style {
-    let value = match status {
-        text_editor::Status::Disabled => muted_text_color(theme),
-        _ => base_text_color(theme),
-    };
-
-    text_editor::Style {
-        background: Background::Color(Color::from_rgba8(0, 0, 0, 0.0)),
-        border: Border::default(),
-        placeholder: muted_text_color(theme),
-        value,
-        selection: if is_dark_theme(theme) {
-            Color::from_rgba8(82, 126, 190, 0.55)
-        } else {
-            Color::from_rgba8(74, 137, 220, 0.25)
-        },
     }
 }
 

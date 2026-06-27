@@ -21,6 +21,7 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, QueueHandle};
 
 use super::{pick_mime, WaylandFileDnd};
+use crate::wayland_dnd::WaylandDndDropPosition;
 
 impl SeatHandler for WaylandFileDnd {
     fn seat_state(&mut self) -> &mut smithay_client_toolkit::seat::SeatState {
@@ -112,8 +113,8 @@ impl DataDeviceHandler for WaylandFileDnd {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         data_device: &WlDataDevice,
-        _x: f64,
-        _y: f64,
+        x: f64,
+        y: f64,
         surface: &wl_surface::WlSurface,
     ) {
         let Some(data_device) = self.data_device_for(data_device) else {
@@ -123,6 +124,9 @@ impl DataDeviceHandler for WaylandFileDnd {
             return;
         };
         self.drop_is_over_surface = surface == &self.surface;
+        self.drop_position = self
+            .drop_is_over_surface
+            .then_some(WaylandDndDropPosition { x, y });
         if !self.drop_is_over_surface {
             offer.accept_mime_type(offer.serial, None);
             offer.set_actions(DndAction::empty(), DndAction::empty());
@@ -140,6 +144,7 @@ impl DataDeviceHandler for WaylandFileDnd {
 
     fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
         self.drop_is_over_surface = false;
+        self.drop_position = None;
     }
 
     fn motion(
@@ -147,9 +152,12 @@ impl DataDeviceHandler for WaylandFileDnd {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _data_device: &WlDataDevice,
-        _x: f64,
-        _y: f64,
+        x: f64,
+        y: f64,
     ) {
+        if self.drop_is_over_surface {
+            self.drop_position = Some(WaylandDndDropPosition { x, y });
+        }
     }
 
     fn selection(

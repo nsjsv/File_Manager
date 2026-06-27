@@ -41,22 +41,24 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(crate) fn request_wayland_file_drag(&self, paths: Vec<PathBuf>) {
+    pub(crate) fn request_wayland_file_drag(&self, paths: Vec<PathBuf>) -> bool {
         if self.is_trash_view || paths.is_empty() {
-            return;
+            return false;
         }
         let Some(runtime) = &self.wayland_dnd else {
             tracing::debug!(
                 path_count = paths.len(),
                 "Wayland file drag skipped because no handle is available"
             );
-            return;
+            return false;
         };
         let path_count = paths.len();
         if let Err(error) = runtime.controller.start_file_drag(paths) {
             tracing::warn!(%error, path_count, "Wayland file drag request failed");
+            false
         } else {
             tracing::debug!(path_count, "Wayland file drag request sent");
+            true
         }
     }
 }

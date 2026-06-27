@@ -115,10 +115,6 @@ impl TextPreviewDocument {
         self.path.as_path()
     }
 
-    pub(crate) fn content(&self) -> &text_editor::Content {
-        &self.content
-    }
-
     pub(crate) fn content_text(&self) -> String {
         self.content.text()
     }
@@ -454,7 +450,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(document.content().text(), content);
+        assert_eq!(document.content_text(), content);
         assert_eq!(document.line_count(), 3);
     }
 
@@ -470,7 +466,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(document.content().text(), "");
+        assert_eq!(document.content_text(), "");
         assert_eq!(document.line_count(), 1);
     }
 
@@ -515,8 +511,8 @@ mod tests {
             viewport_height,
         ));
 
-        assert!(document.content().text().contains("line 49\nline 50"));
-        assert!(document.content().text().contains("line 51"));
+        assert!(document.content_text().contains("line 49\nline 50"));
+        assert!(document.content_text().contains("line 51"));
         assert_eq!(document.visual_scroll_line_offset(), scroll_line_offset);
         assert_eq!(document.content_revision(), 1);
     }
@@ -558,7 +554,7 @@ mod tests {
             },
             viewport_height,
         ));
-        assert!(!document.content().text().contains("stale"));
+        assert!(!document.content_text().contains("stale"));
     }
 
     #[test]
@@ -571,7 +567,7 @@ mod tests {
 
         assert!(document.accept_chunk_error(request.start_offset, "could not read".to_owned()));
         assert_eq!(document.chunk_error(), Some("could not read"));
-        assert!(document.content().text().contains("line 49"));
+        assert!(document.content_text().contains("line 49"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use super::FileBrowser;
-use iced::Task;
+use iced::{window, Point, Task};
 
 use crate::model::Message;
 
@@ -28,5 +28,34 @@ impl FileBrowser {
             self.finish_drag_selection(None),
             self.schedule_thumbnail_refresh(),
         ])
+    }
+
+    pub(super) fn update_pointer_motion(
+        &mut self,
+        window: window::Id,
+        position: Point,
+    ) -> Task<Message> {
+        if window != self.main_window {
+            return Task::none();
+        }
+        self.cursor_position = position;
+        self.update_tab_drag(position);
+        self.update_pane_drag(position);
+        let cursor_inside_main_window = (0.0..=self.main_window_width).contains(&position.x)
+            && (0.0..=self.main_window_height).contains(&position.y);
+        let file_drag_command = if cursor_inside_main_window {
+            self.update_file_drag(position)
+        } else {
+            self.request_file_drag_wayland_dnd_on_window_exit()
+        };
+        self.update_sidebar_bookmark_drag(position);
+        self.update_sidebar_resize_drag(position);
+        self.update_column_resize_drag(position);
+        let selection_command = if self.update_selection_marquee(position) {
+            crate::column_entry_bounds::column_entry_bounds_command()
+        } else {
+            Task::none()
+        };
+        Task::batch([file_drag_command, selection_command])
     }
 }

@@ -5,7 +5,7 @@ use iced::Point;
 
 use super::*;
 use crate::config;
-use crate::model::{FileDragState, FileDragTarget, SidebarLocation};
+use crate::model::{FileDragNativeDndState, FileDragState, FileDragTarget, SidebarLocation};
 
 fn bookmark(path: &str) -> SidebarLocation {
     SidebarLocation {
@@ -44,6 +44,7 @@ fn start_directory_file_drag(browser: &mut FileBrowser, path: &Path) {
         pressed_path: path.to_path_buf(),
         target: None,
         phase: FileDragPhase::Dragging,
+        native_dnd: FileDragNativeDndState::NotRequested,
         column_directories_snapshot: Vec::new(),
     });
 }

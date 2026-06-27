@@ -115,9 +115,9 @@ mod tests {
     use crate::app::column_resize::ColumnResizeDrag;
     use crate::config::ui_thread_startup_config;
     use crate::model::{
-        FileDragPhase, FileDragState, PaneDragState, SelectionMarquee, SelectionMarqueePhase,
-        SelectionMarqueeSource, SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode,
-        TabDragState,
+        FileDragNativeDndState, FileDragPhase, FileDragState, PaneDragState, SelectionMarquee,
+        SelectionMarqueePhase, SelectionMarqueeSource, SidebarBookmarkDragState,
+        SidebarBookmarkDropSlot, TabDragMode, TabDragState,
     };
 
     #[test]
@@ -149,6 +149,7 @@ mod tests {
             pressed_path: path.clone(),
             target: None,
             phase: FileDragPhase::Dragging,
+            native_dnd: FileDragNativeDndState::NotRequested,
             column_directories_snapshot: Vec::new(),
         });
         browser.selection_marquee = Some(SelectionMarquee {

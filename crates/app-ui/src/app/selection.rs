@@ -452,6 +452,7 @@ impl FileBrowser {
         &mut self,
         bounds: Vec<ColumnEntryBounds>,
     ) -> Task<Message> {
+        self.file_entry_bounds = bounds;
         let Some(marquee) = self
             .selection_marquee
             .as_ref()
@@ -471,12 +472,12 @@ impl FileBrowser {
             HashSet::new()
         };
 
-        for entry_bounds in bounds {
+        for entry_bounds in &self.file_entry_bounds {
             if entry_bounds.pane_id == active_pane_id
                 && visible_paths.contains(&entry_bounds.path)
                 && rectangles_intersect(marquee_rectangle, entry_bounds.bounds)
             {
-                next_selection.insert(entry_bounds.path);
+                next_selection.insert(entry_bounds.path.clone());
             }
         }
 

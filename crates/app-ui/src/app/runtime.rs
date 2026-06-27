@@ -112,9 +112,7 @@ fn wayland_file_dnd_stream(
 
         while let Some(event) = event_receiver.recv().await {
             let message = match event {
-                WaylandDndEvent::FilesDropped(selection) => {
-                    Message::WaylandFilesDropped(Ok(selection))
-                }
+                WaylandDndEvent::FilesDropped(drop) => Message::WaylandFilesDropped(Ok(drop)),
                 WaylandDndEvent::Failed(error) => Message::WaylandFilesDropped(Err(error)),
             };
             if output.send(message).await.is_err() {

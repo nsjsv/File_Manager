@@ -1,14 +1,15 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use desktop_linux::WaylandDndWindowHandle;
 use file_core::{DirectoryEntry, DirectoryScan, EntryMetadata, FileKind};
-use iced::{keyboard, Point};
+use iced::{keyboard, window, Point};
 
 use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
     BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryLoadRequest,
-    ExpandedDirectoryStatus, FileDragPhase,
+    ExpandedDirectoryStatus, FileDragNativeDndState, FileDragPhase, Message,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -80,11 +81,77 @@ fn shift_range_click_does_not_seed_activation_double_click() {
         FileDragPhase::WaitingForMovement { .. }
     ));
 
-    browser.update_file_drag(Point::new(10.0, 0.0));
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
     assert!(browser
         .file_drag
         .as_ref()
         .is_some_and(|file_drag| file_drag.is_dragging()));
+    assert_eq!(
+        browser.file_drag.as_ref().map(|drag| drag.native_dnd),
+        Some(FileDragNativeDndState::NotRequested)
+    );
+}
+
+#[test]
+fn file_drag_requests_wayland_dnd_only_after_window_exit() {
+    let source = PathBuf::from("/workspace/report.txt");
+    let mut browser = browser_with_entries(std::slice::from_ref(&source));
+
+    drop(browser.handle_column_entry_clicked(source));
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+    assert_eq!(
+        browser.file_drag.as_ref().map(|drag| drag.native_dnd),
+        Some(FileDragNativeDndState::NotRequested)
+    );
+
+    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
+    drop(browser.request_file_drag_wayland_dnd_on_window_exit());
+
+    assert_eq!(
+        browser.file_drag.as_ref().map(|drag| drag.native_dnd),
+        Some(FileDragNativeDndState::WaylandRequested)
+    );
+}
+
+#[test]
+fn main_window_outside_cursor_move_requests_wayland_dnd() {
+    let source = PathBuf::from("/workspace/report.txt");
+    let mut browser = browser_with_entries(std::slice::from_ref(&source));
+    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
+
+    drop(browser.handle_column_entry_clicked(source));
+    drop(browser.update(Message::CursorMoved {
+        window: browser.main_window,
+        position: Point::new(browser.main_window_width + 1.0, 12.0),
+    }));
+
+    let file_drag = browser
+        .file_drag
+        .as_ref()
+        .expect("file drag remains active");
+    assert!(file_drag.is_dragging());
+    assert_eq!(
+        file_drag.native_dnd,
+        FileDragNativeDndState::WaylandRequested
+    );
+}
+
+#[test]
+fn auxiliary_window_cursor_move_does_not_request_wayland_dnd() {
+    let source = PathBuf::from("/workspace/report.txt");
+    let mut browser = browser_with_entries(std::slice::from_ref(&source));
+    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
+
+    drop(browser.handle_column_entry_clicked(source));
+    drop(browser.update(Message::CursorMoved {
+        window: window::Id::unique(),
+        position: Point::new(browser.main_window_width + 1.0, 12.0),
+    }));
+
+    assert_eq!(
+        browser.file_drag.as_ref().map(|drag| drag.native_dnd),
+        Some(FileDragNativeDndState::NotRequested)
+    );
 }
 
 #[test]

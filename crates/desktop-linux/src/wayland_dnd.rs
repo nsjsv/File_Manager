@@ -32,12 +32,14 @@ use crate::file_clipboard::{
 };
 
 const SUPPORTED_MIME_TYPES: &[&str] = &[
+    INTERNAL_FILE_DRAG_MIME,
     GNOME_COPIED_FILES_MIME,
     URI_LIST_MIME,
     "text/plain;charset=utf-8",
     "UTF8_STRING",
     "text/plain",
 ];
+const INTERNAL_FILE_DRAG_MIME: &str = "application/x-file-manager-internal-dnd";
 const DRAG_REQUEST_TTL: Duration = Duration::from_millis(750);
 static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -58,8 +60,27 @@ impl WaylandDndWindowHandle {
 
 #[derive(Debug, Clone)]
 pub enum WaylandDndEvent {
-    FilesDropped(FileClipboardSelection),
+    FilesDropped(WaylandDndFileDrop),
     Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct WaylandDndFileDrop {
+    pub selection: FileClipboardSelection,
+    pub origin: WaylandDndDropOrigin,
+    pub position: Option<WaylandDndDropPosition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaylandDndDropOrigin {
+    External,
+    Internal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaylandDndDropPosition {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug)]
@@ -161,9 +182,10 @@ struct WaylandFileDnd {
     drag_sources: Vec<DragSession>,
     drop_reads: Vec<DropRead>,
     drop_is_over_surface: bool,
+    drop_position: Option<WaylandDndDropPosition>,
     loop_handle: LoopHandle<'static, WaylandFileDnd>,
     pending_file_drag: Option<PendingFileDrag>,
-    latest_left_press: Option<PointerPress>,
+    active_left_press: Option<PointerPress>,
     event_sender: UnboundedSender<WaylandDndEvent>,
 }
 
@@ -189,13 +211,13 @@ struct PointerPress {
     pointer: WlPointer,
     surface: wl_surface::WlSurface,
     serial: u32,
-    received_at: Instant,
 }
 
 struct DropRead {
     offer: DragOffer,
     mime_type: String,
     data: Vec<u8>,
+    position: Option<WaylandDndDropPosition>,
 }
 
 fn run_wayland_file_dnd(
@@ -227,9 +249,10 @@ fn run_wayland_file_dnd(
         drag_sources: Vec::new(),
         drop_reads: Vec::new(),
         drop_is_over_surface: false,
+        drop_position: None,
         loop_handle: event_loop.handle(),
         pending_file_drag: None,
-        latest_left_press: None,
+        active_left_press: None,
         event_sender,
     };
 
@@ -334,11 +357,10 @@ impl WaylandFileDnd {
         surface: &wl_surface::WlSurface,
         serial: u32,
     ) {
-        self.latest_left_press = Some(PointerPress {
+        self.active_left_press = Some(PointerPress {
             pointer: pointer.clone(),
             surface: surface.clone(),
             serial,
-            received_at: Instant::now(),
         });
         tracing::debug!(serial, "Wayland pointer press serial captured");
         self.start_pending_file_drag(qh);
@@ -346,11 +368,11 @@ impl WaylandFileDnd {
 
     fn clear_pointer_press(&mut self, serial: u32) {
         tracing::debug!(serial, "Wayland pointer release serial observed");
-        self.latest_left_press = None;
+        self.active_left_press = None;
     }
 
     fn start_pending_file_drag(&mut self, qh: &QueueHandle<Self>) {
-        let Some(press) = self.latest_left_press.clone() else {
+        let Some(press) = self.active_left_press.clone() else {
             return;
         };
         if press.surface != self.surface {
@@ -367,13 +389,6 @@ impl WaylandFileDnd {
             tracing::debug!("Wayland file drag request expired before a usable press serial");
             return;
         }
-        if press.received_at.elapsed() > DRAG_REQUEST_TTL {
-            tracing::debug!("Wayland file drag press serial expired before a request arrived");
-            self.latest_left_press = None;
-            self.pending_file_drag = Some(request);
-            return;
-        }
-
         let Some(seat_index) = self
             .seat_objects
             .iter()
@@ -435,6 +450,7 @@ impl WaylandFileDnd {
             offer: offer.clone(),
             mime_type,
             data: Vec::new(),
+            position: self.drop_position,
         });
 
         let offer_key = offer.clone();
@@ -508,10 +524,14 @@ impl WaylandFileDnd {
 
     fn finish_drop_read(&mut self, drop_read: DropRead) {
         match parse_drop_selection(&drop_read.mime_type, &drop_read.data) {
-            Ok(selection) => {
+            Ok(parsed_drop) => {
                 let _ = self
                     .event_sender
-                    .send(WaylandDndEvent::FilesDropped(selection));
+                    .send(WaylandDndEvent::FilesDropped(WaylandDndFileDrop {
+                        selection: parsed_drop.selection,
+                        origin: parsed_drop.origin,
+                        position: drop_read.position,
+                    }));
             }
             Err(error) => {
                 let _ = self
@@ -548,6 +568,7 @@ impl DropReadOutcome {
 }
 
 struct DragPayload {
+    internal_file_drag: String,
     text_uri_list: String,
     gnome_copied_files: String,
 }
@@ -562,6 +583,7 @@ impl DragPayload {
         };
         let selection = FileClipboardSelection::new(FileClipboardOperation::Move, paths.to_vec());
         Self {
+            internal_file_drag: text_uri_list.clone(),
             text_uri_list,
             gnome_copied_files: serialize_gnome_copied_files(&selection),
         }
@@ -569,6 +591,7 @@ impl DragPayload {
 
     fn for_mime(&self, mime: &str) -> Option<&str> {
         match mime {
+            INTERNAL_FILE_DRAG_MIME => Some(&self.internal_file_drag),
             URI_LIST_MIME => Some(&self.text_uri_list),
             GNOME_COPIED_FILES_MIME => Some(&self.gnome_copied_files),
             "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" => Some(&self.text_uri_list),
@@ -577,33 +600,48 @@ impl DragPayload {
     }
 }
 
+struct ParsedDropSelection {
+    selection: FileClipboardSelection,
+    origin: WaylandDndDropOrigin,
+}
+
 fn parse_drop_selection(
     mime_type: &str,
     data: &[u8],
-) -> Result<FileClipboardSelection, WaylandDndError> {
+) -> Result<ParsedDropSelection, WaylandDndError> {
     let payload = std::str::from_utf8(data).map_err(|source| WaylandDndError::PayloadUtf8 {
         mime: mime_type.to_owned(),
         source,
     })?;
-    let paths = match mime_type {
+    let (paths, origin) = match mime_type {
+        INTERNAL_FILE_DRAG_MIME => (
+            parse_file_uri_list(payload).map_err(|source| WaylandDndError::Payload {
+                mime: mime_type.to_owned(),
+                source,
+            })?,
+            WaylandDndDropOrigin::Internal,
+        ),
         GNOME_COPIED_FILES_MIME => parse_gnome_copied_files(payload)
             .map(|selection| selection.paths)
             .map_err(|source| WaylandDndError::Payload {
                 mime: mime_type.to_owned(),
                 source,
-            })?,
+            })
+            .map(|paths| (paths, WaylandDndDropOrigin::External))?,
         URI_LIST_MIME | "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" => {
-            parse_file_uri_list(payload).map_err(|source| WaylandDndError::Payload {
-                mime: mime_type.to_owned(),
-                source,
-            })?
+            parse_file_uri_list(payload)
+                .map_err(|source| WaylandDndError::Payload {
+                    mime: mime_type.to_owned(),
+                    source,
+                })
+                .map(|paths| (paths, WaylandDndDropOrigin::External))?
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), WaylandDndDropOrigin::External),
     };
-    Ok(FileClipboardSelection::new(
-        FileClipboardOperation::Copy,
-        paths,
-    ))
+    Ok(ParsedDropSelection {
+        selection: FileClipboardSelection::new(FileClipboardOperation::Copy, paths),
+        origin,
+    })
 }
 
 fn pick_mime(mime_types: &[String]) -> Option<String> {
@@ -638,8 +676,25 @@ mod tests {
         let selection =
             parse_drop_selection(GNOME_COPIED_FILES_MIME, b"cut\nfile:///tmp/source").unwrap();
 
-        assert_eq!(selection.operation, FileClipboardOperation::Copy);
-        assert_eq!(selection.paths, vec![PathBuf::from("/tmp/source")]);
+        assert_eq!(selection.selection.operation, FileClipboardOperation::Copy);
+        assert_eq!(
+            selection.selection.paths,
+            vec![PathBuf::from("/tmp/source")]
+        );
+        assert_eq!(selection.origin, WaylandDndDropOrigin::External);
+    }
+
+    #[test]
+    fn internal_drag_payload_marks_drop_origin_internal() {
+        let selection =
+            parse_drop_selection(INTERNAL_FILE_DRAG_MIME, b"file:///tmp/source\r\n").unwrap();
+
+        assert_eq!(selection.selection.operation, FileClipboardOperation::Copy);
+        assert_eq!(
+            selection.selection.paths,
+            vec![PathBuf::from("/tmp/source")]
+        );
+        assert_eq!(selection.origin, WaylandDndDropOrigin::Internal);
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub(crate) struct FileDragState {
     pub(crate) pressed_path: PathBuf,
     pub(crate) target: Option<FileDragTarget>,
     pub(crate) phase: FileDragPhase,
+    pub(crate) native_dnd: FileDragNativeDndState,
     pub(crate) column_directories_snapshot: Vec<PathBuf>,
 }
 
@@ -63,12 +64,26 @@ impl FileDragState {
     pub(crate) fn is_dragging(&self) -> bool {
         matches!(self.phase, FileDragPhase::Dragging)
     }
+
+    pub(crate) fn can_request_wayland_dnd(&self) -> bool {
+        self.native_dnd == FileDragNativeDndState::NotRequested
+            && matches!(
+                self.phase,
+                FileDragPhase::WaitingForMovement { .. } | FileDragPhase::Dragging
+            )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FileDragTarget {
     Directory(PathBuf),
     SidebarBookmarkSlot(SidebarBookmarkDropSlot),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileDragNativeDndState {
+    NotRequested,
+    WaylandRequested,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

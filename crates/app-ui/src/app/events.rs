@@ -37,7 +37,14 @@ pub(super) fn global_event_message(
     }
 
     if let Event::Mouse(mouse::Event::CursorMoved { position }) = &event {
-        return Some(Message::CursorMoved(*position));
+        return Some(Message::CursorMoved {
+            window,
+            position: *position,
+        });
+    }
+
+    if matches!(&event, Event::Mouse(mouse::Event::CursorLeft)) {
+        return Some(Message::CursorLeft(window));
     }
 
     if let Some(message) = pointer_pressed_message(&event, status, window) {
@@ -150,16 +157,35 @@ mod tests {
 
     #[test]
     fn captured_cursor_move_updates_cursor_position() {
+        let window = window::Id::unique();
         let position = iced::Point::new(12.0, 24.0);
         let event = Event::Mouse(mouse::Event::CursorMoved { position });
 
-        let message = route_event(event, event::Status::Captured);
+        let message = route_event_with_window(event, event::Status::Captured, window);
 
-        let Some(Message::CursorMoved(received)) = message else {
+        let Some(Message::CursorMoved {
+            window: received_window,
+            position: received,
+        }) = message
+        else {
             panic!("expected cursor movement message");
         };
+        assert_eq!(received_window, window);
         assert_eq!(received.x, position.x);
         assert_eq!(received.y, position.y);
+    }
+
+    #[test]
+    fn cursor_left_reports_source_window() {
+        let window = window::Id::unique();
+        let event = Event::Mouse(mouse::Event::CursorLeft);
+
+        let message = route_event_with_window(event, event::Status::Captured, window);
+
+        assert!(matches!(
+            message,
+            Some(Message::CursorLeft(received_window)) if received_window == window
+        ));
     }
 
     #[test]
