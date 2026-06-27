@@ -93,6 +93,42 @@ impl FileBrowser {
         self.finish_or_continue_transfer_conflicts(state)
     }
 
+    pub(in crate::app) fn apply_transfer_conflict_message(
+        &mut self,
+        message: Message,
+    ) -> Task<Message> {
+        match message {
+            Message::TransferConflictChoiceSelected(choice) => {
+                self.resolve_transfer_conflict_choice(choice)
+            }
+            Message::TransferConflictApplyToAllToggled => {
+                self.toggle_transfer_conflict_apply_to_all();
+                Task::none()
+            }
+            Message::TransferConflictRenameInputChanged(value) => {
+                self.update_transfer_conflict_rename(value);
+                Task::none()
+            }
+            Message::TransferConflictRenameConfirmed => self.confirm_transfer_conflict_rename(),
+            Message::TransferConflictRenameTargetChecked {
+                state,
+                transfer_position,
+                target,
+                available,
+            } => self.accept_transfer_conflict_rename_target(
+                state,
+                transfer_position,
+                target,
+                available,
+            ),
+            Message::TransferConflictCancelRequested => {
+                self.transfer_conflict = None;
+                Task::none()
+            }
+            _ => Task::none(),
+        }
+    }
+
     pub(in crate::app) fn toggle_transfer_conflict_apply_to_all(&mut self) {
         if let Some(state) = &mut self.transfer_conflict {
             state.apply_to_all = !state.apply_to_all;

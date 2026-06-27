@@ -6,6 +6,7 @@ pub mod network_secrets;
 pub mod open;
 pub mod open_with;
 pub mod storage_devices;
+pub mod wayland_dnd;
 
 pub use display_renderer::{
     detect_display_renderer_gpu, detect_display_renderer_gpu_class, DisplayRendererGpu,
@@ -40,4 +41,8 @@ pub use storage_devices::{
     eject_or_power_off_storage_device, load_storage_devices, mount_storage_device,
     unmount_storage_device, StorageDevice, StorageDeviceError, StorageDeviceId,
     StorageDeviceMountState,
+};
+pub use wayland_dnd::{
+    spawn_wayland_file_dnd, WaylandDndCommandError, WaylandDndController, WaylandDndError,
+    WaylandDndEvent, WaylandDndWindowHandle,
 };

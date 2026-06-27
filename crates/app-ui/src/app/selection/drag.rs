@@ -12,20 +12,27 @@ use crate::operation_queue::QueuedTransfer;
 
 impl FileBrowser {
     pub(crate) fn update_file_drag(&mut self, position: iced::Point) {
-        let Some(file_drag) = &mut self.file_drag else {
-            return;
-        };
-        let FileDragPhase::WaitingForMovement { origin } = file_drag.phase else {
-            return;
+        let drag_sources = {
+            let Some(file_drag) = &mut self.file_drag else {
+                return;
+            };
+            let FileDragPhase::WaitingForMovement { origin } = file_drag.phase else {
+                return;
+            };
+
+            let delta_x = position.x - origin.x;
+            let delta_y = position.y - origin.y;
+            if delta_x * delta_x + delta_y * delta_y
+                < POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE
+            {
+                return;
+            }
+
+            file_drag.phase = FileDragPhase::Dragging;
+            file_drag.sources.clone()
         };
 
-        let delta_x = position.x - origin.x;
-        let delta_y = position.y - origin.y;
-        if delta_x * delta_x + delta_y * delta_y
-            >= POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE
-        {
-            file_drag.phase = FileDragPhase::Dragging;
-        }
+        self.request_wayland_file_drag(drag_sources);
     }
 
     pub(crate) fn finish_drag_selection(

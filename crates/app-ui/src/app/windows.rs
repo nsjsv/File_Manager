@@ -513,6 +513,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.file_drop_prompt.is_some() {
+            self.file_drop_prompt = None;
+            return Task::none();
+        }
+
         if self.transfer_conflict.is_some() {
             self.transfer_conflict = None;
             return Task::none();

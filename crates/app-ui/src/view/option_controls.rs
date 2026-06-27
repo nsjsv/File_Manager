@@ -50,6 +50,25 @@ pub(super) fn selectable_choice_row(
     }
 }
 
+pub(super) fn action_choice_row(
+    title: &'static str,
+    description: &'static str,
+    message: Message,
+) -> Element<'static, Message> {
+    let labels = Column::new()
+        .spacing(2)
+        .push(readable_text(title).size(12).width(Length::Fill))
+        .push(readable_text(description).size(11).width(Length::Fill));
+
+    button(labels)
+        .on_press(message)
+        .padding([7, 10])
+        .width(Length::Fill)
+        .height(Length::Fixed(ACTION_CHOICE_HEIGHT))
+        .style(selectable_choice_button_style(false))
+        .into()
+}
+
 pub(super) fn primary_action_button(
     label: &'static str,
     message: Message,

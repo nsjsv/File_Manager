@@ -339,9 +339,11 @@ async fn load_or_generate_thumbnail_with_kind(
 }
 
 fn cached_thumbnail_output_path(cache_dir: &Path, key: &ThumbnailKey, max_edge: u32) -> PathBuf {
-    cache_dir
-        .join(thumbnail_bucket_dir(max_edge))
-        .join(format!("{}.{}", key.as_str(), CACHE_FORMAT_EXTENSION))
+    cache_dir.join(thumbnail_bucket_dir(max_edge)).join(format!(
+        "{}.{}",
+        key.as_str(),
+        CACHE_FORMAT_EXTENSION
+    ))
 }
 
 fn thumbnail_bucket_dir(max_edge: u32) -> &'static str {

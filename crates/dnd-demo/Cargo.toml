@@ -1,0 +1,10 @@
+[package]
+name = "dnd-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+smithay-client-toolkit = { version = "=0.19.2", default-features = false, features = ["calloop"] }
+wayland-client = "0.31.14"

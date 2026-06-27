@@ -6,6 +6,8 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
+use desktop_linux::FileClipboardOperation;
+
 use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
@@ -16,21 +18,24 @@ use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
-    FileContextMenuExpansion, FileContextMenuState, Message, ScrollbarRegion, ScrollbarVisibility,
-    SidebarBookmarkContextMenuState, TransferConflictChoice, TransferConflictItem,
-    TransferConflictMetadata, TransferConflictState,
+    FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, Message, ScrollbarRegion,
+    ScrollbarVisibility, SidebarBookmarkContextMenuState, TransferConflictChoice,
+    TransferConflictItem, TransferConflictMetadata, TransferConflictState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
 use crate::typography::readable_text;
 
 use super::network_connections::network_connection_context_menu_panel;
+use super::option_controls::{action_choice_row, secondary_action_button};
 use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
 const ERROR_NOTIFICATION_MAX_CHARS: usize = 96;
 const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
+const FILE_DROP_OPERATION_PANEL_WIDTH: f32 = 460.0;
+const FILE_DROP_PATH_MAX_CHARS: usize = 62;
 const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
 const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
 const OPEN_WITH_PANEL_WIDTH: f32 = 420.0;
@@ -123,6 +128,62 @@ pub(super) fn destructive_action_confirmation_panel(
     container(content)
         .padding(14)
         .width(Length::Fixed(DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH))
+        .style(context_menu_style)
+        .into()
+}
+
+pub(super) fn file_drop_operation_panel(prompt: &FileDropPrompt) -> Element<'_, Message> {
+    let item_count = prompt.paths.len();
+    let item_label = if item_count == 1 {
+        "1 item".to_owned()
+    } else {
+        format!("{item_count} items")
+    };
+    let destination = format_middle_ellipsized_text(
+        prompt.paste_directory.to_string_lossy().as_ref(),
+        FILE_DROP_PATH_MAX_CHARS,
+    );
+
+    let title = row![
+        themed_icon(IconSymbol::ArrowRight, IconTone::Normal, MENU_ICON_SIZE),
+        readable_text("Drop Files").size(16).width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    let operation_choices = column![
+        action_choice_row(
+            "Move",
+            "Move files into the current folder.",
+            Message::FileDropOperationSelected(FileClipboardOperation::Move),
+        ),
+        action_choice_row(
+            "Copy",
+            "Copy files into the current folder.",
+            Message::FileDropOperationSelected(FileClipboardOperation::Copy),
+        ),
+    ]
+    .spacing(8);
+
+    let actions = row![
+        Space::new().width(Length::Fill),
+        secondary_action_button("Cancel", Message::FileDropCancelled),
+    ]
+    .align_y(Alignment::Center);
+
+    let content = column![
+        title,
+        readable_text(format!("{item_label} will be added to:")).size(13),
+        readable_text(destination).size(12).width(Length::Fill),
+        operation_choices,
+        actions,
+    ]
+    .spacing(12)
+    .width(Length::Fill);
+
+    container(content)
+        .padding(14)
+        .width(Length::Fixed(FILE_DROP_OPERATION_PANEL_WIDTH))
         .style(context_menu_style)
         .into()
 }

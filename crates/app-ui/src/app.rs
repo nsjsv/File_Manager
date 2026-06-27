@@ -42,6 +42,7 @@ mod text_input_shortcuts;
 mod thumbnailing;
 mod update;
 mod view_modes;
+mod wayland_dnd;
 mod windows;
 
 pub(crate) use runtime::run;
@@ -64,7 +65,7 @@ use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
     directory_watch_subscription, operation_queue_auto_hide_command,
-    sidebar_device_refresh_subscription, system_theme_command,
+    sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
 };
 use crate::app::scrollbar::{ScrollbarState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
@@ -76,17 +77,20 @@ use crate::app::windows::{
     MAIN_WINDOW_INITIAL_WIDTH,
 };
 use crate::commands::search_index_maintenance_subscription;
-use crate::commands::{file_operation_subscription, startup_environment_command};
+use crate::commands::{
+    file_operation_subscription, startup_environment_command, wayland_dnd_window_handle_command,
+};
 use crate::config;
 use crate::model::{
     AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    FileDragState, FilePropertiesState, Message, OperationQueuePanelMode, PaneDragState,
-    PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarRegion,
-    SearchIndexRuntime, SearchModePromptState, SearchState, SelectionMarquee, SettingsCategory,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, StartupIndexSetupState,
-    TabDragState, TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
+    PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
+    ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState, SelectionMarquee,
+    SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
+    StartupIndexSetupState, TabDragState, TextPreviewDocument, TransferConflictState,
+    VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -136,6 +140,7 @@ pub(crate) struct FileBrowser {
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
     main_window: window::Id,
+    wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
     pub(crate) thumbnail_cache: ThumbnailCache,
@@ -143,6 +148,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) open_with: Option<OpenWithState>,
+    pub(crate) file_drop_prompt: Option<FileDropPrompt>,
     pub(crate) archive_creation: Option<ArchiveCreationState>,
     pub(crate) archive_extraction: Option<ArchiveExtractionState>,
     pub(crate) batch_rename: Option<BatchRenameState>,
@@ -262,10 +268,9 @@ impl FileBrowser {
         let user_config = config::ui_thread_startup_config();
         let (browser, initial_tasks) = Self::new_with_main_window(user_config, main_window);
 
-        (
-            browser,
-            Task::batch([open_main_window.discard(), initial_tasks]),
-        )
+        let open_main_window = open_main_window.then(wayland_dnd_window_handle_command);
+
+        (browser, Task::batch([open_main_window, initial_tasks]))
     }
 
     #[cfg(test)]
@@ -338,6 +343,7 @@ impl FileBrowser {
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
             main_window,
+            wayland_dnd: None,
             preview_window: None,
             focused_window: main_window,
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
@@ -345,6 +351,7 @@ impl FileBrowser {
             column_viewports: HashMap::new(),
             context_menu: None,
             open_with: None,
+            file_drop_prompt: None,
             archive_creation: None,
             archive_extraction: None,
             batch_rename: None,
@@ -460,6 +467,12 @@ impl FileBrowser {
 
         let mut subscriptions = vec![event::listen_with(global_event_message)];
         subscriptions.push(sidebar_device_refresh_subscription());
+        if let Some(runtime) = &self.wayland_dnd {
+            subscriptions.push(wayland_file_dnd_subscription(
+                runtime.window_handle,
+                runtime.controller.clone(),
+            ));
+        }
 
         if !self.is_loading && !self.is_trash_view {
             subscriptions.push(directory_watch_subscription(self.current_dir.clone()));

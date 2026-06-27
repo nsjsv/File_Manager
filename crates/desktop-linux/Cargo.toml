@@ -5,9 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+smithay-client-toolkit = { version = "=0.19.2", default-features = false, features = ["calloop"] }
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 udisks2 = "0.3.1"
+wayland-client = { version = "0.31.14", features = ["system"] }
 
 [dev-dependencies]
 tempfile.workspace = true

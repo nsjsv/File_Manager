@@ -759,37 +759,24 @@ impl FileBrowser {
                 content,
             } => self.accept_desktop_clipboard_paste(paste_directory, fallback_operation, content),
             Message::ClipboardFileCreated(result) => self.accept_clipboard_file_created(result),
+            Message::WaylandDndWindowHandleLoaded(handle) => self.accept_wayland_dnd_handle(handle),
+            Message::WaylandFilesDropped(result) => self.accept_wayland_file_drop(result),
+            Message::FileDropOperationSelected(operation) => {
+                self.apply_file_drop_operation(operation)
+            }
+            Message::FileDropCancelled => self.cancel_file_drop(),
             Message::TransferConflictsChecked {
                 mode,
                 transfers,
                 conflicts,
             } => self.accept_transfer_conflicts_checked(mode, transfers, conflicts),
-            Message::TransferConflictChoiceSelected(choice) => {
-                self.resolve_transfer_conflict_choice(choice)
-            }
-            Message::TransferConflictApplyToAllToggled => {
-                self.toggle_transfer_conflict_apply_to_all();
-                Task::none()
-            }
-            Message::TransferConflictRenameInputChanged(value) => {
-                self.update_transfer_conflict_rename(value);
-                Task::none()
-            }
-            Message::TransferConflictRenameConfirmed => self.confirm_transfer_conflict_rename(),
-            Message::TransferConflictRenameTargetChecked {
-                state,
-                transfer_position,
-                target,
-                available,
-            } => self.accept_transfer_conflict_rename_target(
-                state,
-                transfer_position,
-                target,
-                available,
-            ),
-            Message::TransferConflictCancelRequested => {
-                self.transfer_conflict = None;
-                Task::none()
+            Message::TransferConflictChoiceSelected(_)
+            | Message::TransferConflictApplyToAllToggled
+            | Message::TransferConflictRenameInputChanged(_)
+            | Message::TransferConflictRenameConfirmed
+            | Message::TransferConflictRenameTargetChecked { .. }
+            | Message::TransferConflictCancelRequested => {
+                self.apply_transfer_conflict_message(message)
             }
             Message::SelectAll => self.select_all_in_file_selection_scope(),
         }

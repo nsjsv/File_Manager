@@ -81,6 +81,8 @@ pub(crate) use search_index_profile::{
 };
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
+mod wayland_dnd;
+pub(crate) use wayland_dnd::wayland_dnd_window_handle_command;
 
 #[cfg(test)]
 mod tests;

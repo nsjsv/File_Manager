@@ -74,7 +74,7 @@ use archive_extraction::archive_extraction_panel;
 use batch_rename::batch_rename_panel;
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
-    open_with_panel, transfer_conflict_panel,
+    file_drop_operation_panel, open_with_panel, transfer_conflict_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
 use search_mode_prompt::search_mode_prompt_panel;
@@ -195,6 +195,12 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: destructive_action_confirmation_panel(confirmation),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(file_drop_prompt) = &browser.file_drop_prompt {
+        floating_input = BrowserFloatingInput::Modal;
+        floating.push(FloatingContent {
+            element: file_drop_operation_panel(file_drop_prompt),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(conflict) = &browser.transfer_conflict {

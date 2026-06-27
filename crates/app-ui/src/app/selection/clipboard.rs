@@ -11,7 +11,7 @@ use crate::commands::{
     create_clipboard_file_command, read_desktop_clipboard_command, write_file_clipboard_command,
 };
 use crate::model::{
-    ContextMenuState, DestructiveActionConfirmation, Message, PendingOperation,
+    ContextMenuState, DestructiveActionConfirmation, FileDropPrompt, Message, PendingOperation,
     TransferConflictMode,
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
@@ -238,6 +238,71 @@ impl FileBrowser {
         }
     }
 
+    pub(in crate::app) fn accept_wayland_file_drop(
+        &mut self,
+        result: Result<FileClipboardSelection, String>,
+    ) -> Task<Message> {
+        if self.is_trash_view {
+            return Task::none();
+        }
+        match result {
+            Ok(selection) => {
+                let paste_directory = self.paste_target_directory();
+                self.request_file_drop_prompt(paste_directory, selection.paths)
+            }
+            Err(error) => {
+                self.error = Some(error);
+                Task::none()
+            }
+        }
+    }
+
+    fn request_file_drop_prompt(
+        &mut self,
+        paste_directory: PathBuf,
+        paths: Vec<PathBuf>,
+    ) -> Task<Message> {
+        if paths.is_empty() {
+            return Task::none();
+        }
+        if self.destructive_action_confirmation.is_some()
+            || self.file_drop_prompt.is_some()
+            || self.transfer_conflict.is_some()
+        {
+            self.error =
+                Some("Finish the current file operation prompt before dropping files".to_owned());
+            return Task::none();
+        }
+        self.context_menu = None;
+        self.open_with = None;
+        self.operation_queue.close_panel();
+        self.path_suggestions.clear();
+        self.path_suggestion_selection = None;
+        self.file_drop_prompt = Some(FileDropPrompt {
+            paste_directory,
+            paths,
+        });
+        Task::none()
+    }
+
+    pub(in crate::app) fn apply_file_drop_operation(
+        &mut self,
+        operation: FileClipboardOperation,
+    ) -> Task<Message> {
+        let Some(prompt) = self.file_drop_prompt.take() else {
+            return Task::none();
+        };
+        self.paste_file_clipboard_selection(
+            prompt.paste_directory,
+            FileClipboardSelection::new(operation, prompt.paths),
+        )
+    }
+
+    pub(in crate::app) fn cancel_file_drop(&mut self) -> Task<Message> {
+        self.file_drop_prompt = None;
+        Task::none()
+    }
+
     fn paste_desktop_clipboard_content(
         &mut self,
         paste_directory: PathBuf,
@@ -345,15 +410,20 @@ impl FileBrowser {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     use desktop_linux::{
         NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
     };
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+    use iced::futures::StreamExt;
+    use iced::Task;
+    use iced_runtime::Action;
 
     use super::*;
     use crate::config;
+    use crate::model::TransferConflictItem;
 
     fn test_entry(path: &Path) -> DirectoryEntry {
         DirectoryEntry::new(
@@ -393,6 +463,130 @@ mod tests {
         browser
             .network_connections
             .accept_loaded(vec![(id, NetworkMountState::Mounted(mount_path))]);
+    }
+
+    async fn transfer_conflict_check_message(
+        task: Task<Message>,
+    ) -> (
+        TransferConflictMode,
+        Vec<QueuedTransfer>,
+        Vec<TransferConflictItem>,
+    ) {
+        let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+            panic!("expected a transfer conflict check task");
+        };
+
+        while let Some(action) = stream.next().await {
+            if let Action::Output(Message::TransferConflictsChecked {
+                mode,
+                transfers,
+                conflicts,
+            }) = action
+            {
+                return (mode, transfers, conflicts);
+            }
+        }
+
+        panic!("expected TransferConflictsChecked output");
+    }
+
+    #[test]
+    fn wayland_file_drop_opens_operation_prompt() {
+        let source = PathBuf::from("/outside/report.txt");
+        let mut browser = browser_with_entries(&[]);
+        browser.cursor_paste_directory = Some(PathBuf::from("/workspace/project"));
+
+        drop(
+            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
+                FileClipboardOperation::Copy,
+                vec![source.clone()],
+            ))),
+        );
+
+        assert!(matches!(
+            &browser.file_drop_prompt,
+            Some(FileDropPrompt {
+                paste_directory,
+                paths,
+            }) if paste_directory == &PathBuf::from("/workspace/project")
+                && paths == &vec![source]
+        ));
+    }
+
+    #[test]
+    fn second_wayland_file_drop_keeps_pending_prompt() {
+        let first_source = PathBuf::from("/outside/first.txt");
+        let second_source = PathBuf::from("/outside/second.txt");
+        let mut browser = browser_with_entries(&[]);
+
+        drop(
+            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
+                FileClipboardOperation::Move,
+                vec![first_source.clone()],
+            ))),
+        );
+        drop(
+            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
+                FileClipboardOperation::Move,
+                vec![second_source],
+            ))),
+        );
+
+        assert!(matches!(
+            &browser.file_drop_prompt,
+            Some(FileDropPrompt { paths, .. }) if paths == &vec![first_source]
+        ));
+        assert_eq!(
+            browser.error.as_deref(),
+            Some("Finish the current file operation prompt before dropping files")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn selected_file_drop_operation_applies_immediately() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let destination = temp_dir.path().join("destination");
+        let source = temp_dir.path().join("report.txt");
+        fs::create_dir_all(&destination).expect("create destination");
+        fs::write(&source, b"report").expect("write source");
+        let mut browser = browser_with_entries(&[]);
+        browser.current_dir = destination.clone();
+
+        drop(
+            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
+                FileClipboardOperation::Move,
+                vec![source.clone()],
+            ))),
+        );
+
+        let (mode, transfers, conflicts) = transfer_conflict_check_message(
+            browser.apply_file_drop_operation(FileClipboardOperation::Copy),
+        )
+        .await;
+
+        assert!(browser.file_drop_prompt.is_none());
+        assert_eq!(mode, TransferConflictMode::Copy);
+        assert_eq!(
+            transfers,
+            vec![QueuedTransfer::new(source, destination.join("report.txt"))]
+        );
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn cancelled_file_drop_clears_prompt() {
+        let source = PathBuf::from("/outside/report.txt");
+        let mut browser = browser_with_entries(&[]);
+
+        drop(
+            browser.accept_wayland_file_drop(Ok(FileClipboardSelection::new(
+                FileClipboardOperation::Move,
+                vec![source],
+            ))),
+        );
+        drop(browser.cancel_file_drop());
+
+        assert!(browser.file_drop_prompt.is_none());
     }
 
     #[test]

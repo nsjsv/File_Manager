@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use desktop_linux::{
-    DesktopClipboardContent, OpenWithApplicationList, StorageDevice, StorageDeviceId,
-    TerminalEmulator,
+    DesktopClipboardContent, FileClipboardOperation, FileClipboardSelection,
+    OpenWithApplicationList, StorageDevice, StorageDeviceId, TerminalEmulator,
+    WaylandDndWindowHandle,
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 pub(crate) use file_index::SearchMode;
@@ -83,6 +84,12 @@ mod session;
 pub(crate) use session::{
     pane_session_from_live, snapshot_from_stored, snapshot_to_stored, BrowserPaneSession,
     BrowserSessionSnapshot, BrowserTabSession,
+};
+mod drag;
+pub(crate) use drag::{
+    FileDragPhase, FileDragState, FileDragTarget, LastActivationClick, PaneDragState,
+    PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode, TabDragState,
+    TabSplitTarget,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -410,6 +417,10 @@ pub(crate) enum Message {
         content: Result<Option<DesktopClipboardContent>, String>,
     },
     ClipboardFileCreated(Result<PathBuf, String>),
+    WaylandDndWindowHandleLoaded(Result<Option<WaylandDndWindowHandle>, String>),
+    WaylandFilesDropped(Result<FileClipboardSelection, String>),
+    FileDropOperationSelected(FileClipboardOperation),
+    FileDropCancelled,
     TransferConflictsChecked {
         mode: TransferConflictMode,
         transfers: Vec<QueuedTransfer>,
@@ -433,6 +444,12 @@ pub(crate) enum Message {
 pub(crate) enum PendingOperation {
     Copy(Vec<PathBuf>),
     Move(Vec<PathBuf>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileDropPrompt {
+    pub(crate) paste_directory: PathBuf,
+    pub(crate) paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -512,104 +529,6 @@ pub(crate) struct StartupEnvironment {
     pub(crate) user_config: UserConfig,
     pub(crate) state_database_path: PathBuf,
     pub(crate) rendering_environment_status: StartupRenderingEnvironmentStatus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TabDragMode {
-    Reorder,
-    Split,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TabSplitTarget {
-    pub(crate) region: SplitRegion,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TabDragState {
-    pub(crate) source_pane_id: BrowserPaneId,
-    pub(crate) tab_id: usize,
-    pub(crate) phase: FileDragPhase,
-    pub(crate) mode: TabDragMode,
-    pub(crate) split_target: Option<TabSplitTarget>,
-}
-
-impl TabDragState {
-    pub(crate) fn is_dragging(&self) -> bool {
-        matches!(self.phase, FileDragPhase::Dragging)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PaneDropTarget {
-    Split(SplitRegion),
-    Merge(BrowserPaneId),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PaneDragState {
-    pub(crate) source_pane_id: BrowserPaneId,
-    pub(crate) phase: FileDragPhase,
-    pub(crate) target: Option<PaneDropTarget>,
-}
-
-impl PaneDragState {
-    pub(crate) fn is_dragging(&self) -> bool {
-        matches!(self.phase, FileDragPhase::Dragging)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FileDragState {
-    pub(crate) sources: Vec<PathBuf>,
-    pub(crate) pressed_path: PathBuf,
-    pub(crate) target: Option<FileDragTarget>,
-    pub(crate) phase: FileDragPhase,
-    pub(crate) column_directories_snapshot: Vec<PathBuf>,
-}
-
-impl FileDragState {
-    pub(crate) fn is_dragging(&self) -> bool {
-        matches!(self.phase, FileDragPhase::Dragging)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FileDragTarget {
-    Directory(PathBuf),
-    SidebarBookmarkSlot(SidebarBookmarkDropSlot),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidebarBookmarkDropSlot {
-    Insert { index: usize },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SidebarBookmarkDragState {
-    pub(crate) path: PathBuf,
-    pub(crate) origin: Point,
-    pub(crate) source_index: usize,
-    pub(crate) phase: FileDragPhase,
-    pub(crate) order_changed: bool,
-}
-
-impl SidebarBookmarkDragState {
-    pub(crate) fn is_dragging(&self) -> bool {
-        matches!(self.phase, FileDragPhase::Dragging)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum FileDragPhase {
-    WaitingForMovement { origin: Point },
-    Dragging,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LastActivationClick {
-    pub(crate) path: PathBuf,
-    pub(crate) at: Instant,
 }
 
 #[derive(Debug, Clone)]
