@@ -7,6 +7,7 @@ impl FileBrowser {
     pub(super) fn clear_pointer_driven_interaction_state(&mut self) {
         self.tab_drag = None;
         self.pane_drag = None;
+        self.pane_drag_pointer_press = None;
         self.file_drag = None;
         self.selection_marquee = None;
         self.drag_selection_anchor = None;
@@ -39,6 +40,7 @@ impl FileBrowser {
             return Task::none();
         }
         self.cursor_position = position;
+        self.promote_ctrl_shift_pane_drag_from_active_pointer_drag();
         self.update_tab_drag(position);
         self.update_pane_drag(position);
         let cursor_inside_main_window = (0.0..=self.main_window_width).contains(&position.x)

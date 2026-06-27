@@ -86,11 +86,11 @@ use crate::model::{
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
-    PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
-    ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState, SelectionMarquee,
-    SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
-    StartupIndexSetupState, TabDragState, TextPreviewDocument, TransferConflictState,
-    VideoPreviewPlayback,
+    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
+    PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState,
+    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
+    TransferConflictState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -183,6 +183,7 @@ pub(crate) struct FileBrowser {
     pub(crate) pane_layout: BrowserPaneLayout,
     tab_drag: Option<TabDragState>,
     pane_drag: Option<PaneDragState>,
+    pane_drag_pointer_press: Option<PaneDragPointerPress>,
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
     file_entry_bounds: Vec<ColumnEntryBounds>,
@@ -389,6 +390,7 @@ impl FileBrowser {
             },
             tab_drag: None,
             pane_drag: None,
+            pane_drag_pointer_press: None,
             selection_marquee: None,
             file_drag: None,
             file_entry_bounds: Vec::new(),

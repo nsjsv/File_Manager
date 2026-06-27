@@ -6,18 +6,24 @@ use super::tabs::apply_active_tab_to_pane;
 use super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
 use crate::app::panes::SplitOverlayBounds;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, FileDragPhase, OperationQueuePanelMode,
-    PaneDragState, PaneDropTarget, SplitAxis, SplitRegion,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, FileDragNativeDndState, FileDragPhase,
+    OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PaneDropTarget,
+    SelectionMarqueePhase, SplitRegion,
 };
 
 const PANE_DROP_CENTER_FRACTION: f32 = 0.28;
 
 #[derive(Debug, Clone, Copy)]
-struct PaneBounds {
-    id: BrowserPaneId,
+struct PaneDragContentBounds {
     top_left: Point,
     width: f32,
     height: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaneDragPromotion {
+    source_pane_id: BrowserPaneId,
+    phase: FileDragPhase,
 }
 
 pub(crate) struct PaneDragPreview<'a> {
@@ -48,6 +54,7 @@ impl FileBrowser {
         }
 
         self.sync_active_tab_state();
+        self.pane_drag_pointer_press = None;
         self.pane_drag = Some(PaneDragState {
             source_pane_id,
             phase: FileDragPhase::WaitingForMovement {
@@ -56,6 +63,46 @@ impl FileBrowser {
             target: None,
         });
         true
+    }
+
+    pub(super) fn promote_ctrl_shift_pane_drag_from_active_pointer_drag(&mut self) -> bool {
+        if !self.ctrl_shift_pane_drag_shortcut_is_pressed()
+            || !self.pane_drag_can_take_over_active_pointer_drag()
+        {
+            return false;
+        }
+
+        let Some(promotion) = self.active_pointer_drag_for_pane_drag() else {
+            return false;
+        };
+        let source_pane_id = promotion.source_pane_id;
+        if self.pane_by_id(source_pane_id).is_none() {
+            return false;
+        }
+
+        self.sync_active_tab_state();
+        self.pane_drag_pointer_press = None;
+        self.file_drag = None;
+        self.selection_marquee = None;
+        self.drag_selection_anchor = None;
+        self.sidebar_bookmark_drop_slot = None;
+        self.pane_drag = Some(PaneDragState {
+            source_pane_id,
+            phase: promotion.phase,
+            target: None,
+        });
+        true
+    }
+
+    pub(super) fn record_pane_drag_pointer_press(&mut self) {
+        let source_pane_id = self.active_pane_id();
+        self.pane_drag_pointer_press =
+            self.pane_by_id(source_pane_id)
+                .is_some()
+                .then_some(PaneDragPointerPress {
+                    source_pane_id,
+                    origin: self.cursor_position,
+                });
     }
 
     pub(super) fn update_pane_drag(&mut self, position: Point) {
@@ -86,6 +133,7 @@ impl FileBrowser {
     }
 
     pub(super) fn finish_pane_drag(&mut self) {
+        self.pane_drag_pointer_press = None;
         let Some(drag) = self.pane_drag.take() else {
             return;
         };
@@ -126,13 +174,8 @@ impl FileBrowser {
 
         match drag.target? {
             PaneDropTarget::Split(region) => Some(self.split_region_overlay_bounds(region)),
-            PaneDropTarget::Merge(target_pane_id) => {
-                self.pane_bounds_by_id(target_pane_id)
-                    .map(|bounds| SplitOverlayBounds {
-                        top_left: bounds.top_left,
-                        width: bounds.width,
-                        height: bounds.height,
-                    })
+            PaneDropTarget::Merge(_) => {
+                Some(self.pane_drag_content_bounds().center_overlay_bounds())
             }
         }
     }
@@ -145,18 +188,61 @@ impl FileBrowser {
             }
         };
         pointer_status_allows_start
-            && self.destructive_action_confirmation.is_none()
+            && self.pane_drag.is_none()
+            && self.pane_drag_shared_state_allows_start()
+            && self.file_drag.is_none()
+            && self.selection_marquee.is_none()
+    }
+
+    fn pane_drag_can_take_over_active_pointer_drag(&self) -> bool {
+        self.pane_drag.is_none()
+            && self.pane_drag_shared_state_allows_start()
+            && self.active_pointer_drag_for_pane_drag().is_some()
+    }
+
+    fn pane_drag_shared_state_allows_start(&self) -> bool {
+        self.destructive_action_confirmation.is_none()
             && self.transfer_conflict.is_none()
             && self.context_menu.is_none()
             && self.open_with.is_none()
             && self.path_suggestions.is_empty()
             && !self.operation_queue_interaction_is_open()
             && self.tab_drag.is_none()
-            && self.file_drag.is_none()
             && self.sidebar_bookmark_drag.is_none()
             && self.sidebar_resize_drag.is_none()
             && self.column_resize_drag.is_none()
-            && self.selection_marquee.is_none()
+    }
+
+    fn active_pointer_drag_for_pane_drag(&self) -> Option<PaneDragPromotion> {
+        if let Some(file_drag) = &self.file_drag {
+            return (file_drag.native_dnd == FileDragNativeDndState::NotRequested).then_some(
+                PaneDragPromotion {
+                    source_pane_id: self.active_pane_id(),
+                    phase: file_drag.phase,
+                },
+            );
+        }
+
+        if let Some(marquee) = &self.selection_marquee {
+            return Some(PaneDragPromotion {
+                source_pane_id: self.active_pane_id(),
+                phase: match marquee.phase {
+                    SelectionMarqueePhase::WaitingForMovement => {
+                        FileDragPhase::WaitingForMovement {
+                            origin: marquee.start,
+                        }
+                    }
+                    SelectionMarqueePhase::Selecting => FileDragPhase::Dragging,
+                },
+            });
+        }
+
+        self.pane_drag_pointer_press.map(|press| PaneDragPromotion {
+            source_pane_id: press.source_pane_id,
+            phase: FileDragPhase::WaitingForMovement {
+                origin: press.origin,
+            },
+        })
     }
 
     fn operation_queue_interaction_is_open(&self) -> bool {
@@ -169,12 +255,14 @@ impl FileBrowser {
         source_pane_id: BrowserPaneId,
         position: Point,
     ) -> Option<PaneDropTarget> {
-        let bounds = self.pane_bounds_at(position)?;
-        if bounds.id == source_pane_id {
+        let BrowserPaneLayout::Split { first, second, .. } = self.pane_layout else {
             return None;
-        }
-
-        Some(bounds.drop_target_at(position))
+        };
+        let merge_target_pane_id = other_split_pane_id(source_pane_id, first, second)?;
+        let bounds = self.pane_drag_content_bounds();
+        bounds
+            .contains(position)
+            .then(|| bounds.drop_target_at(position, merge_target_pane_id))
     }
 
     fn move_dragged_pane_to_split_region(
@@ -238,73 +326,12 @@ impl FileBrowser {
         self.restore_pane_snapshot(target);
     }
 
-    fn pane_bounds_at(&self, position: Point) -> Option<PaneBounds> {
-        self.pane_bounds()
-            .into_iter()
-            .find(|bounds| bounds.contains(position))
-    }
-
-    fn pane_bounds_by_id(&self, pane_id: BrowserPaneId) -> Option<PaneBounds> {
-        self.pane_bounds()
-            .into_iter()
-            .find(|bounds| bounds.id == pane_id)
-    }
-
-    fn pane_bounds(&self) -> Vec<PaneBounds> {
+    fn pane_drag_content_bounds(&self) -> PaneDragContentBounds {
         let sidebar_width = self.sidebar_width;
-        let content_width = (self.main_window_width - sidebar_width).max(1.0);
-        let content_height = self.main_window_height.max(1.0);
-        match self.pane_layout {
-            BrowserPaneLayout::Single { active } => vec![PaneBounds {
-                id: active,
-                top_left: Point::new(sidebar_width, 0.0),
-                width: content_width,
-                height: content_height,
-            }],
-            BrowserPaneLayout::Split {
-                axis: SplitAxis::Horizontal,
-                first,
-                second,
-                ..
-            } => {
-                let half_width = content_width / 2.0;
-                vec![
-                    PaneBounds {
-                        id: first,
-                        top_left: Point::new(sidebar_width, 0.0),
-                        width: half_width,
-                        height: content_height,
-                    },
-                    PaneBounds {
-                        id: second,
-                        top_left: Point::new(sidebar_width + half_width, 0.0),
-                        width: half_width,
-                        height: content_height,
-                    },
-                ]
-            }
-            BrowserPaneLayout::Split {
-                axis: SplitAxis::Vertical,
-                first,
-                second,
-                ..
-            } => {
-                let half_height = content_height / 2.0;
-                vec![
-                    PaneBounds {
-                        id: first,
-                        top_left: Point::new(sidebar_width, 0.0),
-                        width: content_width,
-                        height: half_height,
-                    },
-                    PaneBounds {
-                        id: second,
-                        top_left: Point::new(sidebar_width, half_height),
-                        width: content_width,
-                        height: half_height,
-                    },
-                ]
-            }
+        PaneDragContentBounds {
+            top_left: Point::new(sidebar_width, 0.0),
+            width: (self.main_window_width - sidebar_width).max(1.0),
+            height: self.main_window_height.max(1.0),
         }
     }
 
@@ -340,7 +367,7 @@ impl FileBrowser {
     }
 }
 
-impl PaneBounds {
+impl PaneDragContentBounds {
     fn contains(self, position: Point) -> bool {
         position.x >= self.top_left.x
             && position.x <= self.top_left.x + self.width
@@ -348,7 +375,11 @@ impl PaneBounds {
             && position.y <= self.top_left.y + self.height
     }
 
-    fn drop_target_at(self, position: Point) -> PaneDropTarget {
+    fn drop_target_at(
+        self,
+        position: Point,
+        merge_target_pane_id: BrowserPaneId,
+    ) -> PaneDropTarget {
         let local_x = ((position.x - self.top_left.x) / self.width).clamp(0.0, 1.0);
         let local_y = ((position.y - self.top_left.y) / self.height).clamp(0.0, 1.0);
         let center_min = PANE_DROP_CENTER_FRACTION;
@@ -358,10 +389,20 @@ impl PaneBounds {
             && local_y >= center_min
             && local_y <= center_max
         {
-            return PaneDropTarget::Merge(self.id);
+            return PaneDropTarget::Merge(merge_target_pane_id);
         }
 
         PaneDropTarget::Split(closest_split_region(local_x, local_y))
+    }
+
+    fn center_overlay_bounds(self) -> SplitOverlayBounds {
+        let inset_x = self.width * PANE_DROP_CENTER_FRACTION;
+        let inset_y = self.height * PANE_DROP_CENTER_FRACTION;
+        SplitOverlayBounds {
+            top_left: Point::new(self.top_left.x + inset_x, self.top_left.y + inset_y),
+            width: self.width - inset_x * 2.0,
+            height: self.height - inset_y * 2.0,
+        }
     }
 }
 
@@ -402,4 +443,237 @@ fn merge_pane_tabs(target: &mut BrowserPane, source: BrowserPane) {
     target.tabs.extend(source.tabs);
     target.active_tab_id = source_active_tab_id;
     apply_active_tab_to_pane(target);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+
+    use file_core::TrashEntry;
+    use iced::{keyboard, Point};
+
+    use super::*;
+    use crate::config;
+    use crate::model::{
+        BrowserTab, BrowserViewMode, ColumnBrowserViewport, FileDragState, Message,
+        SelectionMarquee, SelectionMarqueeSource, SplitAxis,
+    };
+    use crate::thumbnail_cache::ColumnViewport;
+
+    fn split_browser_for_test() -> FileBrowser {
+        let left_directory = PathBuf::from("/workspace/left");
+        let right_directory = PathBuf::from("/workspace/right");
+        let left_tab = BrowserTab::directory(0, left_directory.clone());
+        let right_tab = BrowserTab::directory(1, right_directory);
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+        browser.sidebar_width = 0.0;
+        browser.main_window_width = 200.0;
+        browser.main_window_height = 100.0;
+        browser.current_dir = left_directory;
+        browser.tabs = vec![left_tab.clone()];
+        browser.active_tab_id = left_tab.id;
+        browser.pane_layout = BrowserPaneLayout::Split {
+            axis: SplitAxis::Horizontal,
+            first: BrowserPaneId::PRIMARY,
+            second: BrowserPaneId(1),
+            active: BrowserPaneId::PRIMARY,
+        };
+        browser.panes = vec![
+            pane_from_tab_for_test(BrowserPaneId::PRIMARY, left_tab),
+            pane_from_tab_for_test(BrowserPaneId(1), right_tab),
+        ];
+        browser
+    }
+
+    fn pane_from_tab_for_test(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
+        BrowserPane {
+            id: pane_id,
+            current_dir: tab.directory.clone(),
+            is_trash_view: tab.is_trash_view,
+            entries: tab.entries.clone(),
+            directory_loading_placeholder_entries: Vec::new(),
+            trash_entries: Vec::<TrashEntry>::new(),
+            selected: tab.selected.clone(),
+            selected_paths: tab.selected_paths.clone(),
+            selection_anchor: tab.selection_anchor.clone(),
+            deepest_open_column_directory: tab.deepest_open_column_directory.clone(),
+            expanded_directories: tab.expanded_directories.clone(),
+            view_mode: BrowserViewMode::Columns,
+            column_browser_viewport: ColumnBrowserViewport::default(),
+            column_viewports: HashMap::<PathBuf, ColumnViewport>::new(),
+            tabs: vec![tab.clone()],
+            active_tab_id: tab.id,
+            path_input: tab.directory.to_string_lossy().into_owned(),
+            path_suggestions: Vec::new(),
+            path_suggestion_selection: None,
+            path_suggestion_generation: 0,
+            directory_load_generation: 0,
+            directory_load_cancel: None,
+            back_stack: tab.back_stack.clone(),
+            forward_stack: tab.forward_stack.clone(),
+            is_loading: false,
+        }
+    }
+
+    fn ctrl_shift_modifiers() -> keyboard::Modifiers {
+        keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
+    }
+
+    fn assert_overlay_bounds(
+        bounds: SplitOverlayBounds,
+        top_left_x: f32,
+        top_left_y: f32,
+        width: f32,
+        height: f32,
+    ) {
+        const EPSILON: f32 = 0.01;
+        assert!((bounds.top_left.x - top_left_x).abs() < EPSILON);
+        assert!((bounds.top_left.y - top_left_y).abs() < EPSILON);
+        assert!((bounds.width - width).abs() < EPSILON);
+        assert!((bounds.height - height).abs() < EPSILON);
+    }
+
+    #[test]
+    fn pane_drag_merge_overlay_covers_content_center_region() {
+        let mut browser = split_browser_for_test();
+        browser.pane_drag = Some(PaneDragState {
+            source_pane_id: BrowserPaneId::PRIMARY,
+            phase: FileDragPhase::Dragging,
+            target: Some(PaneDropTarget::Merge(BrowserPaneId(1))),
+        });
+
+        let bounds = browser
+            .pane_drag_overlay_bounds()
+            .expect("merge target has overlay bounds");
+
+        assert_overlay_bounds(bounds, 56.0, 28.0, 88.0, 44.0);
+    }
+
+    #[test]
+    fn pane_drag_content_center_targets_merge() {
+        let mut browser = split_browser_for_test();
+        browser.pane_drag = Some(PaneDragState {
+            source_pane_id: BrowserPaneId::PRIMARY,
+            phase: FileDragPhase::Dragging,
+            target: None,
+        });
+
+        browser.update_pane_drag(Point::new(100.0, 50.0));
+
+        assert_eq!(
+            browser.pane_drag.as_ref().and_then(|drag| drag.target),
+            Some(PaneDropTarget::Merge(BrowserPaneId(1)))
+        );
+    }
+
+    #[test]
+    fn pane_drag_split_overlay_keeps_result_region_bounds() {
+        let mut browser = split_browser_for_test();
+        browser.pane_drag = Some(PaneDragState {
+            source_pane_id: BrowserPaneId::PRIMARY,
+            phase: FileDragPhase::Dragging,
+            target: Some(PaneDropTarget::Split(SplitRegion::Right)),
+        });
+
+        let bounds = browser
+            .pane_drag_overlay_bounds()
+            .expect("split target has overlay bounds");
+
+        assert_overlay_bounds(bounds, 100.0, 0.0, 100.0, 100.0);
+    }
+
+    #[test]
+    fn ctrl_shift_during_file_drag_promotes_to_pane_drag() {
+        let mut browser = split_browser_for_test();
+        let source = PathBuf::from("/workspace/left/report.txt");
+        browser.cursor_position = Point::new(190.0, 50.0);
+        browser.file_drag = Some(FileDragState {
+            sources: vec![source.clone()],
+            pressed_path: source,
+            target: None,
+            phase: FileDragPhase::Dragging,
+            native_dnd: FileDragNativeDndState::NotRequested,
+            column_directories_snapshot: Vec::new(),
+        });
+
+        drop(browser.update(Message::KeyboardModifiersChanged(ctrl_shift_modifiers())));
+
+        assert!(browser.file_drag.is_none());
+        let pane_drag = browser.pane_drag.as_ref().expect("pane drag starts");
+        assert_eq!(pane_drag.source_pane_id, BrowserPaneId::PRIMARY);
+        assert!(pane_drag.is_dragging());
+        assert_eq!(
+            pane_drag.target,
+            Some(PaneDropTarget::Split(SplitRegion::Right))
+        );
+    }
+
+    #[test]
+    fn ctrl_shift_during_marquee_drag_promotes_to_pane_drag() {
+        let mut browser = split_browser_for_test();
+        let anchor = PathBuf::from("/workspace/left/report.txt");
+        browser.cursor_position = Point::new(190.0, 50.0);
+        browser.drag_selection_anchor = Some(anchor);
+        browser.selection_marquee = Some(SelectionMarquee {
+            start: Point::new(10.0, 10.0),
+            current: browser.cursor_position,
+            source: SelectionMarqueeSource::PaneBlank,
+            phase: SelectionMarqueePhase::Selecting,
+            base_selection: HashSet::new(),
+            preserve_existing: false,
+        });
+
+        drop(browser.update(Message::KeyboardModifiersChanged(ctrl_shift_modifiers())));
+
+        assert!(browser.selection_marquee.is_none());
+        assert!(browser.drag_selection_anchor.is_none());
+        let pane_drag = browser.pane_drag.as_ref().expect("pane drag starts");
+        assert_eq!(pane_drag.source_pane_id, BrowserPaneId::PRIMARY);
+        assert!(pane_drag.is_dragging());
+        assert_eq!(
+            pane_drag.target,
+            Some(PaneDropTarget::Split(SplitRegion::Right))
+        );
+    }
+
+    #[test]
+    fn ctrl_shift_during_column_placeholder_press_promotes_to_pane_drag() {
+        let mut browser = split_browser_for_test();
+        let selected_path = PathBuf::from("/workspace/left/report.txt");
+        browser.selected = Some(selected_path.clone());
+        browser.selected_paths = HashSet::from([selected_path.clone()]);
+        browser.selection_anchor = Some(selected_path);
+        browser.deepest_open_column_directory = Some(PathBuf::from("/workspace/left/src"));
+        browser.cursor_position = Point::new(10.0, 50.0);
+
+        drop(browser.update(Message::ColumnPlaceholderPressed(BrowserPaneId::PRIMARY)));
+        drop(browser.update(Message::CursorMoved {
+            window: browser.main_window,
+            position: Point::new(190.0, 50.0),
+        }));
+
+        assert!(browser.selection_marquee.is_none());
+        assert!(browser.pane_drag.is_none());
+
+        drop(browser.update(Message::KeyboardModifiersChanged(ctrl_shift_modifiers())));
+
+        assert!(browser.pane_drag_pointer_press.is_none());
+        assert!(browser.selection_marquee.is_none());
+        assert_eq!(
+            browser.deepest_open_column_directory,
+            Some(PathBuf::from("/workspace/left/src"))
+        );
+        assert!(browser
+            .selected_paths
+            .contains(&PathBuf::from("/workspace/left/report.txt")));
+        let pane_drag = browser.pane_drag.as_ref().expect("pane drag starts");
+        assert_eq!(pane_drag.source_pane_id, BrowserPaneId::PRIMARY);
+        assert!(pane_drag.is_dragging());
+        assert_eq!(
+            pane_drag.target,
+            Some(PaneDropTarget::Split(SplitRegion::Right))
+        );
+    }
 }

@@ -50,6 +50,12 @@ impl PaneDragState {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PaneDragPointerPress {
+    pub(crate) source_pane_id: super::BrowserPaneId,
+    pub(crate) origin: Point,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FileDragState {
     pub(crate) sources: Vec<PathBuf>,

@@ -439,6 +439,9 @@ impl FileBrowser {
             }
             Message::KeyboardModifiersChanged(modifiers) => {
                 self.keyboard_modifiers = modifiers;
+                if self.promote_ctrl_shift_pane_drag_from_active_pointer_drag() {
+                    self.update_pane_drag(self.cursor_position);
+                }
                 Task::none()
             }
             Message::KeyboardKeyPressed {

@@ -87,8 +87,8 @@ pub(crate) use session::{
 mod drag;
 pub(crate) use drag::{
     FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, LastActivationClick,
-    PaneDragState, PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode,
-    TabDragState, TabSplitTarget,
+    PaneDragPointerPress, PaneDragState, PaneDropTarget, SidebarBookmarkDragState,
+    SidebarBookmarkDropSlot, TabDragMode, TabDragState, TabSplitTarget,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

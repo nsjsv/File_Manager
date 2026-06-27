@@ -291,6 +291,7 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.file_drag = None;
+        self.record_pane_drag_pointer_press();
 
         rename_command
     }
@@ -383,6 +384,7 @@ impl FileBrowser {
                 self.clear_column_blank_selection_context();
             }
         }
+        self.record_pane_drag_pointer_press();
         self.selection_marquee = Some(SelectionMarquee {
             start: self.cursor_position,
             current: self.cursor_position,

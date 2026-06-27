@@ -123,6 +123,14 @@ Terminal=false
 - 文件操作、搜索、预览等功能是否稳定
 - 哪些功能应该优先补齐
 
+<a href="https://www.star-history.com/">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nsjsv/File_Manager&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nsjsv/File_Manager&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nsjsv/File_Manager&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## 许可证
 
 GPL 3.0

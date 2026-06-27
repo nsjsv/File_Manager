@@ -5,7 +5,6 @@ members = [
     "crates/file-core",
     "crates/file-index",
     "crates/file-operation-store",
-    "crates/dnd-demo",
     "crates/thumbnails",
 ]
 resolver = "2"
