@@ -1,11 +1,8 @@
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-
 use file_core::TransferConflictStrategy;
 use iced::Task;
 
 use crate::app::FileBrowser;
-use crate::commands::{check_transfer_conflicts_command, check_transfer_rename_target_command};
+use crate::commands::check_transfer_conflicts_command;
 use crate::model::{
     Message, TransferConflictChoice, TransferConflictItem, TransferConflictMode,
     TransferConflictState,
@@ -31,7 +28,6 @@ impl FileBrowser {
             return self.enqueue_transfer_operation(mode, transfers);
         }
 
-        let rename_input = conflict_default_name(&conflicts[0]);
         self.error = None;
         self.context_menu = None;
         self.operation_queue.close_panel();
@@ -41,9 +37,8 @@ impl FileBrowser {
             conflicts,
             current_index: 0,
             apply_to_all: false,
-            rename_input,
         });
-        Task::none()
+        self.schedule_transfer_conflict_thumbnails()
     }
 
     fn enqueue_transfer_operation(
@@ -73,16 +68,9 @@ impl FileBrowser {
 
         let apply_to_all = state.apply_to_all;
         loop {
-            let Some(conflict) = state.current_conflict() else {
+            if state.current_conflict().is_none() {
                 break;
             };
-            if choice == TransferConflictChoice::Merge && !conflict.can_merge() {
-                if !apply_to_all {
-                    self.error = Some("Only two folders can be merged".to_owned());
-                }
-                break;
-            }
-
             apply_conflict_choice(&mut state, choice);
             state.current_index += 1;
             if !apply_to_all {
@@ -105,22 +93,6 @@ impl FileBrowser {
                 self.toggle_transfer_conflict_apply_to_all();
                 Task::none()
             }
-            Message::TransferConflictRenameInputChanged(value) => {
-                self.update_transfer_conflict_rename(value);
-                Task::none()
-            }
-            Message::TransferConflictRenameConfirmed => self.confirm_transfer_conflict_rename(),
-            Message::TransferConflictRenameTargetChecked {
-                state,
-                transfer_position,
-                target,
-                available,
-            } => self.accept_transfer_conflict_rename_target(
-                state,
-                transfer_position,
-                target,
-                available,
-            ),
             Message::TransferConflictCancelRequested => {
                 self.transfer_conflict = None;
                 Task::none()
@@ -135,89 +107,17 @@ impl FileBrowser {
         }
     }
 
-    pub(in crate::app) fn update_transfer_conflict_rename(&mut self, value: String) {
-        if let Some(state) = &mut self.transfer_conflict {
-            state.rename_input = value;
-        }
-    }
-
-    pub(in crate::app) fn confirm_transfer_conflict_rename(&mut self) -> Task<Message> {
-        let Some(state) = self.transfer_conflict.take() else {
-            return Task::none();
-        };
-
-        let Some(conflict) = state.current_conflict() else {
-            return self.finish_or_continue_transfer_conflicts(state);
-        };
-        let Some(parent) = conflict.target.parent().map(Path::to_path_buf) else {
-            self.error = Some("Destination path has no parent directory".to_owned());
-            self.transfer_conflict = Some(state);
-            return Task::none();
-        };
-
-        let name = state.rename_input.trim();
-        if !is_valid_transfer_rename(name) {
-            self.error = Some("Enter a name without path separators".to_owned());
-            self.transfer_conflict = Some(state);
-            return Task::none();
-        }
-
-        let renamed_target = parent.join(name);
-        let transfer_position = conflict_transfer_position(&state, conflict);
-        let reserved_targets = reserved_targets_except(&state.transfers, transfer_position);
-        if reserved_targets.contains(&renamed_target) {
-            self.error = Some("That name already exists. Choose another name".to_owned());
-            self.transfer_conflict = Some(state);
-            return Task::none();
-        }
-
-        check_transfer_rename_target_command(state, transfer_position, renamed_target)
-    }
-
-    pub(in crate::app) fn accept_transfer_conflict_rename_target(
-        &mut self,
-        mut state: TransferConflictState,
-        transfer_position: Option<usize>,
-        renamed_target: PathBuf,
-        available: Result<bool, String>,
-    ) -> Task<Message> {
-        match available {
-            Ok(true) => {}
-            Ok(false) => {
-                self.error = Some("That name already exists. Choose another name".to_owned());
-                self.transfer_conflict = Some(state);
-                return Task::none();
-            }
-            Err(error) => {
-                self.error = Some(error);
-                self.transfer_conflict = Some(state);
-                return Task::none();
-            }
-        }
-
-        if let Some(position) = transfer_position {
-            state.transfers[position].target = renamed_target;
-            state.transfers[position].conflict_strategy = TransferConflictStrategy::Fail;
-        }
-        state.current_index += 1;
-        self.error = None;
-        self.finish_or_continue_transfer_conflicts(state)
-    }
-
     fn finish_or_continue_transfer_conflicts(
         &mut self,
-        mut state: TransferConflictState,
+        state: TransferConflictState,
     ) -> Task<Message> {
         if state.current_index >= state.conflicts.len() {
             self.transfer_conflict = None;
             return self.enqueue_transfer_operation(state.mode, state.transfers);
         }
 
-        if let Some(conflict) = state.current_conflict() {
-            state.rename_input = conflict_default_name(conflict);
-        }
         self.transfer_conflict = Some(state);
-        Task::none()
+        self.schedule_transfer_conflict_thumbnails()
     }
 }
 fn apply_conflict_choice(state: &mut TransferConflictState, choice: TransferConflictChoice) {
@@ -231,8 +131,7 @@ fn apply_conflict_choice(state: &mut TransferConflictState, choice: TransferConf
     let strategy = match choice {
         TransferConflictChoice::Replace => TransferConflictStrategy::Replace,
         TransferConflictChoice::Skip => TransferConflictStrategy::Skip,
-        TransferConflictChoice::KeepBoth => TransferConflictStrategy::KeepBoth,
-        TransferConflictChoice::Merge => TransferConflictStrategy::Merge,
+        TransferConflictChoice::Rename => TransferConflictStrategy::KeepBoth,
     };
     state.transfers[position].conflict_strategy = strategy;
 }
@@ -246,27 +145,49 @@ fn conflict_transfer_position(
     })
 }
 
-fn reserved_targets_except(
-    transfers: &[QueuedTransfer],
-    excluded_position: Option<usize>,
-) -> HashSet<PathBuf> {
-    transfers
-        .iter()
-        .enumerate()
-        .filter(|(position, _)| Some(*position) != excluded_position)
-        .map(|(_, transfer)| transfer.target.clone())
-        .collect()
-}
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
 
-fn conflict_default_name(conflict: &TransferConflictItem) -> String {
-    conflict
-        .source
-        .file_name()
-        .or_else(|| conflict.target.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "item".to_owned())
-}
+    use file_core::{TransferConflictMetadata, TransferConflictStrategy};
 
-fn is_valid_transfer_rename(name: &str) -> bool {
-    !name.is_empty() && !name.contains('/') && !name.contains('\\')
+    use super::*;
+
+    fn test_conflict_state() -> TransferConflictState {
+        let source = PathBuf::from("/source/report.txt");
+        let target = PathBuf::from("/target/report.txt");
+
+        TransferConflictState {
+            mode: TransferConflictMode::Copy,
+            transfers: vec![QueuedTransfer::new(source.clone(), target.clone())],
+            conflicts: vec![TransferConflictItem {
+                source,
+                target,
+                source_metadata: TransferConflictMetadata {
+                    is_directory: false,
+                    len: 3,
+                    modified: None,
+                },
+                target_metadata: TransferConflictMetadata {
+                    is_directory: false,
+                    len: 3,
+                    modified: None,
+                },
+            }],
+            current_index: 0,
+            apply_to_all: false,
+        }
+    }
+
+    #[test]
+    fn transfer_conflict_rename_uses_keep_both_strategy() {
+        let mut state = test_conflict_state();
+
+        apply_conflict_choice(&mut state, TransferConflictChoice::Rename);
+
+        assert_eq!(
+            state.transfers[0].conflict_strategy,
+            TransferConflictStrategy::KeepBoth
+        );
+    }
 }

@@ -10,9 +10,10 @@ use crate::model::{
     BrowserPane, BrowserPaneId, BrowserViewMode, Message, PreviewContent, PreviewState,
 };
 use crate::thumbnail_cache::{
-    request_for_entry, ColumnViewport, ThumbnailHandleEntry, ThumbnailLoadOutcome,
-    ThumbnailLoadPolicy, ThumbnailLoadResult, ThumbnailPriority, ThumbnailPurpose, ThumbnailScope,
-    COLUMN_THUMBNAIL_EDGE, LIST_THUMBNAIL_EDGE, PREVIEW_THUMBNAIL_MAX_EDGE,
+    request_for_entry, request_for_transfer_conflict_path, ColumnViewport, ThumbnailHandleEntry,
+    ThumbnailLoadOutcome, ThumbnailLoadPolicy, ThumbnailLoadResult, ThumbnailPriority,
+    ThumbnailPurpose, ThumbnailScope, COLUMN_THUMBNAIL_EDGE, LIST_THUMBNAIL_EDGE,
+    PREVIEW_THUMBNAIL_MAX_EDGE, TRANSFER_CONFLICT_THUMBNAIL_EDGE,
 };
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
@@ -156,6 +157,11 @@ impl FileBrowser {
         };
         self.preview = Some(PreviewState::Loading(path));
         self.request_preview_thumbnail_for_entry(entry)
+    }
+
+    pub(super) fn schedule_transfer_conflict_thumbnails(&mut self) -> Task<Message> {
+        self.enqueue_current_transfer_conflict_thumbnail_requests();
+        self.pump_thumbnail_queue()
     }
 
     pub(super) fn accept_image_preview_dimensions(
@@ -405,17 +411,56 @@ impl FileBrowser {
         let Some(request) = request_for_entry(entry, max_edge) else {
             return;
         };
-        match self.thumbnail_load_policy_for_path(&entry.path) {
+        self.enqueue_thumbnail_request(request, ThumbnailPurpose::List, priority);
+    }
+
+    fn enqueue_current_transfer_conflict_thumbnail_requests(&mut self) {
+        let requests = self
+            .transfer_conflict
+            .as_ref()
+            .and_then(|state| state.current_conflict())
+            .map(|conflict| {
+                [
+                    request_for_transfer_conflict_path(
+                        &conflict.target,
+                        &conflict.target_metadata,
+                        TRANSFER_CONFLICT_THUMBNAIL_EDGE,
+                    ),
+                    request_for_transfer_conflict_path(
+                        &conflict.source,
+                        &conflict.source_metadata,
+                        TRANSFER_CONFLICT_THUMBNAIL_EDGE,
+                    ),
+                ]
+            });
+
+        let Some(requests) = requests else {
+            return;
+        };
+
+        for request in requests.into_iter().flatten() {
+            self.enqueue_thumbnail_request(
+                request,
+                ThumbnailPurpose::TransferConflict,
+                ThumbnailPriority::Focused,
+            );
+        }
+    }
+
+    fn enqueue_thumbnail_request(
+        &mut self,
+        request: ThumbnailRequest,
+        purpose: ThumbnailPurpose,
+        priority: ThumbnailPriority,
+    ) {
+        match self.thumbnail_load_policy_for_path(&request.source) {
             ThumbnailLoadPolicy::LoadOrGenerate => {
                 self.thumbnail_cache
-                    .enqueue_request(request, ThumbnailPurpose::List, priority);
+                    .enqueue_request(request, purpose, priority);
             }
             ThumbnailLoadPolicy::CacheOnly => {
-                self.thumbnail_cache.enqueue_cached_request(
-                    request,
-                    ThumbnailPurpose::List,
-                    priority,
-                );
+                self.thumbnail_cache
+                    .enqueue_cached_request(request, purpose, priority);
             }
         }
     }
@@ -545,6 +590,10 @@ impl FileBrowser {
                 .panes
                 .iter()
                 .any(|pane| thumbnail_request_matches_pane(pane, request))
+            || self
+                .transfer_conflict
+                .as_ref()
+                .is_some_and(|state| thumbnail_request_matches_transfer_conflict(state, request))
     }
 
     fn is_active_preview_loading(&self, path: &Path) -> bool {
@@ -590,6 +639,32 @@ fn thumbnail_request_matches_pane(pane: &BrowserPane, request: &ThumbnailRequest
         )
         .find(|entry| entry.path == request.source)
         .is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
+}
+
+fn thumbnail_request_matches_transfer_conflict(
+    state: &crate::model::TransferConflictState,
+    request: &ThumbnailRequest,
+) -> bool {
+    state.current_conflict().is_some_and(|conflict| {
+        thumbnail_request_matches_transfer_conflict_path(
+            &conflict.target,
+            &conflict.target_metadata,
+            request,
+        ) || thumbnail_request_matches_transfer_conflict_path(
+            &conflict.source,
+            &conflict.source_metadata,
+            request,
+        )
+    })
+}
+
+fn thumbnail_request_matches_transfer_conflict_path(
+    path: &Path,
+    metadata: &file_core::TransferConflictMetadata,
+    request: &ThumbnailRequest,
+) -> bool {
+    request_for_transfer_conflict_path(path, metadata, request.max_edge)
+        .is_some_and(|current| current.key() == request.key())
 }
 
 fn thumbnail_range_for_row_height(

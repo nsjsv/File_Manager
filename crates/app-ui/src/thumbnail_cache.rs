@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use file_core::{DirectoryEntry, FileKind};
+use file_core::{DirectoryEntry, FileKind, TransferConflictMetadata};
 use iced::widget::image;
 use thumbnails::{CachedThumbnail, ThumbnailKey, ThumbnailRequest, ThumbnailSourceMetadata};
 
@@ -10,6 +10,7 @@ pub(crate) const LIST_THUMBNAIL_EDGE: u32 = 96;
 pub(crate) const LIST_THUMBNAIL_SIZE: f32 = 42.0;
 pub(crate) const COLUMN_THUMBNAIL_EDGE: u32 = 48;
 pub(crate) const COLUMN_THUMBNAIL_SIZE: f32 = 18.0;
+pub(crate) const TRANSFER_CONFLICT_THUMBNAIL_EDGE: u32 = 96;
 pub(crate) const PREVIEW_THUMBNAIL_MAX_EDGE: u32 = 2048;
 
 const MAX_READY_THUMBNAILS: usize = 1200;
@@ -21,6 +22,7 @@ const FAILURE_BACKOFF: Duration = Duration::from_secs(45);
 pub(crate) enum ThumbnailPurpose {
     List,
     Preview,
+    TransferConflict,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -402,6 +404,25 @@ pub(crate) fn request_for_entry(entry: &DirectoryEntry, max_edge: u32) -> Option
     Some(ThumbnailRequest::new(
         &entry.path,
         ThumbnailSourceMetadata::from(&entry.metadata),
+        max_edge,
+    ))
+}
+
+pub(crate) fn request_for_transfer_conflict_path(
+    path: &Path,
+    metadata: &TransferConflictMetadata,
+    max_edge: u32,
+) -> Option<ThumbnailRequest> {
+    if metadata.is_directory || !thumbnails::is_supported_thumbnail_path(path) {
+        return None;
+    }
+
+    Some(ThumbnailRequest::new(
+        path,
+        ThumbnailSourceMetadata {
+            len: metadata.len,
+            modified: metadata.modified,
+        },
         max_edge,
     ))
 }

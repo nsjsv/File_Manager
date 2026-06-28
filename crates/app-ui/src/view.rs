@@ -21,6 +21,7 @@ mod startup_index_setup;
 mod tab_motion;
 mod text_preview_panel;
 mod toggle_switch;
+mod transfer_conflict;
 
 pub(crate) use preview_panel::view_preview_window;
 pub(crate) use properties_window::view_properties_window;
@@ -74,12 +75,13 @@ use archive_extraction::archive_extraction_panel;
 use batch_rename::batch_rename_panel;
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
-    file_drop_operation_panel, open_with_panel, transfer_conflict_panel,
+    file_drop_operation_panel, open_with_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
 use search_mode_prompt::search_mode_prompt_panel;
 use sidebar_panel::sidebar_view;
 use startup_index_setup::startup_index_setup_panel;
+use transfer_conflict::transfer_conflict_panel;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const VIEW_MODE_ICON_SIZE: f32 = 16.0;
@@ -206,7 +208,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     } else if let Some(conflict) = &browser.transfer_conflict {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
-            element: transfer_conflict_panel(conflict),
+            element: transfer_conflict_panel(conflict, &browser.thumbnail_cache),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(archive_extraction) = &browser.archive_extraction {

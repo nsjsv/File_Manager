@@ -11,8 +11,8 @@ use desktop_linux::{
 };
 use file_core::{
     available_transfer_target_path, check_transfer_conflicts as check_core_transfer_conflicts,
-    create_file_with_contents, is_transfer_target_available, scan_trash, ScanOptions,
-    TransferConflictCheck, TransferConflictItem, TrashScan,
+    create_file_with_contents, scan_trash, ScanOptions, TransferConflictCheck,
+    TransferConflictItem, TrashScan,
 };
 use file_index::{
     search_file_tree_with_cancel, BuildSelectedPathsRequest, FileSearchIndexMode,
@@ -27,7 +27,6 @@ use crate::config;
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
     SearchRequest, SidebarLocation, StartupEnvironment, TransferConflictMode,
-    TransferConflictState,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::sidebar::{home_sidebar_location, sidebar_locations};
@@ -363,28 +362,6 @@ pub(crate) fn check_transfer_conflicts_command(
             conflicts,
         }
     })
-}
-
-pub(crate) fn check_transfer_rename_target_command(
-    state: TransferConflictState,
-    transfer_position: Option<usize>,
-    target: PathBuf,
-) -> Task<Message> {
-    let issued_state = state.clone();
-    let issued_target = target.clone();
-    Task::perform(
-        async move {
-            is_transfer_target_available(target)
-                .await
-                .map_err(|error| error.to_string())
-        },
-        move |available| Message::TransferConflictRenameTargetChecked {
-            state: issued_state.clone(),
-            transfer_position,
-            target: issued_target.clone(),
-            available,
-        },
-    )
 }
 
 async fn create_clipboard_file_at_available_path(

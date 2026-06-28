@@ -431,14 +431,6 @@ pub(crate) enum Message {
     },
     TransferConflictChoiceSelected(TransferConflictChoice),
     TransferConflictApplyToAllToggled,
-    TransferConflictRenameInputChanged(String),
-    TransferConflictRenameConfirmed,
-    TransferConflictRenameTargetChecked {
-        state: TransferConflictState,
-        transfer_position: Option<usize>,
-        target: PathBuf,
-        available: Result<bool, String>,
-    },
     TransferConflictCancelRequested,
     SelectAll,
 }
@@ -506,8 +498,7 @@ pub(crate) enum TransferConflictMode {
 pub(crate) enum TransferConflictChoice {
     Replace,
     Skip,
-    KeepBoth,
-    Merge,
+    Rename,
 }
 
 #[derive(Debug, Clone)]
@@ -517,7 +508,6 @@ pub(crate) struct TransferConflictState {
     pub(crate) conflicts: Vec<TransferConflictItem>,
     pub(crate) current_index: usize,
     pub(crate) apply_to_all: bool,
-    pub(crate) rename_input: String,
 }
 
 impl TransferConflictState {

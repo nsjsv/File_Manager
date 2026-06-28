@@ -2,15 +2,20 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol};
-use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+use file_core::{
+    DirectoryEntry, EntryMetadata, FileKind, TransferConflictItem, TransferConflictMetadata,
+};
 
 use super::*;
 use crate::animated_image_preview::{
     AnimatedImageFrame, AnimatedImagePlayback, AnimatedImagePreview,
 };
 use crate::config::ui_thread_startup_config;
-use crate::model::{BrowserPaneLayout, BrowserTab, SplitAxis};
+use crate::model::{
+    BrowserPaneLayout, BrowserTab, SplitAxis, TransferConflictMode, TransferConflictState,
+};
 use crate::network_connections::NetworkConnectionState;
+use crate::operation_queue::QueuedTransfer;
 
 #[test]
 fn missing_viewport_schedules_initial_thumbnail_rows() {
@@ -188,6 +193,75 @@ fn cache_only_thumbnail_miss_does_not_block_later_generation() {
 }
 
 #[test]
+fn transfer_conflict_thumbnail_request_matches_current_conflict() {
+    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+    let source = PathBuf::from("/incoming/photo.png");
+    let target = PathBuf::from("/existing/photo.png");
+    let source_metadata = transfer_conflict_metadata(11);
+    let target_metadata = transfer_conflict_metadata(13);
+    let source_request = request_for_transfer_conflict_path(
+        &source,
+        &source_metadata,
+        TRANSFER_CONFLICT_THUMBNAIL_EDGE,
+    )
+    .expect("source request");
+    let target_request = request_for_transfer_conflict_path(
+        &target,
+        &target_metadata,
+        TRANSFER_CONFLICT_THUMBNAIL_EDGE,
+    )
+    .expect("target request");
+    browser.transfer_conflict = Some(TransferConflictState {
+        mode: TransferConflictMode::Copy,
+        transfers: vec![QueuedTransfer::new(source.clone(), target.clone())],
+        conflicts: vec![TransferConflictItem {
+            source,
+            target,
+            source_metadata,
+            target_metadata,
+        }],
+        current_index: 0,
+        apply_to_all: false,
+    });
+
+    assert!(browser.is_current_thumbnail_request(&source_request));
+    assert!(browser.is_current_thumbnail_request(&target_request));
+}
+
+#[test]
+fn transfer_conflict_thumbnail_requests_are_queued() {
+    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+    let source = PathBuf::from("/incoming/photo.png");
+    let target = PathBuf::from("/existing/photo.png");
+    browser.transfer_conflict = Some(TransferConflictState {
+        mode: TransferConflictMode::Copy,
+        transfers: vec![QueuedTransfer::new(source.clone(), target.clone())],
+        conflicts: vec![TransferConflictItem {
+            source: source.clone(),
+            target: target.clone(),
+            source_metadata: transfer_conflict_metadata(11),
+            target_metadata: transfer_conflict_metadata(13),
+        }],
+        current_index: 0,
+        apply_to_all: false,
+    });
+
+    browser.enqueue_current_transfer_conflict_thumbnail_requests();
+    let batch = browser.thumbnail_cache.take_next_batch();
+    let queued_sources = batch
+        .iter()
+        .map(|work| work.request.source.clone())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(batch.len(), 2);
+    assert!(queued_sources.contains(&source));
+    assert!(queued_sources.contains(&target));
+    assert!(batch
+        .iter()
+        .all(|work| work.purpose == ThumbnailPurpose::TransferConflict));
+}
+
+#[test]
 fn preview_thumbnail_refresh_skips_same_edge_window_resize() {
     let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
     let image_entry = image_entry("/workspace/vector.svg");
@@ -310,6 +384,14 @@ fn image_entry(path: &str) -> DirectoryEntry {
         false,
         false,
     )
+}
+
+fn transfer_conflict_metadata(len: u64) -> TransferConflictMetadata {
+    TransferConflictMetadata {
+        is_directory: false,
+        len,
+        modified: None,
+    }
 }
 
 fn mount_network_root(browser: &mut FileBrowser, mount_path: &str) {

@@ -771,9 +771,6 @@ impl FileBrowser {
             } => self.accept_transfer_conflicts_checked(mode, transfers, conflicts),
             Message::TransferConflictChoiceSelected(_)
             | Message::TransferConflictApplyToAllToggled
-            | Message::TransferConflictRenameInputChanged(_)
-            | Message::TransferConflictRenameConfirmed
-            | Message::TransferConflictRenameTargetChecked { .. }
             | Message::TransferConflictCancelRequested => {
                 self.apply_transfer_conflict_message(message)
             }

@@ -1,8 +1,6 @@
-use std::time::SystemTime;
-
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, Button,
-    Column, Row, Space,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, Button, Column, Row,
+    Space,
 };
 use iced::{Alignment, Element, Length};
 
@@ -14,13 +12,12 @@ use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
     context_menu_style, error_notification_style,
 };
-use crate::formatting::{format_file_size, format_middle_ellipsized_text};
+use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
     FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, Message, ScrollbarRegion,
-    ScrollbarVisibility, SidebarBookmarkContextMenuState, TransferConflictChoice,
-    TransferConflictItem, TransferConflictMetadata, TransferConflictState,
+    ScrollbarVisibility, SidebarBookmarkContextMenuState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
@@ -28,7 +25,6 @@ use crate::typography::readable_text;
 
 use super::network_connections::network_connection_context_menu_panel;
 use super::option_controls::{action_choice_row, secondary_action_button};
-use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
@@ -36,8 +32,6 @@ const ERROR_NOTIFICATION_MAX_CHARS: usize = 96;
 const DESTRUCTIVE_CONFIRMATION_PANEL_WIDTH: f32 = 460.0;
 const FILE_DROP_OPERATION_PANEL_WIDTH: f32 = 460.0;
 const FILE_DROP_PATH_MAX_CHARS: usize = 62;
-const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
-const TRANSFER_CONFLICT_PATH_MAX_CHARS: usize = 68;
 const OPEN_WITH_PANEL_WIDTH: f32 = 420.0;
 const OPEN_WITH_APPLICATION_LIST_HEIGHT: f32 = 240.0;
 const OPEN_WITH_PATH_MAX_CHARS: usize = 62;
@@ -188,108 +182,6 @@ pub(super) fn file_drop_operation_panel(prompt: &FileDropPrompt) -> Element<'_, 
         .into()
 }
 
-pub(super) fn transfer_conflict_panel(state: &TransferConflictState) -> Element<'_, Message> {
-    let Some(conflict) = state.current_conflict() else {
-        return container(readable_text("No pending conflicts").size(14))
-            .padding(14)
-            .width(Length::Fixed(TRANSFER_CONFLICT_PANEL_WIDTH))
-            .style(context_menu_style)
-            .into();
-    };
-
-    let title = row![
-        readable_text("Copy/Move Conflict")
-            .size(16)
-            .width(Length::Fill),
-        readable_text(format!(
-            "{} / {}",
-            state.current_index + 1,
-            state.conflicts.len()
-        ))
-        .size(12),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    let mut actions = row![
-        conflict_choice_button("Replace", TransferConflictChoice::Replace),
-        conflict_choice_button("Skip", TransferConflictChoice::Skip),
-        conflict_choice_button("Keep Both", TransferConflictChoice::KeepBoth),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
-    if conflict.can_merge() {
-        actions = actions.push(conflict_choice_button(
-            "Merge Folders",
-            TransferConflictChoice::Merge,
-        ));
-    } else {
-        actions = actions.push(
-            button(readable_text("Merge Folders").size(12))
-                .padding([6, 10])
-                .style(context_menu_button_style()),
-        );
-    }
-
-    let rename = row![
-        text_input("New name", &state.rename_input)
-            .on_input(Message::TransferConflictRenameInputChanged)
-            .on_submit(Message::TransferConflictRenameConfirmed)
-            .padding([6, 8])
-            .size(14)
-            .width(Length::Fill),
-        button(readable_text("Rename").size(12))
-            .on_press(Message::TransferConflictRenameConfirmed)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
-
-    let content = column![
-        title,
-        readable_text(
-            "An item with the same name already exists at the destination. Choose how to continue."
-        )
-        .size(13),
-        transfer_conflict_paths(conflict),
-        transfer_conflict_comparison(conflict),
-        row![
-            button(
-                column![
-                    row![
-                        readable_text("Apply to all").size(12).width(Length::Fill),
-                        switch_control(state.apply_to_all),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                    readable_text("Use this choice for later compatible conflicts.").size(11),
-                ]
-                .spacing(3)
-            )
-            .on_press(Message::TransferConflictApplyToAllToggled)
-            .padding([6, 10])
-            .width(Length::Fill)
-            .style(context_menu_button_style()),
-            button(readable_text("Cancel").size(12))
-                .on_press(Message::TransferConflictCancelRequested)
-                .padding([6, 10])
-                .style(context_menu_button_style()),
-        ]
-        .spacing(6),
-        actions,
-        rename,
-    ]
-    .spacing(10)
-    .width(Length::Fill);
-
-    container(content)
-        .padding(14)
-        .width(Length::Fixed(TRANSFER_CONFLICT_PANEL_WIDTH))
-        .style(context_menu_style)
-        .into()
-}
-
 pub(super) fn open_with_panel(
     state: &OpenWithState,
     scrollbar_visibility: ScrollbarVisibility,
@@ -402,88 +294,6 @@ fn open_with_application_list(
         .width(Length::Fill)
         .on_scroll(|_| Message::OpenWithApplicationsScrolled)
         .into()
-}
-
-fn transfer_conflict_paths(conflict: &TransferConflictItem) -> Element<'_, Message> {
-    let source = conflict.source.to_string_lossy();
-    let target = conflict.target.to_string_lossy();
-    column![
-        readable_text(format!(
-            "Source: {}",
-            format_middle_ellipsized_text(source.as_ref(), TRANSFER_CONFLICT_PATH_MAX_CHARS)
-        ))
-        .size(12),
-        readable_text(format!(
-            "Destination: {}",
-            format_middle_ellipsized_text(target.as_ref(), TRANSFER_CONFLICT_PATH_MAX_CHARS)
-        ))
-        .size(12),
-    ]
-    .spacing(4)
-    .into()
-}
-
-fn transfer_conflict_comparison(conflict: &TransferConflictItem) -> Element<'_, Message> {
-    let source_kind = transfer_metadata_kind(&conflict.source_metadata);
-    let target_kind = transfer_metadata_kind(&conflict.target_metadata);
-    let size = transfer_size_comparison(&conflict.source_metadata, &conflict.target_metadata);
-    let modified = transfer_modified_comparison(
-        conflict.source_metadata.modified,
-        conflict.target_metadata.modified,
-    );
-
-    column![
-        readable_text(format!(
-            "Type: source {source_kind}, destination {target_kind}"
-        ))
-        .size(12),
-        readable_text(size).size(12),
-        readable_text(modified).size(12),
-    ]
-    .spacing(4)
-    .into()
-}
-
-fn transfer_metadata_kind(metadata: &TransferConflictMetadata) -> &'static str {
-    if metadata.is_directory {
-        "Folder"
-    } else {
-        "File"
-    }
-}
-
-fn transfer_size_comparison(
-    source: &TransferConflictMetadata,
-    target: &TransferConflictMetadata,
-) -> String {
-    let source_size = format_file_size(source.len);
-    let target_size = format_file_size(target.len);
-    let comparison = match source.len.cmp(&target.len) {
-        std::cmp::Ordering::Greater => "source is larger",
-        std::cmp::Ordering::Less => "destination is larger",
-        std::cmp::Ordering::Equal => "same size",
-    };
-    format!("Size: source {source_size}, destination {target_size} ({comparison})")
-}
-
-fn transfer_modified_comparison(source: Option<SystemTime>, target: Option<SystemTime>) -> String {
-    let comparison = match (source, target) {
-        (Some(source), Some(target)) if source > target => "source is newer",
-        (Some(source), Some(target)) if source < target => "destination is newer",
-        (Some(_), Some(_)) => "same modified time",
-        _ => "modified time unknown",
-    };
-    format!("Modified: {comparison}")
-}
-
-fn conflict_choice_button(
-    label: &'static str,
-    choice: TransferConflictChoice,
-) -> Button<'static, Message> {
-    button(readable_text(label).size(12))
-        .on_press(Message::TransferConflictChoiceSelected(choice))
-        .padding([6, 10])
-        .style(context_menu_button_style())
 }
 
 fn action_label(icon: IconSymbol, label: &'static str, size: f32) -> Row<'static, Message> {
