@@ -557,7 +557,7 @@ impl FileBrowser {
         thumbnail_range_for_row_height(
             self.column_viewport_for_pane_directory(pane_id, directory),
             len,
-            crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+            crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
         )
     }
 

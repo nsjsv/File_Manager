@@ -38,16 +38,16 @@ fn measured_viewport_schedules_visible_rows_with_overscan() {
 }
 
 #[test]
-fn column_thumbnail_range_uses_column_row_height() {
+fn column_thumbnail_range_uses_column_scroll_height() {
     let viewport = ColumnViewport {
-        offset_y: crate::three_column_view::COLUMN_ENTRY_HEIGHT * 40.0,
-        height: crate::three_column_view::COLUMN_ENTRY_HEIGHT * 3.0,
+        offset_y: crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 40.0,
+        height: crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 3.0,
     };
 
     let range = thumbnail_range_for_row_height(
         Some(viewport),
         120,
-        crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+        crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
     );
 
     assert_eq!(range, (12, 71));

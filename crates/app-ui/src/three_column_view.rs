@@ -35,6 +35,8 @@ const COLUMN_CONTENT_SPACING: u32 = 2;
 const COLUMN_PADDING: [u16; 2] = [5, 5];
 const COLUMN_ENTRY_TEXT_SIZE: u32 = 13;
 pub(crate) const COLUMN_ENTRY_HEIGHT: f32 = 24.0;
+pub(crate) const COLUMN_ENTRY_SCROLL_HEIGHT: f32 =
+    COLUMN_ENTRY_HEIGHT + COLUMN_CONTENT_SPACING as f32;
 const COLUMN_OVERSCAN_ROWS: usize = 16;
 const COLUMN_INITIAL_ROWS: usize = COLUMN_OVERSCAN_ROWS * 2 + 1;
 const COLUMN_ENTRY_SPACING: u32 = 4;
@@ -186,14 +188,18 @@ fn directory_column<'a>(
                 .map(|viewport| {
                     virtual_range_for_viewport(
                         entries.len(),
-                        COLUMN_ENTRY_HEIGHT,
+                        COLUMN_ENTRY_SCROLL_HEIGHT,
                         viewport.offset_y,
                         viewport.height,
                         COLUMN_OVERSCAN_ROWS,
                     )
                 })
                 .unwrap_or_else(|| {
-                    initial_virtual_range(entries.len(), COLUMN_ENTRY_HEIGHT, COLUMN_INITIAL_ROWS)
+                    initial_virtual_range(
+                        entries.len(),
+                        COLUMN_ENTRY_SCROLL_HEIGHT,
+                        COLUMN_INITIAL_ROWS,
+                    )
                 });
             content = content.push(vertical_spacer(range.before_height));
             for entry_index in range.start..range.end {
