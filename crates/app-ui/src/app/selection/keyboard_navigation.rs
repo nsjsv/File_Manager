@@ -221,7 +221,12 @@ impl FileBrowser {
 
     pub(crate) fn activate_path(&mut self, path: PathBuf) -> Task<Message> {
         if self.is_trash_view {
-            return Task::none();
+            if !self.selected_paths.contains(&path) {
+                self.select_path(path);
+            } else if self.selected.as_deref() != Some(path.as_path()) {
+                self.focus_path(path);
+            }
+            return self.restore_selected();
         }
 
         match self.entry_kind(&path) {

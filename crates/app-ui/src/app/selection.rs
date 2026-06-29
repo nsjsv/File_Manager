@@ -103,7 +103,9 @@ impl FileBrowser {
             self.drag_selection_anchor = Some(path.clone());
             self.file_drag = None;
         } else {
-            if was_selected {
+            if was_selected && self.is_trash_view {
+                self.select_path(path.clone());
+            } else if was_selected {
                 self.focus_path(path.clone());
                 self.selection_anchor = Some(path.clone());
             } else {
@@ -496,6 +498,9 @@ impl FileBrowser {
     }
 
     pub(super) fn select_all_in_file_selection_scope(&mut self) -> Task<Message> {
+        if !self.file_browser_content_shortcuts_enabled() {
+            return Task::none();
+        }
         let paths = self.select_all_selection_scope_paths();
         self.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
         self.selection_anchor = paths.first().cloned();
@@ -511,6 +516,10 @@ impl FileBrowser {
     }
 
     fn select_all_selection_scope_paths(&self) -> Vec<PathBuf> {
+        if self.is_trash_view {
+            return self.visible_entry_paths();
+        }
+
         if self.view_mode == BrowserViewMode::Columns {
             return self.entry_paths_in_directory(&self.column_select_all_directory());
         }

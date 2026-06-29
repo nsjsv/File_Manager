@@ -42,6 +42,7 @@ impl ShortcutAction {
                 | Self::NavigateBack
                 | Self::NavigateForward
                 | Self::NavigateUp
+                | Self::SelectAll
         )
     }
 
@@ -772,5 +773,10 @@ mod tests {
     #[test]
     fn properties_shortcut_respects_captured_events() {
         assert!(!ShortcutAction::FileProperties.bypasses_captured_event());
+    }
+
+    #[test]
+    fn select_all_shortcut_uses_focus_aware_captured_routing() {
+        assert!(ShortcutAction::SelectAll.bypasses_captured_event());
     }
 }

@@ -8,8 +8,9 @@ use iced::{keyboard, window, Point};
 use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
-    BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryLoadRequest,
-    ExpandedDirectoryStatus, FileDragNativeDndState, FileDragPhase, Message,
+    trash_location_path, BrowserPaneId, BrowserViewMode, ExpandedDirectory,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, FileDragNativeDndState, FileDragPhase,
+    Message,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -589,4 +590,52 @@ fn column_select_all_hovered_directory_entry_stays_in_entry_column() {
     drop(browser.select_all_in_file_selection_scope());
 
     assert_eq!(browser.selected_paths, HashSet::from([project, sibling]));
+}
+
+#[test]
+fn focused_preview_window_blocks_file_select_all_fallback() {
+    let first = PathBuf::from("/workspace/first.txt");
+    let second = PathBuf::from("/workspace/second.txt");
+    let mut browser = browser_with_entries(&[first, second]);
+    let preview_window = window::Id::unique();
+    browser.preview_window = Some(preview_window);
+    browser.focused_window = preview_window;
+
+    drop(browser.select_all_in_file_selection_scope());
+
+    assert!(browser.selected_paths.is_empty());
+    assert!(browser.selected.is_none());
+}
+
+#[test]
+fn trash_select_all_ignores_hovered_entry_real_parent() {
+    let first = PathBuf::from("/home/user/.local/share/Trash/files/first.txt");
+    let second = PathBuf::from("/home/user/.local/share/Trash/files/second.txt");
+    let mut browser = browser_with_entries(&[first.clone(), second.clone()]);
+    browser.current_dir = trash_location_path();
+    browser.is_trash_view = true;
+    browser.view_mode = BrowserViewMode::Columns;
+    browser.hovered_entry = Some(first.clone());
+
+    drop(browser.select_all_in_file_selection_scope());
+
+    assert_eq!(
+        browser.selected_paths,
+        HashSet::from([first.clone(), second])
+    );
+    assert_eq!(browser.selected, Some(first));
+}
+
+#[test]
+fn trash_plain_click_after_select_all_focuses_single_entry() {
+    let first = PathBuf::from("/workspace/first.txt");
+    let second = PathBuf::from("/workspace/second.txt");
+    let mut browser = browser_with_entries(&[first.clone(), second.clone()]);
+    browser.is_trash_view = true;
+
+    drop(browser.select_all_in_file_selection_scope());
+    drop(browser.handle_list_entry_clicked(second.clone()));
+
+    assert_eq!(browser.selected, Some(second.clone()));
+    assert_eq!(browser.selected_paths, HashSet::from([second]));
 }

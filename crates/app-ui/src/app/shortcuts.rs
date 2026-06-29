@@ -79,6 +79,7 @@ impl FileBrowser {
             && self.batch_rename.is_none()
             && self.settings_window != Some(self.focused_window)
             && self.properties_window != Some(self.focused_window)
+            && self.preview_window != Some(self.focused_window)
             && self.renaming.is_none()
             && self.search.is_none()
             && self.shortcut_capture.is_none()
@@ -195,4 +196,69 @@ fn no_shortcut_modifiers(modifiers: keyboard::Modifiers) -> bool {
 
 fn only_shift_modifier(modifiers: keyboard::Modifiers) -> bool {
     !modifiers.alt() && !modifiers.control() && !modifiers.command() && modifiers.shift()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind, TrashEntry, TrashRestoreEntry};
+
+    use super::*;
+    use crate::config;
+    use crate::model::trash_location_path;
+    use crate::operation_queue::QueuedFileOperation;
+
+    fn test_entry(path: &Path) -> DirectoryEntry {
+        DirectoryEntry::new(
+            path.to_path_buf(),
+            FileKind::File,
+            EntryMetadata {
+                len: 0,
+                modified: None,
+                readonly: false,
+            },
+            false,
+            false,
+            false,
+        )
+    }
+
+    fn browser_with_selected_trash_entry() -> (FileBrowser, TrashRestoreEntry) {
+        let trash_path = PathBuf::from("/home/user/.local/share/Trash/files/report.txt");
+        let info_path = PathBuf::from("/home/user/.local/share/Trash/info/report.txt.trashinfo");
+        let original_path = PathBuf::from("/home/user/report.txt");
+        let trash_entry = TrashEntry {
+            trash_path: trash_path.clone(),
+            info_path: info_path.clone(),
+            original_path: original_path.clone(),
+            deletion_date: None,
+            entry: test_entry(&trash_path),
+        };
+        let expected_restore_entry = trash_entry.restore_entry();
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.current_dir = trash_location_path();
+        browser.is_trash_view = true;
+        browser.is_loading = false;
+        browser.entries = vec![trash_entry.entry.clone()];
+        browser.trash_entries = vec![trash_entry];
+        browser.selected = Some(trash_path.clone());
+        browser.selected_paths = HashSet::from([trash_path]);
+        (browser, expected_restore_entry)
+    }
+
+    #[test]
+    fn open_selected_shortcut_restores_selected_trash_entry() {
+        let (mut browser, expected_restore_entry) = browser_with_selected_trash_entry();
+
+        let command = browser.invoke_shortcut(ShortcutAction::OpenSelected);
+        drop(command);
+
+        assert_eq!(browser.operation_queue.tasks().len(), 1);
+        assert!(matches!(
+            &browser.operation_queue.tasks()[0].operation,
+            QueuedFileOperation::Restore { entries } if entries == &vec![expected_restore_entry]
+        ));
+    }
 }
