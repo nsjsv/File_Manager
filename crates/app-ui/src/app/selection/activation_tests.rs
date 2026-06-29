@@ -300,7 +300,8 @@ fn column_single_click_still_opens_child_column() {
 fn column_single_click_requests_session_save_when_enabled() {
     let directory = PathBuf::from("/workspace/project");
     let mut user_config = config::default_user_config();
-    user_config.save_view_state = true;
+    user_config.startup_location_policy = config::StartupLocationPolicy::PreviousSession;
+    user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
     let (mut browser, _) = FileBrowser::new(user_config);
     browser.current_dir = PathBuf::from("/workspace");
     browser.is_loading = false;

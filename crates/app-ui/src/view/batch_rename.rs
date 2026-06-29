@@ -112,6 +112,11 @@ fn rule_panel_tab_style(
         } else {
             Color::from_rgb8(239, 245, 255)
         };
+        let surface = if is_dark_theme(theme) {
+            Color::from_rgb8(31, 40, 54)
+        } else {
+            Color::from_rgb8(244, 247, 252)
+        };
 
         button::Style {
             background: Some(Background::Color(if selected {
@@ -119,7 +124,7 @@ fn rule_panel_tab_style(
             } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
                 hover
             } else {
-                Color::TRANSPARENT
+                surface
             })),
             text_color: if selected {
                 accent
@@ -134,7 +139,7 @@ fn rule_panel_tab_style(
                 } else {
                     subtle_border_color(theme)
                 },
-                width: if selected { 1.0 } else { 0.0 },
+                width: 1.0,
                 radius: 6.0.into(),
             },
             ..button::Style::default()

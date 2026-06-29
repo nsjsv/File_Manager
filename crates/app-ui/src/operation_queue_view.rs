@@ -4,7 +4,7 @@ use iced::{Alignment, Element, Length};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
-    context_menu_style, error_notification_style, navigation_icon_button_style,
+    context_menu_style, error_notification_style, operation_queue_indicator_button_style,
     path_suggestion_item_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
@@ -44,7 +44,7 @@ pub(crate) fn operation_queue_indicator(
         button(svg)
             .on_press(Message::FileOperationIndicatorPressed)
             .padding(0)
-            .style(navigation_icon_button_style())
+            .style(operation_queue_indicator_button_style())
             .into(),
     )
 }

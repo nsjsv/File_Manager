@@ -53,7 +53,6 @@ impl FileBrowser {
         };
         let startup_command = if self.user_config.startup_location_policy
             == crate::config::StartupLocationPolicy::PreviousSession
-            && self.user_config.save_view_state
         {
             Task::none()
         } else {
@@ -135,7 +134,6 @@ impl FileBrowser {
                 }
                 let session_command = if self.user_config.startup_location_policy
                     == crate::config::StartupLocationPolicy::PreviousSession
-                    && self.user_config.save_view_state
                 {
                     let home = self.search_index.home_dir.clone();
                     let startup_plan = self.startup_session_plan(&home, persisted_browser_session);
@@ -155,7 +153,6 @@ impl FileBrowser {
                 ));
                 if self.user_config.startup_location_policy
                     == crate::config::StartupLocationPolicy::PreviousSession
-                    && self.user_config.save_view_state
                 {
                     let home = self.search_index.home_dir.clone();
                     return self.fallback_startup_directory_after_session_store_error(&home, error);
@@ -185,7 +182,8 @@ impl FileBrowser {
             .is_some_and(|pane| !pane.is_loading && pane.current_dir.as_path() == directory)
     }
 
-    fn apply_loaded_user_config(&mut self, user_config: UserConfig) {
+    fn apply_loaded_user_config(&mut self, mut user_config: UserConfig) {
+        user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
         self.search_index.base_dir = user_config.search_index_dir.clone();
         self.search_index.directory_error_policy = user_config.search_index_directory_error_policy;
         self.search_index.content_index_enabled = user_config.search_index_content_enabled;
@@ -412,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_session_is_ignored_when_save_view_state_is_disabled() {
+    fn previous_session_legacy_disabled_save_view_state_is_normalized() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let home = create_directory(&temp_dir, "home");
         let previous = create_directory(&temp_dir, "previous");
@@ -422,7 +420,7 @@ mod tests {
         let snapshot = BrowserSessionSnapshot {
             panes: vec![BrowserPaneSession {
                 id: BrowserPaneId::PRIMARY,
-                tabs: vec![tab_session(0, previous, BrowserViewMode::List)],
+                tabs: vec![tab_session(0, previous.clone(), BrowserViewMode::List)],
                 active_tab_id: 0,
                 column_browser_viewport: ColumnBrowserViewport::default(),
                 column_viewports: HashMap::new(),
@@ -443,17 +441,15 @@ mod tests {
                 .accept_operation_store(Ok(loaded_store_with_session(&temp_dir, Some(snapshot)))),
         );
 
-        assert_eq!(browser.current_dir, home);
-        assert!(browser
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("View state saving is off")));
+        assert_eq!(browser.current_dir, previous);
+        assert!(browser.user_config.save_view_state);
     }
 
     #[test]
-    fn disabled_save_view_state_does_not_schedule_browser_session_write() {
+    fn home_startup_policy_does_not_schedule_browser_session_write() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let mut user_config = config::default_user_config();
+        user_config.startup_location_policy = StartupLocationPolicy::Home;
         user_config.save_view_state = false;
         let (mut browser, _) = FileBrowser::new(user_config);
 
@@ -521,7 +517,7 @@ mod tests {
         };
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
-        user_config.save_view_state = true;
+        user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
         drop(browser.accept_startup_environment(startup_environment(
@@ -600,7 +596,7 @@ mod tests {
         };
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
-        user_config.save_view_state = true;
+        user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
         drop(browser.accept_startup_environment(startup_environment(
@@ -651,7 +647,7 @@ mod tests {
         };
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
-        user_config.save_view_state = true;
+        user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
         drop(browser.accept_startup_environment(startup_environment(
@@ -677,7 +673,7 @@ mod tests {
         let home = create_directory(&temp_dir, "home");
         let mut user_config = config::default_user_config();
         user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
-        user_config.save_view_state = true;
+        user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
         drop(browser.accept_startup_environment(startup_environment(

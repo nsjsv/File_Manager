@@ -4,7 +4,7 @@ use iced::{Element, Length};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
-    context_menu_button_style, selected_sidebar_item_style, sidebar_style,
+    selected_sidebar_item_style, sidebar_style, transparent_button_style,
 };
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
 use crate::typography::readable_text;
@@ -54,7 +54,7 @@ pub(super) fn auxiliary_sidebar_button(
     button(label)
         .on_press(message)
         .width(Length::Fill)
-        .style(context_menu_button_style())
+        .style(transparent_button_style())
 }
 
 pub(super) fn auxiliary_detail_scroller<'a>(

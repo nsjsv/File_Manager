@@ -9,6 +9,10 @@ use crate::model::{pane_session_from_live, BrowserSessionSnapshot, Message};
 const SESSION_SAVE_INTERVAL: Duration = Duration::from_millis(500);
 
 impl FileBrowser {
+    pub(super) fn should_save_browser_session(&self) -> bool {
+        self.user_config.startup_location_policy.saves_view_state()
+    }
+
     pub(super) fn browser_session_snapshot(&mut self) -> BrowserSessionSnapshot {
         self.sync_active_tab_state();
         let panes = self
@@ -23,7 +27,8 @@ impl FileBrowser {
     }
 
     pub(super) fn request_browser_session_save(&mut self) -> Task<Message> {
-        if !self.user_config.save_view_state {
+        if !self.should_save_browser_session() {
+            self.pending_browser_session_save = false;
             return Task::none();
         }
         let Some(store) = self.operation_queue.task_queue_store().cloned() else {
@@ -44,7 +49,8 @@ impl FileBrowser {
     }
 
     pub(super) fn flush_browser_session_save(&mut self) -> Task<Message> {
-        if !self.user_config.save_view_state {
+        if !self.should_save_browser_session() {
+            self.pending_browser_session_save = false;
             return Task::none();
         }
         let Some(store) = self.operation_queue.task_queue_store().cloned() else {

@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use iced::widget::{button, checkbox, column, container, image, row, Button, Space, Svg};
 use iced::{Alignment, Element, Length, Theme};
 
-use crate::appearance::{context_menu_button_style, context_menu_style};
+use crate::appearance::context_menu_style;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text, format_system_time};
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::model::{
@@ -17,6 +17,7 @@ use crate::thumbnail_cache::{
 };
 use crate::typography::readable_text;
 
+use super::option_controls::secondary_action_button_style;
 use super::{themed_icon, IconTone};
 
 const TRANSFER_CONFLICT_PANEL_WIDTH: f32 = 560.0;
@@ -250,10 +251,13 @@ fn conflict_action_button(label: &'static str, message: Message) -> Button<'stat
     button(
         container(readable_text(label).size(14))
             .width(Length::Fill)
-            .center_x(Length::Fill),
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
     )
     .on_press(message)
-    .padding([7, 10])
+    .padding(0)
     .width(Length::Fixed(98.0))
-    .style(context_menu_button_style())
+    .height(Length::Fixed(32.0))
+    .style(secondary_action_button_style())
 }

@@ -7,6 +7,7 @@ use crate::icons::IconSymbol;
 use crate::model::Message;
 use crate::typography::readable_text;
 
+use super::option_controls::{primary_action_button, secondary_action_button};
 use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
@@ -45,14 +46,8 @@ pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(readable_text("Restart").size(12))
-            .on_press(Message::RendererRestartRequested)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
-        button(readable_text("OK").size(12))
-            .on_press(Message::RendererRestartNoticeDismissed)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
+        primary_action_button("Restart", Message::RendererRestartRequested),
+        secondary_action_button("OK", Message::RendererRestartNoticeDismissed),
     ]
     .spacing(6)
     .align_y(Alignment::Center);

@@ -10,7 +10,7 @@ use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
-    context_menu_style, error_notification_style,
+    context_menu_style, error_notification_style, transparent_button_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
@@ -24,7 +24,7 @@ use crate::sidebar_devices::SidebarDeviceContextMenuState;
 use crate::typography::readable_text;
 
 use super::network_connections::network_connection_context_menu_panel;
-use super::option_controls::{action_choice_row, secondary_action_button};
+use super::option_controls::{action_choice_row, primary_action_button, secondary_action_button};
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const ERROR_NOTIFICATION_FLOAT_WIDTH: f32 = 560.0;
@@ -103,14 +103,8 @@ pub(super) fn destructive_action_confirmation_panel(
 
     let actions = row![
         Space::new().width(Length::Fill),
-        button(readable_text("Cancel").size(12))
-            .on_press(Message::DestructiveActionCanceled)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
-        button(readable_text(confirm_label).size(12))
-            .on_press(Message::DestructiveActionConfirmed)
-            .padding([6, 10])
-            .style(context_menu_button_style()),
+        secondary_action_button("Cancel", Message::DestructiveActionCanceled),
+        primary_action_button(confirm_label, Message::DestructiveActionConfirmed),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -233,10 +227,7 @@ pub(super) fn open_with_panel(
     content = content.push(
         row![
             Space::new().width(Length::Fill),
-            button(readable_text("Cancel").size(12))
-                .on_press(Message::DismissFloating)
-                .padding([6, 10])
-                .style(context_menu_button_style()),
+            secondary_action_button("Cancel", Message::DismissFloating),
         ]
         .align_y(Alignment::Center),
     );
@@ -462,7 +453,7 @@ fn new_entry_menu_trigger() -> Element<'static, Message> {
             ))
             .width(Length::Fill)
             .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
-            .style(context_menu_button_style()),
+            .style(transparent_button_style()),
     )
     .on_enter(Message::FileContextMenuExpansionChanged(
         FileContextMenuExpansion::NewEntry,
@@ -570,7 +561,7 @@ fn menu_button(
         .on_press(message)
         .width(Length::Fill)
         .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
-        .style(context_menu_button_style())
+        .style(transparent_button_style())
 }
 
 fn menu_label(icon: IconSymbol, label: &'static str) -> Row<'static, Message> {

@@ -68,7 +68,7 @@ impl UserPreferences {
             browser_view_mode: config.browser_view_mode,
             startup_location_policy: config.startup_location_policy,
             startup_custom_directory: config.startup_custom_directory.clone(),
-            save_view_state: config.save_view_state,
+            save_view_state: config.startup_location_policy.saves_view_state(),
             shortcuts: config.shortcuts.clone(),
         }
     }
@@ -92,7 +92,7 @@ impl UserPreferences {
         config.browser_view_mode = self.browser_view_mode;
         config.startup_location_policy = self.startup_location_policy;
         config.startup_custom_directory = self.startup_custom_directory.clone();
-        config.save_view_state = self.save_view_state;
+        config.save_view_state = self.startup_location_policy.saves_view_state();
         config.shortcuts = self.shortcuts.clone();
     }
 
@@ -124,13 +124,16 @@ impl UserPreferences {
             browser_view_mode: browser_view_mode_config_value(self.browser_view_mode).to_owned(),
             startup_location: self.startup_location_policy.config_value().to_owned(),
             startup_custom_directory: StoredPath::from_path(&self.startup_custom_directory),
-            save_view_state: self.save_view_state,
+            save_view_state: self.startup_location_policy.saves_view_state(),
             shortcuts: stored_shortcuts(&self.shortcuts),
         }
     }
 
     pub(crate) fn from_stored(stored: StoredUserPreferences, default: &UserConfig) -> Self {
         let default_preferences = Self::from_user_config(default);
+        let startup_location_policy =
+            StartupLocationPolicy::from_config_value(&stored.startup_location)
+                .unwrap_or(default_preferences.startup_location_policy);
         Self {
             search_index_exclude_patterns: normalize_search_index_exclude_patterns(
                 stored.search_index_exclude_patterns,
@@ -167,12 +170,9 @@ impl UserPreferences {
             .unwrap_or(default_preferences.file_operation_verification),
             browser_view_mode: browser_view_mode_from_config_value(&stored.browser_view_mode)
                 .unwrap_or(default_preferences.browser_view_mode),
-            startup_location_policy: StartupLocationPolicy::from_config_value(
-                &stored.startup_location,
-            )
-            .unwrap_or(default_preferences.startup_location_policy),
+            startup_location_policy,
             startup_custom_directory: stored.startup_custom_directory.to_path_buf(),
-            save_view_state: stored.save_view_state,
+            save_view_state: startup_location_policy.saves_view_state(),
             shortcuts: shortcut_config_from_stored(&stored.shortcuts),
         }
     }

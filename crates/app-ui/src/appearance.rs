@@ -152,11 +152,20 @@ pub(crate) fn hovered_row_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn navigation_icon_button_style() -> fn(&Theme, button::Status) -> button::Style {
-    transparent_button_style
+    surface_button_style
+}
+
+pub(crate) fn operation_queue_indicator_button_style() -> fn(&Theme, button::Status) -> button::Style
+{
+    transparent_icon_button_style
+}
+
+pub(crate) fn transparent_button_style() -> fn(&Theme, button::Status) -> button::Style {
+    transparent_icon_button_style
 }
 
 pub(crate) fn context_menu_button_style() -> fn(&Theme, button::Status) -> button::Style {
-    transparent_button_style
+    surface_button_style
 }
 
 pub(crate) fn auto_hide_scrollbar_style(
@@ -636,10 +645,61 @@ fn warning_icon_svg_style_for_status(_theme: &Theme, _status: svg::Status) -> sv
     }
 }
 
-fn transparent_button_style(theme: &Theme, _status: button::Status) -> button::Style {
+fn transparent_icon_button_style(theme: &Theme, status: button::Status) -> button::Style {
     button::Style {
-        text_color: base_text_color(theme),
+        text_color: if matches!(status, button::Status::Disabled) {
+            muted_text_color(theme)
+        } else {
+            base_text_color(theme)
+        },
         ..button::Style::default()
+    }
+}
+
+fn surface_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered => button_hover_surface_color(theme),
+        button::Status::Pressed => button_pressed_surface_color(theme),
+        button::Status::Active | button::Status::Disabled => button_surface_color(theme),
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: if matches!(status, button::Status::Disabled) {
+            muted_text_color(theme)
+        } else {
+            base_text_color(theme)
+        },
+        border: Border {
+            color: subtle_border_color(theme),
+            width: 1.0,
+            radius: 7.0.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
+pub(crate) fn button_surface_color(theme: &Theme) -> Color {
+    if is_dark_theme(theme) {
+        Color::from_rgb8(31, 40, 54)
+    } else {
+        Color::from_rgb8(244, 247, 252)
+    }
+}
+
+pub(crate) fn button_hover_surface_color(theme: &Theme) -> Color {
+    if is_dark_theme(theme) {
+        Color::from_rgb8(35, 47, 65)
+    } else {
+        Color::from_rgb8(239, 245, 255)
+    }
+}
+
+pub(crate) fn button_pressed_surface_color(theme: &Theme) -> Color {
+    if is_dark_theme(theme) {
+        Color::from_rgb8(27, 36, 49)
+    } else {
+        Color::from_rgb8(229, 239, 253)
     }
 }
 

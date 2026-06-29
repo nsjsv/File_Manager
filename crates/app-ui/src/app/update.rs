@@ -597,7 +597,6 @@ impl FileBrowser {
             Message::StartupCustomDirectoryCommitted => {
                 self.commit_startup_custom_directory_input()
             }
-            Message::SaveViewStateToggled => self.toggle_save_view_state(),
             Message::FileOperationVerificationSelected(verification) => {
                 self.user_config.file_operation_verification = verification;
                 self.persist_user_preferences_command()

@@ -78,7 +78,7 @@ network_connections = [
         StartupLocationPolicy::CustomDirectory
     );
     assert_eq!(parsed.startup_custom_directory, PathBuf::from("/workspace"));
-    assert!(parsed.save_view_state);
+    assert!(!parsed.save_view_state);
     assert_eq!(
         parsed
             .shortcuts
@@ -193,7 +193,7 @@ fn user_preferences_round_trip_through_sqlite() {
     )];
     config.startup_location_policy = StartupLocationPolicy::PreviousSession;
     config.startup_custom_directory = PathBuf::from("/workspace");
-    config.save_view_state = true;
+    config.save_view_state = config.startup_location_policy.saves_view_state();
     config.browser_view_mode = BrowserViewMode::List;
     config.terminal_emulator = TerminalEmulator::Ghostty;
     config.file_operation_verification = FileOperationVerification::Strong;
@@ -288,6 +288,22 @@ fn stored_preferences_skip_password_bearing_network_connections() {
         preferences.network_connections[0].connection.id.as_str(),
         "good"
     );
+}
+
+#[test]
+fn stored_preferences_derive_view_state_saving_from_startup_location() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.startup_location = "custom".to_owned();
+    stored.save_view_state = true;
+
+    let preferences = UserPreferences::from_stored(stored, &default);
+
+    assert_eq!(
+        preferences.startup_location_policy,
+        StartupLocationPolicy::CustomDirectory
+    );
+    assert!(!preferences.save_view_state);
 }
 
 #[test]

@@ -27,12 +27,6 @@ impl FileBrowser {
             StartupLocationPolicy::CustomDirectory => {
                 self.startup_directory_plan(&self.user_config.startup_custom_directory, home)
             }
-            StartupLocationPolicy::PreviousSession if !self.user_config.save_view_state => {
-                StartupSessionPlan::Directory {
-                    directory: home.to_path_buf(),
-                    error: Some("View state saving is off; opening the home directory.".to_owned()),
-                }
-            }
             StartupLocationPolicy::PreviousSession => match session {
                 Some(session) => StartupSessionPlan::Session(session),
                 None => StartupSessionPlan::Directory {

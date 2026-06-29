@@ -6,7 +6,6 @@ use super::{toml_string, UserConfig};
 
 const STARTUP_LOCATION_KEY: &str = "startup_location";
 const STARTUP_CUSTOM_DIRECTORY_KEY: &str = "startup_custom_directory";
-const SAVE_VIEW_STATE_KEY: &str = "save_view_state";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartupLocationPolicy {
@@ -32,6 +31,10 @@ impl StartupLocationPolicy {
             Self::PreviousSession => "previous_session",
         }
     }
+
+    pub(crate) fn saves_view_state(self) -> bool {
+        self == Self::PreviousSession
+    }
 }
 
 pub(crate) fn apply_toml_startup_config(config: &mut UserConfig, document: &Table) {
@@ -43,10 +46,5 @@ pub(crate) fn apply_toml_startup_config(config: &mut UserConfig, document: &Tabl
     if let Some(value) = toml_string(document, STARTUP_CUSTOM_DIRECTORY_KEY) {
         config.startup_custom_directory = PathBuf::from(value);
     }
-    if let Some(value) = document
-        .get(SAVE_VIEW_STATE_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.save_view_state = value;
-    }
+    config.save_view_state = config.startup_location_policy.saves_view_state();
 }

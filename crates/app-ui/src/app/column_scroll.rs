@@ -249,7 +249,8 @@ mod tests {
     #[test]
     fn column_browser_scroll_updates_viewport_and_requests_session_save() {
         let mut config = crate::config::ui_thread_startup_config();
-        config.save_view_state = true;
+        config.startup_location_policy = crate::config::StartupLocationPolicy::PreviousSession;
+        config.save_view_state = config.startup_location_policy.saves_view_state();
         let (mut browser, _) = FileBrowser::new(config);
 
         drop(browser.handle_column_browser_scrolled(BrowserPaneId::PRIMARY, 245.0, 820.0));

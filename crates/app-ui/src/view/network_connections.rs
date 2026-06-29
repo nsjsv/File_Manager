@@ -1,7 +1,7 @@
 use iced::widget::{button, column, container, row, text, text_input, Button, Space};
 use iced::{Alignment, Element, Length};
 
-use crate::appearance::{context_menu_button_style, context_menu_style};
+use crate::appearance::{context_menu_button_style, context_menu_style, transparent_button_style};
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::Message;
@@ -221,7 +221,7 @@ fn network_connection_menu_button(
         .on_press(message)
         .width(Length::Fill)
         .height(Length::Fixed(NETWORK_CONTEXT_MENU_ITEM_HEIGHT))
-        .style(context_menu_button_style())
+        .style(transparent_button_style())
 }
 
 fn network_connection_menu_label(

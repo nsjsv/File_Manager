@@ -67,7 +67,8 @@ async fn close_all_windows_saves_browser_session_before_exit() {
         TaskQueueStore::new(temp_dir.path().join("state.sqlite")).expect("create state store");
 
     let mut user_config = config::default_user_config();
-    user_config.save_view_state = true;
+    user_config.startup_location_policy = config::StartupLocationPolicy::PreviousSession;
+    user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
     user_config.browser_view_mode = BrowserViewMode::Columns;
     let (mut browser, _) = FileBrowser::new(user_config);
     drop(browser.accept_operation_store(Ok(LoadedOperationStore {

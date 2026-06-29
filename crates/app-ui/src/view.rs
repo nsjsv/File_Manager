@@ -21,6 +21,7 @@ mod startup_index_setup;
 mod tab_motion;
 mod text_preview_panel;
 mod toggle_switch;
+mod toolbar_controls;
 mod transfer_conflict;
 
 pub(crate) use preview_panel::view_preview_window;
@@ -36,7 +37,7 @@ use std::path::Path;
 
 use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{
-    button, container, mouse_area, opaque, row, stack, text_input, Button, Column, Row, Space, Svg,
+    button, container, mouse_area, opaque, row, stack, text_input, Column, Row, Space, Svg,
 };
 use iced::{Alignment, Element, Length, Point, Theme};
 
@@ -81,6 +82,7 @@ use rendering_settings::renderer_restart_notice_panel;
 use search_mode_prompt::search_mode_prompt_panel;
 use sidebar_panel::sidebar_view;
 use startup_index_setup::startup_index_setup_panel;
+use toolbar_controls::{navigation_button_group, view_mode_button_group};
 use transfer_conflict::transfer_conflict_panel;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
@@ -395,11 +397,9 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
     };
 
     let navigation_bar = row![
-        navigation_icon_button(IconSymbol::ArrowLeft, Message::PaneBack(pane_id)),
-        navigation_icon_button(IconSymbol::ArrowRight, Message::PaneForward(pane_id)),
-        navigation_icon_button(IconSymbol::ArrowUp, Message::PaneUp(pane_id)),
+        navigation_button_group(pane_id),
         path_input_panel(pane),
-        view_mode_buttons(pane),
+        view_mode_button_group(pane),
     ]
     .spacing(8)
     .align_y(Alignment::Start);
@@ -525,50 +525,6 @@ fn pane_drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>
         .style(selected_tab_item_style)
         .into(),
     )
-}
-
-fn navigation_icon_button(icon: IconSymbol, message: Message) -> Button<'static, Message> {
-    button(themed_icon(icon, IconTone::Normal, TOOLBAR_ICON_SIZE))
-        .on_press(message)
-        .padding([6, 8])
-        .style(navigation_icon_button_style())
-}
-
-fn view_mode_buttons(pane: BrowserPaneView<'_>) -> Element<'static, Message> {
-    row![
-        view_mode_button(
-            pane.id,
-            pane.view_mode,
-            BrowserViewMode::Columns,
-            IconSymbol::Columns
-        ),
-        view_mode_button(
-            pane.id,
-            pane.view_mode,
-            BrowserViewMode::List,
-            IconSymbol::List
-        ),
-    ]
-    .spacing(2)
-    .align_y(Alignment::Center)
-    .into()
-}
-
-fn view_mode_button(
-    pane_id: BrowserPaneId,
-    current_mode: BrowserViewMode,
-    target_mode: BrowserViewMode,
-    icon: IconSymbol,
-) -> Button<'static, Message> {
-    let tone = if current_mode == target_mode {
-        IconTone::Selected
-    } else {
-        IconTone::Normal
-    };
-    button(themed_icon(icon, tone, VIEW_MODE_ICON_SIZE))
-        .on_press(Message::BrowserViewModeSelected(pane_id, target_mode))
-        .padding([6, 8])
-        .style(navigation_icon_button_style())
 }
 
 fn tab_bar<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {

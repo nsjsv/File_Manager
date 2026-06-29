@@ -135,7 +135,7 @@ fn segmented_choice_button_style(
         let border_color = if selected {
             accent_border_color(theme)
         } else {
-            Color::TRANSPARENT
+            subtle_border_color(theme)
         };
 
         button::Style {
@@ -147,7 +147,7 @@ fn segmented_choice_button_style(
             },
             border: Border {
                 color: border_color,
-                width: if selected { 1.0 } else { 0.0 },
+                width: 1.0,
                 radius: 6.0.into(),
             },
             ..button::Style::default()
@@ -222,19 +222,23 @@ fn primary_action_button_appearance(theme: &Theme, status: button::Status) -> bu
     }
 }
 
-fn secondary_action_button_style() -> fn(&Theme, button::Status) -> button::Style {
+pub(super) fn secondary_action_button_style() -> fn(&Theme, button::Status) -> button::Style {
     secondary_action_button_appearance
 }
 
 fn secondary_action_button_appearance(theme: &Theme, status: button::Status) -> button::Style {
     let background = match status {
         button::Status::Hovered | button::Status::Pressed => hover_background_color(theme),
-        button::Status::Active | button::Status::Disabled => Color::TRANSPARENT,
+        button::Status::Active | button::Status::Disabled => panel_background_color(theme),
     };
 
     button::Style {
         background: Some(Background::Color(background)),
-        text_color: base_text_color(theme),
+        text_color: if matches!(status, button::Status::Disabled) {
+            muted_text_color(theme)
+        } else {
+            base_text_color(theme)
+        },
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -252,7 +256,7 @@ fn segmented_choice_background(theme: &Theme, status: button::Status, selected: 
         (false, button::Status::Hovered) | (false, button::Status::Pressed) => {
             hover_background_color(theme)
         }
-        (false, _) => Color::TRANSPARENT,
+        (false, _) => panel_background_color(theme),
     }
 }
 

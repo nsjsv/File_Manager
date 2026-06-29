@@ -359,7 +359,6 @@ pub(crate) enum Message {
     StartupLocationPolicySelected(crate::config::StartupLocationPolicy),
     StartupCustomDirectoryInputChanged(String),
     StartupCustomDirectoryCommitted,
-    SaveViewStateToggled,
     BrowserSessionSaved(Result<(), String>),
     BrowserSessionSaveDelayElapsed,
     FileOperationVerificationSelected(FileOperationVerification),

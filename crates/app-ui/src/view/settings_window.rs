@@ -90,7 +90,6 @@ fn general_settings_detail(
             readable_text("Startup").size(13),
             startup_location_options(browser),
             startup_custom_directory_input(browser),
-            save_view_state_button(browser),
             readable_text("Terminal").size(13),
             terminal_emulator_options(browser.terminal_emulator),
         ]
@@ -101,7 +100,6 @@ fn general_settings_detail(
             hidden_files_visibility_button(browser),
             readable_text("Startup").size(13),
             startup_location_options(browser),
-            save_view_state_button(browser),
             readable_text("Terminal").size(13),
             terminal_emulator_options(browser.terminal_emulator),
         ]
@@ -275,21 +273,4 @@ fn startup_custom_directory_input(browser: &FileBrowser) -> Element<'_, Message>
         .padding([5, 8])
         .width(Length::Fill)
         .into()
-}
-
-fn save_view_state_button(browser: &FileBrowser) -> Button<'static, Message> {
-    let enabled = browser.user_config().save_view_state;
-    let label = row![
-        readable_text("Save View State")
-            .size(12)
-            .width(Length::Fill),
-        switch_control(enabled),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::SaveViewStateToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
 }
