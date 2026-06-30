@@ -50,6 +50,11 @@ pub(crate) use browser_panes::{
     ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, SplitAxis,
     SplitRegion,
 };
+mod list_view_preferences;
+pub(crate) use list_view_preferences::{
+    list_column_kind_config_value, list_column_kind_from_config_value, ListColumnConfig,
+    ListColumnKind, ListSortPreference, ListViewPreferences,
+};
 mod batch_rename;
 pub(crate) use batch_rename::{
     same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameMessage,
@@ -233,6 +238,11 @@ pub(crate) enum Message {
     BrowserViewModeSelected(BrowserPaneId, BrowserViewMode),
     ListDirectoryToggled(BrowserPaneId, PathBuf),
     ListEntryClicked(BrowserPaneId, PathBuf),
+    ListHeaderRightClicked(BrowserPaneId),
+    ListColumnVisibilityToggled(ListColumnKind),
+    ListColumnResizeStarted(BrowserPaneId, ListColumnKind),
+    ListColumnReorderStarted(BrowserPaneId, ListColumnKind),
+    ListColumnReorderTargetEntered(ListColumnKind),
     ColumnEntryClicked(BrowserPaneId, PathBuf),
     ColumnBlankClicked(BrowserPaneId, PathBuf),
     ColumnPlaceholderPressed(BrowserPaneId),
@@ -526,6 +536,7 @@ pub(crate) struct StartupEnvironment {
 #[derive(Debug, Clone)]
 pub(crate) enum ContextMenuState {
     FileArea(FileContextMenuState),
+    ListColumns(ListColumnMenuState),
     SidebarBookmark(SidebarBookmarkContextMenuState),
     SidebarDevice(SidebarDeviceContextMenuState),
     NetworkConnection(SidebarNetworkConnectionContextMenuState),
@@ -535,6 +546,7 @@ impl ContextMenuState {
     pub(crate) fn position(&self) -> Point {
         match self {
             Self::FileArea(menu) => menu.position,
+            Self::ListColumns(menu) => menu.position,
             Self::SidebarBookmark(menu) => menu.position,
             Self::SidebarDevice(menu) => menu.position,
             Self::NetworkConnection(menu) => menu.position,
@@ -544,11 +556,17 @@ impl ContextMenuState {
     pub(crate) fn paste_directory(&self) -> Option<&PathBuf> {
         match self {
             Self::FileArea(menu) => Some(&menu.paste_directory),
+            Self::ListColumns(_) => None,
             Self::SidebarBookmark(_) => None,
             Self::SidebarDevice(_) => None,
             Self::NetworkConnection(_) => None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ListColumnMenuState {
+    pub(crate) position: Point,
 }
 
 #[derive(Debug, Clone)]

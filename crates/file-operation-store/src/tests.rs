@@ -276,6 +276,20 @@ fn user_preferences_roundtrip_replace() {
             action_key: "focus_path_input".to_owned(),
             binding: "Ctrl+Alt+L".to_owned(),
         }],
+        list_view_columns: vec![
+            StoredListViewColumn {
+                kind: "name".to_owned(),
+                width: 300.0,
+                visible: true,
+            },
+            StoredListViewColumn {
+                kind: "size".to_owned(),
+                width: 110.0,
+                visible: false,
+            },
+        ],
+        list_sort_field: "size".to_owned(),
+        list_sort_direction: "descending".to_owned(),
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -315,6 +329,39 @@ fn unreadable_user_preferences_payload_is_deleted_on_read() {
         })
         .unwrap();
     assert_eq!(preference_count, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn legacy_user_preferences_without_list_view_fields_get_defaults() {
+    let (store, root) = test_store();
+    let mut payload = serde_json::to_value(StoredUserPreferences::default()).unwrap();
+    let object = payload.as_object_mut().expect("preferences payload object");
+    object.remove("list_view_columns");
+    object.remove("list_sort_field");
+    object.remove("list_sort_direction");
+    let payload_json = serde_json::to_string(&payload).unwrap();
+    let connection = Connection::open(store.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO user_preferences (preference_key, payload_json, updated_at_ms)
+             VALUES (?1, ?2, ?3)",
+            params![user_preferences::USER_PREFERENCES_KEY, payload_json, 1_i64],
+        )
+        .unwrap();
+    drop(connection);
+
+    let preferences = store
+        .read_user_preferences()
+        .unwrap()
+        .expect("preferences load");
+
+    assert_eq!(preferences.list_view_columns.len(), 9);
+    assert_eq!(preferences.list_view_columns[0].kind, "name");
+    assert_eq!(preferences.list_view_columns[4].kind, "extension");
+    assert!(!preferences.list_view_columns[4].visible);
+    assert_eq!(preferences.list_sort_field, "name");
+    assert_eq!(preferences.list_sort_direction, "ascending");
     let _ = fs::remove_dir_all(root);
 }
 

@@ -15,6 +15,8 @@ impl FileBrowser {
         self.sidebar_bookmark_drop_slot = None;
         self.sidebar_resize_drag = None;
         self.column_resize_drag = None;
+        self.list_column_resize_drag = None;
+        self.list_column_reorder_drag = None;
     }
 
     pub(super) fn finish_pointer_drag_interactions(&mut self) -> Task<Message> {
@@ -26,6 +28,8 @@ impl FileBrowser {
             self.finish_sidebar_bookmark_drag(),
             self.finish_sidebar_resize_drag_command(),
             self.finish_column_resize_drag_command(),
+            self.finish_list_column_resize_drag_command(),
+            self.finish_list_column_reorder_drag_command(),
             self.finish_drag_selection(None),
             self.schedule_thumbnail_refresh(),
         ])
@@ -53,6 +57,8 @@ impl FileBrowser {
         self.update_sidebar_bookmark_drag(position);
         self.update_sidebar_resize_drag(position);
         self.update_column_resize_drag(position);
+        self.update_list_column_resize_drag(position);
+        self.update_list_column_reorder_drag(position);
         let selection_command = if self.update_selection_marquee(position) {
             crate::column_entry_bounds::column_entry_bounds_command()
         } else {

@@ -16,8 +16,9 @@ use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
-    FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, Message, ScrollbarRegion,
-    ScrollbarVisibility, SidebarBookmarkContextMenuState,
+    FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, ListColumnConfig,
+    ListColumnKind, ListViewPreferences, Message, ScrollbarRegion, ScrollbarVisibility,
+    SidebarBookmarkContextMenuState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
@@ -37,10 +38,12 @@ const OPEN_WITH_APPLICATION_LIST_HEIGHT: f32 = 240.0;
 const OPEN_WITH_PATH_MAX_CHARS: usize = 62;
 const OPEN_WITH_ERROR_MAX_CHARS: usize = 96;
 const CONTEXT_MENU_WIDTH: f32 = 190.0;
+const LIST_COLUMN_MENU_WIDTH: f32 = 230.0;
 const CONTEXT_SUBMENU_WIDTH: f32 = 170.0;
 const CONTEXT_MENU_PADDING: f32 = 8.0;
 const CONTEXT_MENU_ITEM_SPACING: f32 = 4.0;
 const CONTEXT_MENU_ITEM_HEIGHT: f32 = 28.0;
+const LIST_COLUMN_VISIBILITY_BUTTON_HEIGHT: f32 = 28.0;
 pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
     let message = format_middle_ellipsized_text(error, ERROR_NOTIFICATION_MAX_CHARS);
     let content = row![
@@ -293,18 +296,72 @@ fn action_label(icon: IconSymbol, label: &'static str, size: f32) -> Row<'static
         .align_y(Alignment::Center)
 }
 
-pub(super) fn context_menu_panel(
-    menu: &ContextMenuState,
+pub(super) fn context_menu_panel<'a>(
+    menu: &'a ContextMenuState,
     is_trash_view: bool,
     active_pane_id: BrowserPaneId,
-) -> Element<'_, Message> {
+    list_view_preferences: &'a ListViewPreferences,
+) -> Element<'a, Message> {
     match menu {
         ContextMenuState::FileArea(menu) => {
             file_context_menu_panel(menu, is_trash_view, active_pane_id)
         }
+        ContextMenuState::ListColumns(_) => list_column_context_menu_panel(list_view_preferences),
         ContextMenuState::SidebarBookmark(menu) => sidebar_bookmark_context_menu_panel(menu),
         ContextMenuState::SidebarDevice(menu) => sidebar_device_context_menu_panel(menu),
         ContextMenuState::NetworkConnection(menu) => network_connection_context_menu_panel(menu),
+    }
+}
+
+fn list_column_context_menu_panel(preferences: &ListViewPreferences) -> Element<'_, Message> {
+    let mut menu_content = Column::new()
+        .spacing(CONTEXT_MENU_ITEM_SPACING)
+        .padding(CONTEXT_MENU_PADDING);
+    for column in preferences.columns() {
+        menu_content = menu_content.push(list_column_menu_row(column));
+    }
+
+    container(menu_content)
+        .width(Length::Fixed(LIST_COLUMN_MENU_WIDTH))
+        .style(context_menu_style)
+        .into()
+}
+
+fn list_column_menu_row(column: &ListColumnConfig) -> Element<'static, Message> {
+    row![
+        themed_icon(IconSymbol::List, IconTone::Normal, MENU_ICON_SIZE),
+        readable_text(column.kind.label())
+            .size(13)
+            .width(Length::Fill),
+        list_column_visibility_button(column),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
+    .into()
+}
+
+fn list_column_visibility_button(column: &ListColumnConfig) -> Button<'static, Message> {
+    let label = if column.kind == ListColumnKind::Name {
+        "Required"
+    } else if column.visible {
+        "Hide"
+    } else {
+        "Show"
+    };
+    let button = button(
+        container(readable_text(label).size(12))
+            .center_x(Length::Fixed(62.0))
+            .center_y(Length::Fixed(LIST_COLUMN_VISIBILITY_BUTTON_HEIGHT)),
+    )
+    .width(Length::Fixed(62.0))
+    .height(Length::Fixed(LIST_COLUMN_VISIBILITY_BUTTON_HEIGHT))
+    .style(transparent_button_style());
+
+    if column.kind == ListColumnKind::Name {
+        button
+    } else {
+        button.on_press(Message::ListColumnVisibilityToggled(column.kind))
     }
 }
 

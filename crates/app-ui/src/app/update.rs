@@ -269,6 +269,19 @@ impl FileBrowser {
                 }
                 self.handle_list_entry_clicked(path)
             }
+            Message::ListHeaderRightClicked(pane_id) => self.open_list_column_menu(pane_id),
+            Message::ListColumnVisibilityToggled(column) => {
+                self.toggle_list_column_visibility(column)
+            }
+            Message::ListColumnResizeStarted(pane_id, column) => {
+                self.start_list_column_resize_drag(pane_id, column)
+            }
+            Message::ListColumnReorderStarted(pane_id, column) => {
+                self.start_list_column_reorder_drag(pane_id, column)
+            }
+            Message::ListColumnReorderTargetEntered(column) => {
+                self.enter_list_column_reorder_target(column)
+            }
             Message::ColumnEntryClicked(pane_id, path) => {
                 self.activate_pane(pane_id);
                 if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
@@ -304,6 +317,8 @@ impl FileBrowser {
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
+                    self.finish_list_column_resize_drag_command(),
+                    self.finish_list_column_reorder_drag_command(),
                     self.finish_drag_selection(release_directory),
                     self.schedule_thumbnail_refresh(),
                 ])
@@ -369,6 +384,8 @@ impl FileBrowser {
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
                     self.finish_column_resize_drag_command(),
+                    self.finish_list_column_resize_drag_command(),
+                    self.finish_list_column_reorder_drag_command(),
                     self.finish_drag_selection(release_directory),
                     self.schedule_thumbnail_refresh(),
                 ])

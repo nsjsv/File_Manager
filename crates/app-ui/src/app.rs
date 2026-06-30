@@ -7,6 +7,7 @@ mod column_scroll;
 mod config_persistence;
 mod events;
 mod file_operations;
+mod list_view_settings;
 mod navigation;
 mod network_connections;
 mod network_settings;
@@ -223,6 +224,8 @@ pub(crate) struct FileBrowser {
     column_return_targets: HashMap<PathBuf, PathBuf>,
     pending_keyboard_column_focus: Option<PendingKeyboardColumnFocus>,
     column_resize_drag: Option<ColumnResizeDrag>,
+    list_column_resize_drag: Option<crate::app::list_view_settings::ListColumnResizeDrag>,
+    list_column_reorder_drag: Option<crate::app::list_view_settings::ListColumnReorderDrag>,
     last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
     operation_history: FileOperationHistory,
@@ -435,6 +438,8 @@ impl FileBrowser {
             column_return_targets: HashMap::new(),
             pending_keyboard_column_focus: None,
             column_resize_drag: None,
+            list_column_resize_drag: None,
+            list_column_reorder_drag: None,
             last_activation_click: None,
             operation_queue: FileOperationQueue::new(),
             operation_history: FileOperationHistory::new(),

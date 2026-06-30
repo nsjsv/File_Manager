@@ -5,11 +5,11 @@ use desktop_linux::{
     DisplayRendererGpu, DisplayRendererGpuClass, NetworkConnection, NetworkConnectionId,
     NetworkProtocol, TerminalEmulator,
 };
-use file_core::FileOperationVerification;
+use file_core::{FileOperationVerification, SortDirection, SortField};
 use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 use file_operation_store::{StoredNetworkConnection, TaskQueueStore};
 
-use crate::model::BrowserViewMode;
+use crate::model::{BrowserViewMode, ListColumnKind};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutBindingId;
 
@@ -195,6 +195,27 @@ fn user_preferences_round_trip_through_sqlite() {
     config.startup_custom_directory = PathBuf::from("/workspace");
     config.save_view_state = config.startup_location_policy.saves_view_state();
     config.browser_view_mode = BrowserViewMode::List;
+    config
+        .list_view_preferences
+        .set_column_visible(ListColumnKind::Kind, false);
+    config
+        .list_view_preferences
+        .set_column_visible(ListColumnKind::Extension, true);
+    config
+        .list_view_preferences
+        .set_column_width(ListColumnKind::Name, 280.0);
+    config
+        .list_view_preferences
+        .set_column_width(ListColumnKind::Extension, 140.0);
+    config
+        .list_view_preferences
+        .move_column_right(ListColumnKind::Name);
+    config
+        .list_view_preferences
+        .move_column_to(ListColumnKind::Extension, ListColumnKind::Name);
+    config
+        .list_view_preferences
+        .select_sort_column(ListColumnKind::Size);
     config.terminal_emulator = TerminalEmulator::Ghostty;
     config.file_operation_verification = FileOperationVerification::Strong;
     config.search_mode = SearchBackendMode::Indexed;
@@ -236,6 +257,29 @@ fn user_preferences_round_trip_through_sqlite() {
     assert_eq!(loaded.startup_custom_directory, PathBuf::from("/workspace"));
     assert!(loaded.save_view_state);
     assert_eq!(loaded.browser_view_mode, BrowserViewMode::List);
+    let loaded_columns = loaded
+        .list_view_preferences
+        .columns()
+        .iter()
+        .map(|column| (column.kind, column.visible, column.width))
+        .collect::<Vec<_>>();
+    assert_eq!(loaded_columns[0].0, ListColumnKind::Modified);
+    assert_eq!(loaded_columns[1].0, ListColumnKind::Extension);
+    assert!(loaded_columns[1].1);
+    assert_eq!(loaded_columns[1].2, 140.0);
+    assert_eq!(loaded_columns[2].0, ListColumnKind::Name);
+    assert_eq!(loaded_columns[2].2, 280.0);
+    assert!(loaded
+        .list_view_preferences
+        .columns()
+        .iter()
+        .find(|column| column.kind == ListColumnKind::Kind)
+        .is_some_and(|column| !column.visible));
+    assert_eq!(loaded.list_view_preferences.sort().field, SortField::Size);
+    assert_eq!(
+        loaded.list_view_preferences.sort().direction,
+        SortDirection::Ascending
+    );
     assert_eq!(loaded.terminal_emulator, TerminalEmulator::Ghostty);
     assert_eq!(
         loaded.file_operation_verification,

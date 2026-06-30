@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
-use file_core::FileOperationVerification;
+use file_core::{FileOperationVerification, SortDirection, SortField};
 use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy, MediaMetadataScope};
 
 use crate::model::BrowserViewMode;
@@ -170,6 +170,40 @@ pub(crate) fn browser_view_mode_config_value(view_mode: BrowserViewMode) -> &'st
     }
 }
 
+pub(crate) fn sort_field_from_config_value(value: &str) -> Option<SortField> {
+    match value {
+        "name" => Some(SortField::Name),
+        "modified" => Some(SortField::Modified),
+        "size" => Some(SortField::Size),
+        "kind" => Some(SortField::Kind),
+        _ => None,
+    }
+}
+
+pub(crate) fn sort_field_config_value(field: SortField) -> &'static str {
+    match field {
+        SortField::Name => "name",
+        SortField::Modified => "modified",
+        SortField::Size => "size",
+        SortField::Kind => "kind",
+    }
+}
+
+pub(crate) fn sort_direction_from_config_value(value: &str) -> Option<SortDirection> {
+    match value {
+        "ascending" => Some(SortDirection::Ascending),
+        "descending" => Some(SortDirection::Descending),
+        _ => None,
+    }
+}
+
+pub(crate) fn sort_direction_config_value(direction: SortDirection) -> &'static str {
+    match direction {
+        SortDirection::Ascending => "ascending",
+        SortDirection::Descending => "descending",
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
@@ -190,6 +224,7 @@ pub(crate) struct UserConfig {
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) list_view_preferences: crate::model::ListViewPreferences,
     pub(crate) startup_location_policy: StartupLocationPolicy,
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
@@ -235,6 +270,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        list_view_preferences: crate::model::ListViewPreferences::default(),
         startup_location_policy: StartupLocationPolicy::Home,
         startup_custom_directory: fallback_base.clone(),
         save_view_state: false,
@@ -262,6 +298,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        list_view_preferences: crate::model::ListViewPreferences::default(),
         startup_location_policy: StartupLocationPolicy::Home,
         startup_custom_directory: PathBuf::new(),
         save_view_state: false,

@@ -1,5 +1,6 @@
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::{StoreError, StoreResult, StoredPath, TaskQueueStore};
 
@@ -26,6 +27,48 @@ pub struct StoredUserPreferences {
     pub startup_custom_directory: StoredPath,
     pub save_view_state: bool,
     pub shortcuts: Vec<StoredShortcutBinding>,
+    #[serde(default = "default_stored_list_view_columns")]
+    pub list_view_columns: Vec<StoredListViewColumn>,
+    #[serde(default = "default_list_sort_field")]
+    pub list_sort_field: String,
+    #[serde(default = "default_list_sort_direction")]
+    pub list_sort_direction: String,
+}
+
+impl Default for StoredUserPreferences {
+    fn default() -> Self {
+        Self {
+            search_index_exclude_patterns: Vec::new(),
+            search_index_content_enabled: false,
+            search_index_media_scope: "off".to_owned(),
+            search_index_directory_error_policy: "skip_unreadable".to_owned(),
+            search_mode: "simple".to_owned(),
+            search_mode_prompt: "pending".to_owned(),
+            network_list_thumbnail_downloads_enabled: false,
+            max_preview_file_bytes: 3 * 1024 * 1024,
+            show_hidden_files: false,
+            sidebar_width: 180.0,
+            sidebar_favorites: None,
+            network_connections: Vec::new(),
+            terminal_emulator: "automatic".to_owned(),
+            file_operation_verification: "basic_metadata".to_owned(),
+            browser_view_mode: "columns".to_owned(),
+            startup_location: "home".to_owned(),
+            startup_custom_directory: StoredPath::from_path(Path::new("")),
+            save_view_state: false,
+            shortcuts: Vec::new(),
+            list_view_columns: default_stored_list_view_columns(),
+            list_sort_field: default_list_sort_field(),
+            list_sort_direction: default_list_sort_direction(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredListViewColumn {
+    pub kind: String,
+    pub width: f64,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +90,35 @@ pub struct StoredNetworkConnection {
 pub struct StoredShortcutBinding {
     pub action_key: String,
     pub binding: String,
+}
+
+fn default_stored_list_view_columns() -> Vec<StoredListViewColumn> {
+    [
+        ("name", 320.0, true),
+        ("modified", 160.0, true),
+        ("size", 96.0, true),
+        ("kind", 96.0, true),
+        ("extension", 112.0, false),
+        ("readonly", 96.0, false),
+        ("path", 320.0, false),
+        ("hidden", 88.0, false),
+        ("symlink", 104.0, false),
+    ]
+    .into_iter()
+    .map(|(kind, width, visible)| StoredListViewColumn {
+        kind: kind.to_owned(),
+        width,
+        visible,
+    })
+    .collect()
+}
+
+fn default_list_sort_field() -> String {
+    "name".to_owned()
+}
+
+fn default_list_sort_direction() -> String {
+    "ascending".to_owned()
 }
 
 impl TaskQueueStore {

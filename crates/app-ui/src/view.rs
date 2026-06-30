@@ -254,6 +254,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
                 context_menu,
                 browser.is_trash_view,
                 browser.active_pane_id(),
+                &browser.user_config().list_view_preferences,
             ),
             placement: FloatingPlacement::At(context_menu.position()),
         });

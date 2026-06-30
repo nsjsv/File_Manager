@@ -4,8 +4,8 @@ use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, Ter
 use file_core::FileOperationVerification;
 use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 use file_operation_store::{
-    StoreResult, StoredNetworkConnection, StoredPath, StoredShortcutBinding, StoredSidebarFavorite,
-    StoredUserPreferences, TaskQueueStore,
+    StoreResult, StoredListViewColumn, StoredNetworkConnection, StoredPath, StoredShortcutBinding,
+    StoredSidebarFavorite, StoredUserPreferences, TaskQueueStore,
 };
 
 use super::app_config::AppConfig;
@@ -15,10 +15,14 @@ use super::{
     app_config_dir_path, browser_view_mode_config_value, browser_view_mode_from_config_value,
     default_state_database_path, default_user_config, file_operation_verification_config_value,
     file_operation_verification_from_config_value, normalize_max_preview_file_bytes,
-    normalize_search_index_exclude_patterns, normalize_sidebar_width, SearchBackendMode,
-    SearchModePromptStatus, SidebarFavoriteConfig, UserConfig,
+    normalize_search_index_exclude_patterns, normalize_sidebar_width, sort_direction_config_value,
+    sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
+    SearchBackendMode, SearchModePromptStatus, SidebarFavoriteConfig, UserConfig,
 };
-use crate::model::BrowserViewMode;
+use crate::model::{
+    list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
+    ListColumnConfig, ListSortPreference, ListViewPreferences,
+};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
 
@@ -39,6 +43,7 @@ pub(crate) struct UserPreferences {
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) list_view_preferences: ListViewPreferences,
     pub(crate) startup_location_policy: StartupLocationPolicy,
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
@@ -66,6 +71,7 @@ impl UserPreferences {
             terminal_emulator: config.terminal_emulator,
             file_operation_verification: config.file_operation_verification,
             browser_view_mode: config.browser_view_mode,
+            list_view_preferences: config.list_view_preferences.clone(),
             startup_location_policy: config.startup_location_policy,
             startup_custom_directory: config.startup_custom_directory.clone(),
             save_view_state: config.startup_location_policy.saves_view_state(),
@@ -90,6 +96,7 @@ impl UserPreferences {
         config.terminal_emulator = self.terminal_emulator;
         config.file_operation_verification = self.file_operation_verification;
         config.browser_view_mode = self.browser_view_mode;
+        config.list_view_preferences = self.list_view_preferences.clone();
         config.startup_location_policy = self.startup_location_policy;
         config.startup_custom_directory = self.startup_custom_directory.clone();
         config.save_view_state = self.startup_location_policy.saves_view_state();
@@ -122,6 +129,13 @@ impl UserPreferences {
             )
             .to_owned(),
             browser_view_mode: browser_view_mode_config_value(self.browser_view_mode).to_owned(),
+            list_view_columns: stored_list_view_columns(&self.list_view_preferences),
+            list_sort_field: sort_field_config_value(self.list_view_preferences.sort().field)
+                .to_owned(),
+            list_sort_direction: sort_direction_config_value(
+                self.list_view_preferences.sort().direction,
+            )
+            .to_owned(),
             startup_location: self.startup_location_policy.config_value().to_owned(),
             startup_custom_directory: StoredPath::from_path(&self.startup_custom_directory),
             save_view_state: self.startup_location_policy.saves_view_state(),
@@ -134,6 +148,8 @@ impl UserPreferences {
         let startup_location_policy =
             StartupLocationPolicy::from_config_value(&stored.startup_location)
                 .unwrap_or(default_preferences.startup_location_policy);
+        let list_view_preferences =
+            list_view_preferences_from_stored(&stored, &default_preferences);
         Self {
             search_index_exclude_patterns: normalize_search_index_exclude_patterns(
                 stored.search_index_exclude_patterns,
@@ -170,6 +186,7 @@ impl UserPreferences {
             .unwrap_or(default_preferences.file_operation_verification),
             browser_view_mode: browser_view_mode_from_config_value(&stored.browser_view_mode)
                 .unwrap_or(default_preferences.browser_view_mode),
+            list_view_preferences,
             startup_location_policy,
             startup_custom_directory: stored.startup_custom_directory.to_path_buf(),
             save_view_state: startup_location_policy.saves_view_state(),
@@ -296,6 +313,43 @@ fn network_connections_from_stored(
         }
     }
     restored
+}
+
+fn stored_list_view_columns(preferences: &ListViewPreferences) -> Vec<StoredListViewColumn> {
+    preferences
+        .columns()
+        .iter()
+        .map(|column| StoredListViewColumn {
+            kind: list_column_kind_config_value(column.kind).to_owned(),
+            width: f64::from(column.width),
+            visible: column.visible,
+        })
+        .collect()
+}
+
+fn list_view_preferences_from_stored(
+    stored: &StoredUserPreferences,
+    default: &UserPreferences,
+) -> ListViewPreferences {
+    let columns = stored
+        .list_view_columns
+        .iter()
+        .filter_map(|column| {
+            let kind = list_column_kind_from_config_value(&column.kind)?;
+            Some(ListColumnConfig::new(
+                kind,
+                column.width as f32,
+                column.visible,
+            ))
+        })
+        .collect();
+    let sort = ListSortPreference {
+        field: sort_field_from_config_value(&stored.list_sort_field)
+            .unwrap_or(default.list_view_preferences.sort().field),
+        direction: sort_direction_from_config_value(&stored.list_sort_direction)
+            .unwrap_or(default.list_view_preferences.sort().direction),
+    };
+    ListViewPreferences::new(columns, sort)
 }
 
 fn stored_shortcuts(shortcuts: &ShortcutConfig) -> Vec<StoredShortcutBinding> {
