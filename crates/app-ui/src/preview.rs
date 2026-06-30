@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use file_core::{
-    is_supported_audio_path, is_supported_video_path, scan_directory, DirectoryEntry, FileKind,
+    archive_extraction_format_for_path, is_supported_audio_path, is_supported_video_path,
+    list_archive_members, scan_directory, ArchiveListingEntry, DirectoryEntry, FileKind,
     ScanOptions,
 };
 
@@ -18,7 +16,6 @@ pub(crate) const PREVIEW_ARCHIVE_ENTRY_LIMIT: usize = 500;
 
 const SUPPORTED_ARCHIVE_FORMAT_MESSAGE: &str =
     "Archive preview supports .zip, .tar, .tar.gz, .tgz, .7z, and .rar files";
-const SEVEN_ZIP_COMMAND_NAMES: [&str; 3] = ["7z", "7zz", "7za"];
 
 pub(crate) async fn load_preview(
     path: PathBuf,
@@ -30,8 +27,8 @@ pub(crate) async fn load_preview(
         FileKind::Directory => load_directory_preview(path, options).await,
         FileKind::File => {
             reject_file_over_preview_limit(&path, max_file_bytes).await?;
-            if let Some(format) = archive_format_for_path(&path) {
-                load_archive_preview(path, format).await
+            if archive_extraction_format_for_path(&path).is_some() {
+                load_archive_preview(path).await
             } else if is_known_archive_path(&path) {
                 Err(format!(
                     "This archive format is not supported yet. {SUPPORTED_ARCHIVE_FORMAT_MESSAGE}"
@@ -89,233 +86,19 @@ pub(crate) async fn load_directory_preview_children(
         .map_err(|error| error.to_string())
 }
 
-async fn load_archive_preview(
-    path: PathBuf,
-    format: ArchiveFormat,
-) -> Result<PreviewContent, String> {
-    // zip/tar 解析接口是同步的，放进阻塞线程池避免卡住 async runtime。
-    let archive_preview =
-        tokio::task::spawn_blocking(move || load_archive_preview_blocking(path.as_path(), format))
-            .await
-            .map_err(|error| format!("could not read archive preview: {error}"))??;
-
-    Ok(PreviewContent::Archive {
-        entries: archive_preview.entries,
-    })
-}
-
-fn load_archive_preview_blocking(
-    path: &Path,
-    format: ArchiveFormat,
-) -> Result<ArchivePreview, String> {
-    let members = match format {
-        ArchiveFormat::Zip => read_zip_members(path),
-        ArchiveFormat::Tar => read_tar_members(path, TarCompression::Plain),
-        ArchiveFormat::GzipTar => read_tar_members(path, TarCompression::Gzip),
-        ArchiveFormat::SevenZip => read_seven_zip_command_members(path, "7z"),
-        ArchiveFormat::Rar => read_seven_zip_command_members(path, "rar"),
-    }?;
-
+async fn load_archive_preview(path: PathBuf) -> Result<PreviewContent, String> {
+    let members = list_archive_members(path)
+        .await
+        .map_err(|error| error.to_string())?;
     let mut tree_builder = ArchiveTreeBuilder::new();
     for member in members {
         tree_builder.insert_member(member);
     }
+    let archive_preview = tree_builder.finish(PREVIEW_ARCHIVE_ENTRY_LIMIT);
 
-    Ok(tree_builder.finish(PREVIEW_ARCHIVE_ENTRY_LIMIT))
-}
-
-fn read_zip_members(path: &Path) -> Result<Vec<ArchiveMember>, String> {
-    let file = File::open(path).map_err(|error| format!("could not open zip preview: {error}"))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| format!("could not read zip preview: {error}"))?;
-    let mut members = Vec::with_capacity(archive.len());
-
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|error| format!("could not inspect zip entry: {error}"))?;
-        let kind = if entry.is_dir() {
-            FileKind::Directory
-        } else {
-            FileKind::File
-        };
-        members.push(ArchiveMember {
-            path: entry.name().to_owned(),
-            kind,
-        });
-    }
-
-    Ok(members)
-}
-
-fn read_tar_members(
-    path: &Path,
-    compression: TarCompression,
-) -> Result<Vec<ArchiveMember>, String> {
-    let file = File::open(path).map_err(|error| format!("could not open tar preview: {error}"))?;
-    match compression {
-        TarCompression::Plain => read_tar_members_from(file),
-        TarCompression::Gzip => read_tar_members_from(flate2::read::GzDecoder::new(file)),
-    }
-}
-
-fn read_tar_members_from<R: std::io::Read>(reader: R) -> Result<Vec<ArchiveMember>, String> {
-    let mut archive = tar::Archive::new(reader);
-    let entries = archive
-        .entries()
-        .map_err(|error| format!("could not read tar preview: {error}"))?;
-    let mut members = Vec::new();
-
-    for entry_outcome in entries {
-        let entry =
-            entry_outcome.map_err(|error| format!("could not inspect tar entry: {error}"))?;
-        let entry_type = entry.header().entry_type();
-        let kind = if entry_type.is_dir() {
-            FileKind::Directory
-        } else if entry_type.is_symlink() {
-            FileKind::Symlink
-        } else if entry_type.is_file() {
-            FileKind::File
-        } else {
-            FileKind::Other
-        };
-        let path = entry
-            .path()
-            .map_err(|error| format!("could not inspect tar entry path: {error}"))?
-            .to_string_lossy()
-            .into_owned();
-        members.push(ArchiveMember { path, kind });
-    }
-
-    Ok(members)
-}
-
-fn read_seven_zip_command_members(
-    path: &Path,
-    format_label: &str,
-) -> Result<Vec<ArchiveMember>, String> {
-    for command_name in SEVEN_ZIP_COMMAND_NAMES {
-        let command_outcome = Command::new(command_name)
-            .arg("l")
-            .arg("-slt")
-            .arg("--")
-            .arg(path)
-            .output();
-        let command_output = match command_outcome {
-            Ok(command_output) => command_output,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "could not run {command_name} for {format_label} preview: {error}"
-                ));
-            }
-        };
-
-        if command_output.status.success() {
-            let listing = String::from_utf8_lossy(&command_output.stdout);
-            return Ok(parse_seven_zip_listing(&listing));
-        }
-
-        let error_message = String::from_utf8_lossy(&command_output.stderr);
-        let error_message = error_message.trim();
-        if error_message.is_empty() {
-            return Err(format!(
-                "could not list {format_label} archive with {command_name}: exit status {}",
-                command_output.status
-            ));
-        }
-        return Err(format!(
-            "could not list {format_label} archive with {command_name}: {error_message}"
-        ));
-    }
-
-    Err("Install 7z, 7zz, or 7za to preview .7z/.rar archives".to_owned())
-}
-
-fn parse_seven_zip_listing(technical_listing: &str) -> Vec<ArchiveMember> {
-    let mut members = Vec::new();
-    let mut in_archive_entries = false;
-    let mut current_entry: Option<SevenZipListedEntry> = None;
-
-    for line in technical_listing.lines() {
-        if line.trim() == "----------" {
-            in_archive_entries = true;
-            continue;
-        }
-        if !in_archive_entries {
-            continue;
-        }
-        if line.trim().is_empty() {
-            push_listed_archive_member(current_entry.take(), &mut members);
-            continue;
-        }
-
-        if let Some(path) = line.strip_prefix("Path = ") {
-            push_listed_archive_member(current_entry.take(), &mut members);
-            current_entry = Some(SevenZipListedEntry {
-                path: path.to_owned(),
-                is_directory: path.ends_with('/') || path.ends_with('\\'),
-            });
-            continue;
-        }
-
-        let Some(entry) = current_entry.as_mut() else {
-            continue;
-        };
-        if let Some(folder) = line.strip_prefix("Folder = ") {
-            entry.is_directory |= seven_zip_folder_field_is_directory(folder);
-        } else if let Some(attributes) = line.strip_prefix("Attributes = ") {
-            entry.is_directory |= seven_zip_attributes_field_is_directory(attributes);
-        }
-    }
-
-    push_listed_archive_member(current_entry, &mut members);
-    members
-}
-
-fn push_listed_archive_member(
-    listed_entry: Option<SevenZipListedEntry>,
-    members: &mut Vec<ArchiveMember>,
-) {
-    let Some(listed_entry) = listed_entry else {
-        return;
-    };
-    if listed_entry.path.is_empty() {
-        return;
-    }
-
-    members.push(ArchiveMember {
-        path: listed_entry.path,
-        kind: if listed_entry.is_directory {
-            FileKind::Directory
-        } else {
-            FileKind::File
-        },
-    });
-}
-
-fn seven_zip_folder_field_is_directory(folder: &str) -> bool {
-    let folder = folder.trim();
-    folder == "+" || folder.eq_ignore_ascii_case("true")
-}
-
-fn seven_zip_attributes_field_is_directory(attributes: &str) -> bool {
-    attributes.trim_start().starts_with('D')
-}
-
-fn archive_format_for_path(path: &Path) -> Option<ArchiveFormat> {
-    let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
-    if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
-        return Some(ArchiveFormat::GzipTar);
-    }
-
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some(extension) if extension.eq_ignore_ascii_case("zip") => Some(ArchiveFormat::Zip),
-        Some(extension) if extension.eq_ignore_ascii_case("tar") => Some(ArchiveFormat::Tar),
-        Some(extension) if extension.eq_ignore_ascii_case("7z") => Some(ArchiveFormat::SevenZip),
-        Some(extension) if extension.eq_ignore_ascii_case("rar") => Some(ArchiveFormat::Rar),
-        _ => None,
-    }
+    Ok(PreviewContent::Archive {
+        entries: archive_preview.entries,
+    })
 }
 
 fn is_known_archive_path(path: &Path) -> bool {
@@ -351,33 +134,8 @@ async fn load_video_preview(path: PathBuf) -> Result<PreviewContent, String> {
     })
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ArchiveFormat {
-    Zip,
-    Tar,
-    GzipTar,
-    SevenZip,
-    Rar,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TarCompression {
-    Plain,
-    Gzip,
-}
-
 struct ArchivePreview {
     entries: Vec<PreviewTreeEntry>,
-}
-
-struct ArchiveMember {
-    path: String,
-    kind: FileKind,
-}
-
-struct SevenZipListedEntry {
-    path: String,
-    is_directory: bool,
 }
 
 struct ArchiveTreeBuilder {
@@ -395,7 +153,7 @@ impl ArchiveTreeBuilder {
         }
     }
 
-    fn insert_member(&mut self, member: ArchiveMember) {
+    fn insert_member(&mut self, member: ArchiveListingEntry) {
         let segments = archive_path_segments(&member.path);
         if segments.is_empty() {
             return;

@@ -443,11 +443,13 @@ fn deterministic_random_text(name: &str, index: usize, length: usize, alphabet: 
     } else {
         alphabet
     };
-    let mut seed = 0xcbf29ce484222325u64;
-    for byte in name.as_bytes().iter().chain(index.to_le_bytes().iter()) {
-        seed ^= u64::from(*byte);
-        seed = seed.wrapping_mul(0x100000001b3);
-    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(name.as_bytes());
+    hasher.update(&index.to_le_bytes());
+    let hash = hasher.finalize();
+    let mut seed_bytes = [0u8; 8];
+    seed_bytes.copy_from_slice(&hash.as_bytes()[..8]);
+    let mut seed = u64::from_le_bytes(seed_bytes);
 
     let mut output = String::new();
     for _ in 0..length {

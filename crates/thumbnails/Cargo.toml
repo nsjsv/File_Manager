@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3.workspace = true
 file-core = { path = "../file-core" }
 image.workspace = true
 resvg.workspace = true

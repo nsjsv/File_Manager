@@ -20,14 +20,12 @@ pub(crate) fn exclude_rules_hash(patterns: &[String]) -> String {
     normalized.sort_unstable();
     normalized.dedup();
 
-    let mut hash = 0xcbf29ce484222325u64;
+    let mut hasher = blake3::Hasher::new();
     for pattern in normalized {
-        for byte in pattern.as_bytes().iter().chain(std::iter::once(&0)) {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
+        hasher.update(pattern.as_bytes());
+        hasher.update(b"\0");
     }
-    format!("{hash:016x}")
+    hasher.finalize().to_hex().to_string()
 }
 
 #[cfg(test)]

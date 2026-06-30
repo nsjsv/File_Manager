@@ -15,8 +15,6 @@ use tokio_util::sync::CancellationToken;
 use crate::formatting::format_file_size;
 
 const NETWORK_PREVIEW_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
-const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-const FNV_PRIME: u64 = 0x100000001b3;
 
 #[derive(Debug, Clone)]
 pub(crate) struct NetworkPreviewCacheRequest {
@@ -110,7 +108,7 @@ fn network_preview_cache_path(
     source_metadata: &std::fs::Metadata,
 ) -> PathBuf {
     let signature = network_preview_cache_signature(source_path, source_metadata);
-    let mut file_name = OsString::from(format!("network-preview-{signature:016x}"));
+    let mut file_name = OsString::from(format!("network-preview-{signature}"));
     if let Some(extension) = source_path.extension() {
         file_name.push(".");
         file_name.push(extension);
@@ -118,19 +116,27 @@ fn network_preview_cache_path(
     cache_dir.join(file_name)
 }
 
-fn network_preview_cache_signature(source_path: &Path, source_metadata: &std::fs::Metadata) -> u64 {
-    let mut hash = FNV_OFFSET;
+fn network_preview_cache_signature(
+    source_path: &Path,
+    source_metadata: &std::fs::Metadata,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    update_signature_field(&mut hasher, b"file-manager-network-preview");
     #[cfg(unix)]
     {
-        hash = hash_bytes(hash, source_path.as_os_str().as_bytes());
+        update_signature_field(&mut hasher, source_path.as_os_str().as_bytes());
     }
     #[cfg(not(unix))]
     {
         let path_text = source_path.to_string_lossy();
-        hash = hash_bytes(hash, path_text.as_bytes());
+        update_signature_field(&mut hasher, path_text.as_bytes());
     }
-    hash = hash_bytes(hash, &source_metadata.len().to_le_bytes());
-    hash_bytes(hash, &modified_signature(source_metadata).to_le_bytes())
+    update_signature_field(&mut hasher, &source_metadata.len().to_le_bytes());
+    update_signature_field(
+        &mut hasher,
+        &modified_signature(source_metadata).to_le_bytes(),
+    );
+    hasher.finalize().to_hex().to_string()
 }
 
 fn modified_signature(metadata: &std::fs::Metadata) -> u128 {
@@ -142,12 +148,9 @@ fn modified_signature(metadata: &std::fs::Metadata) -> u128 {
         .unwrap_or(0)
 }
 
-fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
+fn update_signature_field(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 async fn cached_file_is_fresh(path: &Path, now: SystemTime) -> bool {

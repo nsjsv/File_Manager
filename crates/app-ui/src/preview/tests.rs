@@ -1,7 +1,8 @@
-use std::io::Write;
-
+use file_core::{
+    create_archive_with_progress, ArchiveCompressionLevel, ArchiveCreationRequest, ArchiveFormat,
+};
 use tempfile::tempdir;
-use zip::write::SimpleFileOptions;
+use tokio_util::sync::CancellationToken;
 
 use crate::model::{PreviewTreeDirectoryChildren, TextPreviewFormat};
 use crate::text_preview_loading::PREVIEW_TEXT_LIMIT;
@@ -15,7 +16,7 @@ const TEST_LARGE_MAX_PREVIEW_FILE_BYTES: u64 = 32 * 1024 * 1024;
 async fn load_preview_reads_zip_archive_tree() {
     let temp_dir = tempdir().expect("temp dir");
     let archive_path = temp_dir.path().join("sample.zip");
-    write_zip_archive(&archive_path);
+    write_test_archive(&archive_path, ArchiveFormat::Zip).await;
 
     let preview_content = load_preview(
         archive_path.clone(),
@@ -96,7 +97,7 @@ async fn load_directory_preview_children_reads_expanded_layer() {
 async fn load_preview_reads_gzip_tar_archive_tree() {
     let temp_dir = tempdir().expect("temp dir");
     let archive_path = temp_dir.path().join("sample.tar.gz");
-    write_gzip_tar_archive(&archive_path);
+    write_test_archive(&archive_path, ArchiveFormat::TarGz).await;
 
     let preview_content = load_preview(
         archive_path,
@@ -111,8 +112,9 @@ async fn load_preview_reads_gzip_tar_archive_tree() {
         panic!("expected archive preview");
     };
 
-    assert_preview_tree_entry(&entries[0], "nested", FileKind::Directory, 0, None);
-    assert_preview_tree_entry(&entries[1], "file.txt", FileKind::File, 1, Some(0));
+    assert_preview_tree_entry(&entries[0], "src", FileKind::Directory, 0, None);
+    assert_preview_tree_entry(&entries[1], "main.rs", FileKind::File, 1, Some(0));
+    assert_preview_tree_entry(&entries[2], "README.md", FileKind::File, 0, None);
 }
 
 #[tokio::test]
@@ -234,37 +236,6 @@ async fn load_preview_truncates_long_markdown_on_utf8_boundary() {
     assert!(rendered.is_char_boundary(rendered.len()));
 }
 
-#[test]
-fn parse_seven_zip_listing_reads_directory_markers() {
-    let members = parse_seven_zip_listing(
-        r#"
-Path = archive.rar
-Type = Rar
-
-----------
-Path = src
-Folder = +
-Attributes = D_ drwxr-xr-x
-
-Path = src/main.rs
-Folder = -
-Attributes = A_ -rw-r--r--
-
-Path = docs\guide.md
-Folder = -
-Attributes = A_ -rw-r--r--
-"#,
-    );
-
-    assert_eq!(members.len(), 3);
-    assert_eq!(members[0].path, "src");
-    assert_eq!(members[0].kind, FileKind::Directory);
-    assert_eq!(members[1].path, "src/main.rs");
-    assert_eq!(members[1].kind, FileKind::File);
-    assert_eq!(members[2].path, "docs\\guide.md");
-    assert_eq!(members[2].kind, FileKind::File);
-}
-
 fn numbered_line_range(start: usize, end: usize) -> String {
     let mut content = String::new();
     for index in start..end {
@@ -273,36 +244,29 @@ fn numbered_line_range(start: usize, end: usize) -> String {
     content
 }
 
-fn write_zip_archive(path: &Path) {
-    let file = File::create(path).expect("create zip file");
-    let mut archive = zip::ZipWriter::new(file);
-    let options = SimpleFileOptions::default();
-    archive.add_directory("src/", options).expect("zip dir");
-    archive
-        .start_file("src/main.rs", options)
-        .expect("zip nested file");
-    archive.write_all(b"fn main() {}\n").expect("zip content");
-    archive
-        .start_file("README.md", options)
-        .expect("zip root file");
-    archive.write_all(b"# sample\n").expect("zip readme");
-    archive.finish().expect("finish zip");
-}
+async fn write_test_archive(path: &Path, format: ArchiveFormat) {
+    let source_dir = path
+        .parent()
+        .expect("archive parent")
+        .join("archive-source");
+    std::fs::create_dir_all(source_dir.join("src")).expect("create source dir");
+    std::fs::write(source_dir.join("src").join("main.rs"), "fn main() {}\n")
+        .expect("write nested source");
+    std::fs::write(source_dir.join("README.md"), "# sample\n").expect("write readme source");
 
-fn write_gzip_tar_archive(path: &Path) {
-    let file = File::create(path).expect("create tar.gz file");
-    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-    let mut archive = tar::Builder::new(encoder);
-    let bytes = b"hello\n";
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    archive
-        .append_data(&mut header, "nested/file.txt", &bytes[..])
-        .expect("tar nested file");
-    let encoder = archive.into_inner().expect("finish tar");
-    encoder.finish().expect("finish gzip");
+    create_archive_with_progress(
+        ArchiveCreationRequest {
+            sources: vec![source_dir.join("src"), source_dir.join("README.md")],
+            target: path.to_path_buf(),
+            format,
+            compression_level: ArchiveCompressionLevel::Balanced,
+            password: None,
+        },
+        CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("create test archive");
 }
 
 fn assert_preview_tree_entry(

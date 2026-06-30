@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-blake3 = "1.8.5"
+blake3.workspace = true
 flate2 = "1.1.9"
 notify.workspace = true
 tar = "0.4.46"

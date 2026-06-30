@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use thumbnails::{
-    generate_image_thumbnail, is_supported_thumbnail_path, is_supported_video_path,
-    load_cached_thumbnail, load_image_dimensions, load_or_generate_image_thumbnail,
-    load_or_generate_thumbnail, path_is_in_thumbnail_cache, ThumbnailError, ThumbnailOptions,
-    ThumbnailRequest, ThumbnailSourceMetadata,
+    generate_image_thumbnail, is_supported_thumbnail_path, load_cached_thumbnail,
+    load_image_dimensions, load_or_generate_image_thumbnail, load_or_generate_thumbnail,
+    path_is_in_thumbnail_cache, ThumbnailError, ThumbnailOptions, ThumbnailRequest,
+    ThumbnailSourceMetadata,
 };
 
 #[tokio::test]
@@ -213,7 +213,7 @@ fn supported_thumbnail_path_includes_images_and_videos() {
         assert!(is_supported_thumbnail_path(path), "{path}");
     }
     assert!(is_supported_thumbnail_path("clip.MP4"));
-    assert!(is_supported_video_path("movie.webm"));
+    assert!(is_supported_thumbnail_path("movie.webm"));
     assert!(!is_supported_thumbnail_path("notes.txt"));
 }
 

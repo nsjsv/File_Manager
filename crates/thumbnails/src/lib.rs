@@ -184,22 +184,6 @@ pub enum ThumbnailError {
     },
 }
 
-pub fn is_supported_image_path(path: impl AsRef<Path>) -> bool {
-    file_core::is_supported_image_path(path)
-}
-
-pub fn is_supported_image_extension(extension: &str) -> bool {
-    file_core::is_supported_image_extension(extension)
-}
-
-pub fn is_supported_video_path(path: impl AsRef<Path>) -> bool {
-    file_core::is_supported_video_path(path)
-}
-
-pub fn is_supported_video_extension(extension: &str) -> bool {
-    file_core::is_supported_video_extension(extension)
-}
-
 pub fn is_supported_thumbnail_path(path: impl AsRef<Path>) -> bool {
     thumbnail_media_kind_for_path(path.as_ref()).is_some()
 }
@@ -256,7 +240,7 @@ pub async fn load_or_generate_image_thumbnail(
     cache_dir: impl AsRef<Path>,
     request: ThumbnailRequest,
 ) -> Result<CachedThumbnail, ThumbnailError> {
-    if !is_supported_image_path(&request.source) {
+    if !file_core::is_supported_image_path(&request.source) {
         return Err(ThumbnailError::UnsupportedFormat {
             path: request.source,
         });
@@ -721,9 +705,9 @@ fn video_thumbnailer_failure_message(output: &Output) -> String {
 
 fn thumbnail_media_kind_for_path(path: &Path) -> Option<ThumbnailMediaKind> {
     let extension = path.extension().and_then(std::ffi::OsStr::to_str)?;
-    if is_supported_image_extension(extension) {
+    if file_core::is_supported_image_extension(extension) {
         Some(ThumbnailMediaKind::Image)
-    } else if is_supported_video_extension(extension) {
+    } else if file_core::is_supported_video_extension(extension) {
         Some(ThumbnailMediaKind::Video)
     } else {
         None
@@ -754,16 +738,16 @@ fn temporary_output_path(output: &Path) -> PathBuf {
 }
 
 fn thumbnail_key(request: &ThumbnailRequest, media_kind: ThumbnailMediaKind) -> ThumbnailKey {
-    let mut hash = 0xcbf29ce484222325u64;
-    update_hash(&mut hash, b"file-manager-thumbnail");
-    update_hash(&mut hash, &[THUMBNAILER_VERSION]);
-    update_hash(&mut hash, media_kind.cache_tag());
-    update_hash(&mut hash, request_path_bytes(&request.source));
-    update_hash(&mut hash, &request.metadata.len.to_le_bytes());
-    update_system_time_hash(&mut hash, request.metadata.modified);
-    update_hash(&mut hash, &request.max_edge.to_le_bytes());
-    update_hash(&mut hash, CACHE_FORMAT_EXTENSION.as_bytes());
-    ThumbnailKey(format!("{hash:016x}"))
+    let mut hasher = blake3::Hasher::new();
+    update_hash(&mut hasher, b"file-manager-thumbnail");
+    update_hash(&mut hasher, &[THUMBNAILER_VERSION]);
+    update_hash(&mut hasher, media_kind.cache_tag());
+    update_hash(&mut hasher, request_path_bytes(&request.source));
+    update_hash(&mut hasher, &request.metadata.len.to_le_bytes());
+    update_system_time_hash(&mut hasher, request.metadata.modified);
+    update_hash(&mut hasher, &request.max_edge.to_le_bytes());
+    update_hash(&mut hasher, CACHE_FORMAT_EXTENSION.as_bytes());
+    ThumbnailKey(hasher.finalize().to_hex().to_string())
 }
 
 #[cfg(unix)]
@@ -777,39 +761,35 @@ fn request_path_bytes(path: &Path) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-fn update_hash(hash: &mut u64, bytes: &[u8]) {
-    update_hash_inner(hash, bytes);
+fn update_hash(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    update_hash_inner(hasher, bytes);
 }
 
 #[cfg(not(unix))]
-fn update_hash(hash: &mut u64, bytes: impl AsRef<[u8]>) {
-    update_hash_inner(hash, bytes.as_ref());
+fn update_hash(hasher: &mut blake3::Hasher, bytes: impl AsRef<[u8]>) {
+    update_hash_inner(hasher, bytes.as_ref());
 }
 
-fn update_hash_inner(hash: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        *hash ^= *byte as u64;
-        *hash = hash.wrapping_mul(0x100000001b3);
-    }
-    *hash ^= 0xff;
-    *hash = hash.wrapping_mul(0x100000001b3);
+fn update_hash_inner(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
-fn update_system_time_hash(hash: &mut u64, time: Option<SystemTime>) {
+fn update_system_time_hash(hasher: &mut blake3::Hasher, time: Option<SystemTime>) {
     match time {
         Some(time) => match time.duration_since(UNIX_EPOCH) {
             Ok(duration) => {
-                update_hash(hash, b"mtime+");
-                update_hash(hash, &duration.as_secs().to_le_bytes());
-                update_hash(hash, &duration.subsec_nanos().to_le_bytes());
+                update_hash(hasher, b"mtime+");
+                update_hash(hasher, &duration.as_secs().to_le_bytes());
+                update_hash(hasher, &duration.subsec_nanos().to_le_bytes());
             }
             Err(error) => {
                 let duration = error.duration();
-                update_hash(hash, b"mtime-");
-                update_hash(hash, &duration.as_secs().to_le_bytes());
-                update_hash(hash, &duration.subsec_nanos().to_le_bytes());
+                update_hash(hasher, b"mtime-");
+                update_hash(hasher, &duration.as_secs().to_le_bytes());
+                update_hash(hasher, &duration.subsec_nanos().to_le_bytes());
             }
         },
-        None => update_hash(hash, b"mtime-none"),
+        None => update_hash(hasher, b"mtime-none"),
     }
 }

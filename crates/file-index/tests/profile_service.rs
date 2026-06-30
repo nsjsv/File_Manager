@@ -7,11 +7,11 @@ use std::time::Duration;
 
 use file_core::FileKind;
 use file_index::{
-    build_file_search_index, default_search_index_exclude_patterns, BuildSelectedPathsRequest,
-    ContentIndexPolicy, DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode,
-    FileSearchIndexOptions, IndexProfile, IndexService, IndexServiceCommand, IndexServiceEvent,
-    IndexTaskPhase, MediaMetadataPolicy, MediaMetadataScope, ProfileStore, SearchIndexFileRecord,
-    SearchMode, SearchQuery,
+    build_file_search_index, default_search_index_exclude_patterns, search_index_dir_for_root,
+    BuildSelectedPathsRequest, ContentIndexPolicy, DirectoryErrorPolicy, FileSearchIndexFailure,
+    FileSearchIndexMode, FileSearchIndexOptions, IndexProfile, IndexService, IndexServiceCommand,
+    IndexServiceEvent, IndexTaskPhase, MediaMetadataPolicy, MediaMetadataScope, ProfileStore,
+    SearchIndexFileRecord, SearchMode, SearchQuery,
 };
 use tempfile::tempdir;
 
@@ -244,7 +244,7 @@ async fn index_service_queries_files_mode_from_configured_profile() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("daily-note.txt"), b"note").unwrap();
     let index_base = dir.path().join("indexes");
-    let index_dir = index_base.join(root_key_for_test(&root));
+    let index_dir = search_index_dir_for_root(&index_base, &root);
     build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
         .await
         .unwrap();
@@ -281,7 +281,7 @@ async fn index_service_queries_content_mode_when_profile_enables_content() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("meeting.md"), "quarterly roadmap signal").unwrap();
     let index_base = dir.path().join("indexes");
-    let index_dir = index_base.join(root_key_for_test(&root));
+    let index_dir = search_index_dir_for_root(&index_base, &root);
     build_file_search_index(
         &root,
         &index_dir,
@@ -586,7 +586,7 @@ async fn index_service_maintains_root_after_file_create_modify_and_delete() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("initial.txt"), "initial body").unwrap();
     let index_base = dir.path().join("indexes");
-    let index_dir = index_base.join(root_key_for_test(&root));
+    let index_dir = search_index_dir_for_root(&index_base, &root);
     build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
         .await
         .unwrap();
@@ -622,7 +622,7 @@ async fn index_service_maintains_root_after_file_rename() {
     let renamed = root.join("published-note.txt");
     std::fs::write(&source, "draft").unwrap();
     let index_base = dir.path().join("indexes");
-    let index_dir = index_base.join(root_key_for_test(&root));
+    let index_dir = search_index_dir_for_root(&index_base, &root);
     build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
         .await
         .unwrap();
@@ -650,7 +650,7 @@ async fn index_service_maintenance_does_not_reconcile_changes_missed_while_stopp
     let missed = root.join("offline-note.txt");
     std::fs::write(root.join("initial.txt"), "initial").unwrap();
     let index_base = dir.path().join("indexes");
-    let index_dir = index_base.join(root_key_for_test(&root));
+    let index_dir = search_index_dir_for_root(&index_base, &root);
     build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
         .await
         .unwrap();
@@ -668,20 +668,6 @@ async fn index_service_maintenance_does_not_reconcile_changes_missed_while_stopp
     wait_for_watch_started(&mut events, &root).await;
 
     assert_file_query_count(&service, &root, "offline", 0).await;
-}
-
-fn root_key_for_test(root: &PathBuf) -> String {
-    hex_encode(root.as_os_str().as_encoded_bytes())
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
 }
 
 async fn wait_for_watch_started(

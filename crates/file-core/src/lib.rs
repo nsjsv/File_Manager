@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod archive_extraction;
+pub mod archive_listing;
 pub mod entry;
 pub mod media;
 pub mod ops;
@@ -17,6 +18,7 @@ pub use archive_extraction::{
     archive_extraction_format_for_path, extract_archive, inspect_archive_extraction,
     is_supported_archive_path, ArchiveExtractionFormat, ArchiveExtractionRequest,
 };
+pub use archive_listing::{list_archive_members, ArchiveListingEntry};
 pub use entry::{DirectoryEntry, EntryMetadata, FileKind};
 pub use media::{
     is_supported_audio_extension, is_supported_audio_path, is_supported_image_extension,
@@ -46,3 +48,5 @@ pub use trash_bin::{
     TrashRestoreEntry, TrashScan,
 };
 pub use watch::{watch_directory, DirectoryChange, DirectoryWatcher};
+
+pub(crate) const SEVEN_ZIP_COMMAND_NAMES: [&str; 3] = ["7z", "7zz", "7za"];

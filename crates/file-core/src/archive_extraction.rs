@@ -8,9 +8,7 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use zip::result::ZipError;
 
-use crate::{ArchivePassword, FileError};
-
-const SEVEN_ZIP_COMMAND_NAMES: [&str; 3] = ["7z", "7zz", "7za"];
+use crate::{ArchivePassword, FileError, SEVEN_ZIP_COMMAND_NAMES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveExtractionFormat {

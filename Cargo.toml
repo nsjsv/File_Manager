@@ -16,6 +16,7 @@ license = "GPL-3.0-or-later"
 repository = ""
 
 [workspace.dependencies]
+blake3 = "1.8.5"
 dirs = "5.0"
 iced = { version = "0.14", default-features = false, features = ["tokio", "advanced", "advanced-shaping", "svg", "image", "x11", "wayland", "fira-sans", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }

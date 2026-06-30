@@ -468,23 +468,16 @@ fn scroll_frame_offset(delta: SmoothScrollDelta) -> scrollable::AbsoluteOffset {
 }
 
 pub(crate) fn path_hash(path: &Path) -> String {
+    let mut hasher = blake3::Hasher::new();
     #[cfg(unix)]
     {
-        hash_bytes(path.as_os_str().as_bytes())
+        hasher.update(path.as_os_str().as_bytes());
     }
     #[cfg(not(unix))]
     {
-        hash_bytes(path.to_string_lossy().as_bytes())
+        hasher.update(path.to_string_lossy().as_bytes());
     }
-}
-
-fn hash_bytes(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
+    hasher.finalize().to_hex().to_string()
 }
 
 #[cfg(test)]
