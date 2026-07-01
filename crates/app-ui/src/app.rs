@@ -8,6 +8,8 @@ mod config_persistence;
 mod events;
 mod file_operations;
 mod list_directory_summaries;
+#[cfg(test)]
+mod list_size_sorting_tests;
 mod list_view_settings;
 mod navigation;
 mod network_connections;

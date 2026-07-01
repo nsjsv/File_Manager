@@ -1,14 +1,17 @@
-use std::path::Path;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use file_core::{DirectoryEntry, FileKind};
+use file_core::{DirectoryEntry, FileKind, ScanOptions, SortDirection, SortField};
 use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::load_list_directory_summary_command;
 use crate::formatting::format_file_size;
 use crate::model::{
-    BrowserPaneId, BrowserViewMode, ExpandedDirectoryStatus, ListDirectorySizeDisplayMode,
-    ListDirectorySummaryLoadRequest, Message,
+    BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryStatus,
+    ListDirectorySizeDisplayMode, ListDirectorySummaryCache, ListDirectorySummaryLoadRequest,
+    Message,
 };
 use crate::operation_queue::QueuedFileOperation;
 use crate::thumbnail_cache::ColumnViewport;
@@ -24,10 +27,56 @@ impl FileBrowser {
     pub(super) fn toggle_list_directory_size_display_mode(&mut self) -> Task<Message> {
         self.user_config.list_directory_size_display_mode =
             self.user_config.list_directory_size_display_mode.toggled();
+        self.resort_size_sorted_list_panes();
         Task::batch([
             self.persist_user_preferences_command(),
             self.schedule_visible_list_directory_summaries(),
         ])
+    }
+
+    pub(super) fn resort_size_sorted_list_panes(&mut self) {
+        if self.options.sort_field != SortField::Size {
+            return;
+        }
+
+        let display_mode = self.user_config.list_directory_size_display_mode;
+        let sort_direction = self.options.sort_direction;
+        let active_pane_id = self.active_pane_id();
+        let mut sorted_active_pane = false;
+
+        if self.view_mode == BrowserViewMode::List && !self.is_trash_view {
+            resort_list_state_by_displayed_size(
+                &mut self.entries,
+                &mut self.expanded_directories,
+                &self.list_directory_summary_cache,
+                display_mode,
+                sort_direction,
+            );
+            self.sync_active_tab_state();
+            sorted_active_pane = true;
+        }
+
+        for pane in self
+            .panes
+            .iter_mut()
+            .filter(|pane| pane.id != active_pane_id)
+        {
+            if pane.view_mode != BrowserViewMode::List || pane.is_trash_view {
+                continue;
+            }
+            resort_list_state_by_displayed_size(
+                &mut pane.entries,
+                &mut pane.expanded_directories,
+                &self.list_directory_summary_cache,
+                display_mode,
+                sort_direction,
+            );
+            pane.sync_active_tab_state();
+        }
+
+        if sorted_active_pane {
+            self.sync_active_pane_state();
+        }
     }
 
     pub(super) fn schedule_visible_list_directory_summaries(&mut self) -> Task<Message> {
@@ -88,14 +137,14 @@ impl FileBrowser {
         request: ListDirectorySummaryLoadRequest,
         outcome: Result<crate::model::ListDirectorySummary, String>,
     ) -> Task<Message> {
-        match outcome {
-            Ok(summary) => {
-                self.list_directory_summary_cache
-                    .store_summary(&request, summary);
-            }
-            Err(_) => {
-                self.list_directory_summary_cache.store_failure(&request);
-            }
+        let changed = match outcome {
+            Ok(summary) => self
+                .list_directory_summary_cache
+                .store_summary(&request, summary),
+            Err(_) => self.list_directory_summary_cache.store_failure(&request),
+        };
+        if changed {
+            self.resort_size_sorted_list_panes();
         }
         Task::none()
     }
@@ -299,6 +348,199 @@ impl FileBrowser {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectoryDisplayedSizeValue {
+    Known(u64),
+    Unknown,
+}
+
+fn resort_list_state_by_displayed_size(
+    entries: &mut Vec<DirectoryEntry>,
+    expanded_directories: &mut HashMap<PathBuf, ExpandedDirectory>,
+    summary_cache: &ListDirectorySummaryCache,
+    display_mode: ListDirectorySizeDisplayMode,
+    sort_direction: SortDirection,
+) {
+    let loaded_child_counts = loaded_child_counts_for_expanded_directories(expanded_directories);
+    resort_entry_tree_by_displayed_size(
+        entries,
+        expanded_directories,
+        &loaded_child_counts,
+        summary_cache,
+        display_mode,
+        sort_direction,
+    );
+}
+
+fn resort_entry_tree_by_displayed_size(
+    entries: &mut Vec<DirectoryEntry>,
+    expanded_directories: &mut HashMap<PathBuf, ExpandedDirectory>,
+    loaded_child_counts: &HashMap<PathBuf, usize>,
+    summary_cache: &ListDirectorySummaryCache,
+    display_mode: ListDirectorySizeDisplayMode,
+    sort_direction: SortDirection,
+) {
+    entries.sort_unstable_by(|left, right| {
+        compare_entries_by_displayed_size(
+            left,
+            right,
+            loaded_child_counts,
+            summary_cache,
+            display_mode,
+            sort_direction,
+        )
+    });
+
+    let expanded_paths = entries
+        .iter()
+        .filter(|entry| entry.kind == FileKind::Directory)
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    for expanded_path in expanded_paths {
+        let Some(mut expanded) = expanded_directories.remove(&expanded_path) else {
+            continue;
+        };
+        resort_entry_tree_by_displayed_size(
+            &mut expanded.entries,
+            expanded_directories,
+            loaded_child_counts,
+            summary_cache,
+            display_mode,
+            sort_direction,
+        );
+        expanded_directories.insert(expanded_path, expanded);
+    }
+}
+
+fn loaded_child_counts_for_expanded_directories(
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+) -> HashMap<PathBuf, usize> {
+    expanded_directories
+        .iter()
+        .filter(|(_, expanded)| matches!(expanded.status, ExpandedDirectoryStatus::Loaded))
+        .map(|(path, expanded)| (path.clone(), expanded.entries.len()))
+        .collect()
+}
+
+fn compare_entries_by_displayed_size(
+    left: &DirectoryEntry,
+    right: &DirectoryEntry,
+    loaded_child_counts: &HashMap<PathBuf, usize>,
+    summary_cache: &ListDirectorySummaryCache,
+    display_mode: ListDirectorySizeDisplayMode,
+    sort_direction: SortDirection,
+) -> Ordering {
+    match (
+        left.kind == FileKind::Directory,
+        right.kind == FileKind::Directory,
+    ) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => compare_file_sizes(left, right, sort_direction),
+        (true, true) => compare_directory_displayed_sizes(
+            left,
+            right,
+            loaded_child_counts,
+            summary_cache,
+            display_mode,
+            sort_direction,
+        ),
+    }
+}
+
+fn compare_file_sizes(
+    left: &DirectoryEntry,
+    right: &DirectoryEntry,
+    sort_direction: SortDirection,
+) -> Ordering {
+    apply_sort_direction(
+        left.metadata
+            .len
+            .cmp(&right.metadata.len)
+            .then_with(|| compare_entry_names(left, right)),
+        sort_direction,
+    )
+}
+
+fn compare_directory_displayed_sizes(
+    left: &DirectoryEntry,
+    right: &DirectoryEntry,
+    loaded_child_counts: &HashMap<PathBuf, usize>,
+    summary_cache: &ListDirectorySummaryCache,
+    display_mode: ListDirectorySizeDisplayMode,
+    sort_direction: SortDirection,
+) -> Ordering {
+    let left_value =
+        directory_displayed_size_value(left, loaded_child_counts, summary_cache, display_mode);
+    let right_value =
+        directory_displayed_size_value(right, loaded_child_counts, summary_cache, display_mode);
+    match (left_value, right_value) {
+        (
+            DirectoryDisplayedSizeValue::Known(left_value),
+            DirectoryDisplayedSizeValue::Known(right_value),
+        ) => apply_sort_direction(
+            left_value
+                .cmp(&right_value)
+                .then_with(|| compare_entry_names(left, right)),
+            sort_direction,
+        ),
+        (DirectoryDisplayedSizeValue::Known(_), DirectoryDisplayedSizeValue::Unknown) => {
+            Ordering::Less
+        }
+        (DirectoryDisplayedSizeValue::Unknown, DirectoryDisplayedSizeValue::Known(_)) => {
+            Ordering::Greater
+        }
+        (DirectoryDisplayedSizeValue::Unknown, DirectoryDisplayedSizeValue::Unknown) => {
+            apply_sort_direction(compare_entry_names(left, right), sort_direction)
+        }
+    }
+}
+
+fn directory_displayed_size_value(
+    entry: &DirectoryEntry,
+    loaded_child_counts: &HashMap<PathBuf, usize>,
+    summary_cache: &ListDirectorySummaryCache,
+    display_mode: ListDirectorySizeDisplayMode,
+) -> DirectoryDisplayedSizeValue {
+    let summary = summary_cache.summary_for_path(&entry.path);
+    match display_mode {
+        ListDirectorySizeDisplayMode::ItemCount => summary
+            .map(|summary| summary.direct_child_count as u64)
+            .or_else(|| {
+                loaded_child_counts
+                    .get(&entry.path)
+                    .copied()
+                    .map(|count| count as u64)
+            })
+            .map(DirectoryDisplayedSizeValue::Known)
+            .unwrap_or(DirectoryDisplayedSizeValue::Unknown),
+        ListDirectorySizeDisplayMode::RecursiveTotalSize => summary
+            .and_then(|summary| summary.recursive_total_size_bytes)
+            .map(DirectoryDisplayedSizeValue::Known)
+            .unwrap_or(DirectoryDisplayedSizeValue::Unknown),
+    }
+}
+
+fn compare_entry_names(left: &DirectoryEntry, right: &DirectoryEntry) -> Ordering {
+    file_core::compare_entries(
+        left,
+        right,
+        &ScanOptions {
+            include_hidden: true,
+            sort_field: SortField::Name,
+            sort_direction: SortDirection::Ascending,
+            directories_first: false,
+        },
+    )
+}
+
+fn apply_sort_direction(ordering: Ordering, sort_direction: SortDirection) -> Ordering {
+    match sort_direction {
+        SortDirection::Ascending => ordering,
+        SortDirection::Descending => ordering.reverse(),
+    }
+}
+
 fn list_item_count_text(count: usize) -> String {
     if count == 1 {
         "1 item".to_owned()
@@ -329,10 +571,28 @@ fn collect_list_directory_paths(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use file_core::{EntryMetadata, FileKind, SortDirection, SortField};
+
     use super::*;
     use crate::config;
     use crate::model::ListDirectorySummary;
     use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
+
+    fn test_entry(path: PathBuf, kind: FileKind, len: u64) -> DirectoryEntry {
+        DirectoryEntry::new(
+            path,
+            kind,
+            EntryMetadata {
+                len,
+                ..EntryMetadata::default()
+            },
+            false,
+            false,
+            false,
+        )
+    }
 
     fn remember_summary(
         browser: &mut FileBrowser,
@@ -370,6 +630,37 @@ mod tests {
         assert_eq!(
             browser.user_config.list_directory_size_display_mode,
             ListDirectorySizeDisplayMode::RecursiveTotalSize
+        );
+    }
+
+    #[test]
+    fn size_sort_orders_directories_by_item_count() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let root = PathBuf::from("/workspace");
+        let smaller = root.join("a");
+        let larger = root.join("b");
+
+        browser.current_dir = root;
+        browser.view_mode = BrowserViewMode::List;
+        browser.options.sort_field = SortField::Size;
+        browser.options.sort_direction = SortDirection::Ascending;
+        browser.entries = vec![
+            test_entry(larger.clone(), FileKind::Directory, 0),
+            test_entry(smaller.clone(), FileKind::Directory, 0),
+            test_entry(PathBuf::from("/workspace/file.bin"), FileKind::File, 9),
+        ];
+        remember_summary(&mut browser, &smaller, 1, 10);
+        remember_summary(&mut browser, &larger, 3, 30);
+
+        browser.resort_size_sorted_list_panes();
+
+        assert_eq!(
+            browser
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>(),
+            vec![smaller, larger, PathBuf::from("/workspace/file.bin")]
         );
     }
 

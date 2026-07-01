@@ -244,10 +244,15 @@ fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<
         {
             header = header.push(list_column_resize_divider(pane_id, previous.kind));
         }
+        let sort_direction = column
+            .kind
+            .sort_field()
+            .filter(|field| *field == sort.field)
+            .map(|_| sort.direction);
         header = header.push(header_cell(
             pane_id,
             column,
-            sort,
+            sort_direction,
             dragged_column == Some(column.kind),
             drop_target == Some(column.kind),
         ));
@@ -269,18 +274,14 @@ fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<
 fn header_cell(
     pane_id: BrowserPaneId,
     column: &ListColumnConfig,
-    sort: crate::model::ListSortPreference,
+    sort_direction: Option<SortDirection>,
     is_dragged: bool,
     is_drop_target: bool,
 ) -> Element<'static, Message> {
-    let content: Element<'static, Message> = if column
-        .kind
-        .sort_field()
-        .is_some_and(|field| sort.field == field)
-    {
+    let content: Element<'static, Message> = if let Some(direction) = sort_direction {
         row![
             readable_text(column.kind.label()).size(LIST_HEADER_TEXT_SIZE),
-            list_sort_direction_indicator(sort.direction),
+            list_sort_direction_indicator(direction),
         ]
         .spacing(4)
         .align_y(Alignment::Center)

@@ -113,19 +113,22 @@ impl FileBrowser {
     ) -> Task<Message> {
         if request.pane_id != self.active_pane_id() {
             let options = self.options.clone();
-            let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
-                return Task::none();
-            };
-            if !directory_load_request_matches_pane(
-                &request,
-                pane.current_dir.as_path(),
-                pane.directory_load_generation,
-            ) {
-                return Task::none();
+            {
+                let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
+                    return Task::none();
+                };
+                if !directory_load_request_matches_pane(
+                    &request,
+                    pane.current_dir.as_path(),
+                    pane.directory_load_generation,
+                ) {
+                    return Task::none();
+                }
+                merge_directory_scan_batch(&mut pane.entries, batch, &options);
+                pane.directory_loading_placeholder_entries.clear();
+                pane.sync_active_tab_state();
             }
-            merge_directory_scan_batch(&mut pane.entries, batch, &options);
-            pane.directory_loading_placeholder_entries.clear();
-            pane.sync_active_tab_state();
+            self.resort_size_sorted_list_panes();
             return Task::none();
         }
 
@@ -139,6 +142,7 @@ impl FileBrowser {
         merge_directory_scan_batch(&mut self.entries, batch, &self.options);
         self.directory_loading_placeholder_entries.clear();
         self.sync_active_tab_state();
+        self.resort_size_sorted_list_panes();
         self.schedule_thumbnail_refresh()
     }
 
@@ -148,27 +152,30 @@ impl FileBrowser {
         scan: DirectoryScan,
     ) -> Task<Message> {
         if request.pane_id != self.active_pane_id() {
-            let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
-                return Task::none();
-            };
-            if !directory_load_request_matches_pane(
-                &request,
-                pane.current_dir.as_path(),
-                pane.directory_load_generation,
-            ) {
-                return Task::none();
-            }
+            let current_dir = {
+                let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
+                    return Task::none();
+                };
+                if !directory_load_request_matches_pane(
+                    &request,
+                    pane.current_dir.as_path(),
+                    pane.directory_load_generation,
+                ) {
+                    return Task::none();
+                }
 
-            pane.current_dir = scan.path;
-            pane.path_input = path_text(&pane.current_dir);
-            pane.path_suggestions.clear();
-            pane.path_suggestion_selection = None;
-            pane.entries = scan.entries;
-            pane.directory_loading_placeholder_entries.clear();
-            pane.is_loading = false;
-            pane.directory_load_cancel = None;
-            pane.sync_active_tab_state();
-            let current_dir = pane.current_dir.clone();
+                pane.current_dir = scan.path;
+                pane.path_input = path_text(&pane.current_dir);
+                pane.path_suggestions.clear();
+                pane.path_suggestion_selection = None;
+                pane.entries = scan.entries;
+                pane.directory_loading_placeholder_entries.clear();
+                pane.is_loading = false;
+                pane.directory_load_cancel = None;
+                pane.sync_active_tab_state();
+                pane.current_dir.clone()
+            };
+            self.resort_size_sorted_list_panes();
             return Task::batch([
                 delayed_thumbnail_refresh_command(request.pane_id, current_dir),
                 self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
@@ -196,6 +203,7 @@ impl FileBrowser {
         startup_trace::mark_once("initial_directory_ready");
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
+        self.resort_size_sorted_list_panes();
         Task::batch([
             command,
             delayed_thumbnail_refresh_command(request.pane_id, self.current_dir.clone()),
@@ -516,17 +524,20 @@ impl FileBrowser {
     ) -> Task<Message> {
         if request.pane_id != self.active_pane_id() {
             let options = self.options.clone();
-            let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
-                return Task::none();
-            };
-            let Some(expanded) = pane.expanded_directories.get_mut(&request.path) else {
-                return Task::none();
-            };
-            if !expanded_load_request_matches_directory(&request, expanded) {
-                return Task::none();
+            {
+                let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
+                    return Task::none();
+                };
+                let Some(expanded) = pane.expanded_directories.get_mut(&request.path) else {
+                    return Task::none();
+                };
+                if !expanded_load_request_matches_directory(&request, expanded) {
+                    return Task::none();
+                }
+                merge_directory_scan_batch(&mut expanded.entries, batch, &options);
+                pane.sync_active_tab_state();
             }
-            merge_directory_scan_batch(&mut expanded.entries, batch, &options);
-            pane.sync_active_tab_state();
+            self.resort_size_sorted_list_panes();
             return Task::none();
         }
 
@@ -538,6 +549,7 @@ impl FileBrowser {
         }
         merge_directory_scan_batch(&mut expanded.entries, batch, &self.options);
         self.sync_active_tab_state();
+        self.resort_size_sorted_list_panes();
         self.schedule_thumbnail_refresh()
     }
 
@@ -576,6 +588,7 @@ impl FileBrowser {
                 pane.sync_active_tab_state();
                 (pending_error, loaded_child_count)
             };
+            self.resort_size_sorted_list_panes();
             if let Some(loaded_child_count) = loaded_child_count {
                 self.remember_loaded_list_directory_children(&request.path, loaded_child_count);
             }
@@ -614,6 +627,7 @@ impl FileBrowser {
         let pending_keyboard_focus = self.complete_pending_keyboard_column_focus(&loaded_path);
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
+        self.resort_size_sorted_list_panes();
         Task::batch([
             pending_keyboard_focus,
             command,
