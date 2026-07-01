@@ -62,9 +62,10 @@ pub(crate) use list_directory_summary::{
 };
 mod batch_rename;
 pub(crate) use batch_rename::{
-    same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameMessage,
-    BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRulePanel, BatchRenameSortMode,
-    BatchRenameState,
+    same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode,
+    BatchRenameMessage, BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass,
+    BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode,
+    BatchRenameSortMode, BatchRenameSource, BatchRenameState,
 };
 mod properties;
 pub(crate) use properties::{

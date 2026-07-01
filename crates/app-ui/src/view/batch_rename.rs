@@ -12,15 +12,16 @@ use crate::appearance::{
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::model::{
-    BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameMessage, BatchRenamePreviewRow,
-    BatchRenameRandomMode, BatchRenameRulePanel, BatchRenameSortMode, BatchRenameState, Message,
-    ScrollbarRegion, ScrollbarVisibility,
+    BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode, BatchRenameMessage,
+    BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass, BatchRenameRemoveMode,
+    BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode, BatchRenameSortMode,
+    BatchRenameState, Message, ScrollbarRegion, ScrollbarVisibility,
 };
 use crate::typography::readable_text;
 
+use super::batch_rename_preview_name_input_id;
 use super::option_controls::{
     inactive_primary_action_button, primary_action_button, secondary_action_button,
-    segmented_choice_row, SegmentedChoice,
 };
 
 const BATCH_RENAME_PANEL_WIDTH: f32 = 720.0;
@@ -221,6 +222,11 @@ fn sequence_controls(state: &BatchRenameState) -> Element<'_, Message> {
                 BatchRenameMessage::SequenceStartChanged
             ),
             input_column(
+                "Step",
+                &state.sequence.step_input,
+                BatchRenameMessage::SequenceStepChanged
+            ),
+            input_column(
                 "Padding",
                 &state.sequence.padding_input,
                 BatchRenameMessage::SequencePaddingChanged
@@ -250,6 +256,14 @@ fn sequence_controls(state: &BatchRenameState) -> Element<'_, Message> {
 fn replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
     column![
         section_title("Replace"),
+        pick_list(
+            BatchRenameReplaceScope::options(),
+            Some(state.replace.scope),
+            |scope| { Message::BatchRename(BatchRenameMessage::ReplaceScopeSelected(scope)) }
+        )
+        .width(Length::Fill)
+        .text_size(12)
+        .padding([5, 8]),
         row![
             input_column(
                 "Find",
@@ -264,6 +278,25 @@ fn replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
+        row![
+            input_column(
+                "Range start",
+                &state.replace.range_start_input,
+                BatchRenameMessage::ReplaceRangeStartChanged
+            ),
+            input_column(
+                "Range length",
+                &state.replace.range_length_input,
+                BatchRenameMessage::ReplaceRangeLengthChanged
+            ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        checkbox(state.replace.ignore_case)
+            .label("Ignore case")
+            .on_toggle(
+                |value| Message::BatchRename(BatchRenameMessage::ReplaceIgnoreCaseToggled(value))
+            ),
     ]
     .spacing(6)
     .into()
@@ -272,6 +305,14 @@ fn replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
 fn insert_controls(state: &BatchRenameState) -> Element<'_, Message> {
     column![
         section_title("Insert"),
+        pick_list(
+            BatchRenameInsertMode::options(),
+            Some(state.insert.mode),
+            |mode| { Message::BatchRename(BatchRenameMessage::InsertModeSelected(mode)) }
+        )
+        .width(Length::Fill)
+        .text_size(12)
+        .padding([5, 8]),
         row![
             input_column(
                 "Text",
@@ -286,6 +327,16 @@ fn insert_controls(state: &BatchRenameState) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
+        input_column(
+            "After text",
+            &state.insert.anchor,
+            BatchRenameMessage::InsertAnchorChanged
+        ),
+        checkbox(state.insert.ignore_extension)
+            .label("Ignore extension")
+            .on_toggle(|value| Message::BatchRename(
+                BatchRenameMessage::InsertIgnoreExtensionToggled(value)
+            )),
     ]
     .spacing(6)
     .into()
@@ -294,6 +345,14 @@ fn insert_controls(state: &BatchRenameState) -> Element<'_, Message> {
 fn slice_controls(state: &BatchRenameState) -> Element<'_, Message> {
     column![
         section_title("Slice"),
+        pick_list(
+            BatchRenameSliceMode::options(),
+            Some(state.slice.mode),
+            |mode| { Message::BatchRename(BatchRenameMessage::SliceModeSelected(mode)) }
+        )
+        .width(Length::Fill)
+        .text_size(12)
+        .padding([5, 8]),
         row![
             input_column(
                 "Start",
@@ -308,6 +367,11 @@ fn slice_controls(state: &BatchRenameState) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
+        input_column(
+            "After text",
+            &state.slice.anchor,
+            BatchRenameMessage::SliceAnchorChanged
+        ),
     ]
     .spacing(6)
     .into()
@@ -346,6 +410,14 @@ fn random_controls(state: &BatchRenameState) -> Element<'_, Message> {
 fn remove_controls(state: &BatchRenameState) -> Element<'_, Message> {
     column![
         section_title("Remove"),
+        pick_list(
+            BatchRenameRemoveMode::options(),
+            Some(state.remove.mode),
+            |mode| { Message::BatchRename(BatchRenameMessage::RemoveModeSelected(mode)) }
+        )
+        .width(Length::Fill)
+        .text_size(12)
+        .padding([5, 8]),
         input_column(
             "Text",
             &state.remove.text,
@@ -365,9 +437,36 @@ fn remove_controls(state: &BatchRenameState) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
+        row![
+            remove_class_toggle(state, BatchRenameRemoveClass::Lowercase),
+            remove_class_toggle(state, BatchRenameRemoveClass::Uppercase),
+            remove_class_toggle(state, BatchRenameRemoveClass::Digits),
+            remove_class_toggle(state, BatchRenameRemoveClass::Symbols),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        row![
+            remove_class_toggle(state, BatchRenameRemoveClass::Brackets),
+            remove_class_toggle(state, BatchRenameRemoveClass::Whitespace),
+            remove_class_toggle(state, BatchRenameRemoveClass::Hanzi),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
     ]
     .spacing(6)
     .into()
+}
+
+fn remove_class_toggle(
+    state: &BatchRenameState,
+    class: BatchRenameRemoveClass,
+) -> Element<'static, Message> {
+    checkbox(state.remove.classes.contains(&class))
+        .label(class.label())
+        .on_toggle(move |value| {
+            Message::BatchRename(BatchRenameMessage::RemoveClassToggled(class, value))
+        })
+        .into()
 }
 
 fn list_controls(state: &BatchRenameState) -> Element<'_, Message> {
@@ -431,26 +530,18 @@ fn batch_controls(state: &BatchRenameState) -> Element<'_, Message> {
     .into()
 }
 
-fn case_controls(state: &BatchRenameState) -> Element<'static, Message> {
+fn case_controls(state: &BatchRenameState) -> Element<'_, Message> {
     column![
         section_title("Case"),
-        segmented_choice_row(vec![
-            case_choice(state, BatchRenameCaseRule::Unchanged),
-            case_choice(state, BatchRenameCaseRule::Lowercase),
-            case_choice(state, BatchRenameCaseRule::Uppercase),
-            case_choice(state, BatchRenameCaseRule::TitleCase),
-        ]),
+        pick_list(BatchRenameCaseRule::options(), Some(state.case), |case| {
+            Message::BatchRename(BatchRenameMessage::CaseSelected(case))
+        })
+        .width(Length::Fill)
+        .text_size(12)
+        .padding([5, 8]),
     ]
     .spacing(6)
     .into()
-}
-
-fn case_choice(state: &BatchRenameState, case: BatchRenameCaseRule) -> SegmentedChoice {
-    SegmentedChoice {
-        label: case.label(),
-        selected: state.case == case,
-        message: Message::BatchRename(BatchRenameMessage::CaseSelected(case)),
-    }
 }
 
 fn preview_rows(
@@ -459,9 +550,18 @@ fn preview_rows(
 ) -> Element<'_, Message> {
     let mut rows = Column::new().spacing(4);
     let dragging_active = state.dragging_preview_source().is_some();
+    let editing_source = state.editing_target_name_source();
+    let editing_input = state.editing_target_name_input();
     for row in &state.preview.rows {
         let is_dragging = state.dragging_preview_source() == Some(row.source.as_path());
-        rows = rows.push(preview_row(row, is_dragging, dragging_active));
+        let is_editing = editing_source == Some(row.source.as_path());
+        rows = rows.push(preview_row(
+            row,
+            is_dragging,
+            dragging_active,
+            is_editing,
+            editing_input,
+        ));
     }
 
     let scroll_region = ScrollbarRegion::BatchRenamePreview;
@@ -481,19 +581,54 @@ fn preview_rows(
     .into()
 }
 
-fn preview_row(
-    row_state: &BatchRenamePreviewRow,
+fn preview_row<'a>(
+    row_state: &'a BatchRenamePreviewRow,
     is_dragging: bool,
     dragging_active: bool,
-) -> Element<'_, Message> {
+    is_editing: bool,
+    editing_input: &'a str,
+) -> Element<'a, Message> {
     let source =
         format_middle_ellipsized_text(&row_state.original_name, BATCH_RENAME_PATH_MAX_CHARS);
     let target = format_middle_ellipsized_text(&row_state.target_name, BATCH_RENAME_PATH_MAX_CHARS);
     let status = row_state.status.label();
+    let source_cell: Element<'a, Message> = mouse_area(
+        container(readable_text(source).size(12))
+            .width(Length::FillPortion(3))
+            .padding([1, 0]),
+    )
+    .on_press(Message::BatchRename(
+        BatchRenameMessage::PreviewDragStarted(row_state.source.clone()),
+    ))
+    .interaction(iced::mouse::Interaction::Grab)
+    .into();
+    let target_cell: Element<'a, Message> = if is_editing {
+        text_input("New name", editing_input)
+            .id(batch_rename_preview_name_input_id(&row_state.source))
+            .on_input(|value| Message::BatchRename(BatchRenameMessage::PreviewNameChanged(value)))
+            .on_submit(Message::BatchRename(
+                BatchRenameMessage::PreviewNameEditCommitted,
+            ))
+            .padding([5, 6])
+            .size(12)
+            .width(Length::FillPortion(3))
+            .into()
+    } else {
+        mouse_area(
+            container(readable_text(target).size(12))
+                .width(Length::FillPortion(3))
+                .padding([1, 0]),
+        )
+        .on_press(Message::BatchRename(
+            BatchRenameMessage::PreviewNameEditStarted(row_state.source.clone()),
+        ))
+        .interaction(iced::mouse::Interaction::Text)
+        .into()
+    };
     let row_container = container(
         row![
-            readable_text(source).size(12).width(Length::FillPortion(3)),
-            readable_text(target).size(12).width(Length::FillPortion(3)),
+            source_cell,
+            target_cell,
             readable_text(status).size(11).width(Length::FillPortion(1)),
         ]
         .spacing(8)
@@ -508,9 +643,6 @@ fn preview_row(
     });
 
     let row_area = mouse_area(row_container)
-        .on_press(Message::BatchRename(
-            BatchRenameMessage::PreviewDragStarted(row_state.source.clone()),
-        ))
         .on_release(Message::BatchRename(
             BatchRenameMessage::PreviewDragFinished,
         ))

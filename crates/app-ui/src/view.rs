@@ -131,6 +131,10 @@ pub(crate) fn rename_input_id() -> iced::widget::Id {
     iced::widget::Id::new("rename-input")
 }
 
+pub(crate) fn batch_rename_preview_name_input_id(path: &Path) -> iced::widget::Id {
+    iced::widget::Id::from(format!("batch-rename-preview-name-{}", path.display()))
+}
+
 pub(crate) fn path_input_id(pane_id: BrowserPaneId) -> iced::widget::Id {
     iced::widget::Id::from(format!("path-input-{}", pane_id.key()))
 }
