@@ -400,6 +400,7 @@ async fn load_startup_environment() -> StartupEnvironment {
         );
         StartupEnvironment {
             home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            system_language: crate::localization::detect_system_language(),
             user_config,
             state_database_path: config::default_state_database_path(),
             rendering_environment_status,
@@ -408,6 +409,7 @@ async fn load_startup_environment() -> StartupEnvironment {
     .await
     .unwrap_or_else(|_| StartupEnvironment {
         home: PathBuf::from("/"),
+        system_language: config::UiLanguage::English,
         user_config: config::ui_thread_startup_config(),
         state_database_path: PathBuf::new(),
         rendering_environment_status: StartupRenderingEnvironmentStatus::ready(

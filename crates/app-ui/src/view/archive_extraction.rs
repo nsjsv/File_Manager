@@ -63,11 +63,14 @@ pub(super) fn archive_extraction_panel(state: &ArchiveExtractionState) -> Elemen
 }
 
 fn archive_password_input(state: &ArchiveExtractionState) -> Element<'_, Message> {
-    let mut password_input = text_input("Password", state.password().as_str())
-        .secure(true)
-        .padding([6, 8])
-        .size(14)
-        .width(Length::Fill);
+    let mut password_input = text_input(
+        &crate::localization::translate_current("Password"),
+        state.password().as_str(),
+    )
+    .secure(true)
+    .padding([6, 8])
+    .size(14)
+    .width(Length::Fill);
     if state.is_waiting_for_password() {
         password_input = password_input
             .on_input(|password| {
@@ -115,23 +118,27 @@ fn archive_extraction_actions(state: &ArchiveExtractionState) -> Element<'_, Mes
 }
 
 fn archive_summary(state: &ArchiveExtractionState) -> String {
-    format!(
-        "Archive: {}",
-        format_middle_ellipsized_text(
-            state.request().archive.to_string_lossy().as_ref(),
-            ARCHIVE_PATH_MAX_CHARS,
-        )
-    )
+    let archive = format_middle_ellipsized_text(
+        state.request().archive.to_string_lossy().as_ref(),
+        ARCHIVE_PATH_MAX_CHARS,
+    );
+    if crate::localization::current_language_is_chinese() {
+        format!("归档：{archive}")
+    } else {
+        format!("Archive: {archive}")
+    }
 }
 
 fn destination_summary(state: &ArchiveExtractionState) -> String {
-    format!(
-        "Destination: {}",
-        format_middle_ellipsized_text(
-            state.request().destination.to_string_lossy().as_ref(),
-            ARCHIVE_PATH_MAX_CHARS,
-        )
-    )
+    let destination = format_middle_ellipsized_text(
+        state.request().destination.to_string_lossy().as_ref(),
+        ARCHIVE_PATH_MAX_CHARS,
+    );
+    if crate::localization::current_language_is_chinese() {
+        format!("目标目录：{destination}")
+    } else {
+        format!("Destination: {destination}")
+    }
 }
 
 fn status_text(state: &ArchiveExtractionState) -> &'static str {

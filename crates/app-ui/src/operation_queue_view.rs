@@ -55,7 +55,12 @@ pub(crate) fn operation_queue_panel(
 ) -> Element<'_, Message> {
     let header = row![
         readable_text("Tasks").size(16).width(Length::Fill),
-        readable_text(format!("{} tasks", queue.task_count())).size(12),
+        readable_text(if crate::localization::current_language_is_chinese() {
+            format!("{} 个任务", queue.task_count())
+        } else {
+            format!("{} tasks", queue.task_count())
+        })
+        .size(12),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -141,6 +146,7 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
 fn operation_title_text(title: &str, path_lines: &FileOperationPathLines) -> String {
     let file_name = format_middle_ellipsized_text(&path_lines.file_name, TASK_FILE_NAME_MAX_CHARS);
     let more_count = path_lines.total_items.saturating_sub(1);
+    let title = crate::localization::translate_current(title);
     if more_count == 0 {
         format!("{title} - {file_name}")
     } else {
@@ -150,7 +156,7 @@ fn operation_title_text(title: &str, path_lines: &FileOperationPathLines) -> Str
 
 fn path_line_text(label: &'static str, path: &str) -> String {
     let path = format_middle_ellipsized_text(path, TASK_PATH_MAX_CHARS);
-    format!("{label}: {path}")
+    format!("{}: {path}", crate::localization::translate_current(label))
 }
 
 fn empty_queue_row() -> Element<'static, Message> {

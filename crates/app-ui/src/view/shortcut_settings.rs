@@ -56,7 +56,7 @@ fn shortcut_binding_row(
 ) -> Element<'static, Message> {
     let is_capturing = capture.is_some_and(|capture| capture.binding_id == binding.id);
     let binding_label = if is_capturing {
-        "Press keys...".to_owned()
+        crate::localization::translate_current("Press keys...")
     } else {
         binding.binding.config_value()
     };
@@ -85,17 +85,32 @@ fn shortcut_binding_row(
 
 fn shortcut_capture_feedback(capture: &ShortcutCaptureState) -> Element<'static, Message> {
     let message = if capture.unsupported_key {
-        "Unsupported shortcut. Use a letter, number, function key, arrow, or named edit key."
-            .to_owned()
+        crate::localization::translate_current(
+            "Unsupported shortcut. Use a letter, number, function key, arrow, or named edit key.",
+        )
     } else if let Some(conflict) = capture.conflict_binding_id {
         let rejected = capture
             .rejected_binding
             .as_ref()
             .map(|binding| binding.config_value())
-            .unwrap_or_else(|| "Shortcut".to_owned());
-        format!("{rejected} conflicts with {}.", conflict.label())
+            .unwrap_or_else(|| crate::localization::translate_current("Shortcut"));
+        if crate::localization::current_language_is_chinese() {
+            format!(
+                "{rejected} 与 {} 冲突。",
+                crate::localization::translate_current(conflict.label())
+            )
+        } else {
+            format!("{rejected} conflicts with {}.", conflict.label())
+        }
     } else {
-        format!("Listening for {}...", capture.binding_id.label())
+        if crate::localization::current_language_is_chinese() {
+            format!(
+                "正在监听 {}...",
+                crate::localization::translate_current(capture.binding_id.label())
+            )
+        } else {
+            format!("Listening for {}...", capture.binding_id.label())
+        }
     };
 
     row![

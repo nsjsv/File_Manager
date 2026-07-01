@@ -29,12 +29,15 @@ pub(super) fn archive_creation_panel(state: &ArchiveCreationState) -> Element<'_
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let name_input = text_input("Archive name", state.file_name())
-        .on_input(|name| Message::ArchiveCreation(ArchiveCreationMessage::NameChanged(name)))
-        .on_submit(Message::ArchiveCreation(ArchiveCreationMessage::Submitted))
-        .padding([6, 8])
-        .size(14)
-        .width(Length::Fill);
+    let name_input = text_input(
+        &crate::localization::translate_current("Archive name"),
+        state.file_name(),
+    )
+    .on_input(|name| Message::ArchiveCreation(ArchiveCreationMessage::NameChanged(name)))
+    .on_submit(Message::ArchiveCreation(ArchiveCreationMessage::Submitted))
+    .padding([6, 8])
+    .size(14)
+    .width(Length::Fill);
     let validation_error = state
         .validation_error()
         .map(str::to_owned)
@@ -101,11 +104,14 @@ fn archive_compression_buttons(state: &ArchiveCreationState) -> Element<'_, Mess
 }
 
 fn archive_password_input(state: &ArchiveCreationState) -> Element<'_, Message> {
-    let mut password_input = text_input("Optional password", state.password().as_str())
-        .secure(true)
-        .padding([6, 8])
-        .size(14)
-        .width(Length::Fill);
+    let mut password_input = text_input(
+        &crate::localization::translate_current("Optional password"),
+        state.password().as_str(),
+    )
+    .secure(true)
+    .padding([6, 8])
+    .size(14)
+    .width(Length::Fill);
     if state.password_supported() {
         password_input = password_input
             .on_input(|password| {
@@ -153,37 +159,53 @@ fn archive_creation_actions(state: &ArchiveCreationState) -> Element<'_, Message
 
 fn source_summary(state: &ArchiveCreationState) -> String {
     match state.sources() {
-        [] => "No selected items".to_owned(),
-        [source] => format!(
-            "Source: {}",
-            format_middle_ellipsized_text(
+        [] => crate::localization::translate_current("No selected items"),
+        [source] => {
+            let source = format_middle_ellipsized_text(
                 source.to_string_lossy().as_ref(),
-                ARCHIVE_PATH_MAX_CHARS
-            )
-        ),
-        sources => format!("Sources: {} items", sources.len()),
+                ARCHIVE_PATH_MAX_CHARS,
+            );
+            if crate::localization::current_language_is_chinese() {
+                format!("来源：{source}")
+            } else {
+                format!("Source: {source}")
+            }
+        }
+        sources => {
+            if crate::localization::current_language_is_chinese() {
+                format!("来源：{} 个项目", sources.len())
+            } else {
+                format!("Sources: {} items", sources.len())
+            }
+        }
     }
 }
 
 fn target_directory_summary(state: &ArchiveCreationState) -> String {
-    format!(
-        "Destination: {}",
-        format_middle_ellipsized_text(
-            state.target_directory().to_string_lossy().as_ref(),
-            ARCHIVE_PATH_MAX_CHARS,
-        )
-    )
+    let destination = format_middle_ellipsized_text(
+        state.target_directory().to_string_lossy().as_ref(),
+        ARCHIVE_PATH_MAX_CHARS,
+    );
+    if crate::localization::current_language_is_chinese() {
+        format!("目标目录：{destination}")
+    } else {
+        format!("Destination: {destination}")
+    }
 }
 
 fn target_summary(state: &ArchiveCreationState) -> String {
     match state.target_path() {
-        Ok(target) => format!(
-            "Target: {}",
-            format_middle_ellipsized_text(
+        Ok(target) => {
+            let target = format_middle_ellipsized_text(
                 target.to_string_lossy().as_ref(),
-                ARCHIVE_PATH_MAX_CHARS
-            )
-        ),
+                ARCHIVE_PATH_MAX_CHARS,
+            );
+            if crate::localization::current_language_is_chinese() {
+                format!("目标文件：{target}")
+            } else {
+                format!("Target: {target}")
+            }
+        }
         Err(error) => error,
     }
 }

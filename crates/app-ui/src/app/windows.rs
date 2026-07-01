@@ -232,15 +232,15 @@ fn preview_size_matches(actual: PreviewSize, expected: PreviewSize) -> bool {
 impl FileBrowser {
     pub(super) fn window_title(&self, window: window::Id) -> String {
         if self.search_window == Some(window) {
-            "Search - File Manager".to_owned()
+            crate::localization::translate_current("Search - File Manager")
         } else if self.settings_window == Some(window) {
-            "Settings - File Manager".to_owned()
+            crate::localization::translate_current("Settings - File Manager")
         } else if self.properties_window == Some(window) {
-            "Properties - File Manager".to_owned()
+            crate::localization::translate_current("Properties - File Manager")
         } else if self.preview_window == Some(window) {
-            "Preview - File Manager".to_owned()
+            crate::localization::translate_current("Preview - File Manager")
         } else {
-            "File Manager".to_owned()
+            crate::localization::translate_current("File Manager")
         }
     }
 

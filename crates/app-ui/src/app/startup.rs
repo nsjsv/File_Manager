@@ -23,6 +23,7 @@ impl FileBrowser {
     ) -> Task<Message> {
         startup_trace::mark_once("startup_environment_loaded");
         let home = startup_environment.home;
+        self.system_language = startup_environment.system_language;
         let state_database_path = startup_environment.state_database_path;
         let rendering_environment_status = startup_environment.rendering_environment_status;
 
@@ -210,6 +211,7 @@ impl FileBrowser {
                 user_config.network_connections.clone(),
             );
         self.user_config = user_config;
+        self.refresh_current_language();
         self.sync_search_index_exclude_inputs_from_config();
     }
 }
@@ -244,6 +246,7 @@ mod tests {
     ) -> StartupEnvironment {
         StartupEnvironment {
             home,
+            system_language: config::UiLanguage::English,
             user_config,
             state_database_path,
             rendering_environment_status: StartupRenderingEnvironmentStatus::ready(

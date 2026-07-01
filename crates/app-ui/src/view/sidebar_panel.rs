@@ -1,5 +1,5 @@
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, stack, text, Column, Row, Space,
+    button, column, container, mouse_area, row, scrollable, stack, Column, Row, Space,
 };
 use iced::{Alignment, Element, Length, Padding};
 
@@ -34,7 +34,7 @@ const SIDEBAR_BOOKMARK_DROP_SLOT_HEIGHT: f32 = 3.0;
 
 pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     let sidebar_header = row![
-        text("Places").size(16).width(Length::Fill),
+        readable_text("Places").size(16).width(Length::Fill),
         button(themed_icon(
             IconSymbol::Settings,
             IconTone::Normal,
@@ -598,29 +598,39 @@ fn sidebar_network_connection_detail(
     pending: bool,
 ) -> String {
     if pending {
-        "Working...".to_owned()
+        crate::localization::translate_current("Working...")
     } else {
         match &connection.state {
-            desktop_linux::NetworkMountState::Disconnected => "Not connected".to_owned(),
-            desktop_linux::NetworkMountState::Connecting => "Connecting...".to_owned(),
+            desktop_linux::NetworkMountState::Disconnected => {
+                crate::localization::translate_current("Not connected")
+            }
+            desktop_linux::NetworkMountState::Connecting => {
+                crate::localization::translate_current("Connecting...")
+            }
             desktop_linux::NetworkMountState::Mounted(path) => path.to_string_lossy().into_owned(),
-            desktop_linux::NetworkMountState::Error(_) => "Connection error".to_owned(),
+            desktop_linux::NetworkMountState::Error(_) => {
+                crate::localization::translate_current("Connection error")
+            }
         }
     }
 }
 
 fn sidebar_device_detail(device: &SidebarDeviceEntry, pending: bool) -> String {
     if pending {
-        "Working...".to_owned()
+        crate::localization::translate_current("Working...")
     } else if device.is_mounted() {
         device
             .detail
             .clone()
-            .unwrap_or_else(|| "Mounted".to_owned())
+            .unwrap_or_else(|| crate::localization::translate_current("Mounted"))
     } else if device.size_bytes > 0 {
-        format!("Not mounted · {}", format_file_size(device.size_bytes))
+        if crate::localization::current_language_is_chinese() {
+            format!("未挂载 · {}", format_file_size(device.size_bytes))
+        } else {
+            format!("Not mounted · {}", format_file_size(device.size_bytes))
+        }
     } else {
-        "Not mounted".to_owned()
+        crate::localization::translate_current("Not mounted")
     }
 }
 

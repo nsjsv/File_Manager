@@ -614,6 +614,9 @@ impl FileBrowser {
                 self.update_max_preview_file_mib_input(value)
             }
             Message::MaxPreviewFileMibInputCommitted => self.commit_max_preview_file_mib_input(),
+            Message::LanguageSettingSelected(language_setting) => {
+                self.select_language_setting(language_setting)
+            }
             Message::StartupLocationPolicySelected(policy) => {
                 self.select_startup_location_policy(policy)
             }

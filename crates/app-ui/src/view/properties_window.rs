@@ -517,20 +517,33 @@ fn display_path(path: &Path) -> String {
 
 fn display_optional_time(time: Option<SystemTime>) -> String {
     time.map(format_system_time)
-        .unwrap_or_else(|| "Unavailable".to_owned())
+        .unwrap_or_else(|| crate::localization::translate_current("Unavailable"))
 }
 
 fn display_size(bytes: u64) -> String {
-    format!("{} ({bytes} bytes)", format_file_size(bytes))
+    if crate::localization::current_language_is_chinese() {
+        format!("{}（{bytes} 字节）", format_file_size(bytes))
+    } else {
+        format!("{} ({bytes} bytes)", format_file_size(bytes))
+    }
 }
 
 fn display_contents(contents: &FilePropertiesDirectoryContents) -> String {
-    format!(
-        "{} files, {} folders, total {}",
-        contents.file_count,
-        contents.directory_count,
-        format_file_size(contents.total_size_bytes)
-    )
+    if crate::localization::current_language_is_chinese() {
+        format!(
+            "{} 个文件，{} 个文件夹，总计 {}",
+            contents.file_count,
+            contents.directory_count,
+            format_file_size(contents.total_size_bytes)
+        )
+    } else {
+        format!(
+            "{} files, {} folders, total {}",
+            contents.file_count,
+            contents.directory_count,
+            format_file_size(contents.total_size_bytes)
+        )
+    }
 }
 
 fn display_permissions(permissions: FilePropertiesPermissions) -> String {

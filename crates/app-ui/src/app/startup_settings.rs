@@ -3,10 +3,22 @@ use std::path::PathBuf;
 use iced::Task;
 
 use super::FileBrowser;
-use crate::config::StartupLocationPolicy;
+use crate::config::{StartupLocationPolicy, UiLanguageSetting};
 use crate::model::Message;
 
 impl FileBrowser {
+    pub(super) fn select_language_setting(
+        &mut self,
+        language_setting: UiLanguageSetting,
+    ) -> Task<Message> {
+        if self.user_config.language_setting == language_setting {
+            return Task::none();
+        }
+        self.user_config.language_setting = language_setting;
+        self.refresh_current_language();
+        self.persist_user_preferences_command()
+    }
+
     pub(super) fn select_startup_location_policy(
         &mut self,
         policy: StartupLocationPolicy,
@@ -90,5 +102,25 @@ mod tests {
         );
         assert!(!browser.user_config().save_view_state);
         assert!(!browser.pending_browser_session_save);
+    }
+
+    #[test]
+    fn system_language_selection_tracks_detected_language() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        browser.system_language = config::UiLanguage::Chinese;
+
+        drop(browser.select_language_setting(UiLanguageSetting::System));
+
+        assert_eq!(browser.active_language(), config::UiLanguage::Chinese);
+    }
+
+    #[test]
+    fn explicit_language_selection_overrides_system_language() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        browser.system_language = config::UiLanguage::Chinese;
+
+        drop(browser.select_language_setting(UiLanguageSetting::English));
+
+        assert_eq!(browser.active_language(), config::UiLanguage::English);
     }
 }

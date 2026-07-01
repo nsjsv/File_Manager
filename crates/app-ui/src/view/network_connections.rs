@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, row, text, text_input, Button, Space};
+use iced::widget::{button, column, container, row, text_input, Button, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::appearance::{context_menu_button_style, context_menu_style, transparent_button_style};
@@ -34,8 +34,13 @@ pub(super) fn network_connection_editor_panel(
     ]
     .spacing(8)
     .align_y(Alignment::Center);
-    let mut label_input = text_input("Name", &editor.label).padding([6, 8]).size(14);
-    let mut uri_input = text_input("URI", &editor.uri)
+    let mut label_input = text_input(
+        &crate::localization::translate_current("Name"),
+        &editor.label,
+    )
+    .padding([6, 8])
+    .size(14);
+    let mut uri_input = text_input(&crate::localization::translate_current("URI"), &editor.uri)
         .on_submit(Message::NetworkConnection(
             NetworkConnectionMessage::EditorSaved,
         ))
@@ -57,31 +62,33 @@ pub(super) fn network_connection_editor_panel(
         .push(label_input)
         .push(uri_input)
         .push(
-            text_input("Username", &editor.username)
-                .on_input(|value| {
-                    Message::NetworkConnection(NetworkConnectionMessage::EditorUsernameChanged(
-                        value,
-                    ))
-                })
-                .on_submit(Message::NetworkConnection(
-                    NetworkConnectionMessage::EditorSaved,
-                ))
-                .padding([6, 8])
-                .size(14),
+            text_input(
+                &crate::localization::translate_current("Username"),
+                &editor.username,
+            )
+            .on_input(|value| {
+                Message::NetworkConnection(NetworkConnectionMessage::EditorUsernameChanged(value))
+            })
+            .on_submit(Message::NetworkConnection(
+                NetworkConnectionMessage::EditorSaved,
+            ))
+            .padding([6, 8])
+            .size(14),
         )
         .push(
-            text_input("Password", &editor.password)
-                .secure(true)
-                .on_input(|value| {
-                    Message::NetworkConnection(NetworkConnectionMessage::EditorPasswordChanged(
-                        value,
-                    ))
-                })
-                .on_submit(Message::NetworkConnection(
-                    NetworkConnectionMessage::EditorSaved,
-                ))
-                .padding([6, 8])
-                .size(14),
+            text_input(
+                &crate::localization::translate_current("Password"),
+                &editor.password,
+            )
+            .secure(true)
+            .on_input(|value| {
+                Message::NetworkConnection(NetworkConnectionMessage::EditorPasswordChanged(value))
+            })
+            .on_submit(Message::NetworkConnection(
+                NetworkConnectionMessage::EditorSaved,
+            ))
+            .padding([6, 8])
+            .size(14),
         );
 
     if editor.mode != NetworkConnectionEditorMode::Connect {
@@ -230,7 +237,7 @@ fn network_connection_menu_label(
 ) -> iced::widget::Row<'static, Message> {
     row![
         themed_icon(icon, IconTone::Normal, MENU_ICON_SIZE),
-        text(label)
+        crate::typography::readable_text(label)
     ]
     .spacing(6)
     .align_y(Alignment::Center)

@@ -608,12 +608,15 @@ fn list_name_cell<'a>(
     let indent = Space::new().width(Length::Fixed(depth as f32 * LIST_INDENT_WIDTH));
     let toggle = list_directory_toggle(pane, entry);
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
-        text_input("File name", pane.rename_input)
-            .id(rename_input_id())
-            .on_input(Message::RenameInputChanged)
-            .on_submit(Message::RenameSelected)
-            .width(Length::Fill)
-            .into()
+        text_input(
+            &crate::localization::translate_current("File name"),
+            pane.rename_input,
+        )
+        .id(rename_input_id())
+        .on_input(Message::RenameInputChanged)
+        .on_submit(Message::RenameSelected)
+        .width(Length::Fill)
+        .into()
     } else {
         measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),

@@ -17,6 +17,8 @@ pub struct StoredUserPreferences {
     pub network_list_thumbnail_downloads_enabled: bool,
     pub max_preview_file_bytes: u64,
     pub show_hidden_files: bool,
+    #[serde(default = "default_language_setting")]
+    pub language_setting: String,
     pub sidebar_width: f64,
     pub sidebar_favorites: Option<Vec<StoredSidebarFavorite>>,
     pub network_connections: Vec<StoredNetworkConnection>,
@@ -49,6 +51,7 @@ impl Default for StoredUserPreferences {
             network_list_thumbnail_downloads_enabled: false,
             max_preview_file_bytes: 3 * 1024 * 1024,
             show_hidden_files: false,
+            language_setting: default_language_setting(),
             sidebar_width: 180.0,
             sidebar_favorites: None,
             network_connections: Vec::new(),
@@ -126,6 +129,10 @@ fn default_list_sort_direction() -> String {
 
 fn default_list_directory_size_display_mode() -> String {
     "item_count".to_owned()
+}
+
+fn default_language_setting() -> String {
+    "system".to_owned()
 }
 
 impl TaskQueueStore {

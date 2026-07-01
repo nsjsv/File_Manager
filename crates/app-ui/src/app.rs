@@ -83,6 +83,8 @@ use crate::commands::{
     file_operation_subscription, startup_environment_command, wayland_dnd_window_handle_command,
 };
 use crate::config;
+use crate::config::UiLanguage;
+use crate::localization;
 use crate::model::{
     AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
@@ -213,6 +215,7 @@ pub(crate) struct FileBrowser {
     pub(crate) rename_input: String,
     pub(crate) is_loading: bool,
     pub(crate) error: Option<String>,
+    system_language: UiLanguage,
     pub(crate) cursor_position: Point,
     pub(crate) main_window_width: f32,
     pub(crate) main_window_height: f32,
@@ -256,6 +259,16 @@ pub(crate) struct PendingKeyboardColumnFocus {
 impl FileBrowser {
     pub(crate) fn user_config(&self) -> &config::UserConfig {
         &self.user_config
+    }
+
+    pub(crate) fn active_language(&self) -> UiLanguage {
+        self.user_config
+            .language_setting
+            .resolve(self.system_language)
+    }
+
+    fn refresh_current_language(&self) {
+        localization::set_current_language(self.active_language());
     }
 
     pub(crate) fn file_operation_verification(&self) -> file_core::FileOperationVerification {
@@ -428,6 +441,7 @@ impl FileBrowser {
             rename_input: String::new(),
             is_loading: true,
             error: None,
+            system_language: UiLanguage::English,
             cursor_position: Point::new(0.0, 0.0),
             main_window_width: MAIN_WINDOW_INITIAL_WIDTH,
             main_window_height: MAIN_WINDOW_INITIAL_HEIGHT,
@@ -460,6 +474,7 @@ impl FileBrowser {
             theme: Theme::Light,
             is_shutting_down: false,
         };
+        browser.refresh_current_language();
         browser.refresh_column_width_reference_content_widths();
         startup_trace::mark_once("file_browser_new_ready");
         (
@@ -605,7 +620,7 @@ impl FileBrowser {
             }
             view_browser(self)
         } else {
-            iced::widget::container(iced::widget::text("Closing window..."))
+            iced::widget::container(crate::typography::readable_text("Closing window..."))
                 .width(iced::Length::Fill)
                 .height(iced::Length::Fill)
                 .into()

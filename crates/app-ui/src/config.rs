@@ -64,6 +64,62 @@ pub(crate) enum SearchModePromptStatus {
     Completed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UiLanguage {
+    English,
+    Chinese,
+}
+
+impl UiLanguage {
+    pub(crate) const fn as_u8(self) -> u8 {
+        match self {
+            Self::English => 0,
+            Self::Chinese => 1,
+        }
+    }
+
+    pub(crate) const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Chinese,
+            _ => Self::English,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UiLanguageSetting {
+    System,
+    English,
+    Chinese,
+}
+
+impl UiLanguageSetting {
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "system" => Some(Self::System),
+            "english" => Some(Self::English),
+            "chinese" => Some(Self::Chinese),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::English => "english",
+            Self::Chinese => "chinese",
+        }
+    }
+
+    pub(crate) fn resolve(self, system_language: UiLanguage) -> UiLanguage {
+        match self {
+            Self::System => system_language,
+            Self::English => UiLanguage::English,
+            Self::Chinese => UiLanguage::Chinese,
+        }
+    }
+}
+
 impl SearchModePromptStatus {
     pub(crate) fn from_config_value(value: &str) -> Option<Self> {
         match value {
@@ -229,6 +285,7 @@ pub(crate) struct UserConfig {
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
     pub(crate) max_preview_file_bytes: u64,
     pub(crate) show_hidden_files: bool,
+    pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) network_connections: Vec<SavedNetworkConnection>,
@@ -276,6 +333,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         network_list_thumbnail_downloads_enabled: false,
         max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
         show_hidden_files: false,
+        language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         sidebar_favorites: None,
         network_connections: Vec::new(),
@@ -305,6 +363,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         network_list_thumbnail_downloads_enabled: false,
         max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
         show_hidden_files: false,
+        language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         sidebar_favorites: None,
         network_connections: Vec::new(),

@@ -6,10 +6,9 @@ use file_index::{
     MediaMetadataScope,
 };
 use iced::widget::{
-    button, column, container, mouse_area, radio, row, text, text_input, Button, Column, Space,
-    Text,
+    button, column, container, mouse_area, radio, row, text_input, Button, Column, Space,
 };
-use iced::{Alignment, Element, Length, Theme};
+use iced::{Alignment, Element, Length};
 
 use crate::app::search_index_settings::{
     search_index_display_path, search_index_exclude_pattern_display_path,
@@ -24,7 +23,7 @@ use crate::model::{
     Message, SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
     SearchIndexPathRuleSelection,
 };
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::option_controls::selectable_choice_row;
 use super::toggle_switch::switch_control;
@@ -94,7 +93,7 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
         DirectoryErrorPolicy::Abort => "Abort scan",
     };
     let roots_label = if browser.search_index.profile_roots.is_empty() {
-        "No roots selected".to_owned()
+        crate::localization::translate_current("No roots selected")
     } else {
         format!(
             "{} explicit path(s)",
@@ -173,7 +172,7 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
     ];
 
     if let Some(error) = &browser.search_index.profile_error {
-        profile = profile.push(readable_text(format!("Profile error: {error}")).size(12));
+        profile = profile.push(localized_text(format!("Profile error: {error}")).size(12));
     }
     profile = profile.push(
         readable_text("Changing content or media indexing applies to future rebuilds and updates.")
@@ -188,14 +187,16 @@ fn search_index_daemon_status_label(
     loading: bool,
 ) -> String {
     if loading {
-        return "Checking...".to_owned();
+        return crate::localization::translate_current("Checking...");
     }
     match status {
-        Some(SearchIndexDaemonStatus::Reachable) => "Connected".to_owned(),
+        Some(SearchIndexDaemonStatus::Reachable) => {
+            crate::localization::translate_current("Connected")
+        }
         Some(SearchIndexDaemonStatus::Unreachable(error)) => {
             format!("Unavailable: {error}")
         }
-        None => "Unknown".to_owned(),
+        None => crate::localization::translate_current("Unknown"),
     }
 }
 
@@ -262,7 +263,7 @@ fn path_rules_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
     let home = browser.search_index_home_directory();
     let mut rules: Column<'a, Message> = Column::new()
         .spacing(8)
-        .push(scoped_text("Path rules").size(13))
+        .push(readable_text("Path rules").size(13))
         .push(path_rules_header());
 
     let path_rule_entries = browser.search_index.path_rule_entries();
@@ -280,7 +281,7 @@ fn path_rules_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
     }
 
     if !has_rows {
-        rules = rules.push(scoped_text("No path rules configured.").size(12));
+        rules = rules.push(readable_text("No path rules configured.").size(12));
     }
 
     if matches!(
@@ -349,9 +350,9 @@ fn path_rule_label(
 
 fn path_rules_header<'a>() -> Element<'a, Message> {
     let content = row![
-        scoped_text("Index").size(12).width(Length::Fixed(72.0)),
-        scoped_text("Exclude").size(12).width(Length::Fixed(72.0)),
-        scoped_text("Path").size(12).width(Length::Fill),
+        readable_text("Index").size(12).width(Length::Fixed(72.0)),
+        readable_text("Exclude").size(12).width(Length::Fixed(72.0)),
+        readable_text("Path").size(12).width(Length::Fill),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -467,10 +468,10 @@ fn root_statuses_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
     let roots = browser.search_index_setting_roots();
     let mut statuses: Column<'a, Message> = Column::new()
         .spacing(8)
-        .push(scoped_text("Indexed roots").size(13));
+        .push(readable_text("Indexed roots").size(13));
 
     if roots.is_empty() {
-        statuses = statuses.push(scoped_text("No searchable roots are available yet.").size(12));
+        statuses = statuses.push(readable_text("No searchable roots are available yet.").size(12));
     } else {
         for root in roots {
             statuses = statuses.push(root_status_card(browser, root));
@@ -508,7 +509,7 @@ fn root_status_card<'a>(browser: &'a FileBrowser, root: PathBuf) -> Element<'a, 
     }
 
     if let Some(error) = error {
-        details = details.push(readable_text(format!("Index error: {error}")).size(12));
+        details = details.push(localized_text(format!("Index error: {error}")).size(12));
     }
 
     details = match status {
@@ -546,7 +547,7 @@ fn index_status_rows(status: &FileSearchIndexStatus) -> Element<'static, Message
         .updated_at_ms
         .or(status.built_at_ms)
         .map(format_unix_ms)
-        .unwrap_or_else(|| "Never".to_owned());
+        .unwrap_or_else(|| crate::localization::translate_current("Never"));
     let mut rows = column![
         metadata_row("State", state_label.to_owned()),
         metadata_row("Records", status.record_count.to_string()),
@@ -685,8 +686,4 @@ fn format_unix_ms(ms: i64) -> String {
     };
     time.map(format_system_time)
         .unwrap_or_else(|| "Out of range".to_owned())
-}
-
-fn scoped_text<'a>(content: &'a str) -> Text<'a, Theme, iced::Renderer> {
-    text(content)
 }

@@ -364,12 +364,15 @@ fn column_entry_row<'a>(
     let icon_tone = visual_state.icon_tone();
 
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
-        text_input("File name", pane.rename_input)
-            .id(rename_input_id())
-            .on_input(Message::RenameInputChanged)
-            .on_submit(Message::RenameSelected)
-            .width(Length::Fill)
-            .into()
+        text_input(
+            &crate::localization::translate_current("File name"),
+            pane.rename_input,
+        )
+        .id(rename_input_id())
+        .on_input(Message::RenameInputChanged)
+        .on_submit(Message::RenameSelected)
+        .width(Length::Fill)
+        .into()
     } else {
         measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),

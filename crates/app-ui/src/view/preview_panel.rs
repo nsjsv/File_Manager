@@ -21,7 +21,7 @@ use crate::model::{
     ScrollbarRegion, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
     VideoPreviewPlaybackStatus,
 };
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::{
     auxiliary_window_message, icon_tone_style, text_preview_panel::text_preview_panel, themed_icon,
@@ -175,10 +175,12 @@ fn network_preview_download_panel(download: &NetworkPreviewDownload) -> Column<'
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| download.source_path.to_string_lossy().into_owned());
-    let title = format!(
-        "Downloading {}",
-        format_middle_ellipsized_text(&name, PREVIEW_ENTRY_NAME_MAX_CHARS)
-    );
+    let name = format_middle_ellipsized_text(&name, PREVIEW_ENTRY_NAME_MAX_CHARS);
+    let title = if crate::localization::current_language_is_chinese() {
+        format!("正在下载 {name}")
+    } else {
+        format!("Downloading {name}")
+    };
     let progress = download.fraction().unwrap_or(0.0);
     let detail = download
         .bytes_total
@@ -189,7 +191,7 @@ fn network_preview_download_panel(download: &NetworkPreviewDownload) -> Column<'
                 format_file_size(bytes_total)
             )
         })
-        .unwrap_or_else(|| "Preparing download...".to_owned());
+        .unwrap_or_else(|| crate::localization::translate_current("Preparing download..."));
 
     column![
         readable_text(title).size(14),
@@ -569,7 +571,7 @@ fn audio_timeline_control(
 fn audio_volume_control(playback: Option<&AudioPreviewPlayback>) -> Element<'static, Message> {
     let volume = playback.map(|playback| playback.volume).unwrap_or(1.0);
     column![
-        readable_text(format!("Volume {:.0}%", volume * 100.0)).size(12),
+        localized_text(format!("Volume {:.0}%", volume * 100.0)).size(12),
         slider(0.0..=1.0, volume, Message::AudioPreviewVolumeChanged)
             .step(AUDIO_VOLUME_SLIDER_STEP)
             .width(Length::Fixed(AUDIO_VOLUME_SLIDER_WIDTH)),

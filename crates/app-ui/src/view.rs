@@ -666,13 +666,16 @@ fn path_input_panel<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
         .into();
     }
 
-    let input = text_input("Path", pane.path_input)
-        .id(path_input_id(pane.id))
-        .on_input(move |value| Message::PathInputChanged(pane.id, value))
-        .on_submit(Message::PathInputSubmitted(pane.id))
-        .padding([7, 10])
-        .size(16)
-        .width(Length::Fill);
+    let input = text_input(
+        &crate::localization::translate_current("Path"),
+        pane.path_input,
+    )
+    .id(path_input_id(pane.id))
+    .on_input(move |value| Message::PathInputChanged(pane.id, value))
+    .on_submit(Message::PathInputSubmitted(pane.id))
+    .padding([7, 10])
+    .size(16)
+    .width(Length::Fill);
 
     let popup = (!pane.path_suggestions.is_empty()).then(|| path_suggestions_panel(pane));
 

@@ -17,7 +17,7 @@ use crate::model::{
     BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode, BatchRenameSortMode,
     BatchRenameState, Message, ScrollbarRegion, ScrollbarVisibility,
 };
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::batch_rename_preview_name_input_id;
 use super::option_controls::{
@@ -34,7 +34,7 @@ pub(super) fn batch_rename_panel(
 ) -> Element<'_, Message> {
     let header = row![
         readable_text("Batch Rename").size(16).width(Length::Fill),
-        readable_text(format!("{} items", state.items.len())).size(12),
+        localized_text(format!("{} items", state.items.len())).size(12),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -236,12 +236,12 @@ fn sequence_controls(state: &BatchRenameState) -> Element<'_, Message> {
         .align_y(Alignment::Center),
         row![
             checkbox(state.sequence.include_original_stem)
-                .label("Original stem")
+                .label(crate::localization::translate_current("Original stem"))
                 .on_toggle(|value| Message::BatchRename(
                     BatchRenameMessage::SequenceIncludeOriginalToggled(value)
                 )),
             checkbox(state.sequence.preserve_extension)
-                .label("Extension")
+                .label(crate::localization::translate_current("Extension"))
                 .on_toggle(|value| Message::BatchRename(
                     BatchRenameMessage::SequencePreserveExtensionToggled(value)
                 )),
@@ -293,7 +293,7 @@ fn replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Alignment::Center),
         checkbox(state.replace.ignore_case)
-            .label("Ignore case")
+            .label(crate::localization::translate_current("Ignore case"))
             .on_toggle(
                 |value| Message::BatchRename(BatchRenameMessage::ReplaceIgnoreCaseToggled(value))
             ),
@@ -333,7 +333,7 @@ fn insert_controls(state: &BatchRenameState) -> Element<'_, Message> {
             BatchRenameMessage::InsertAnchorChanged
         ),
         checkbox(state.insert.ignore_extension)
-            .label("Ignore extension")
+            .label(crate::localization::translate_current("Ignore extension"))
             .on_toggle(|value| Message::BatchRename(
                 BatchRenameMessage::InsertIgnoreExtensionToggled(value)
             )),
@@ -603,16 +603,19 @@ fn preview_row<'a>(
     .interaction(iced::mouse::Interaction::Grab)
     .into();
     let target_cell: Element<'a, Message> = if is_editing {
-        text_input("New name", editing_input)
-            .id(batch_rename_preview_name_input_id(&row_state.source))
-            .on_input(|value| Message::BatchRename(BatchRenameMessage::PreviewNameChanged(value)))
-            .on_submit(Message::BatchRename(
-                BatchRenameMessage::PreviewNameEditCommitted,
-            ))
-            .padding([5, 6])
-            .size(12)
-            .width(Length::FillPortion(3))
-            .into()
+        text_input(
+            &crate::localization::translate_current("New name"),
+            editing_input,
+        )
+        .id(batch_rename_preview_name_input_id(&row_state.source))
+        .on_input(|value| Message::BatchRename(BatchRenameMessage::PreviewNameChanged(value)))
+        .on_submit(Message::BatchRename(
+            BatchRenameMessage::PreviewNameEditCommitted,
+        ))
+        .padding([5, 6])
+        .size(12)
+        .width(Length::FillPortion(3))
+        .into()
     } else {
         mouse_area(
             container(readable_text(target).size(12))
@@ -683,7 +686,7 @@ fn input_column<'a>(
 ) -> Element<'a, Message> {
     column![
         readable_text(label).size(11),
-        text_input(label, value)
+        text_input(&crate::localization::translate_current(label), value)
             .on_input(move |value| Message::BatchRename(message(value)))
             .padding([6, 8])
             .size(13)

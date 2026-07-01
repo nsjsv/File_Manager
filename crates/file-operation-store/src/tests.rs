@@ -254,6 +254,7 @@ fn user_preferences_roundtrip_replace() {
         network_list_thumbnail_downloads_enabled: true,
         max_preview_file_bytes: 8 * 1024 * 1024,
         show_hidden_files: true,
+        language_setting: "chinese".to_owned(),
         sidebar_width: 248.0,
         sidebar_favorites: Some(vec![StoredSidebarFavorite {
             label: "Projects".to_owned(),
@@ -365,6 +366,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.list_sort_field, "name");
     assert_eq!(preferences.list_sort_direction, "ascending");
     assert_eq!(preferences.list_directory_size_display_mode, "item_count");
+    assert_eq!(preferences.language_setting, "system");
     let _ = fs::remove_dir_all(root);
 }
 

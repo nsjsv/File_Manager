@@ -21,7 +21,9 @@ use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
-use crate::config::{RenderingGpuPreference, SearchBackendMode, UserConfig};
+use crate::config::{
+    RenderingGpuPreference, SearchBackendMode, UiLanguage, UiLanguageSetting, UserConfig,
+};
 use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
@@ -378,6 +380,7 @@ pub(crate) enum Message {
     NetworkListThumbnailDownloadsToggled,
     MaxPreviewFileMibInputChanged(String),
     MaxPreviewFileMibInputCommitted,
+    LanguageSettingSelected(UiLanguageSetting),
     StartupLocationPolicySelected(crate::config::StartupLocationPolicy),
     StartupCustomDirectoryInputChanged(String),
     StartupCustomDirectoryCommitted,
@@ -540,6 +543,7 @@ impl TransferConflictState {
 #[derive(Debug, Clone)]
 pub(crate) struct StartupEnvironment {
     pub(crate) home: PathBuf,
+    pub(crate) system_language: UiLanguage,
     pub(crate) user_config: UserConfig,
     pub(crate) state_database_path: PathBuf,
     pub(crate) rendering_environment_status: StartupRenderingEnvironmentStatus,

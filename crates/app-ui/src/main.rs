@@ -14,6 +14,7 @@ mod formatting;
 mod icons;
 mod input_blocking_space;
 mod list_view;
+mod localization;
 mod measured_middle_ellipsized_text;
 mod model;
 mod network_connections;

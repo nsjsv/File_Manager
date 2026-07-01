@@ -1,6 +1,5 @@
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, Button, Column, Row,
-    Space,
+    button, checkbox, column, container, mouse_area, row, scrollable, Button, Column, Row, Space,
 };
 use iced::{Alignment, Element, Length};
 
@@ -22,7 +21,7 @@ use crate::model::{
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::network_connections::network_connection_context_menu_panel;
 use super::option_controls::{action_choice_row, primary_action_button, secondary_action_button};
@@ -164,7 +163,7 @@ pub(super) fn file_drop_operation_panel(prompt: &FileDropPrompt) -> Element<'_, 
 
     let content = column![
         title,
-        readable_text(format!("{item_label} will be added to:")).size(13),
+        localized_text(format!("{item_label} will be added to:")).size(13),
         readable_text(destination).size(12).width(Length::Fill),
         operation_choices,
         actions,
@@ -200,7 +199,7 @@ pub(super) fn open_with_panel(
 
     if let Some(fallback_error) = state.fallback_error() {
         content = content.push(
-            readable_text(format!(
+            localized_text(format!(
                 "Default open failed: {}",
                 format_middle_ellipsized_text(fallback_error, OPEN_WITH_ERROR_MAX_CHARS)
             ))
@@ -221,7 +220,9 @@ pub(super) fn open_with_panel(
                 .push(open_with_application_list(state, scrollbar_visibility))
                 .push(
                     checkbox(state.set_default_selected())
-                        .label("Set as default application")
+                        .label(crate::localization::translate_current(
+                            "Set as default application",
+                        ))
                         .on_toggle(Message::OpenWithDefaultApplicationToggled),
                 );
         }
@@ -291,9 +292,12 @@ fn open_with_application_list(
 }
 
 fn action_label(icon: IconSymbol, label: &'static str, size: f32) -> Row<'static, Message> {
-    row![themed_icon(icon, IconTone::Normal, size), text(label)]
-        .spacing(6)
-        .align_y(Alignment::Center)
+    row![
+        themed_icon(icon, IconTone::Normal, size),
+        crate::typography::readable_text(label)
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
 }
 
 pub(super) fn context_menu_panel<'a>(
@@ -628,7 +632,7 @@ fn menu_label(icon: IconSymbol, label: &'static str) -> Row<'static, Message> {
 fn menu_label_with_chevron(icon: IconSymbol, label: &'static str) -> Row<'static, Message> {
     row![
         themed_icon(icon, IconTone::Normal, MENU_ICON_SIZE),
-        text(label).width(Length::Fill),
+        crate::typography::readable_text(label).width(Length::Fill),
         themed_icon(IconSymbol::ChevronRight, IconTone::Normal, MENU_ICON_SIZE),
     ]
     .spacing(6)

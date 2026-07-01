@@ -62,6 +62,7 @@ network_connections = [
     assert!(parsed.network_list_thumbnail_downloads_enabled);
     assert_eq!(parsed.max_preview_file_bytes, 4 * 1024 * 1024);
     assert!(parsed.show_hidden_files);
+    assert_eq!(parsed.language_setting, UiLanguageSetting::System);
     assert_eq!(parsed.sidebar_width, 260.5);
     assert_eq!(parsed.terminal_emulator, TerminalEmulator::Ghostty);
     assert_eq!(
@@ -181,6 +182,7 @@ fn user_preferences_round_trip_through_sqlite() {
     };
     let mut config = default_user_config();
     config.show_hidden_files = true;
+    config.language_setting = UiLanguageSetting::Chinese;
     config.sidebar_width = 245.0;
     config.sidebar_favorites = Some(vec![SidebarFavoriteConfig {
         label: "Projects".to_owned(),
@@ -253,6 +255,7 @@ fn user_preferences_round_trip_through_sqlite() {
         app_config.rendering_gpu_preference
     );
     assert!(loaded.show_hidden_files);
+    assert_eq!(loaded.language_setting, UiLanguageSetting::Chinese);
     assert_eq!(loaded.sidebar_width, 245.0);
     assert_eq!(loaded.sidebar_favorites, config.sidebar_favorites);
     assert_eq!(loaded.network_connections, config.network_connections);
@@ -409,6 +412,17 @@ fn stored_preferences_derive_view_state_saving_from_startup_location() {
         StartupLocationPolicy::CustomDirectory
     );
     assert!(!preferences.save_view_state);
+}
+
+#[test]
+fn stored_preferences_invalid_language_setting_falls_back_to_system() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.language_setting = "unsupported".to_owned();
+
+    let preferences = UserPreferences::from_stored(stored, &default);
+
+    assert_eq!(preferences.language_setting, UiLanguageSetting::System);
 }
 
 #[test]

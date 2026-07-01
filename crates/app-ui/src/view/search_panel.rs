@@ -54,18 +54,25 @@ fn search_panel(
     let root = format_middle_ellipsized_text(root.as_ref(), SEARCH_ROOT_MAX_CHARS);
     let header = row![
         readable_text("Search").size(16).width(Length::Fill),
-        readable_text(format!("{} · {root}", search_scope_label(search.scope))).size(12),
+        readable_text(format!(
+            "{} · {root}",
+            crate::localization::translate_current(search_scope_label(search.scope))
+        ))
+        .size(12),
     ]
     .spacing(10)
     .align_y(Alignment::Center);
 
-    let input = text_input("Search files", &search.query)
-        .id(search_input_id())
-        .on_input(Message::SearchInputChanged)
-        .on_submit(Message::SearchActivated)
-        .padding([8, 10])
-        .size(16)
-        .width(Length::Fill);
+    let input = text_input(
+        &crate::localization::translate_current("Search files"),
+        &search.query,
+    )
+    .id(search_input_id())
+    .on_input(Message::SearchInputChanged)
+    .on_submit(Message::SearchActivated)
+    .padding([8, 10])
+    .size(16)
+    .width(Length::Fill);
 
     let content = column![
         header,
@@ -201,24 +208,48 @@ fn search_match_row(search_match: &FileSearchMatch, is_selected: bool) -> Elemen
 }
 
 fn search_footer(search: &SearchState) -> Element<'_, Message> {
-    let mode_label = search_mode_label(search.mode);
-    let status = if search.index_error.is_some() {
-        format!("{mode_label} index failed · Tab switches scope · Esc closes")
-    } else if search.is_indexing {
-        format!("{mode_label} index updating · Tab switches scope · Enter opens match · Esc closes")
-    } else if search.is_loading {
-        format!("Searching {mode_label} · Tab switches scope · Enter opens match · Esc closes")
-    } else if search.skipped_count > 0 {
-        format!(
-            "{mode_label} matches: {} · Skipped locations: {} · Tab switches scope · Enter opens match · Esc closes",
-            search.matches.len(),
-            search.skipped_count
-        )
+    let mode_label = crate::localization::translate_current(search_mode_label(search.mode));
+    let status = if crate::localization::current_language_is_chinese() {
+        if search.index_error.is_some() {
+            format!("{mode_label} 索引失败 · Tab 切换范围 · Esc 关闭")
+        } else if search.is_indexing {
+            format!("{mode_label} 索引更新中 · Tab 切换范围 · Enter 打开结果 · Esc 关闭")
+        } else if search.is_loading {
+            format!("正在搜索 {mode_label} · Tab 切换范围 · Enter 打开结果 · Esc 关闭")
+        } else if search.skipped_count > 0 {
+            format!(
+                "{mode_label} 匹配数：{} · 已跳过位置：{} · Tab 切换范围 · Enter 打开结果 · Esc 关闭",
+                search.matches.len(),
+                search.skipped_count
+            )
+        } else {
+            format!(
+                "{mode_label} 匹配数：{} · Tab 切换范围 · Enter 打开结果 · Esc 关闭",
+                search.matches.len()
+            )
+        }
     } else {
-        format!(
-            "{mode_label} matches: {} · Tab switches scope · Enter opens match · Esc closes",
-            search.matches.len()
-        )
+        let mode_label = search_mode_label(search.mode);
+        if search.index_error.is_some() {
+            format!("{mode_label} index failed · Tab switches scope · Esc closes")
+        } else if search.is_indexing {
+            format!(
+                "{mode_label} index updating · Tab switches scope · Enter opens match · Esc closes"
+            )
+        } else if search.is_loading {
+            format!("Searching {mode_label} · Tab switches scope · Enter opens match · Esc closes")
+        } else if search.skipped_count > 0 {
+            format!(
+                "{mode_label} matches: {} · Skipped locations: {} · Tab switches scope · Enter opens match · Esc closes",
+                search.matches.len(),
+                search.skipped_count
+            )
+        } else {
+            format!(
+                "{mode_label} matches: {} · Tab switches scope · Enter opens match · Esc closes",
+                search.matches.len()
+            )
+        }
     };
 
     readable_text(status).size(12).into()
@@ -282,9 +313,9 @@ fn search_match_detail(search_match: &FileSearchMatch) -> Option<String> {
 fn media_detail(media: &MediaSearchMetadata) -> String {
     let mut parts = Vec::new();
     parts.push(match media.media_kind {
-        MediaSearchKind::Image => "Image".to_owned(),
-        MediaSearchKind::Audio => "Audio".to_owned(),
-        MediaSearchKind::Video => "Video".to_owned(),
+        MediaSearchKind::Image => crate::localization::translate_current("Image"),
+        MediaSearchKind::Audio => crate::localization::translate_current("Audio"),
+        MediaSearchKind::Video => crate::localization::translate_current("Video"),
     });
     if let (Some(width), Some(height)) = (media.width, media.height) {
         parts.push(format!("{width}x{height}"));

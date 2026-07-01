@@ -18,7 +18,8 @@ use super::{
     list_directory_size_display_mode_from_config_value, normalize_max_preview_file_bytes,
     normalize_search_index_exclude_patterns, normalize_sidebar_width, sort_direction_config_value,
     sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
-    SearchBackendMode, SearchModePromptStatus, SidebarFavoriteConfig, UserConfig,
+    SearchBackendMode, SearchModePromptStatus, SidebarFavoriteConfig, UiLanguageSetting,
+    UserConfig,
 };
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
@@ -38,6 +39,7 @@ pub(crate) struct UserPreferences {
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
     pub(crate) max_preview_file_bytes: u64,
     pub(crate) show_hidden_files: bool,
+    pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) network_connections: Vec<SavedNetworkConnection>,
@@ -67,6 +69,7 @@ impl UserPreferences {
                 .network_list_thumbnail_downloads_enabled,
             max_preview_file_bytes: normalize_max_preview_file_bytes(config.max_preview_file_bytes),
             show_hidden_files: config.show_hidden_files,
+            language_setting: config.language_setting,
             sidebar_width: normalize_sidebar_width(config.sidebar_width),
             sidebar_favorites: config.sidebar_favorites.clone(),
             network_connections: config.network_connections.clone(),
@@ -93,6 +96,7 @@ impl UserPreferences {
             self.network_list_thumbnail_downloads_enabled;
         config.max_preview_file_bytes = self.max_preview_file_bytes;
         config.show_hidden_files = self.show_hidden_files;
+        config.language_setting = self.language_setting;
         config.sidebar_width = self.sidebar_width;
         config.sidebar_favorites = self.sidebar_favorites.clone();
         config.network_connections = self.network_connections.clone();
@@ -121,6 +125,7 @@ impl UserPreferences {
             network_list_thumbnail_downloads_enabled: self.network_list_thumbnail_downloads_enabled,
             max_preview_file_bytes: normalize_max_preview_file_bytes(self.max_preview_file_bytes),
             show_hidden_files: self.show_hidden_files,
+            language_setting: self.language_setting.config_value().to_owned(),
             sidebar_width: f64::from(normalize_sidebar_width(self.sidebar_width)),
             sidebar_favorites: self
                 .sidebar_favorites
@@ -181,6 +186,8 @@ impl UserPreferences {
                 .network_list_thumbnail_downloads_enabled,
             max_preview_file_bytes: normalize_max_preview_file_bytes(stored.max_preview_file_bytes),
             show_hidden_files: stored.show_hidden_files,
+            language_setting: UiLanguageSetting::from_config_value(&stored.language_setting)
+                .unwrap_or(default_preferences.language_setting),
             sidebar_width: normalize_sidebar_width(stored.sidebar_width as f32),
             sidebar_favorites: stored
                 .sidebar_favorites

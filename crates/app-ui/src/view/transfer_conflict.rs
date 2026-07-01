@@ -61,7 +61,9 @@ pub(super) fn transfer_conflict_panel<'a>(
     );
 
     let apply_to_all = checkbox(state.apply_to_all)
-        .label("Apply this action to all files and folders")
+        .label(crate::localization::translate_current(
+            "Apply this action to all files and folders",
+        ))
         .on_toggle(|_| Message::TransferConflictApplyToAllToggled)
         .size(18)
         .text_size(14)
@@ -112,10 +114,12 @@ fn conflict_title(conflict: &TransferConflictItem) -> String {
         .or_else(|| conflict.source.file_name())
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "item".to_owned());
-    format!(
-        "This folder already contains a file named \"{}\".",
-        format_middle_ellipsized_text(&file_name, TRANSFER_CONFLICT_NAME_MAX_CHARS)
-    )
+    let file_name = format_middle_ellipsized_text(&file_name, TRANSFER_CONFLICT_NAME_MAX_CHARS);
+    if crate::localization::current_language_is_chinese() {
+        format!("此文件夹已包含名为“{file_name}”的文件。")
+    } else {
+        format!("This folder already contains a file named \"{file_name}\".")
+    }
 }
 
 fn conflict_count_label(state: &TransferConflictState) -> Element<'_, Message> {
@@ -173,28 +177,62 @@ fn conflict_section_title(section_kind: ConflictFileSectionKind, path: &Path) ->
 
     match section_kind {
         ConflictFileSectionKind::Existing => {
-            format!("Replace the existing file in \"{directory}\"")
+            if crate::localization::current_language_is_chinese() {
+                format!("替换“{directory}”中的现有文件")
+            } else {
+                format!("Replace the existing file in \"{directory}\"")
+            }
         }
-        ConflictFileSectionKind::Incoming => "Use the following file?".to_owned(),
+        ConflictFileSectionKind::Incoming => {
+            if crate::localization::current_language_is_chinese() {
+                "使用以下文件？".to_owned()
+            } else {
+                "Use the following file?".to_owned()
+            }
+        }
     }
 }
 
 fn conflict_size_label(metadata: &TransferConflictMetadata) -> String {
     if metadata.is_directory {
-        "Size: folder".to_owned()
+        if crate::localization::current_language_is_chinese() {
+            "大小：文件夹".to_owned()
+        } else {
+            "Size: folder".to_owned()
+        }
     } else {
-        format!(
-            "Size: {} ({} bytes)",
-            format_file_size(metadata.len),
-            metadata.len
-        )
+        if crate::localization::current_language_is_chinese() {
+            format!(
+                "大小：{}（{} 字节）",
+                format_file_size(metadata.len),
+                metadata.len
+            )
+        } else {
+            format!(
+                "Size: {} ({} bytes)",
+                format_file_size(metadata.len),
+                metadata.len
+            )
+        }
     }
 }
 
 fn conflict_modified_label(modified: Option<SystemTime>) -> String {
     modified
-        .map(|time| format!("Modified: {}", format_system_time(time)))
-        .unwrap_or_else(|| "Modified: unknown".to_owned())
+        .map(|time| {
+            if crate::localization::current_language_is_chinese() {
+                format!("修改时间：{}", format_system_time(time))
+            } else {
+                format!("Modified: {}", format_system_time(time))
+            }
+        })
+        .unwrap_or_else(|| {
+            if crate::localization::current_language_is_chinese() {
+                "修改时间：未知".to_owned()
+            } else {
+                "Modified: unknown".to_owned()
+            }
+        })
 }
 
 fn conflict_icon(conflict: &TransferConflictItem) -> Svg<'static, Theme> {

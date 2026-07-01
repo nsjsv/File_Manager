@@ -6,7 +6,7 @@ use crate::model::{
     TextPreviewLineLimitNotice,
 };
 use crate::text_preview_viewer::text_preview_viewer;
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::markdown_preview::markdown_preview_body;
 use super::option_controls::{segmented_choice_row, SegmentedChoice};
@@ -82,7 +82,7 @@ fn text_preview_line_limit_notice(notice: TextPreviewLineLimitNotice) -> Element
 }
 
 fn text_preview_chunk_error(error: &str) -> Element<'static, Message> {
-    readable_text(format!("Could not load more text preview: {error}"))
+    localized_text(format!("Could not load more text preview: {error}"))
         .size(12)
         .into()
 }

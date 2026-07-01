@@ -25,7 +25,7 @@ struct TerminalEmulatorPickOption(TerminalEmulator);
 
 impl fmt::Display for TerminalEmulatorPickOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.0.label())
+        formatter.write_str(&crate::localization::translate_current(self.0.label()))
     }
 }
 
@@ -85,6 +85,8 @@ fn general_settings_detail(
     let content = if show_custom_directory {
         column![
             readable_text("General").size(20),
+            readable_text("Language").size(13),
+            language_setting_options(browser),
             readable_text("File display").size(13),
             hidden_files_visibility_button(browser),
             list_directory_size_display_mode_button(browser),
@@ -97,6 +99,8 @@ fn general_settings_detail(
     } else {
         column![
             readable_text("General").size(20),
+            readable_text("Language").size(13),
+            language_setting_options(browser),
             readable_text("File display").size(13),
             hidden_files_visibility_button(browser),
             list_directory_size_display_mode_button(browser),
@@ -268,13 +272,42 @@ fn startup_location_options(browser: &FileBrowser) -> Element<'_, Message> {
     .into()
 }
 
+fn language_setting_options(browser: &FileBrowser) -> Element<'_, Message> {
+    let setting = browser.user_config().language_setting;
+    column![
+        selectable_choice_row(
+            "Auto",
+            "Use the detected system language.",
+            setting == crate::config::UiLanguageSetting::System,
+            Message::LanguageSettingSelected(crate::config::UiLanguageSetting::System),
+        ),
+        selectable_choice_row(
+            "English",
+            "Always show the interface in English.",
+            setting == crate::config::UiLanguageSetting::English,
+            Message::LanguageSettingSelected(crate::config::UiLanguageSetting::English),
+        ),
+        selectable_choice_row(
+            "中文",
+            "Always show the interface in Chinese.",
+            setting == crate::config::UiLanguageSetting::Chinese,
+            Message::LanguageSettingSelected(crate::config::UiLanguageSetting::Chinese),
+        ),
+    ]
+    .spacing(6)
+    .into()
+}
+
 fn startup_custom_directory_input(browser: &FileBrowser) -> Element<'_, Message> {
-    let input = text_input("Directory", &browser.startup_custom_directory_input)
-        .on_input(Message::StartupCustomDirectoryInputChanged)
-        .on_submit(Message::StartupCustomDirectoryCommitted)
-        .padding([6, 8])
-        .size(12)
-        .width(Length::Fill);
+    let input = text_input(
+        &crate::localization::translate_current("Directory"),
+        &browser.startup_custom_directory_input,
+    )
+    .on_input(Message::StartupCustomDirectoryInputChanged)
+    .on_submit(Message::StartupCustomDirectoryCommitted)
+    .padding([6, 8])
+    .size(12)
+    .width(Length::Fill);
     let save = button(container(readable_text("Save").size(12)).padding([6, 10]))
         .on_press(Message::StartupCustomDirectoryCommitted)
         .style(context_menu_button_style());
