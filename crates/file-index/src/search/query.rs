@@ -47,33 +47,26 @@ fn collect_candidate_indices(
     normalized_query: &str,
     limit: usize,
 ) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut seen = HashSet::new();
     let fallback_target = limit.saturating_mul(200).clamp(512, MAX_RANKED_CANDIDATES);
+    let query_len = normalized_query.chars().count();
+    let mut indices = if query_len >= 3 {
+        catalog.trigram_candidates(normalized_query)
+    } else {
+        Vec::new()
+    };
 
-    push_matching_records(catalog, &mut indices, &mut seen, |record| {
-        record.normalized_name == normalized_query
-    });
-    push_matching_records(catalog, &mut indices, &mut seen, |record| {
-        record.normalized_name.starts_with(normalized_query)
-            || record.segment_starts_with(normalized_query)
-    });
-    push_matching_records(catalog, &mut indices, &mut seen, |record| {
-        record.normalized_name.contains(normalized_query)
-            || record.normalized_path.contains(normalized_query)
-    });
-
-    if normalized_query.chars().count() >= 3 {
-        for index in catalog.trigram_candidates(normalized_query) {
-            push_candidate_index(index, &mut indices, &mut seen);
-        }
-    }
-
-    if indices.len() < fallback_target {
+    if query_len < 3 || indices.len() < fallback_target {
+        let mut seen = indices.iter().copied().collect::<HashSet<_>>();
         for (index, record) in catalog.records().iter().enumerate() {
-            if ordered_match(&record.normalized_name, normalized_query)
-                || ordered_match(&record.normalized_path, normalized_query)
-            {
+            let matches = if query_len < 3 {
+                structural_rank(record, normalized_query).is_some()
+                    || ordered_match(&record.normalized_name, normalized_query)
+                    || ordered_match(&record.normalized_path, normalized_query)
+            } else {
+                ordered_match(&record.normalized_name, normalized_query)
+                    || ordered_match(&record.normalized_path, normalized_query)
+            };
+            if matches {
                 push_candidate_index(index, &mut indices, &mut seen);
             }
             if indices.len() >= MAX_RANKED_CANDIDATES {
@@ -82,20 +75,10 @@ fn collect_candidate_indices(
         }
     }
 
-    indices
-}
-
-fn push_matching_records(
-    catalog: &SearchCatalog,
-    indices: &mut Vec<usize>,
-    seen: &mut HashSet<usize>,
-    matches: impl Fn(&SearchCatalogRecord) -> bool,
-) {
-    for (index, record) in catalog.records().iter().enumerate() {
-        if matches(record) {
-            push_candidate_index(index, indices, seen);
-        }
+    if indices.len() > MAX_RANKED_CANDIDATES {
+        indices.truncate(MAX_RANKED_CANDIDATES);
     }
+    indices
 }
 
 fn push_candidate_index(index: usize, indices: &mut Vec<usize>, seen: &mut HashSet<usize>) {

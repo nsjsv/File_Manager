@@ -553,28 +553,6 @@ async fn file_search_index_media_scope_limits_audio_to_all() {
 }
 
 #[tokio::test]
-async fn file_search_index_all_mode_merges_duplicate_sources() {
-    let dir = tempdir().unwrap();
-    let index_dir = tempdir().unwrap();
-    fs::write(dir.path().join("roadmap.md"), "roadmap body").unwrap();
-
-    build_file_search_index(dir.path(), index_dir.path(), all_index_options(true))
-        .await
-        .unwrap();
-    let search = search_file_index(
-        index_dir.path(),
-        dir.path(),
-        "roadmap",
-        all_search_options(true, 10),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(search.matches.len(), 1);
-    assert_eq!(search.matches[0].path, dir.path().join("roadmap.md"));
-}
-
-#[tokio::test]
 async fn search_file_tree_respects_hidden_option() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join(".secret-note"), b"hidden").unwrap();
@@ -681,16 +659,6 @@ fn media_search_options_with_scope(
     }
 }
 
-fn all_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
-    FileSearchOptions {
-        mode: file_index::SearchMode::All,
-        content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
-        media_metadata_scope: file_index::MediaMetadataScope::All,
-        ..search_options(include_hidden, limit)
-    }
-}
-
 fn index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         include_hidden,
@@ -716,15 +684,6 @@ fn media_index_options_with_scope(
 ) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         media_metadata_scope,
-        ..index_options(include_hidden)
-    }
-}
-
-fn all_index_options(include_hidden: bool) -> FileSearchIndexOptions {
-    FileSearchIndexOptions {
-        content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
-        media_metadata_scope: file_index::MediaMetadataScope::All,
         ..index_options(include_hidden)
     }
 }

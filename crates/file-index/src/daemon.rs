@@ -29,9 +29,10 @@ pub enum IndexDaemonError {
     Io(#[from] io::Error),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct IndexDaemonState {
     cores: AsyncMutex<HashMap<PathBuf, Arc<IndexDaemonCore>>>,
+    shutdown: CancellationToken,
 }
 
 #[derive(Debug)]
@@ -46,13 +47,34 @@ pub async fn run(config: IndexDaemonConfig) -> Result<(), IndexDaemonError> {
     let state = Arc::new(IndexDaemonState::default());
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Err(error) = state.handle_connection(stream).await {
-                eprintln!("index daemon connection failed: {error}");
+        tokio::select! {
+            _ = state.shutdown.cancelled() => break,
+            accepted = listener.accept() => {
+                let (stream, _) = accepted?;
+                let state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    if let Err(error) = state.handle_connection(stream).await {
+                        eprintln!("index daemon connection failed: {error}");
+                    }
+                });
             }
-        });
+        }
+    }
+
+    drop(listener);
+    match std::fs::remove_file(&config.socket_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+impl Default for IndexDaemonState {
+    fn default() -> Self {
+        Self {
+            cores: AsyncMutex::new(HashMap::new()),
+            shutdown: CancellationToken::new(),
+        }
     }
 }
 
@@ -94,9 +116,21 @@ impl IndexDaemonState {
         if matches!(request.command, IndexRequestCommand::Ping) {
             write_frame(
                 &mut stream,
-                &IndexResponse::from_event(&IndexServiceEvent::Pong),
+                &IndexResponse::from_event(&IndexServiceEvent::Pong {
+                    daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+                }),
             )
             .await?;
+            return Ok(());
+        }
+
+        if matches!(request.command, IndexRequestCommand::Shutdown) {
+            write_frame(
+                &mut stream,
+                &IndexResponse::from_event(&IndexServiceEvent::Shutdown),
+            )
+            .await?;
+            self.shutdown.cancel();
             return Ok(());
         }
 

@@ -6,7 +6,7 @@ mod tests;
 
 use serde::{Deserialize, Serialize};
 
-pub const INDEX_PROTOCOL_VERSION: u16 = 2;
+pub const INDEX_PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexRequest {
@@ -31,6 +31,7 @@ pub enum IndexRequestCommand {
     SubscribeMaintenance { profile_id: String },
     Ping,
     StartMaintenance { profile_id: String },
+    Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,10 +175,13 @@ pub enum WireIndexServiceEvent {
         root: WirePath,
         message: String,
     },
-    Pong,
+    Pong {
+        daemon_version: String,
+    },
     MaintenanceStarted {
         profile_id: String,
     },
+    Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -16,6 +16,8 @@ use tempfile::tempdir;
 
 #[path = "index/ignore_rules.rs"]
 mod ignore_rules;
+#[path = "index/query_modes.rs"]
+mod query_modes;
 #[path = "index/search.rs"]
 mod search;
 

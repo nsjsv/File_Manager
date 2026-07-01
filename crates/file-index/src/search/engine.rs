@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use file_core::ScanWarning;
 
+use super::cache::SearchQueryRuntime;
 use super::catalog::{SearchCatalog, SearchCatalogRecord};
 use super::extractor::{extract_media_documents, extract_text_documents};
 use super::full_text::{search_tantivy_index, write_tantivy_index, FullTextSearchHit};
@@ -41,44 +41,46 @@ pub(crate) fn write_search_documents(
 }
 
 pub(crate) fn search_index_catalog_and_tantivy(
-    index_dir: &Path,
-    catalog: &SearchCatalog,
+    runtime: &SearchQueryRuntime,
     query: &str,
     options: &FileSearchOptions,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
     match options.mode {
-        SearchMode::Files => Ok(query::search_catalog(catalog, query, options.limit.max(1))),
-        SearchMode::Contents => search_tantivy_source(
-            index_dir,
+        SearchMode::Files => Ok(query::search_catalog(
+            runtime.catalog(),
             query,
-            SearchResultSource::Contents,
+            options.limit.max(1),
+        )),
+        SearchMode::Contents => search_tantivy_source(
+            runtime,
+            query,
+            &[SearchResultSource::Contents],
             options.content_index_enabled,
             options.limit,
         ),
         SearchMode::Media => search_tantivy_source(
-            index_dir,
+            runtime,
             query,
-            SearchResultSource::Media,
+            &[SearchResultSource::Media],
             options.media_metadata_scope.includes_media(),
             options.limit,
         ),
         SearchMode::All => {
-            let mut matches = query::search_catalog(catalog, query, options.limit.max(1));
+            let mut matches = query::search_catalog(runtime.catalog(), query, options.limit.max(1));
+            let mut sources = Vec::with_capacity(2);
             if options.content_index_enabled {
-                matches.extend(full_text_hits_to_matches(search_tantivy_index(
-                    index_dir,
-                    query,
-                    &[SearchResultSource::Contents],
-                    options.limit,
-                )?));
+                sources.push(SearchResultSource::Contents);
             }
             if options.media_metadata_scope.includes_media() {
-                matches.extend(full_text_hits_to_matches(search_tantivy_index(
-                    index_dir,
+                sources.push(SearchResultSource::Media);
+            }
+            if !sources.is_empty() {
+                matches.extend(search_tantivy_matches(
+                    runtime,
                     query,
-                    &[SearchResultSource::Media],
+                    &sources,
                     options.limit,
-                )?));
+                )?);
             }
             Ok(merge_search_matches(matches, options.limit.max(1)))
         }
@@ -86,53 +88,39 @@ pub(crate) fn search_index_catalog_and_tantivy(
 }
 
 fn search_tantivy_source(
-    index_dir: &Path,
+    runtime: &SearchQueryRuntime,
     query: &str,
-    source: SearchResultSource,
+    sources: &[SearchResultSource],
     enabled: bool,
     limit: usize,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
     if !enabled {
         return Ok(Vec::new());
     }
-    Ok(full_text_hits_to_matches(search_tantivy_index(
-        index_dir,
-        query,
-        &[source],
-        limit,
-    )?))
+    search_tantivy_matches(runtime, query, sources, limit)
 }
 
-fn full_text_hits_to_matches(hits: Vec<FullTextSearchHit>) -> Vec<FileSearchMatch> {
+fn search_tantivy_matches(
+    runtime: &SearchQueryRuntime,
+    query: &str,
+    sources: &[SearchResultSource],
+    limit: usize,
+) -> Result<Vec<FileSearchMatch>, IndexError> {
+    let full_text_runtime = runtime.full_text_runtime()?;
+    Ok(full_text_hits_to_matches(
+        runtime.catalog(),
+        search_tantivy_index(full_text_runtime.as_deref(), query, sources, limit)?,
+    ))
+}
+
+fn full_text_hits_to_matches(
+    catalog: &SearchCatalog,
+    hits: Vec<FullTextSearchHit>,
+) -> Vec<FileSearchMatch> {
     hits.into_iter()
-        .map(|hit| {
-            let kind = hit
-                .path
-                .symlink_metadata()
-                .ok()
-                .map(|metadata| {
-                    let file_type = metadata.file_type();
-                    if file_type.is_dir() {
-                        file_core::FileKind::Directory
-                    } else if file_type.is_file() {
-                        file_core::FileKind::File
-                    } else if file_type.is_symlink() {
-                        file_core::FileKind::Symlink
-                    } else {
-                        file_core::FileKind::Other
-                    }
-                })
-                .unwrap_or(file_core::FileKind::File);
-            FileSearchMatch {
-                path: hit.path,
-                relative_path: hit.relative_path,
-                name: OsString::from(hit.name),
-                kind,
-                rank_score: hit.score,
-                source: hit.source,
-                snippet: hit.snippet,
-                media: hit.media,
-            }
+        .filter_map(|hit| {
+            let record = catalog.record_by_storage_key(&hit.storage_key)?;
+            Some(record.to_search_match(hit.score, hit.source, hit.snippet, hit.media))
         })
         .collect()
 }

@@ -4,13 +4,16 @@ use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
 use tantivy::snippet::SnippetGenerator;
+use tantivy::IndexReader;
 use tantivy::{doc, Index, TantivyDocument};
 
 use super::extractor::{ExtractedMediaDocument, ExtractedTextDocument};
+use super::path_encoding::path_storage_key;
 use super::types::{MediaSearchKind, MediaSearchMetadata, SearchResultSource};
 use crate::IndexError;
 
 const TANTIVY_DIR_NAME: &str = "tantivy";
+const PATH_KEY_FIELD: &str = "path_key";
 const PATH_FIELD: &str = "path";
 const RELATIVE_PATH_FIELD: &str = "relative_path";
 const NAME_FIELD: &str = "name";
@@ -29,6 +32,7 @@ const RANK_HINT_FIELD: &str = "rank_hint";
 #[derive(Clone)]
 struct SearchSchema {
     schema: Schema,
+    path_key: Field,
     path: Field,
     relative_path: Field,
     name: Field,
@@ -45,11 +49,16 @@ struct SearchSchema {
     rank_hint: Field,
 }
 
+pub(crate) struct TantivySearchRuntime {
+    index: Index,
+    reader: IndexReader,
+    schema: SearchSchema,
+    tantivy_dir: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FullTextSearchHit {
-    pub(crate) path: PathBuf,
-    pub(crate) relative_path: PathBuf,
-    pub(crate) name: String,
+    pub(crate) storage_key: String,
     pub(crate) source: SearchResultSource,
     pub(crate) score: u32,
     pub(crate) snippet: Option<String>,
@@ -73,6 +82,7 @@ pub(crate) fn write_tantivy_index(
 
     for text in text_documents {
         let mut document = doc!(
+            schema.path_key => path_storage_key(&text.path),
             schema.path => text.path.to_string_lossy().into_owned(),
             schema.relative_path => text.relative_path.to_string_lossy().into_owned(),
             schema.name => text.name.clone(),
@@ -91,6 +101,7 @@ pub(crate) fn write_tantivy_index(
     for media in media_documents {
         let metadata = &media.metadata;
         let mut document = doc!(
+            schema.path_key => path_storage_key(&media.path),
             schema.path => media.path.to_string_lossy().into_owned(),
             schema.relative_path => media.relative_path.to_string_lossy().into_owned(),
             schema.name => media.name.clone(),
@@ -119,50 +130,70 @@ pub(crate) fn write_tantivy_index(
     Ok(())
 }
 
+impl TantivySearchRuntime {
+    pub(crate) fn open(index_dir: &Path) -> Result<Option<Self>, IndexError> {
+        let tantivy_dir = tantivy_dir(index_dir);
+        if !tantivy_dir.join("meta.json").is_file() {
+            return Ok(None);
+        }
+
+        let schema = search_schema();
+        let index = Index::open_in_dir(&tantivy_dir)
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+        let reader = index
+            .reader()
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+        Ok(Some(Self {
+            index,
+            reader,
+            schema,
+            tantivy_dir,
+        }))
+    }
+
+    fn query_parser(&self) -> QueryParser {
+        QueryParser::for_index(
+            &self.index,
+            vec![
+                self.schema.body,
+                self.schema.name,
+                self.schema.relative_path,
+                self.schema.codec,
+                self.schema.title,
+                self.schema.artist,
+                self.schema.exif,
+            ],
+        )
+    }
+}
+
 pub(crate) fn search_tantivy_index(
-    index_dir: &Path,
+    runtime: Option<&TantivySearchRuntime>,
     query_text: &str,
     sources: &[SearchResultSource],
     limit: usize,
 ) -> Result<Vec<FullTextSearchHit>, IndexError> {
-    let tantivy_dir = tantivy_dir(index_dir);
-    if !tantivy_dir.join("meta.json").is_file() {
+    let Some(runtime) = runtime else {
         return Ok(Vec::new());
-    }
-    let schema = search_schema();
-    let index =
-        Index::open_in_dir(&tantivy_dir).map_err(|error| IndexError::store(&tantivy_dir, error))?;
-    let reader = index
-        .reader()
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-    let searcher = reader.searcher();
-    let query_parser = QueryParser::for_index(
-        &index,
-        vec![
-            schema.body,
-            schema.name,
-            schema.relative_path,
-            schema.codec,
-            schema.title,
-            schema.artist,
-            schema.exif,
-        ],
-    );
+    };
+
+    let searcher = runtime.reader.searcher();
+    let query_parser = runtime.query_parser();
     let query = query_parser
         .parse_query(query_text)
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+        .map_err(|error| IndexError::store(&runtime.tantivy_dir, error))?;
     let top_docs = searcher
         .search(&query, &TopDocs::with_limit(limit.max(1)).order_by_score())
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-    let snippet_generator = SnippetGenerator::create(&searcher, &*query, schema.body).ok();
+        .map_err(|error| IndexError::store(&runtime.tantivy_dir, error))?;
+    let snippet_generator = SnippetGenerator::create(&searcher, &*query, runtime.schema.body).ok();
     let allowed_sources = sources.iter().copied().map(source_key).collect::<Vec<_>>();
     let mut hits = Vec::new();
 
     for (score, address) in top_docs {
         let document = searcher
             .doc::<TantivyDocument>(address)
-            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-        let Some(source_text) = first_text(&document, schema.source) else {
+            .map_err(|error| IndexError::store(&runtime.tantivy_dir, error))?;
+        let Some(source_text) = first_text(&document, runtime.schema.source) else {
             continue;
         };
         if !allowed_sources.iter().any(|source| *source == source_text) {
@@ -171,28 +202,20 @@ pub(crate) fn search_tantivy_index(
         let Some(source) = source_from_key(source_text) else {
             continue;
         };
-        let Some(path) = first_text(&document, schema.path).map(PathBuf::from) else {
+        let Some(storage_key) = first_text(&document, runtime.schema.path_key) else {
             continue;
         };
-        let relative_path = first_text(&document, schema.relative_path)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| path.clone());
-        let name = first_text(&document, schema.name)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
         let snippet = snippet_generator
             .as_ref()
             .map(|generator| generator.snippet_from_doc(&document).fragment().to_owned())
             .filter(|snippet| !snippet.trim().is_empty());
 
         hits.push(FullTextSearchHit {
-            path,
-            relative_path,
-            name,
+            storage_key: storage_key.to_owned(),
             source,
             score: score_to_rank(score),
             snippet,
-            media: media_metadata_from_document(&document, &schema, source),
+            media: media_metadata_from_document(&document, &runtime.schema, source),
         });
     }
 
@@ -201,6 +224,7 @@ pub(crate) fn search_tantivy_index(
 
 fn search_schema() -> SearchSchema {
     let mut builder = Schema::builder();
+    let path_key = builder.add_text_field(PATH_KEY_FIELD, STRING | STORED);
     let path = builder.add_text_field(PATH_FIELD, STRING | STORED);
     let relative_path = builder.add_text_field(RELATIVE_PATH_FIELD, TEXT | STORED);
     let name = builder.add_text_field(NAME_FIELD, TEXT | STORED);
@@ -218,6 +242,7 @@ fn search_schema() -> SearchSchema {
     let schema = builder.build();
     SearchSchema {
         schema,
+        path_key,
         path,
         relative_path,
         name,

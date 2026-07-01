@@ -165,10 +165,37 @@ async fn daemon_restart_loads_stored_profile() {
     restarted.abort();
 }
 
+#[tokio::test]
+async fn daemon_shutdown_exits_cleanly() {
+    let dir = tempdir().unwrap();
+    let socket_path = dir.path().join("file-indexd.sock");
+    let index_base_dir = dir.path().join("index-base");
+    let daemon = tokio::spawn(run(IndexDaemonConfig {
+        socket_path: socket_path.clone(),
+    }));
+    let client = IndexClient::new(index_base_dir, socket_path);
+    wait_for_daemon(&client).await;
+
+    let shutdown = client.execute(IndexServiceCommand::Shutdown).await.unwrap();
+    assert_eq!(shutdown, IndexServiceEvent::Shutdown);
+    tokio::time::timeout(Duration::from_secs(5), daemon)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        client.execute(IndexServiceCommand::Ping).await,
+        Err(IndexClientError::Connect { .. })
+    ));
+}
+
 async fn wait_for_daemon(client: &IndexClient) {
     for _ in 0..50 {
         match client.execute(IndexServiceCommand::Ping).await {
-            Ok(IndexServiceEvent::Pong) => return,
+            Ok(IndexServiceEvent::Pong { daemon_version }) => {
+                assert_eq!(daemon_version, env!("CARGO_PKG_VERSION"));
+                return;
+            }
             Ok(event) => panic!("daemon ping returned unexpected event: {event:?}"),
             Err(IndexClientError::Connect { .. }) => {
                 tokio::time::sleep(Duration::from_millis(20)).await;

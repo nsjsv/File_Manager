@@ -56,6 +56,7 @@ impl IndexRequestCommand {
     pub fn into_service_command(self) -> Option<IndexServiceCommand> {
         Some(match self {
             Self::Ping => IndexServiceCommand::Ping,
+            Self::Shutdown => IndexServiceCommand::Shutdown,
             Self::ConfigureProfile(profile) => {
                 IndexServiceCommand::ConfigureProfile(profile.into_domain())
             }
@@ -95,6 +96,7 @@ impl From<IndexServiceCommand> for IndexRequestCommand {
     fn from(command: IndexServiceCommand) -> Self {
         match command {
             IndexServiceCommand::Ping => Self::Ping,
+            IndexServiceCommand::Shutdown => Self::Shutdown,
             IndexServiceCommand::ConfigureProfile(profile) => {
                 Self::ConfigureProfile(WireIndexProfile::from_domain(&profile))
             }
@@ -260,7 +262,10 @@ impl WireBuildSelectedPathsRequest {
 impl WireIndexServiceEvent {
     pub fn from_domain(event: &IndexServiceEvent) -> Self {
         match event {
-            IndexServiceEvent::Pong => Self::Pong,
+            IndexServiceEvent::Pong { daemon_version } => Self::Pong {
+                daemon_version: daemon_version.clone(),
+            },
+            IndexServiceEvent::Shutdown => Self::Shutdown,
             IndexServiceEvent::ProfileConfigured(id) => Self::ProfileConfigured(id.clone()),
             IndexServiceEvent::ProfileLoaded(profile) => {
                 Self::ProfileLoaded(profile.as_ref().map(WireIndexProfile::from_domain))
@@ -329,7 +334,8 @@ impl WireIndexServiceEvent {
 
     pub fn into_domain(self) -> IndexServiceEvent {
         match self {
-            Self::Pong => IndexServiceEvent::Pong,
+            Self::Pong { daemon_version } => IndexServiceEvent::Pong { daemon_version },
+            Self::Shutdown => IndexServiceEvent::Shutdown,
             Self::ProfileConfigured(id) => IndexServiceEvent::ProfileConfigured(id),
             Self::ProfileLoaded(profile) => {
                 IndexServiceEvent::ProfileLoaded(profile.map(WireIndexProfile::into_domain))

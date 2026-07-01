@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use std::{future::Future, io};
+use std::{fmt, future::Future, io};
 
 use file_index::{
     BuildSelectedPathsRequest, FileSearchIndexProgress, IndexClient, IndexClientError,
@@ -17,6 +17,30 @@ use crate::model::{Message, SearchIndexDaemonStatus};
 const SEARCH_INDEX_SERVICE_UNIT: &str = "file-manager-index.service";
 const INDEX_DAEMON_EXECUTABLE_NAME: &str = "file-indexd";
 const DAEMON_START_SETTLE_DELAY: Duration = Duration::from_millis(150);
+const DAEMON_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const DAEMON_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const EXPECTED_INDEX_DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug)]
+enum IndexDaemonProbeError {
+    Client(IndexClientError),
+    VersionMismatch {
+        expected: &'static str,
+        actual: String,
+    },
+}
+
+impl fmt::Display for IndexDaemonProbeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Client(error) => write!(formatter, "{error}"),
+            Self::VersionMismatch { expected, actual } => write!(
+                formatter,
+                "index daemon version mismatch: expected {expected}, got {actual}"
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum IndexDaemonServiceAction {
@@ -54,10 +78,9 @@ pub(super) async fn execute_index_command(
 ) -> Result<IndexServiceEvent, String> {
     ensure_index_daemon_started(index_base_dir.clone()).await?;
     let client = IndexClient::for_index_base_dir(index_base_dir);
-    let socket_path = client.socket_path().to_path_buf();
     let command_for_retry = command.clone();
     let first_result = client.execute(command.clone()).await;
-    run_with_protocol_retry(first_result, None, socket_path, || {
+    run_with_protocol_retry(first_result, None, client.clone(), || {
         let client = IndexClient::for_index_base_dir(client.index_base_dir().to_path_buf());
         let command = command_for_retry.clone();
         async move { client.execute(command).await }
@@ -95,10 +118,10 @@ async fn ensure_index_daemon_started(index_base_dir: PathBuf) -> Result<(), Stri
     let client = IndexClient::for_index_base_dir(index_base_dir);
     match probe_index_daemon_client(&client).await {
         Ok(()) => Ok(()),
-        Err(error) if matches!(error, IndexClientError::Connect { .. }) => {
+        Err(error) if index_daemon_probe_is_connect_error(&error) => {
             recover_index_daemon(&client, error, IndexDaemonServiceAction::Start).await
         }
-        Err(error) if index_daemon_error_requires_restart(&error) => {
+        Err(error) if index_daemon_probe_error_requires_restart(&error) => {
             recover_index_daemon(&client, error, IndexDaemonServiceAction::Restart).await
         }
         Err(error) => Err(error.to_string()),
@@ -112,12 +135,12 @@ async fn restart_index_daemon(index_base_dir: PathBuf) -> Result<SearchIndexDaem
     let client = IndexClient::for_index_base_dir(index_base_dir);
     match probe_index_daemon_client(&client).await {
         Ok(()) => Ok(SearchIndexDaemonStatus::Reachable),
-        Err(error) if index_daemon_error_allows_local_launch(&error) => {
-            start_local_index_daemon(client.socket_path()).await?;
+        Err(error) if index_daemon_probe_error_allows_local_launch(&error) => {
+            start_local_index_daemon(&client).await?;
             load_index_daemon_status(client.index_base_dir().to_path_buf()).await
         }
         Err(error) => Ok(SearchIndexDaemonStatus::Unreachable(
-            index_daemon_error_message(&error, restart_error.as_deref()),
+            index_daemon_probe_error_message(&error, restart_error.as_deref()),
         )),
     }
 }
@@ -138,13 +161,23 @@ async fn probe_index_daemon(index_base_dir: PathBuf) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-async fn probe_index_daemon_client(client: &IndexClient) -> Result<(), IndexClientError> {
+async fn probe_index_daemon_client(client: &IndexClient) -> Result<(), IndexDaemonProbeError> {
     match client.execute(IndexServiceCommand::Ping).await {
-        Ok(IndexServiceEvent::Pong) => Ok(()),
-        Ok(event) => Err(IndexClientError::Protocol(format!(
-            "unexpected search index event: {event:?}"
+        Ok(IndexServiceEvent::Pong { daemon_version })
+            if daemon_version == EXPECTED_INDEX_DAEMON_VERSION =>
+        {
+            Ok(())
+        }
+        Ok(IndexServiceEvent::Pong { daemon_version }) => {
+            Err(IndexDaemonProbeError::VersionMismatch {
+                expected: EXPECTED_INDEX_DAEMON_VERSION,
+                actual: daemon_version,
+            })
+        }
+        Ok(event) => Err(IndexDaemonProbeError::Client(IndexClientError::Protocol(
+            format!("unexpected search index event: {event:?}"),
         ))),
-        Err(error) => Err(error),
+        Err(error) => Err(IndexDaemonProbeError::Client(error)),
     }
 }
 
@@ -182,11 +215,11 @@ async fn run_index_daemon_service_action(action: IndexDaemonServiceAction) -> Re
     Ok(())
 }
 
-async fn start_local_index_daemon(socket_path: &Path) -> Result<(), String> {
+async fn start_local_index_daemon(client: &IndexClient) -> Result<(), String> {
     let executable = local_index_daemon_executable()?;
-    let _ = run_index_daemon_service_action(IndexDaemonServiceAction::Stop).await;
+    stop_current_index_daemon_for_local_launch(client).await?;
     Command::new(&executable)
-        .arg(socket_path.as_os_str())
+        .arg(client.socket_path().as_os_str())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -198,14 +231,14 @@ async fn start_local_index_daemon(socket_path: &Path) -> Result<(), String> {
 
 async fn recover_index_daemon(
     client: &IndexClient,
-    first_error: IndexClientError,
+    first_error: IndexDaemonProbeError,
     service_action: IndexDaemonServiceAction,
 ) -> Result<(), String> {
     let mut recovery_errors = vec![first_error.to_string()];
     match run_index_daemon_service_action(service_action).await {
         Ok(()) => match probe_index_daemon_client(client).await {
             Ok(()) => return Ok(()),
-            Err(error) if index_daemon_error_allows_local_launch(&error) => {
+            Err(error) if index_daemon_probe_error_allows_local_launch(&error) => {
                 recovery_errors.push(error.to_string());
             }
             Err(error) => return Err(error.to_string()),
@@ -213,7 +246,7 @@ async fn recover_index_daemon(
         Err(error) => recovery_errors.push(error),
     }
 
-    if let Err(error) = start_local_index_daemon(client.socket_path()).await {
+    if let Err(error) = start_local_index_daemon(client).await {
         recovery_errors.push(error);
         return Err(recovery_errors.join("; "));
     }
@@ -249,7 +282,7 @@ fn sibling_index_daemon_executable(current_exe: &Path) -> Option<PathBuf> {
 async fn run_with_protocol_retry<T, Retry, RetryFuture>(
     first_result: Result<T, IndexClientError>,
     start_error: Option<&str>,
-    socket_path: PathBuf,
+    recovery_client: IndexClient,
     mut retry: Retry,
 ) -> Result<T, String>
 where
@@ -272,7 +305,7 @@ where
                     Err(error) => recovery_errors.push(error),
                 }
             }
-            if let Err(error) = start_local_index_daemon(&socket_path).await {
+            if let Err(error) = start_local_index_daemon(&recovery_client).await {
                 recovery_errors.push(error);
                 return Err(recovery_errors.join("; "));
             }
@@ -293,6 +326,39 @@ fn index_daemon_error_message(error: &IndexClientError, start_error: Option<&str
     }
 }
 
+fn index_daemon_probe_error_message(
+    error: &IndexDaemonProbeError,
+    start_error: Option<&str>,
+) -> String {
+    match (error, start_error) {
+        (IndexDaemonProbeError::Client(IndexClientError::Connect { .. }), Some(start_error)) => {
+            format!("{error}; {start_error}")
+        }
+        _ => error.to_string(),
+    }
+}
+
+fn index_daemon_probe_is_connect_error(error: &IndexDaemonProbeError) -> bool {
+    matches!(
+        error,
+        IndexDaemonProbeError::Client(IndexClientError::Connect { .. })
+    )
+}
+
+fn index_daemon_probe_error_requires_restart(error: &IndexDaemonProbeError) -> bool {
+    match error {
+        IndexDaemonProbeError::VersionMismatch { .. } => true,
+        IndexDaemonProbeError::Client(error) => index_daemon_error_requires_restart(error),
+    }
+}
+
+fn index_daemon_probe_error_allows_local_launch(error: &IndexDaemonProbeError) -> bool {
+    match error {
+        IndexDaemonProbeError::VersionMismatch { .. } => true,
+        IndexDaemonProbeError::Client(error) => index_daemon_error_allows_local_launch(error),
+    }
+}
+
 fn index_daemon_error_requires_restart(error: &IndexClientError) -> bool {
     match error {
         IndexClientError::ProtocolMismatch { .. } | IndexClientError::Codec(_) => true,
@@ -308,6 +374,49 @@ fn index_daemon_error_requires_restart(error: &IndexClientError) -> bool {
 
 fn index_daemon_error_allows_local_launch(error: &IndexClientError) -> bool {
     matches!(error, IndexClientError::Connect { .. }) || index_daemon_error_requires_restart(error)
+}
+
+async fn stop_current_index_daemon_for_local_launch(client: &IndexClient) -> Result<(), String> {
+    let _ = run_index_daemon_service_action(IndexDaemonServiceAction::Stop).await;
+    match probe_index_daemon_client(client).await {
+        Ok(()) | Err(IndexDaemonProbeError::VersionMismatch { .. }) => {
+            shutdown_running_index_daemon(client).await
+        }
+        Err(IndexDaemonProbeError::Client(IndexClientError::Connect { .. })) => Ok(()),
+        Err(IndexDaemonProbeError::Client(_)) => Ok(()),
+    }
+}
+
+async fn shutdown_running_index_daemon(client: &IndexClient) -> Result<(), String> {
+    match client.execute(IndexServiceCommand::Shutdown).await {
+        Ok(IndexServiceEvent::Shutdown) => wait_for_index_daemon_shutdown(client).await,
+        Ok(event) => Err(format!("unexpected search index event: {event:?}")),
+        Err(IndexClientError::Connect { .. }) => Ok(()),
+        Err(error) => Err(format!("could not stop running index daemon: {error}")),
+    }
+}
+
+async fn wait_for_index_daemon_shutdown(client: &IndexClient) -> Result<(), String> {
+    let started = tokio::time::Instant::now();
+    loop {
+        match client.execute(IndexServiceCommand::Ping).await {
+            Err(IndexClientError::Connect { .. }) => return Ok(()),
+            Err(IndexClientError::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::UnexpectedEof
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                return Ok(());
+            }
+            _ if started.elapsed() >= DAEMON_SHUTDOWN_TIMEOUT => {
+                return Err("timed out waiting for running index daemon to stop".to_owned());
+            }
+            _ => tokio::time::sleep(DAEMON_SHUTDOWN_POLL_INTERVAL).await,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -328,6 +437,17 @@ mod tests {
         assert!(!index_daemon_error_requires_restart(
             &IndexClientError::Service("missing profile default".to_owned())
         ));
+    }
+
+    #[test]
+    fn version_mismatch_requests_daemon_restart() {
+        let error = IndexDaemonProbeError::VersionMismatch {
+            expected: EXPECTED_INDEX_DAEMON_VERSION,
+            actual: "0.0.0".to_owned(),
+        };
+
+        assert!(index_daemon_probe_error_requires_restart(&error));
+        assert!(index_daemon_probe_error_allows_local_launch(&error));
     }
 
     #[test]
@@ -361,5 +481,21 @@ mod tests {
                 actual: 1,
             }
         ));
+    }
+
+    #[test]
+    fn version_mismatch_error_message_reports_expected_and_actual_versions() {
+        let error = IndexDaemonProbeError::VersionMismatch {
+            expected: EXPECTED_INDEX_DAEMON_VERSION,
+            actual: "0.0.0".to_owned(),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "index daemon version mismatch: expected {}, got 0.0.0",
+                EXPECTED_INDEX_DAEMON_VERSION
+            )
+        );
     }
 }

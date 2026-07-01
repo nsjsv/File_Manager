@@ -14,7 +14,7 @@ use super::{IndexRequest, IndexRequestCommand, IndexResponse, WirePath};
 
 #[test]
 fn protocol_version_changes_when_wire_schema_changes() {
-    assert_eq!(super::INDEX_PROTOCOL_VERSION, 2);
+    assert_eq!(super::INDEX_PROTOCOL_VERSION, 3);
 }
 
 #[test]
@@ -37,6 +37,15 @@ fn new_command_variants_are_appended_after_version_one_commands() {
         }),
         13
     );
+    assert_eq!(command_discriminant(&IndexRequestCommand::Shutdown), 14);
+}
+
+#[test]
+fn shutdown_command_round_trip_preserves_variant() {
+    let request = IndexRequest::from_command("/cache/index", IndexServiceCommand::Shutdown);
+    let restored = request.command.into_service_command().unwrap();
+
+    assert_eq!(restored, IndexServiceCommand::Shutdown);
 }
 
 #[test]
@@ -152,6 +161,18 @@ fn status_response_round_trip_preserves_readiness_and_failures() {
     });
 
     assert_response_event_round_trips(event);
+}
+
+#[test]
+fn pong_response_round_trip_preserves_daemon_version() {
+    assert_response_event_round_trips(IndexServiceEvent::Pong {
+        daemon_version: "1.2.3".to_owned(),
+    });
+}
+
+#[test]
+fn shutdown_response_round_trips() {
+    assert_response_event_round_trips(IndexServiceEvent::Shutdown);
 }
 
 #[test]

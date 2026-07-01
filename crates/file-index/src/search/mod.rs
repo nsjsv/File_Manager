@@ -14,7 +14,7 @@ mod types;
 
 use std::path::{Path, PathBuf};
 
-use cache::catalog_for_index;
+use cache::query_runtime_for_index;
 use catalog::{SearchCatalog, SearchCatalogRecord};
 use crawl::crawl_search_records;
 use engine::search_index_catalog_and_tantivy;
@@ -162,7 +162,7 @@ pub async fn search_file_index(
     let join_root = root.clone();
 
     tokio::task::spawn_blocking(move || {
-        let catalog = catalog_for_index(
+        let runtime = query_runtime_for_index(
             &index_dir,
             &root,
             options.include_hidden,
@@ -172,7 +172,7 @@ pub async fn search_file_index(
             options.content_max_file_bytes,
             options.media_metadata_scope,
         )?;
-        let matches = search_index_catalog_and_tantivy(&index_dir, &catalog, &query, &options)?;
+        let matches = search_index_catalog_and_tantivy(&runtime, &query, &options)?;
         Ok(FileSearchOutcome {
             root,
             matches,
@@ -261,6 +261,11 @@ pub async fn remove_file_search_index(index_dir: impl AsRef<Path>) -> Result<(),
     tokio::task::spawn_blocking(move || remove_catalog_dir(&index_dir))
         .await
         .map_err(|error| search_index_error(&join_path, error))?
+}
+
+#[doc(hidden)]
+pub fn clear_search_query_cache_for_tests() {
+    cache::clear_query_cache();
 }
 
 fn empty_search_outcome(root: PathBuf) -> FileSearchOutcome {

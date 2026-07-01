@@ -42,6 +42,7 @@ pub struct BuildSelectedPathsRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexServiceCommand {
     Ping,
+    Shutdown,
     ConfigureProfile(IndexProfile),
     LoadProfile(String),
     Query(SearchQuery),
@@ -58,7 +59,10 @@ pub enum IndexServiceCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexServiceEvent {
-    Pong,
+    Pong {
+        daemon_version: String,
+    },
+    Shutdown,
     ProfileConfigured(String),
     ProfileLoaded(Option<IndexProfile>),
     QueryFinished(FileSearchOutcome),
@@ -147,7 +151,10 @@ impl IndexServiceCore {
     ) -> Result<IndexServiceEvent, IndexError> {
         match command {
             IndexServiceCommand::ConfigureProfile(profile) => self.configure_profile(profile),
-            IndexServiceCommand::Ping => Ok(IndexServiceEvent::Pong),
+            IndexServiceCommand::Ping => Ok(IndexServiceEvent::Pong {
+                daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+            }),
+            IndexServiceCommand::Shutdown => Ok(IndexServiceEvent::Shutdown),
             IndexServiceCommand::LoadProfile(profile_id) => self.load_profile(&profile_id),
             IndexServiceCommand::Query(query) => self.query(query).await,
             IndexServiceCommand::Rebuild { profile_id, root } => {

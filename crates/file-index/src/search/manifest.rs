@@ -150,9 +150,6 @@ impl SearchIndexManifest {
         if self.ignore_policy_version != IGNORE_POLICY_VERSION {
             return Some("search index ignore policy is outdated".to_owned());
         }
-        if self.extractor_version != EXTRACTOR_VERSION {
-            return Some("search index extractor version is outdated".to_owned());
-        }
         if self.root_key != path_storage_key(root) {
             return Some("search index root does not match".to_owned());
         }
@@ -175,6 +172,11 @@ impl SearchIndexManifest {
         }
         if self.media_metadata_scope != media_metadata_scope {
             return Some("search index media policy is outdated".to_owned());
+        }
+        if self.extractor_version != EXTRACTOR_VERSION
+            && (content_index_enabled || media_metadata_scope.includes_media())
+        {
+            return Some("search index extractor version is outdated".to_owned());
         }
         None
     }
