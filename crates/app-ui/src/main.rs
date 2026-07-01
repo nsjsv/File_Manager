@@ -6,6 +6,7 @@ mod audio_preview;
 mod column_entry_bounds;
 mod commands;
 mod config;
+mod directory_summary;
 mod file_entry_presentation;
 mod file_entry_view;
 mod floating_surface;

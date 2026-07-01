@@ -424,7 +424,7 @@ impl FileBrowser {
         self.set_deepest_open_column_directory(next_directory);
     }
 
-    fn set_deepest_open_column_directory(&mut self, directory: Option<PathBuf>) {
+    pub(super) fn set_deepest_open_column_directory(&mut self, directory: Option<PathBuf>) {
         self.deepest_open_column_directory = directory.filter(|directory| {
             directory != &self.current_dir && directory.starts_with(self.current_dir.as_path())
         });

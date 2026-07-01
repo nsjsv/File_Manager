@@ -86,7 +86,10 @@ impl FileBrowser {
             pane.column_viewports.insert(directory, viewport);
         }
         self.schedule_visible_list_thumbnail_range_for_pane(pane_id, Some(viewport));
-        self.pump_thumbnail_queue()
+        Task::batch([
+            self.schedule_visible_list_directory_summary_range_for_pane(pane_id, Some(viewport)),
+            self.pump_thumbnail_queue(),
+        ])
     }
 
     pub(super) fn request_preview_thumbnail_for_entry(

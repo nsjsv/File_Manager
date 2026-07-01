@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use file_core::FileKind;
@@ -22,6 +23,13 @@ impl FileBrowser {
             return Task::none();
         }
 
+        let transition_command = match view_mode {
+            BrowserViewMode::List => {
+                self.sync_expanded_directories_to_open_columns();
+                Task::none()
+            }
+            BrowserViewMode::Columns => self.sync_open_column_directory_to_list_selection(),
+        };
         self.view_mode = view_mode;
         self.hovered_entry = None;
         self.cursor_paste_directory = None;
@@ -32,7 +40,14 @@ impl FileBrowser {
         self.column_resize_drag = None;
         self.user_config.browser_view_mode = view_mode;
         self.sync_active_tab_state();
+        let list_directory_summary_command = if view_mode == BrowserViewMode::List {
+            self.schedule_visible_list_directory_summaries_for_pane(pane_id)
+        } else {
+            Task::none()
+        };
         Task::batch([
+            transition_command,
+            list_directory_summary_command,
             self.persist_user_preferences_command(),
             self.schedule_thumbnail_refresh(),
             self.request_browser_session_save(),
@@ -200,6 +215,45 @@ impl FileBrowser {
         )
         .into_iter()
         .next()
+    }
+
+    fn sync_expanded_directories_to_open_columns(&mut self) {
+        let retained_paths = crate::three_column_view::column_directories(self)
+            .into_iter()
+            .filter(|path| path != &self.current_dir)
+            .collect::<HashSet<_>>();
+        self.expanded_directories.retain(|path, expanded| {
+            if retained_paths.contains(path) {
+                expanded.is_expanded = true;
+                expanded.is_collapsing = false;
+                expanded.animation_progress = 1.0;
+                return true;
+            }
+            Self::cancel_expanded_directory_load(expanded);
+            false
+        });
+    }
+
+    fn sync_open_column_directory_to_list_selection(&mut self) -> Task<Message> {
+        let selected = self.selected.clone();
+        let selected_kind = selected.as_deref().and_then(|path| self.entry_kind(path));
+        match (selected, selected_kind) {
+            (Some(path), Some(FileKind::Directory)) => {
+                let command = self.open_column_for_directory(path);
+                self.sync_expanded_directories_to_open_columns();
+                command
+            }
+            (Some(path), Some(_)) => {
+                self.set_deepest_open_column_directory(path.parent().map(Path::to_path_buf));
+                self.sync_expanded_directories_to_open_columns();
+                Task::none()
+            }
+            _ => {
+                self.set_deepest_open_column_directory(None);
+                self.sync_expanded_directories_to_open_columns();
+                Task::none()
+            }
+        }
     }
 }
 

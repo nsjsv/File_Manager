@@ -168,6 +168,104 @@ fn switching_tabs_restores_view_mode_and_expanded_directories() {
 }
 
 #[test]
+fn switching_from_columns_to_list_keeps_only_open_column_chain() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let src = project.join("src");
+    let main_rs = src.join("main.rs");
+    let stale = root.join("stale");
+    let stale_child = stale.join("old.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(stale.clone(), FileKind::Directory),
+    ];
+    browser.view_mode = BrowserViewMode::Columns;
+    browser.deepest_open_column_directory = Some(src.clone());
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(src.clone(), FileKind::Directory)]),
+    );
+    browser.expanded_directories.insert(
+        src.clone(),
+        loaded_directory(vec![test_entry(main_rs, FileKind::File)]),
+    );
+    browser.expanded_directories.insert(
+        stale.clone(),
+        loaded_directory(vec![test_entry(stale_child, FileKind::File)]),
+    );
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+
+    assert_eq!(browser.view_mode, BrowserViewMode::List);
+    assert_eq!(
+        browser
+            .expanded_directories
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from([project.clone(), src.clone()])
+    );
+    assert!(browser
+        .expanded_directories
+        .values()
+        .all(|expanded| expanded.is_expanded
+            && !expanded.is_collapsing
+            && (expanded.animation_progress - 1.0).abs() <= f32::EPSILON));
+    assert!(!browser.expanded_directories.contains_key(&stale));
+}
+
+#[test]
+fn switching_from_list_to_columns_replaces_stale_column_history() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let src = project.join("src");
+    let main_rs = src.join("main.rs");
+    let stale = root.join("stale");
+    let stale_child = stale.join("old.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(stale.clone(), FileKind::Directory),
+    ];
+    browser.view_mode = BrowserViewMode::List;
+    browser.selected = Some(main_rs.clone());
+    browser.selected_paths = HashSet::from([main_rs.clone()]);
+    browser.deepest_open_column_directory = Some(stale.clone());
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(src.clone(), FileKind::Directory)]),
+    );
+    browser.expanded_directories.insert(
+        src.clone(),
+        loaded_directory(vec![test_entry(main_rs, FileKind::File)]),
+    );
+    browser.expanded_directories.insert(
+        stale.clone(),
+        loaded_directory(vec![test_entry(stale_child, FileKind::File)]),
+    );
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+
+    assert_eq!(browser.view_mode, BrowserViewMode::Columns);
+    assert_eq!(browser.deepest_open_column_directory, Some(src.clone()));
+    assert_eq!(
+        browser
+            .expanded_directories
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from([project.clone(), src.clone()])
+    );
+    assert_eq!(
+        crate::three_column_view::column_directories(&browser),
+        vec![root, project, src]
+    );
+}
+
+#[test]
 fn activating_split_panes_preserves_each_pane_view_mode() {
     let left_dir = PathBuf::from("/workspace/left");
     let right_dir = PathBuf::from("/workspace/right");

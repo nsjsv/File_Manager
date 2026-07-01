@@ -87,6 +87,7 @@ fn general_settings_detail(
             readable_text("General").size(20),
             readable_text("File display").size(13),
             hidden_files_visibility_button(browser),
+            list_directory_size_display_mode_button(browser),
             readable_text("Startup").size(13),
             startup_location_options(browser),
             startup_custom_directory_input(browser),
@@ -98,6 +99,7 @@ fn general_settings_detail(
             readable_text("General").size(20),
             readable_text("File display").size(13),
             hidden_files_visibility_button(browser),
+            list_directory_size_display_mode_button(browser),
             readable_text("Startup").size(13),
             startup_location_options(browser),
             readable_text("Terminal").size(13),
@@ -212,6 +214,26 @@ fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Mess
 
     button(container(label).padding([5, 8]).width(Length::Fill))
         .on_press(Message::ShowHiddenFilesToggled)
+        .width(Length::Fill)
+        .style(context_menu_button_style())
+}
+
+fn list_directory_size_display_mode_button(browser: &FileBrowser) -> Button<'static, Message> {
+    let uses_recursive_total_size = browser
+        .user_config()
+        .list_directory_size_display_mode
+        .uses_recursive_total_size();
+    let label = row![
+        readable_text("Show Recursive Folder Size In List View")
+            .size(12)
+            .width(Length::Fill),
+        switch_control(uses_recursive_total_size),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    button(container(label).padding([5, 8]).width(Length::Fill))
+        .on_press(Message::ListDirectorySizeDisplayModeToggled)
         .width(Length::Fill)
         .style(context_menu_button_style())
 }

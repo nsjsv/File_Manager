@@ -7,6 +7,7 @@ mod column_scroll;
 mod config_persistence;
 mod events;
 mod file_operations;
+mod list_directory_summaries;
 mod list_view_settings;
 mod navigation;
 mod network_connections;
@@ -231,6 +232,7 @@ pub(crate) struct FileBrowser {
     operation_history: FileOperationHistory,
     pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
     operation_queue_auto_hide_generation: u64,
+    list_directory_summary_cache: crate::model::ListDirectorySummaryCache,
     pending_browser_session_save: bool,
     last_browser_session_save: Option<std::time::Instant>,
     scrollbar: ScrollbarState,
@@ -445,6 +447,7 @@ impl FileBrowser {
             operation_history: FileOperationHistory::new(),
             operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
             operation_queue_auto_hide_generation: 0,
+            list_directory_summary_cache: crate::model::ListDirectorySummaryCache::default(),
             pending_browser_session_save: false,
             last_browser_session_save: None,
             scrollbar: ScrollbarState::default(),

@@ -1,0 +1,205 @@
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+use tokio_util::sync::CancellationToken;
+
+const DIRECTORY_CONTENTS_PROGRESS_INTERVAL: usize = 128;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DirectoryContentsSummary {
+    pub(crate) file_count: usize,
+    pub(crate) directory_count: usize,
+    pub(crate) total_size_bytes: u64,
+    pub(crate) total_disk_size_bytes: u64,
+}
+
+impl DirectoryContentsSummary {
+    pub(crate) fn total_item_count(&self) -> usize {
+        self.file_count.saturating_add(self.directory_count)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum DirectorySummaryError {
+    Cancelled,
+    Io(std::io::Error),
+}
+
+pub(crate) fn read_directory_contents_summary(
+    path: &Path,
+    cancellation: CancellationToken,
+    mut progress: impl FnMut(DirectoryContentsSummary),
+) -> Result<DirectoryContentsSummary, DirectorySummaryError> {
+    let mut summary = DirectoryContentsSummary::default();
+    let mut processed_entries = 0usize;
+
+    if cancellation.is_cancelled() {
+        return Err(DirectorySummaryError::Cancelled);
+    }
+
+    for entry in std::fs::read_dir(path).map_err(DirectorySummaryError::Io)? {
+        if cancellation.is_cancelled() {
+            return Err(DirectorySummaryError::Cancelled);
+        }
+
+        let entry = entry.map_err(DirectorySummaryError::Io)?;
+        let file_type = entry.file_type().map_err(DirectorySummaryError::Io)?;
+        let metadata = entry.metadata().map_err(DirectorySummaryError::Io)?;
+        if file_type.is_dir() {
+            summary.directory_count += 1;
+        } else {
+            summary.file_count += 1;
+        }
+        summary.total_size_bytes = summary.total_size_bytes.saturating_add(metadata.len());
+        summary.total_disk_size_bytes = summary
+            .total_disk_size_bytes
+            .saturating_add(metadata_disk_size(&metadata));
+        processed_entries = processed_entries.saturating_add(1);
+        if processed_entries % DIRECTORY_CONTENTS_PROGRESS_INTERVAL == 0 {
+            progress(summary.clone());
+        }
+    }
+
+    progress(summary.clone());
+    Ok(summary)
+}
+
+pub(crate) fn read_directory_recursive_total_size(
+    path: &Path,
+    cancellation: CancellationToken,
+) -> Result<u64, DirectorySummaryError> {
+    let mut pending = vec![PathBuf::from(path)];
+    let mut total_size_bytes = 0u64;
+
+    while let Some(directory) = pending.pop() {
+        if cancellation.is_cancelled() {
+            return Err(DirectorySummaryError::Cancelled);
+        }
+
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if directory.as_path() == path => {
+                return Err(DirectorySummaryError::Io(error));
+            }
+            Err(_) => continue,
+        };
+
+        for entry in entries {
+            if cancellation.is_cancelled() {
+                return Err(DirectorySummaryError::Cancelled);
+            }
+
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            total_size_bytes = total_size_bytes.saturating_add(metadata.len());
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+
+    Ok(total_size_bytes)
+}
+
+#[cfg(unix)]
+pub(crate) fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
+    metadata.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_total_size_skips_unreadable_descendants() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path();
+        let readable_dir = root.join("readable");
+        let blocked_dir = root.join("blocked");
+        let top_file = root.join("top.txt");
+        let nested_file = readable_dir.join("nested.txt");
+        let blocked_file = blocked_dir.join("secret.txt");
+
+        std::fs::create_dir(&readable_dir).expect("create readable dir");
+        std::fs::create_dir(&blocked_dir).expect("create blocked dir");
+        std::fs::write(&top_file, b"top-level").expect("write top file");
+        std::fs::write(&nested_file, b"nested").expect("write nested file");
+        std::fs::write(&blocked_file, b"secret").expect("write blocked file");
+
+        let expected = std::fs::metadata(&readable_dir)
+            .expect("readable dir metadata")
+            .len()
+            + std::fs::metadata(&blocked_dir)
+                .expect("blocked dir metadata")
+                .len()
+            + std::fs::metadata(&top_file)
+                .expect("top file metadata")
+                .len()
+            + std::fs::metadata(&nested_file)
+                .expect("nested file metadata")
+                .len();
+
+        let original_permissions = std::fs::metadata(&blocked_dir)
+            .expect("blocked dir metadata")
+            .permissions();
+        let mut blocked_permissions = original_permissions.clone();
+        blocked_permissions.set_mode(0o000);
+        std::fs::set_permissions(&blocked_dir, blocked_permissions).expect("lock blocked dir");
+        if std::fs::read_dir(&blocked_dir).is_ok() {
+            std::fs::set_permissions(&blocked_dir, original_permissions)
+                .expect("unlock blocked dir");
+            return;
+        }
+
+        let total = read_directory_recursive_total_size(root, CancellationToken::new())
+            .expect("recursive total size");
+
+        std::fs::set_permissions(&blocked_dir, original_permissions).expect("unlock blocked dir");
+
+        assert_eq!(total, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_total_size_errors_when_root_directory_is_unreadable() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().join("root");
+        std::fs::create_dir(&root).expect("create root dir");
+        std::fs::write(root.join("file.txt"), b"payload").expect("write file");
+
+        let original_permissions = std::fs::metadata(&root)
+            .expect("root metadata")
+            .permissions();
+        let mut blocked_permissions = original_permissions.clone();
+        blocked_permissions.set_mode(0o000);
+        std::fs::set_permissions(&root, blocked_permissions).expect("lock root dir");
+        if std::fs::read_dir(&root).is_ok() {
+            std::fs::set_permissions(&root, original_permissions).expect("unlock root dir");
+            return;
+        }
+
+        let outcome = read_directory_recursive_total_size(&root, CancellationToken::new());
+
+        std::fs::set_permissions(&root, original_permissions).expect("unlock root dir");
+
+        assert!(matches!(outcome, Err(DirectorySummaryError::Io(_))));
+    }
+}

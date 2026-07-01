@@ -14,14 +14,15 @@ use super::startup::StartupLocationPolicy;
 use super::{
     app_config_dir_path, browser_view_mode_config_value, browser_view_mode_from_config_value,
     default_state_database_path, default_user_config, file_operation_verification_config_value,
-    file_operation_verification_from_config_value, normalize_max_preview_file_bytes,
+    file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
+    list_directory_size_display_mode_from_config_value, normalize_max_preview_file_bytes,
     normalize_search_index_exclude_patterns, normalize_sidebar_width, sort_direction_config_value,
     sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
     SearchBackendMode, SearchModePromptStatus, SidebarFavoriteConfig, UserConfig,
 };
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
-    ListColumnConfig, ListSortPreference, ListViewPreferences,
+    ListColumnConfig, ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences,
 };
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
@@ -44,6 +45,7 @@ pub(crate) struct UserPreferences {
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) list_view_preferences: ListViewPreferences,
+    pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
@@ -72,6 +74,7 @@ impl UserPreferences {
             file_operation_verification: config.file_operation_verification,
             browser_view_mode: config.browser_view_mode,
             list_view_preferences: config.list_view_preferences.clone(),
+            list_directory_size_display_mode: config.list_directory_size_display_mode,
             startup_location_policy: config.startup_location_policy,
             startup_custom_directory: config.startup_custom_directory.clone(),
             save_view_state: config.startup_location_policy.saves_view_state(),
@@ -97,6 +100,7 @@ impl UserPreferences {
         config.file_operation_verification = self.file_operation_verification;
         config.browser_view_mode = self.browser_view_mode;
         config.list_view_preferences = self.list_view_preferences.clone();
+        config.list_directory_size_display_mode = self.list_directory_size_display_mode;
         config.startup_location_policy = self.startup_location_policy;
         config.startup_custom_directory = self.startup_custom_directory.clone();
         config.save_view_state = self.startup_location_policy.saves_view_state();
@@ -134,6 +138,10 @@ impl UserPreferences {
                 .to_owned(),
             list_sort_direction: sort_direction_config_value(
                 self.list_view_preferences.sort().direction,
+            )
+            .to_owned(),
+            list_directory_size_display_mode: list_directory_size_display_mode_config_value(
+                self.list_directory_size_display_mode,
             )
             .to_owned(),
             startup_location: self.startup_location_policy.config_value().to_owned(),
@@ -187,6 +195,10 @@ impl UserPreferences {
             browser_view_mode: browser_view_mode_from_config_value(&stored.browser_view_mode)
                 .unwrap_or(default_preferences.browser_view_mode),
             list_view_preferences,
+            list_directory_size_display_mode: list_directory_size_display_mode_from_config_value(
+                &stored.list_directory_size_display_mode,
+            )
+            .unwrap_or(default_preferences.list_directory_size_display_mode),
             startup_location_policy,
             startup_custom_directory: stored.startup_custom_directory.to_path_buf(),
             save_view_state: startup_location_policy.saves_view_state(),

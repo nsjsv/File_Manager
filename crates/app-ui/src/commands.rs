@@ -46,6 +46,8 @@ mod config_persistence;
 pub(crate) use config_persistence::{save_app_config_command, save_user_preferences_command};
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
+mod list_directory_summary;
+pub(crate) use list_directory_summary::load_list_directory_summary_command;
 mod network_connections;
 pub(crate) use network_connections::{
     network_connection_credentials_clear_command, network_connection_credentials_lookup_command,

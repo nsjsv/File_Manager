@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 
 use file_core::FileKind;
 use iced::futures::channel::mpsc::Sender as IcedSender;
@@ -9,13 +9,16 @@ use iced::futures::SinkExt;
 use iced::Task;
 use tokio_util::sync::CancellationToken;
 
+use crate::directory_summary::{
+    metadata_disk_size, read_directory_contents_summary, DirectoryContentsSummary,
+    DirectorySummaryError,
+};
 use crate::model::{
     FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
     FilePropertiesPermissions, FilePropertiesRequest, FilePropertiesSnapshot, Message,
 };
 
 const FILE_PROPERTIES_CHANNEL_SIZE: usize = 8;
-const DIRECTORY_CONTENTS_PROGRESS_INTERVAL: usize = 128;
 
 pub(crate) fn file_properties_command(
     request: FilePropertiesRequest,
@@ -188,8 +191,8 @@ async fn load_directory_properties_contents(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| match error {
-        FilePropertiesReadError::Cancelled => "operation cancelled".to_owned(),
-        FilePropertiesReadError::Io(error) => error.to_string(),
+        DirectorySummaryError::Cancelled => "operation cancelled".to_owned(),
+        DirectorySummaryError::Io(error) => error.to_string(),
     })
     .map_err(|error| {
         if error.is_empty() {
@@ -312,59 +315,22 @@ fn read_directory_properties_contents(
     path: &Path,
     cancellation: CancellationToken,
     mut progress: impl FnMut(FilePropertiesDirectoryContents),
-) -> Result<FilePropertiesDirectoryContents, FilePropertiesReadError> {
-    let mut contents = FilePropertiesDirectoryContents {
-        file_count: 0,
-        directory_count: 0,
-        total_size_bytes: 0,
-        total_disk_size_bytes: 0,
-    };
+) -> Result<FilePropertiesDirectoryContents, DirectorySummaryError> {
+    read_directory_contents_summary(path, cancellation, |summary| {
+        progress(file_properties_directory_contents(summary));
+    })
+    .map(file_properties_directory_contents)
+}
 
-    if cancellation.is_cancelled() {
-        return Err(FilePropertiesReadError::Cancelled);
+fn file_properties_directory_contents(
+    summary: DirectoryContentsSummary,
+) -> FilePropertiesDirectoryContents {
+    FilePropertiesDirectoryContents {
+        file_count: summary.file_count,
+        directory_count: summary.directory_count,
+        total_size_bytes: summary.total_size_bytes,
+        total_disk_size_bytes: summary.total_disk_size_bytes,
     }
-
-    let mut processed_entries = 0usize;
-    for entry in std::fs::read_dir(path).map_err(FilePropertiesReadError::Io)? {
-        if cancellation.is_cancelled() {
-            return Err(FilePropertiesReadError::Cancelled);
-        }
-
-        let entry = entry.map_err(FilePropertiesReadError::Io)?;
-        let file_type = entry.file_type().map_err(FilePropertiesReadError::Io)?;
-        let metadata = entry.metadata().map_err(FilePropertiesReadError::Io)?;
-        if file_type.is_dir() {
-            contents.directory_count += 1;
-        } else {
-            contents.file_count += 1;
-        }
-        contents.total_size_bytes = contents.total_size_bytes.saturating_add(metadata.len());
-        contents.total_disk_size_bytes = contents
-            .total_disk_size_bytes
-            .saturating_add(metadata_disk_size(&metadata));
-        processed_entries = processed_entries.saturating_add(1);
-        if processed_entries % DIRECTORY_CONTENTS_PROGRESS_INTERVAL == 0 {
-            progress(contents.clone());
-        }
-    }
-
-    progress(contents.clone());
-    Ok(contents)
-}
-
-enum FilePropertiesReadError {
-    Cancelled,
-    Io(std::io::Error),
-}
-
-#[cfg(unix)]
-fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
-    metadata.blocks().saturating_mul(512)
-}
-
-#[cfg(not(unix))]
-fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
-    metadata.len()
 }
 
 #[cfg(all(test, unix))]

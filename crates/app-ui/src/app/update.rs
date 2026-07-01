@@ -282,6 +282,12 @@ impl FileBrowser {
             Message::ListColumnReorderTargetEntered(column) => {
                 self.enter_list_column_reorder_target(column)
             }
+            Message::ListColumnReorderTargetExited(column) => {
+                self.exit_list_column_reorder_target(column)
+            }
+            Message::ListDirectorySummaryLoaded(request, outcome) => {
+                self.accept_list_directory_summary(request, outcome)
+            }
             Message::ColumnEntryClicked(pane_id, path) => {
                 self.activate_pane(pane_id);
                 if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
@@ -598,6 +604,9 @@ impl FileBrowser {
             Message::SettingsOpened => self.open_settings(),
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
             Message::ShowHiddenFilesToggled => self.toggle_show_hidden_files(),
+            Message::ListDirectorySizeDisplayModeToggled => {
+                self.toggle_list_directory_size_display_mode()
+            }
             Message::NetworkListThumbnailDownloadsToggled => {
                 self.toggle_network_list_thumbnail_downloads()
             }

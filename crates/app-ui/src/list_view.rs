@@ -1,5 +1,5 @@
 use file_core::{DirectoryEntry, FileKind, SortDirection};
-use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space};
+use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space, Stack};
 use iced::{Alignment, Element, Length};
 
 use crate::app::panes::BrowserPaneView;
@@ -7,14 +7,15 @@ use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, column_resize_divider_style,
-    icon_svg_style, list_header_style, list_panel_style, list_row_style,
+    icon_svg_style, list_header_reorder_cell_style, list_header_reorder_indicator_style,
+    list_header_style, list_panel_style, list_row_style,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::file_entry_view::{
     entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryIconTone, FileEntryVisualState,
 };
-use crate::formatting::{format_file_size, format_system_time};
+use crate::formatting::format_system_time;
 use crate::icons::rotated_chevron_right_view;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{
@@ -27,16 +28,19 @@ use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 const LIST_ROW_TEXT_SIZE: u32 = 15;
 const LIST_HEADER_TEXT_SIZE: u32 = 12;
+const LIST_HEADER_SORT_ICON_SIZE: f32 = 12.0;
 const LIST_CONTENT_PADDING: [u16; 2] = [4, 6];
 pub(crate) const LIST_ROW_HEIGHT: f32 = 46.0;
-const LIST_OVERSCAN_ROWS: usize = 16;
-const LIST_INITIAL_ROWS: usize = LIST_OVERSCAN_ROWS * 2 + 1;
+pub(crate) const LIST_OVERSCAN_ROWS: usize = 16;
+pub(crate) const LIST_INITIAL_ROWS: usize = LIST_OVERSCAN_ROWS * 2 + 1;
 const LIST_ROW_PADDING: [u16; 2] = [0, 8];
 const LIST_HEADER_PADDING: [u16; 2] = [4, 8];
 const LIST_ROW_SPACING: u32 = 6;
 const LIST_INDENT_WIDTH: f32 = 18.0;
 const LIST_TOGGLE_WIDTH: f32 = 18.0;
 const LIST_TOGGLE_ICON_SIZE: f32 = 14.0;
+const LIST_HEADER_CELL_HEIGHT: f32 = 24.0;
+const LIST_HEADER_DROP_INDICATOR_WIDTH: f32 = 3.0;
 const LIST_COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 5.0;
 const LIST_COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 
@@ -226,6 +230,8 @@ fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<
         .list_view_preferences
         .visible_columns()
         .collect::<Vec<_>>();
+    let dragged_column = browser.list_column_being_reordered();
+    let drop_target = browser.list_column_reorder_insertion_target();
     let sort = browser.user_config().list_view_preferences.sort();
     let mut header = Row::new()
         .spacing(0)
@@ -238,7 +244,13 @@ fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<
         {
             header = header.push(list_column_resize_divider(pane_id, previous.kind));
         }
-        header = header.push(header_cell(pane_id, column, sort));
+        header = header.push(header_cell(
+            pane_id,
+            column,
+            sort,
+            dragged_column == Some(column.kind),
+            drop_target == Some(column.kind),
+        ));
     }
     if let Some(last_column) = visible_columns.last() {
         header = header.push(list_column_resize_divider(pane_id, last_column.kind));
@@ -258,31 +270,76 @@ fn header_cell(
     pane_id: BrowserPaneId,
     column: &ListColumnConfig,
     sort: crate::model::ListSortPreference,
+    is_dragged: bool,
+    is_drop_target: bool,
 ) -> Element<'static, Message> {
-    let label = if column
+    let content: Element<'static, Message> = if column
         .kind
         .sort_field()
         .is_some_and(|field| sort.field == field)
     {
-        let marker = match sort.direction {
-            SortDirection::Ascending => "^",
-            SortDirection::Descending => "v",
-        };
-        format!("{} {marker}", column.kind.label())
+        row![
+            readable_text(column.kind.label()).size(LIST_HEADER_TEXT_SIZE),
+            list_sort_direction_indicator(sort.direction),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into()
     } else {
-        column.kind.label().to_owned()
+        readable_text(column.kind.label())
+            .size(LIST_HEADER_TEXT_SIZE)
+            .into()
     };
+    let mut layers = Stack::new()
+        .width(list_column_width(column.width))
+        .height(Length::Fixed(LIST_HEADER_CELL_HEIGHT));
+    layers = layers.push(
+        container(content)
+            .padding([0, 6])
+            .center_y(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .clip(true)
+            .style(list_header_reorder_cell_style(is_dragged, is_drop_target)),
+    );
+    if is_drop_target {
+        layers = layers.push(list_header_drop_indicator());
+    }
+
     mouse_area(
-        container(readable_text(label).size(LIST_HEADER_TEXT_SIZE))
-            .center_y(Length::Fixed(24.0))
+        container(layers)
+            .center_y(Length::Fixed(LIST_HEADER_CELL_HEIGHT))
             .width(list_column_width(column.width))
-            .height(Length::Fixed(24.0))
-            .clip(true),
+            .height(Length::Fixed(LIST_HEADER_CELL_HEIGHT)),
     )
     .on_press(Message::ListColumnReorderStarted(pane_id, column.kind))
     .on_enter(Message::ListColumnReorderTargetEntered(column.kind))
+    .on_exit(Message::ListColumnReorderTargetExited(column.kind))
     .on_release(Message::DragSelectionFinished)
     .interaction(iced::mouse::Interaction::Grab)
+    .into()
+}
+
+fn list_sort_direction_indicator(direction: SortDirection) -> Element<'static, Message> {
+    let rotation = match direction {
+        SortDirection::Ascending => -90.0,
+        SortDirection::Descending => 90.0,
+    };
+    rotated_chevron_right_view(rotation, LIST_HEADER_SORT_ICON_SIZE)
+        .style(icon_svg_style())
+        .into()
+}
+
+fn list_header_drop_indicator() -> Element<'static, Message> {
+    row![
+        container(Space::new())
+            .width(Length::Fixed(LIST_HEADER_DROP_INDICATOR_WIDTH))
+            .height(Length::Fill)
+            .style(list_header_reorder_indicator_style),
+        Space::new().width(Length::Fill),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
     .into()
 }
 
@@ -475,7 +532,7 @@ fn list_entry_cell<'a>(
             list_name_cell(browser, pane, entry, depth, icon_tone, column.width)
         }
         ListColumnKind::Modified => text_cell(modified_text(entry), column.width),
-        ListColumnKind::Size => text_cell(size_text(entry), column.width),
+        ListColumnKind::Size => text_cell(browser.list_directory_size_text(entry), column.width),
         ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
         ListColumnKind::Extension => text_cell(extension_text(entry), column.width),
         ListColumnKind::Readonly => text_cell(readonly_text(entry), column.width),
@@ -494,7 +551,7 @@ fn list_placeholder_entry_cell<'a>(
     match column.kind {
         ListColumnKind::Name => list_placeholder_name_cell(browser, entry, depth, column.width),
         ListColumnKind::Modified => text_cell(modified_text(entry), column.width),
-        ListColumnKind::Size => text_cell(size_text(entry), column.width),
+        ListColumnKind::Size => text_cell(browser.list_directory_size_text(entry), column.width),
         ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
         ListColumnKind::Extension => text_cell(extension_text(entry), column.width),
         ListColumnKind::Readonly => text_cell(readonly_text(entry), column.width),
@@ -614,14 +671,6 @@ fn modified_text(entry: &DirectoryEntry) -> String {
         .modified
         .map(format_system_time)
         .unwrap_or_else(|| "-".to_owned())
-}
-
-fn size_text(entry: &DirectoryEntry) -> String {
-    if entry.kind == FileKind::Directory {
-        "-".to_owned()
-    } else {
-        format_file_size(entry.metadata.len)
-    }
 }
 
 fn kind_text(entry: &DirectoryEntry) -> String {

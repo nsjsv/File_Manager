@@ -290,6 +290,7 @@ fn user_preferences_roundtrip_replace() {
         ],
         list_sort_field: "size".to_owned(),
         list_sort_direction: "descending".to_owned(),
+        list_directory_size_display_mode: "recursive_total_size".to_owned(),
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -340,6 +341,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("list_view_columns");
     object.remove("list_sort_field");
     object.remove("list_sort_direction");
+    object.remove("list_directory_size_display_mode");
     let payload_json = serde_json::to_string(&payload).unwrap();
     let connection = Connection::open(store.db_path()).unwrap();
     connection
@@ -362,6 +364,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert!(!preferences.list_view_columns[4].visible);
     assert_eq!(preferences.list_sort_field, "name");
     assert_eq!(preferences.list_sort_direction, "ascending");
+    assert_eq!(preferences.list_directory_size_display_mode, "item_count");
     let _ = fs::remove_dir_all(root);
 }
 

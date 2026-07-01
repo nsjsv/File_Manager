@@ -55,6 +55,11 @@ pub(crate) use list_view_preferences::{
     list_column_kind_config_value, list_column_kind_from_config_value, ListColumnConfig,
     ListColumnKind, ListSortPreference, ListViewPreferences,
 };
+mod list_directory_summary;
+pub(crate) use list_directory_summary::{
+    ListDirectorySizeDisplayMode, ListDirectorySummary, ListDirectorySummaryCache,
+    ListDirectorySummaryLoadRequest,
+};
 mod batch_rename;
 pub(crate) use batch_rename::{
     same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameMessage,
@@ -243,6 +248,11 @@ pub(crate) enum Message {
     ListColumnResizeStarted(BrowserPaneId, ListColumnKind),
     ListColumnReorderStarted(BrowserPaneId, ListColumnKind),
     ListColumnReorderTargetEntered(ListColumnKind),
+    ListColumnReorderTargetExited(ListColumnKind),
+    ListDirectorySummaryLoaded(
+        ListDirectorySummaryLoadRequest,
+        Result<ListDirectorySummary, String>,
+    ),
     ColumnEntryClicked(BrowserPaneId, PathBuf),
     ColumnBlankClicked(BrowserPaneId, PathBuf),
     ColumnPlaceholderPressed(BrowserPaneId),
@@ -363,6 +373,7 @@ pub(crate) enum Message {
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
     ShowHiddenFilesToggled,
+    ListDirectorySizeDisplayModeToggled,
     NetworkListThumbnailDownloadsToggled,
     MaxPreviewFileMibInputChanged(String),
     MaxPreviewFileMibInputCommitted,

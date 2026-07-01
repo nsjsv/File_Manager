@@ -231,7 +231,10 @@ impl FileBrowser {
         result: Result<PathBuf, String>,
     ) -> Task<Message> {
         match result {
-            Ok(_) => self.reload_current(),
+            Ok(path) => {
+                self.invalidate_list_directory_summary_subtree_and_ancestor_chain(&path);
+                self.reload_current_preserving_list_directory_summaries()
+            }
             Err(error) => {
                 self.error = Some(error);
                 Task::none()

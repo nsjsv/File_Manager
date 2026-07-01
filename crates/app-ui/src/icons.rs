@@ -57,7 +57,7 @@ pub(crate) fn rotated_chevron_right_view(rotation_degrees: f32, size: f32) -> Sv
 }
 
 fn rotated_chevron_right_bytes(rotation_degrees: f32) -> Vec<u8> {
-    let rotation_degrees = rotation_degrees.clamp(0.0, 90.0);
+    let rotation_degrees = rotation_degrees.clamp(-90.0, 90.0);
     let Some(path_start) = CHEVRON_RIGHT_SVG.find("<path") else {
         return CHEVRON_RIGHT_SVG.as_bytes().to_vec();
     };

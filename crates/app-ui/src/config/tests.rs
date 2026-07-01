@@ -9,7 +9,7 @@ use file_core::{FileOperationVerification, SortDirection, SortField};
 use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 use file_operation_store::{StoredNetworkConnection, TaskQueueStore};
 
-use crate::model::{BrowserViewMode, ListColumnKind};
+use crate::model::{BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutBindingId;
 
@@ -93,6 +93,10 @@ network_connections = [
         "davs://user@example.test/docs"
     );
     assert!(parsed.network_connections[1].auto_connect);
+    assert_eq!(
+        parsed.list_directory_size_display_mode,
+        ListDirectorySizeDisplayMode::ItemCount
+    );
 }
 
 #[test]
@@ -134,6 +138,7 @@ fn app_config_toml_contains_only_startup_level_keys() {
         "startup_location",
         "search_mode",
         "max_preview_file_bytes",
+        "list_directory_size_display_mode",
     ] {
         assert!(
             !document.contains_key(key),
@@ -216,6 +221,7 @@ fn user_preferences_round_trip_through_sqlite() {
     config
         .list_view_preferences
         .select_sort_column(ListColumnKind::Size);
+    config.list_directory_size_display_mode = ListDirectorySizeDisplayMode::RecursiveTotalSize;
     config.terminal_emulator = TerminalEmulator::Ghostty;
     config.file_operation_verification = FileOperationVerification::Strong;
     config.search_mode = SearchBackendMode::Indexed;
@@ -279,6 +285,10 @@ fn user_preferences_round_trip_through_sqlite() {
     assert_eq!(
         loaded.list_view_preferences.sort().direction,
         SortDirection::Ascending
+    );
+    assert_eq!(
+        loaded.list_directory_size_display_mode,
+        ListDirectorySizeDisplayMode::RecursiveTotalSize
     );
     assert_eq!(loaded.terminal_emulator, TerminalEmulator::Ghostty);
     assert_eq!(
@@ -348,6 +358,20 @@ fn stored_preferences_derive_view_state_saving_from_startup_location() {
         StartupLocationPolicy::CustomDirectory
     );
     assert!(!preferences.save_view_state);
+}
+
+#[test]
+fn stored_preferences_default_list_directory_size_mode_is_item_count() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.list_directory_size_display_mode = "unknown".to_owned();
+
+    let preferences = UserPreferences::from_stored(stored, &default);
+
+    assert_eq!(
+        preferences.list_directory_size_display_mode,
+        ListDirectorySizeDisplayMode::ItemCount
+    );
 }
 
 #[test]
@@ -467,6 +491,10 @@ save_view_state = "maybe"
         default.startup_custom_directory
     );
     assert_eq!(parsed.save_view_state, default.save_view_state);
+    assert_eq!(
+        parsed.list_directory_size_display_mode,
+        default.list_directory_size_display_mode
+    );
 }
 
 #[test]
@@ -482,6 +510,10 @@ fn default_user_config_keeps_expected_search_and_preview_defaults() {
     );
     assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
     assert!(!config.save_view_state);
+    assert_eq!(
+        config.list_directory_size_display_mode,
+        ListDirectorySizeDisplayMode::ItemCount
+    );
     assert_eq!(
         config.search_index_exclude_patterns,
         file_index::default_search_index_exclude_patterns()

@@ -33,6 +33,8 @@ pub struct StoredUserPreferences {
     pub list_sort_field: String,
     #[serde(default = "default_list_sort_direction")]
     pub list_sort_direction: String,
+    #[serde(default = "default_list_directory_size_display_mode")]
+    pub list_directory_size_display_mode: String,
 }
 
 impl Default for StoredUserPreferences {
@@ -60,6 +62,7 @@ impl Default for StoredUserPreferences {
             list_view_columns: default_stored_list_view_columns(),
             list_sort_field: default_list_sort_field(),
             list_sort_direction: default_list_sort_direction(),
+            list_directory_size_display_mode: default_list_directory_size_display_mode(),
         }
     }
 }
@@ -119,6 +122,10 @@ fn default_list_sort_field() -> String {
 
 fn default_list_sort_direction() -> String {
     "ascending".to_owned()
+}
+
+fn default_list_directory_size_display_mode() -> String {
+    "item_count".to_owned()
 }
 
 impl TaskQueueStore {

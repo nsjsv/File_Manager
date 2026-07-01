@@ -13,6 +13,7 @@ impl FileBrowser {
         task_id: u64,
         result: Result<FileOperationOutcome, String>,
     ) -> Task<Message> {
+        let completed_operation = self.operation_queue.operation(task_id).cloned();
         let completed_successfully = result.is_ok();
         let search_index_root = self
             .operation_queue
@@ -61,7 +62,12 @@ impl FileBrowser {
         }
 
         if finished {
-            self.reload_visible_panes()
+            if let Some(operation) = completed_operation.as_ref() {
+                self.invalidate_list_directory_summaries_for_file_operation(operation);
+                self.reload_visible_panes_preserving_list_directory_summaries()
+            } else {
+                self.reload_visible_panes()
+            }
         } else {
             Task::none()
         }
@@ -196,4 +202,130 @@ fn focus_rename_input_command() -> Task<Message> {
         iced::widget::operation::focus(input_id.clone()),
         iced::widget::operation::select_all(input_id),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::config;
+    use crate::model::ListDirectorySummary;
+
+    fn remember_summary(
+        browser: &mut FileBrowser,
+        path: &std::path::Path,
+        count: usize,
+        size: u64,
+    ) {
+        browser
+            .list_directory_summary_cache
+            .remember_direct_child_count(path.to_path_buf(), count);
+        let request = browser
+            .list_directory_summary_cache
+            .start_request(path.to_path_buf(), true)
+            .expect("recursive request");
+        assert!(browser.list_directory_summary_cache.store_summary(
+            &request,
+            ListDirectorySummary {
+                direct_child_count: count,
+                recursive_total_size_bytes: Some(size),
+            }
+        ));
+    }
+
+    #[test]
+    fn finished_delete_operation_only_invalidates_affected_directory_chain() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let root = PathBuf::from("/workspace");
+        let current_dir = root.join("project");
+        let deleted_child = current_dir.join("todo.txt");
+        let unrelated = root.join("archive");
+
+        browser.current_dir = current_dir.clone();
+        browser.is_loading = false;
+
+        remember_summary(&mut browser, &root, 3, 4096);
+        remember_summary(&mut browser, &current_dir, 2, 2048);
+        remember_summary(&mut browser, &unrelated, 1, 512);
+
+        assert!(browser
+            .operation_queue
+            .enqueue(QueuedFileOperation::DeletePermanently {
+                paths: vec![deleted_child],
+            })
+            .is_none());
+        let task_id = browser
+            .operation_queue
+            .tasks()
+            .last()
+            .expect("queued task")
+            .id;
+
+        drop(browser.accept_file_operation_finished(task_id, Ok(FileOperationOutcome::NoHistory)));
+
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&current_dir)
+            .is_none());
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&root)
+            .is_none());
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&unrelated)
+            .is_some());
+    }
+
+    #[test]
+    fn finished_directory_delete_operation_clears_cached_descendant_summaries() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let root = PathBuf::from("/workspace");
+        let current_dir = root.join("project");
+        let deleted_directory = current_dir.join("src");
+        let deleted_descendant = deleted_directory.join("nested");
+        let unrelated = root.join("archive");
+
+        browser.current_dir = current_dir.clone();
+        browser.is_loading = false;
+
+        remember_summary(&mut browser, &root, 3, 4096);
+        remember_summary(&mut browser, &current_dir, 2, 2048);
+        remember_summary(&mut browser, &deleted_directory, 4, 1536);
+        remember_summary(&mut browser, &deleted_descendant, 1, 256);
+        remember_summary(&mut browser, &unrelated, 1, 512);
+
+        assert!(browser
+            .operation_queue
+            .enqueue(QueuedFileOperation::DeletePermanently {
+                paths: vec![deleted_directory],
+            })
+            .is_none());
+        let task_id = browser
+            .operation_queue
+            .tasks()
+            .last()
+            .expect("queued task")
+            .id;
+
+        drop(browser.accept_file_operation_finished(task_id, Ok(FileOperationOutcome::NoHistory)));
+
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&current_dir)
+            .is_none());
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&root)
+            .is_none());
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&deleted_descendant)
+            .is_none());
+        assert!(browser
+            .list_directory_summary_cache
+            .summary_for_path(&unrelated)
+            .is_some());
+    }
 }

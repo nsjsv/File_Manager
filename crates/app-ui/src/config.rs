@@ -4,7 +4,7 @@ use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::{FileOperationVerification, SortDirection, SortField};
 use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy, MediaMetadataScope};
 
-use crate::model::BrowserViewMode;
+use crate::model::{BrowserViewMode, ListDirectorySizeDisplayMode};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
 
@@ -204,6 +204,18 @@ pub(crate) fn sort_direction_config_value(direction: SortDirection) -> &'static 
     }
 }
 
+pub(crate) fn list_directory_size_display_mode_from_config_value(
+    value: &str,
+) -> Option<ListDirectorySizeDisplayMode> {
+    ListDirectorySizeDisplayMode::from_config_value(value)
+}
+
+pub(crate) fn list_directory_size_display_mode_config_value(
+    mode: ListDirectorySizeDisplayMode,
+) -> &'static str {
+    mode.config_value()
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
@@ -225,6 +237,7 @@ pub(crate) struct UserConfig {
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) list_view_preferences: crate::model::ListViewPreferences,
+    pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
@@ -271,6 +284,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         list_view_preferences: crate::model::ListViewPreferences::default(),
+        list_directory_size_display_mode: ListDirectorySizeDisplayMode::ItemCount,
         startup_location_policy: StartupLocationPolicy::Home,
         startup_custom_directory: fallback_base.clone(),
         save_view_state: false,
@@ -299,6 +313,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         list_view_preferences: crate::model::ListViewPreferences::default(),
+        list_directory_size_display_mode: ListDirectorySizeDisplayMode::ItemCount,
         startup_location_policy: StartupLocationPolicy::Home,
         startup_custom_directory: PathBuf::new(),
         save_view_state: false,

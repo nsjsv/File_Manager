@@ -116,16 +116,19 @@ impl Default for ListSortPreference {
 }
 
 impl ListSortPreference {
-    #[cfg(test)]
     pub(crate) fn select_column(&mut self, column: ListColumnKind) {
         let Some(field) = column.sort_field() else {
             return;
         };
         if self.field == field {
-            self.direction = match self.direction {
-                SortDirection::Ascending => SortDirection::Descending,
-                SortDirection::Descending => SortDirection::Ascending,
-            };
+            match self.direction {
+                SortDirection::Ascending => {
+                    self.direction = SortDirection::Descending;
+                }
+                SortDirection::Descending => {
+                    *self = Self::default();
+                }
+            }
         } else {
             self.field = field;
             self.direction = SortDirection::Ascending;
@@ -168,7 +171,6 @@ impl ListViewPreferences {
         self.sort
     }
 
-    #[cfg(test)]
     pub(crate) fn select_sort_column(&mut self, column: ListColumnKind) {
         self.sort.select_column(column);
     }
@@ -234,8 +236,13 @@ impl ListViewPreferences {
         else {
             return false;
         };
+        let insert_index = if dragged_index < target_index {
+            target_index - 1
+        } else {
+            target_index
+        };
         let dragged_column = self.columns.remove(dragged_index);
-        self.columns.insert(target_index, dragged_column);
+        self.columns.insert(insert_index, dragged_column);
         true
     }
 
@@ -466,19 +473,45 @@ mod tests {
     }
 
     #[test]
-    fn selecting_sort_column_toggles_current_column_and_selects_new_column() {
-        let mut sort = ListSortPreference::default();
+    fn dragging_column_to_later_target_inserts_before_target() {
+        let mut preferences = ListViewPreferences::default();
 
-        sort.select_column(ListColumnKind::Name);
-        assert_eq!(sort.field, SortField::Name);
-        assert_eq!(sort.direction, SortDirection::Descending);
+        assert!(preferences.move_column_to(ListColumnKind::Name, ListColumnKind::Kind));
+
+        assert_eq!(
+            kinds(&preferences),
+            vec![
+                ListColumnKind::Modified,
+                ListColumnKind::Size,
+                ListColumnKind::Name,
+                ListColumnKind::Kind,
+                ListColumnKind::Extension,
+                ListColumnKind::Readonly,
+                ListColumnKind::Path,
+                ListColumnKind::Hidden,
+                ListColumnKind::Symlink,
+            ]
+        );
+    }
+
+    #[test]
+    fn selecting_sort_column_cycles_back_to_default_and_ignores_unsortable_columns() {
+        let mut sort = ListSortPreference::default();
 
         sort.select_column(ListColumnKind::Size);
         assert_eq!(sort.field, SortField::Size);
         assert_eq!(sort.direction, SortDirection::Ascending);
 
-        sort.select_column(ListColumnKind::Extension);
+        sort.select_column(ListColumnKind::Size);
         assert_eq!(sort.field, SortField::Size);
+        assert_eq!(sort.direction, SortDirection::Descending);
+
+        sort.select_column(ListColumnKind::Size);
+        assert_eq!(sort.field, SortField::Name);
+        assert_eq!(sort.direction, SortDirection::Ascending);
+
+        sort.select_column(ListColumnKind::Extension);
+        assert_eq!(sort.field, SortField::Name);
         assert_eq!(sort.direction, SortDirection::Ascending);
     }
 }
