@@ -378,7 +378,7 @@ fn image_entry(path: &str) -> DirectoryEntry {
         EntryMetadata {
             len: 10,
             modified: None,
-            readonly: false,
+            ..EntryMetadata::default()
         },
         false,
         false,

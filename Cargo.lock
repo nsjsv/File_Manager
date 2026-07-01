@@ -1596,6 +1596,7 @@ version = "0.1.1"
 dependencies = [
  "blake3",
  "flate2",
+ "libc",
  "notify",
  "tar",
  "tempfile",

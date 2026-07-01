@@ -17,6 +17,62 @@ async fn scan_directory_reads_regular_entries() {
 }
 
 #[tokio::test]
+async fn scan_directory_populates_time_metadata_from_filesystem() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("report.txt");
+    fs::write(&file_path, b"hello").unwrap();
+
+    let scan = scan_directory(dir.path(), ScanOptions::default())
+        .await
+        .unwrap();
+    let entry = scan
+        .entries
+        .iter()
+        .find(|entry| entry.path == file_path)
+        .expect("scanned entry");
+    let metadata = fs::symlink_metadata(&file_path).unwrap();
+
+    assert_eq!(entry.metadata.modified, metadata.modified().ok());
+    assert_eq!(entry.metadata.accessed, metadata.accessed().ok());
+    assert_eq!(entry.metadata.created, metadata.created().ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn scan_directory_populates_unix_owner_group_and_permissions() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("report.txt");
+    fs::write(&file_path, b"hello").unwrap();
+
+    let scan = scan_directory(dir.path(), ScanOptions::default())
+        .await
+        .unwrap();
+    let entry = scan
+        .entries
+        .iter()
+        .find(|entry| entry.path == file_path)
+        .expect("scanned entry");
+    let metadata = fs::symlink_metadata(&file_path).unwrap();
+
+    assert!(entry
+        .metadata
+        .owner_name
+        .as_deref()
+        .is_some_and(|owner| !owner.is_empty()));
+    assert!(entry
+        .metadata
+        .group_name
+        .as_deref()
+        .is_some_and(|group| !group.is_empty()));
+    assert_eq!(
+        entry.metadata.permissions_mode,
+        Some(metadata.mode() & 0o7777)
+    );
+}
+
+#[tokio::test]
 async fn scan_directory_with_progress_reports_batches_and_final_sorted_scan() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("b.txt"), b"hello").unwrap();

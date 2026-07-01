@@ -22,7 +22,7 @@ fn directory_entry(path: &Path) -> DirectoryEntry {
         EntryMetadata {
             len: 0,
             modified: None,
-            readonly: false,
+            ..EntryMetadata::default()
         },
         false,
         false,

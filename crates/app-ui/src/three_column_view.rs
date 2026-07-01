@@ -562,7 +562,7 @@ mod tests {
             EntryMetadata {
                 len: 0,
                 modified: None,
-                readonly: false,
+                ..EntryMetadata::default()
             },
             false,
             false,

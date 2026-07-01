@@ -14,7 +14,46 @@ pub enum FileKind {
 pub struct EntryMetadata {
     pub len: u64,
     pub modified: Option<SystemTime>,
+    pub accessed: Option<SystemTime>,
+    pub created: Option<SystemTime>,
     pub readonly: bool,
+    pub owner_name: Option<String>,
+    pub group_name: Option<String>,
+    pub permissions_mode: Option<u32>,
+}
+
+impl Default for EntryMetadata {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            modified: None,
+            accessed: None,
+            created: None,
+            readonly: false,
+            owner_name: None,
+            group_name: None,
+            permissions_mode: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_entry_metadata_leaves_optional_fields_empty() {
+        let metadata = EntryMetadata::default();
+
+        assert_eq!(metadata.len, 0);
+        assert_eq!(metadata.modified, None);
+        assert_eq!(metadata.accessed, None);
+        assert_eq!(metadata.created, None);
+        assert_eq!(metadata.owner_name, None);
+        assert_eq!(metadata.group_name, None);
+        assert_eq!(metadata.permissions_mode, None);
+        assert!(!metadata.readonly);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

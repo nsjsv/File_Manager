@@ -1,7 +1,13 @@
+#[cfg(unix)]
+use std::ffi::CStr;
 use std::ffi::OsString;
 use std::io;
 #[cfg(unix)]
+use std::mem::MaybeUninit;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -194,11 +200,7 @@ pub(crate) async fn entry_from_path(
         FileKind::Other
     };
 
-    let metadata = EntryMetadata {
-        len: symlink_metadata.len(),
-        modified: symlink_metadata.modified().ok(),
-        readonly: symlink_metadata.permissions().readonly(),
-    };
+    let metadata = entry_metadata_from_fs_metadata(&symlink_metadata);
 
     Ok(DirectoryEntry::with_file_name(
         path,
@@ -209,6 +211,139 @@ pub(crate) async fn entry_from_path(
         is_symlink,
         is_broken_symlink,
     ))
+}
+
+fn entry_metadata_from_fs_metadata(metadata: &std::fs::Metadata) -> EntryMetadata {
+    EntryMetadata {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        accessed: metadata.accessed().ok(),
+        created: metadata.created().ok(),
+        readonly: metadata.permissions().readonly(),
+        owner_name: owner_name_from_fs_metadata(metadata),
+        group_name: group_name_from_fs_metadata(metadata),
+        permissions_mode: permissions_mode_from_fs_metadata(metadata),
+    }
+}
+
+#[cfg(unix)]
+fn owner_name_from_fs_metadata(metadata: &std::fs::Metadata) -> Option<String> {
+    Some(lookup_unix_user_name(metadata.uid()))
+}
+
+#[cfg(not(unix))]
+fn owner_name_from_fs_metadata(_metadata: &std::fs::Metadata) -> Option<String> {
+    None
+}
+
+#[cfg(unix)]
+fn group_name_from_fs_metadata(metadata: &std::fs::Metadata) -> Option<String> {
+    Some(lookup_unix_group_name(metadata.gid()))
+}
+
+#[cfg(not(unix))]
+fn group_name_from_fs_metadata(_metadata: &std::fs::Metadata) -> Option<String> {
+    None
+}
+
+#[cfg(unix)]
+fn permissions_mode_from_fs_metadata(metadata: &std::fs::Metadata) -> Option<u32> {
+    Some(metadata.mode() & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn permissions_mode_from_fs_metadata(_metadata: &std::fs::Metadata) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn lookup_unix_user_name(uid: u32) -> String {
+    let mut buffer = vec![0_u8; unix_account_lookup_buffer_len()];
+    loop {
+        let mut passwd = MaybeUninit::<libc::passwd>::zeroed();
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let status = unsafe {
+            libc::getpwuid_r(
+                uid as libc::uid_t,
+                passwd.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if status == 0 {
+            if result.is_null() {
+                return uid.to_string();
+            }
+            let name_ptr = unsafe { (*result).pw_name };
+            if name_ptr.is_null() {
+                return uid.to_string();
+            }
+            return unsafe { CStr::from_ptr(name_ptr) }
+                .to_string_lossy()
+                .into_owned();
+        }
+        if status == libc::ERANGE {
+            buffer.resize(buffer.len().saturating_mul(2).max(1), 0);
+            continue;
+        }
+        return uid.to_string();
+    }
+}
+
+#[cfg(unix)]
+fn lookup_unix_group_name(gid: u32) -> String {
+    let mut buffer = vec![0_u8; unix_group_lookup_buffer_len()];
+    loop {
+        let mut group = MaybeUninit::<libc::group>::zeroed();
+        let mut result: *mut libc::group = std::ptr::null_mut();
+        let status = unsafe {
+            libc::getgrgid_r(
+                gid as libc::gid_t,
+                group.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if status == 0 {
+            if result.is_null() {
+                return gid.to_string();
+            }
+            let name_ptr = unsafe { (*result).gr_name };
+            if name_ptr.is_null() {
+                return gid.to_string();
+            }
+            return unsafe { CStr::from_ptr(name_ptr) }
+                .to_string_lossy()
+                .into_owned();
+        }
+        if status == libc::ERANGE {
+            buffer.resize(buffer.len().saturating_mul(2).max(1), 0);
+            continue;
+        }
+        return gid.to_string();
+    }
+}
+
+#[cfg(unix)]
+fn unix_account_lookup_buffer_len() -> usize {
+    let size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
+    if size > 0 {
+        size as usize
+    } else {
+        1024
+    }
+}
+
+#[cfg(unix)]
+fn unix_group_lookup_buffer_len() -> usize {
+    let size = unsafe { libc::sysconf(libc::_SC_GETGR_R_SIZE_MAX) };
+    if size > 0 {
+        size as usize
+    } else {
+        1024
+    }
 }
 
 #[cfg(unix)]

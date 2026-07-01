@@ -205,19 +205,19 @@ fn user_preferences_round_trip_through_sqlite() {
         .set_column_visible(ListColumnKind::Kind, false);
     config
         .list_view_preferences
-        .set_column_visible(ListColumnKind::Extension, true);
+        .set_column_visible(ListColumnKind::Owner, true);
     config
         .list_view_preferences
         .set_column_width(ListColumnKind::Name, 280.0);
     config
         .list_view_preferences
-        .set_column_width(ListColumnKind::Extension, 140.0);
+        .set_column_width(ListColumnKind::Owner, 140.0);
     config
         .list_view_preferences
         .move_column_right(ListColumnKind::Name);
     config
         .list_view_preferences
-        .move_column_to(ListColumnKind::Extension, ListColumnKind::Name);
+        .move_column_to(ListColumnKind::Owner, ListColumnKind::Name);
     config
         .list_view_preferences
         .select_sort_column(ListColumnKind::Size);
@@ -270,7 +270,7 @@ fn user_preferences_round_trip_through_sqlite() {
         .map(|column| (column.kind, column.visible, column.width))
         .collect::<Vec<_>>();
     assert_eq!(loaded_columns[0].0, ListColumnKind::Modified);
-    assert_eq!(loaded_columns[1].0, ListColumnKind::Extension);
+    assert_eq!(loaded_columns[1].0, ListColumnKind::Owner);
     assert!(loaded_columns[1].1);
     assert_eq!(loaded_columns[1].2, 140.0);
     assert_eq!(loaded_columns[2].0, ListColumnKind::Name);
@@ -312,6 +312,57 @@ fn user_preferences_round_trip_through_sqlite() {
             .config_value(),
         "Ctrl+Alt+L"
     );
+}
+
+#[test]
+fn stored_preferences_drop_removed_list_columns_and_restore_supported_defaults() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.list_view_columns = vec![
+        file_operation_store::StoredListViewColumn {
+            kind: "name".to_owned(),
+            width: 280.0,
+            visible: true,
+        },
+        file_operation_store::StoredListViewColumn {
+            kind: "extension".to_owned(),
+            width: 150.0,
+            visible: true,
+        },
+        file_operation_store::StoredListViewColumn {
+            kind: "size".to_owned(),
+            width: 88.0,
+            visible: true,
+        },
+    ];
+
+    let preferences = UserPreferences::from_stored(stored, &default);
+
+    assert_eq!(
+        preferences
+            .list_view_preferences
+            .columns()
+            .iter()
+            .map(|column| column.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            ListColumnKind::Name,
+            ListColumnKind::Size,
+            ListColumnKind::Modified,
+            ListColumnKind::Kind,
+            ListColumnKind::Owner,
+            ListColumnKind::Group,
+            ListColumnKind::Permissions,
+            ListColumnKind::Accessed,
+            ListColumnKind::Created,
+        ]
+    );
+    assert!(preferences
+        .list_view_preferences
+        .columns()
+        .iter()
+        .find(|column| column.kind == ListColumnKind::Name)
+        .is_some_and(|column| column.visible));
 }
 
 #[test]

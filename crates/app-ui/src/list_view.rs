@@ -19,8 +19,8 @@ use crate::formatting::format_system_time;
 use crate::icons::rotated_chevron_right_view;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{
-    BrowserPaneId, DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus, ListColumnConfig,
-    ListColumnKind, Message, ScrollbarRegion,
+    BrowserPaneId, DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus,
+    FilePropertiesPermissions, ListColumnConfig, ListColumnKind, Message, ScrollbarRegion,
 };
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
@@ -534,11 +534,11 @@ fn list_entry_cell<'a>(
         ListColumnKind::Modified => text_cell(modified_text(entry), column.width),
         ListColumnKind::Size => text_cell(browser.list_directory_size_text(entry), column.width),
         ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
-        ListColumnKind::Extension => text_cell(extension_text(entry), column.width),
-        ListColumnKind::Readonly => text_cell(readonly_text(entry), column.width),
-        ListColumnKind::Path => text_cell(path_text(entry), column.width),
-        ListColumnKind::Hidden => text_cell(hidden_text(entry), column.width),
-        ListColumnKind::Symlink => text_cell(symlink_text(entry), column.width),
+        ListColumnKind::Owner => text_cell(owner_text(entry), column.width),
+        ListColumnKind::Group => text_cell(group_text(entry), column.width),
+        ListColumnKind::Permissions => text_cell(permissions_text(entry), column.width),
+        ListColumnKind::Accessed => text_cell(accessed_text(entry), column.width),
+        ListColumnKind::Created => text_cell(created_text(entry), column.width),
     }
 }
 
@@ -553,11 +553,11 @@ fn list_placeholder_entry_cell<'a>(
         ListColumnKind::Modified => text_cell(modified_text(entry), column.width),
         ListColumnKind::Size => text_cell(browser.list_directory_size_text(entry), column.width),
         ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
-        ListColumnKind::Extension => text_cell(extension_text(entry), column.width),
-        ListColumnKind::Readonly => text_cell(readonly_text(entry), column.width),
-        ListColumnKind::Path => text_cell(path_text(entry), column.width),
-        ListColumnKind::Hidden => text_cell(hidden_text(entry), column.width),
-        ListColumnKind::Symlink => text_cell(symlink_text(entry), column.width),
+        ListColumnKind::Owner => text_cell(owner_text(entry), column.width),
+        ListColumnKind::Group => text_cell(group_text(entry), column.width),
+        ListColumnKind::Permissions => text_cell(permissions_text(entry), column.width),
+        ListColumnKind::Accessed => text_cell(accessed_text(entry), column.width),
+        ListColumnKind::Created => text_cell(created_text(entry), column.width),
     }
 }
 
@@ -666,11 +666,7 @@ fn text_cell(text: String, width: f32) -> Element<'static, Message> {
 }
 
 fn modified_text(entry: &DirectoryEntry) -> String {
-    entry
-        .metadata
-        .modified
-        .map(format_system_time)
-        .unwrap_or_else(|| "-".to_owned())
+    timestamp_text(entry.metadata.modified)
 }
 
 fn kind_text(entry: &DirectoryEntry) -> String {
@@ -684,51 +680,92 @@ fn kind_text(entry: &DirectoryEntry) -> String {
     kind.to_owned()
 }
 
-fn extension_text(entry: &DirectoryEntry) -> String {
+fn owner_text(entry: &DirectoryEntry) -> String {
     entry
-        .path
-        .extension()
-        .map(|extension| extension.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .metadata
+        .owner_name
+        .clone()
+        .unwrap_or_else(|| "-".to_owned())
 }
 
-fn readonly_text(entry: &DirectoryEntry) -> String {
-    if entry.metadata.readonly {
-        "Read only".to_owned()
-    } else {
-        String::new()
-    }
+fn group_text(entry: &DirectoryEntry) -> String {
+    entry
+        .metadata
+        .group_name
+        .clone()
+        .unwrap_or_else(|| "-".to_owned())
 }
 
-fn path_text(entry: &DirectoryEntry) -> String {
-    entry.path.to_string_lossy().into_owned()
+fn permissions_text(entry: &DirectoryEntry) -> String {
+    entry
+        .metadata
+        .permissions_mode
+        .map(FilePropertiesPermissions::from_mode)
+        .map(|permissions| {
+            format!(
+                "{} ({})",
+                permissions.symbolic_string(),
+                permissions.octal_string()
+            )
+        })
+        .unwrap_or_else(|| "-".to_owned())
 }
 
-fn hidden_text(entry: &DirectoryEntry) -> String {
-    if entry.is_hidden {
-        "Hidden".to_owned()
-    } else {
-        String::new()
-    }
+fn accessed_text(entry: &DirectoryEntry) -> String {
+    timestamp_text(entry.metadata.accessed)
 }
 
-fn symlink_text(entry: &DirectoryEntry) -> String {
-    if entry.is_broken_symlink {
-        "Broken link".to_owned()
-    } else if entry.is_symlink {
-        "Link".to_owned()
-    } else {
-        String::new()
-    }
+fn created_text(entry: &DirectoryEntry) -> String {
+    timestamp_text(entry.metadata.created)
+}
+
+fn timestamp_text(value: Option<std::time::SystemTime>) -> String {
+    value
+        .map(format_system_time)
+        .unwrap_or_else(|| "-".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+    use std::path::PathBuf;
 
     #[test]
     fn list_column_width_uses_proportional_layout_weight() {
         assert_eq!(list_column_width(160.0), Length::FillPortion(160));
         assert_eq!(list_column_width(0.0), Length::FillPortion(1));
+    }
+
+    fn test_entry(metadata: EntryMetadata) -> DirectoryEntry {
+        DirectoryEntry::new(
+            PathBuf::from("/workspace/report.txt"),
+            FileKind::File,
+            metadata,
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn new_metadata_columns_render_placeholder_when_metadata_is_missing() {
+        let entry = test_entry(EntryMetadata::default());
+
+        assert_eq!(owner_text(&entry), "-");
+        assert_eq!(group_text(&entry), "-");
+        assert_eq!(permissions_text(&entry), "-");
+        assert_eq!(accessed_text(&entry), "-");
+        assert_eq!(created_text(&entry), "-");
+    }
+
+    #[test]
+    fn permissions_column_formats_symbolic_and_octal_mode() {
+        let entry = test_entry(EntryMetadata {
+            permissions_mode: Some(0o755),
+            ..EntryMetadata::default()
+        });
+
+        assert_eq!(permissions_text(&entry), "rwxr-xr-x (0755)");
     }
 }

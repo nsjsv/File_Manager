@@ -24,7 +24,7 @@ fn entry(path: PathBuf, kind: FileKind, len: u64, is_hidden: bool) -> DirectoryE
         EntryMetadata {
             len,
             modified: None,
-            readonly: false,
+            ..EntryMetadata::default()
         },
         is_hidden,
         false,

@@ -360,7 +360,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
 
     assert_eq!(preferences.list_view_columns.len(), 9);
     assert_eq!(preferences.list_view_columns[0].kind, "name");
-    assert_eq!(preferences.list_view_columns[4].kind, "extension");
+    assert_eq!(preferences.list_view_columns[4].kind, "owner");
     assert!(!preferences.list_view_columns[4].visible);
     assert_eq!(preferences.list_sort_field, "name");
     assert_eq!(preferences.list_sort_direction, "ascending");

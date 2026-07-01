@@ -20,7 +20,7 @@ fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
         EntryMetadata {
             len: 0,
             modified: None,
-            readonly: false,
+            ..EntryMetadata::default()
         },
         false,
         false,

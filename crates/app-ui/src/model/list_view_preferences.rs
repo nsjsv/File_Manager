@@ -9,11 +9,11 @@ pub(crate) enum ListColumnKind {
     Modified,
     Size,
     Kind,
-    Extension,
-    Readonly,
-    Path,
-    Hidden,
-    Symlink,
+    Owner,
+    Group,
+    Permissions,
+    Accessed,
+    Created,
 }
 
 impl ListColumnKind {
@@ -22,24 +22,24 @@ impl ListColumnKind {
         Self::Modified,
         Self::Size,
         Self::Kind,
-        Self::Extension,
-        Self::Readonly,
-        Self::Path,
-        Self::Hidden,
-        Self::Symlink,
+        Self::Owner,
+        Self::Group,
+        Self::Permissions,
+        Self::Accessed,
+        Self::Created,
     ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Name => "Name",
-            Self::Modified => "Date Modified",
+            Self::Modified => "Modified Time",
             Self::Size => "Size",
             Self::Kind => "Kind",
-            Self::Extension => "Extension",
-            Self::Readonly => "Read Only",
-            Self::Path => "Path",
-            Self::Hidden => "Hidden",
-            Self::Symlink => "Symlink",
+            Self::Owner => "Owner",
+            Self::Group => "Group",
+            Self::Permissions => "Permissions",
+            Self::Accessed => "Accessed Time",
+            Self::Created => "Created Time",
         }
     }
 
@@ -49,11 +49,11 @@ impl ListColumnKind {
             Self::Modified => "modified",
             Self::Size => "size",
             Self::Kind => "kind",
-            Self::Extension => "extension",
-            Self::Readonly => "readonly",
-            Self::Path => "path",
-            Self::Hidden => "hidden",
-            Self::Symlink => "symlink",
+            Self::Owner => "owner",
+            Self::Group => "group",
+            Self::Permissions => "permissions",
+            Self::Accessed => "accessed",
+            Self::Created => "created",
         }
     }
 
@@ -63,11 +63,11 @@ impl ListColumnKind {
             "modified" => Some(Self::Modified),
             "size" => Some(Self::Size),
             "kind" => Some(Self::Kind),
-            "extension" => Some(Self::Extension),
-            "readonly" => Some(Self::Readonly),
-            "path" => Some(Self::Path),
-            "hidden" => Some(Self::Hidden),
-            "symlink" => Some(Self::Symlink),
+            "owner" => Some(Self::Owner),
+            "group" => Some(Self::Group),
+            "permissions" => Some(Self::Permissions),
+            "accessed" => Some(Self::Accessed),
+            "created" => Some(Self::Created),
             _ => None,
         }
     }
@@ -78,7 +78,7 @@ impl ListColumnKind {
             Self::Modified => Some(SortField::Modified),
             Self::Size => Some(SortField::Size),
             Self::Kind => Some(SortField::Kind),
-            Self::Extension | Self::Readonly | Self::Path | Self::Hidden | Self::Symlink => None,
+            Self::Owner | Self::Group | Self::Permissions | Self::Accessed | Self::Created => None,
         }
     }
 }
@@ -312,14 +312,14 @@ fn default_columns() -> Vec<ListColumnConfig> {
 fn default_column_width(kind: ListColumnKind) -> f32 {
     match kind {
         ListColumnKind::Name => 320.0,
-        ListColumnKind::Modified => 160.0,
+        ListColumnKind::Modified => 168.0,
         ListColumnKind::Size => 96.0,
         ListColumnKind::Kind => 96.0,
-        ListColumnKind::Extension => 112.0,
-        ListColumnKind::Readonly => 96.0,
-        ListColumnKind::Path => 320.0,
-        ListColumnKind::Hidden => 88.0,
-        ListColumnKind::Symlink => 104.0,
+        ListColumnKind::Owner => 120.0,
+        ListColumnKind::Group => 120.0,
+        ListColumnKind::Permissions => 128.0,
+        ListColumnKind::Accessed => 168.0,
+        ListColumnKind::Created => 168.0,
     }
 }
 
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn default_columns_include_all_columns_in_expected_order() {
+    fn default_columns_include_supported_columns_in_expected_order() {
         let preferences = ListViewPreferences::default();
 
         assert_eq!(kinds(&preferences), ListColumnKind::ALL);
@@ -382,11 +382,11 @@ mod tests {
                 ListColumnKind::Name,
                 ListColumnKind::Modified,
                 ListColumnKind::Kind,
-                ListColumnKind::Extension,
-                ListColumnKind::Readonly,
-                ListColumnKind::Path,
-                ListColumnKind::Hidden,
-                ListColumnKind::Symlink,
+                ListColumnKind::Owner,
+                ListColumnKind::Group,
+                ListColumnKind::Permissions,
+                ListColumnKind::Accessed,
+                ListColumnKind::Created,
             ]
         );
         assert!(preferences
@@ -440,11 +440,11 @@ mod tests {
                 ListColumnKind::Name,
                 ListColumnKind::Kind,
                 ListColumnKind::Size,
-                ListColumnKind::Extension,
-                ListColumnKind::Readonly,
-                ListColumnKind::Path,
-                ListColumnKind::Hidden,
-                ListColumnKind::Symlink,
+                ListColumnKind::Owner,
+                ListColumnKind::Group,
+                ListColumnKind::Permissions,
+                ListColumnKind::Accessed,
+                ListColumnKind::Created,
             ]
         );
     }
@@ -453,20 +453,20 @@ mod tests {
     fn dragging_column_to_target_reorders_columns() {
         let mut preferences = ListViewPreferences::default();
 
-        assert!(preferences.move_column_to(ListColumnKind::Extension, ListColumnKind::Name));
+        assert!(preferences.move_column_to(ListColumnKind::Owner, ListColumnKind::Name));
 
         assert_eq!(
             kinds(&preferences),
             vec![
-                ListColumnKind::Extension,
+                ListColumnKind::Owner,
                 ListColumnKind::Name,
                 ListColumnKind::Modified,
                 ListColumnKind::Size,
                 ListColumnKind::Kind,
-                ListColumnKind::Readonly,
-                ListColumnKind::Path,
-                ListColumnKind::Hidden,
-                ListColumnKind::Symlink,
+                ListColumnKind::Group,
+                ListColumnKind::Permissions,
+                ListColumnKind::Accessed,
+                ListColumnKind::Created,
             ]
         );
         assert!(!preferences.move_column_to(ListColumnKind::Name, ListColumnKind::Name));
@@ -485,11 +485,11 @@ mod tests {
                 ListColumnKind::Size,
                 ListColumnKind::Name,
                 ListColumnKind::Kind,
-                ListColumnKind::Extension,
-                ListColumnKind::Readonly,
-                ListColumnKind::Path,
-                ListColumnKind::Hidden,
-                ListColumnKind::Symlink,
+                ListColumnKind::Owner,
+                ListColumnKind::Group,
+                ListColumnKind::Permissions,
+                ListColumnKind::Accessed,
+                ListColumnKind::Created,
             ]
         );
     }
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(sort.field, SortField::Name);
         assert_eq!(sort.direction, SortDirection::Ascending);
 
-        sort.select_column(ListColumnKind::Extension);
+        sort.select_column(ListColumnKind::Owner);
         assert_eq!(sort.field, SortField::Name);
         assert_eq!(sort.direction, SortDirection::Ascending);
     }

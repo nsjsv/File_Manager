@@ -98,14 +98,14 @@ pub struct StoredShortcutBinding {
 fn default_stored_list_view_columns() -> Vec<StoredListViewColumn> {
     [
         ("name", 320.0, true),
-        ("modified", 160.0, true),
+        ("modified", 168.0, true),
         ("size", 96.0, true),
         ("kind", 96.0, true),
-        ("extension", 112.0, false),
-        ("readonly", 96.0, false),
-        ("path", 320.0, false),
-        ("hidden", 88.0, false),
-        ("symlink", 104.0, false),
+        ("owner", 120.0, false),
+        ("group", 120.0, false),
+        ("permissions", 128.0, false),
+        ("accessed", 168.0, false),
+        ("created", 168.0, false),
     ]
     .into_iter()
     .map(|(kind, width, visible)| StoredListViewColumn {
