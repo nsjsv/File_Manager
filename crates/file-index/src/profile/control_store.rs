@@ -359,7 +359,8 @@ impl ProfileStore {
         }
         transaction
             .commit()
-            .map_err(|error| IndexError::store(&self.db_path, error))
+            .map_err(|error| IndexError::store(&self.db_path, error))?;
+        Ok(())
     }
 
     pub fn load_root_snapshot(

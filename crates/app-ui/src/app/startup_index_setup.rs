@@ -23,6 +23,10 @@ const STARTUP_INDEX_TOGGLE_ROTATION_EPSILON: f32 = 0.001;
 
 impl FileBrowser {
     pub(super) fn refresh_startup_index_setup_choices(&mut self) -> Task<Message> {
+        if self.search_index.profile_loading {
+            self.startup_index_setup = None;
+            return Task::none();
+        }
         if self.user_config.search_mode != SearchBackendMode::Indexed
             || (self.user_config.search_mode_prompt != SearchModePromptStatus::Completed
                 && self.search_mode_prompt.is_some())

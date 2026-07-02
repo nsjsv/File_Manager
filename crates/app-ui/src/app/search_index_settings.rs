@@ -153,10 +153,11 @@ impl FileBrowser {
         outcome: Result<SearchIndexDaemonStatus, String>,
     ) -> Task<Message> {
         self.search_index.daemon_status_loading = false;
-        self.search_index.daemon_status = Some(match outcome {
+        let daemon_status = match outcome {
             Ok(status) => status,
             Err(error) => SearchIndexDaemonStatus::Unreachable(error),
-        });
+        };
+        self.search_index.daemon_status = Some(daemon_status);
         Task::none()
     }
 
@@ -328,6 +329,7 @@ impl FileBrowser {
                 self.user_config.search_index_content_enabled = profile.content.enabled;
                 self.user_config.search_index_media_scope = profile.media.scope;
                 self.search_index.apply_profile(&profile);
+                self.startup_index_setup = None;
                 let save_profile_task =
                     if profile.roots != loaded_roots || profile_missing_configured_excludes {
                         self.save_current_search_index_profile()
@@ -340,7 +342,7 @@ impl FileBrowser {
             }
             Ok(None) => {
                 self.search_index.profile_error = None;
-                Task::none()
+                self.refresh_startup_index_setup_choices()
             }
             Err(error) => {
                 self.search_index.profile_error = Some(error);

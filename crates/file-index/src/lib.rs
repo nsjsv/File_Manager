@@ -25,9 +25,11 @@ pub enum IndexError {
 
 impl IndexError {
     pub(crate) fn store(path: impl Into<PathBuf>, error: impl ToString) -> Self {
+        let path = path.into();
+        let message = error.to_string();
         Self::Store {
-            path: path.into(),
-            message: error.to_string(),
+            path,
+            message,
         }
     }
 }

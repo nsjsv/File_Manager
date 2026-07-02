@@ -155,6 +155,7 @@ fn socket_has_listener(socket_path: &Path) -> bool {
 impl IndexDaemonState {
     async fn handle_connection(&self, mut stream: UnixStream) -> Result<(), IndexClientError> {
         let request: IndexRequest = read_frame(&mut stream).await?;
+        let request_index_base_dir = request.index_base_dir();
         if request.version != INDEX_PROTOCOL_VERSION {
             write_frame(
                 &mut stream,
@@ -188,7 +189,7 @@ impl IndexDaemonState {
             return Ok(());
         }
 
-        let core = self.core_for(request.index_base_dir()).await?;
+        let core = self.core_for(request_index_base_dir).await?;
         match request.command {
             IndexRequestCommand::SubscribeMaintenance { profile_id } => {
                 let events = core.service.status_stream();

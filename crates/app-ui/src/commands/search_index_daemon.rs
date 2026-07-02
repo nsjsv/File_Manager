@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::{fmt, future::Future, io};
 
@@ -9,6 +10,7 @@ use file_index::{
 };
 use iced::Task;
 use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::UserConfig;
@@ -20,6 +22,8 @@ const DAEMON_START_SETTLE_DELAY: Duration = Duration::from_millis(150);
 const DAEMON_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const DAEMON_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const EXPECTED_INDEX_DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+static DAEMON_RECOVERY_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
 #[derive(Debug)]
 enum IndexDaemonProbeError {
@@ -116,6 +120,11 @@ pub(super) async fn build_selected_paths_with_progress(
 
 async fn ensure_index_daemon_started(index_base_dir: PathBuf) -> Result<(), String> {
     let client = IndexClient::for_index_base_dir(index_base_dir);
+    if probe_index_daemon_client(&client).await.is_ok() {
+        return Ok(());
+    }
+
+    let _recovery_guard = daemon_recovery_lock().lock().await;
     match probe_index_daemon_client(&client).await {
         Ok(()) => Ok(()),
         Err(error) if index_daemon_probe_is_connect_error(&error) => {
@@ -128,16 +137,26 @@ async fn ensure_index_daemon_started(index_base_dir: PathBuf) -> Result<(), Stri
     }
 }
 
+fn daemon_recovery_lock() -> &'static AsyncMutex<()> {
+    DAEMON_RECOVERY_LOCK.get_or_init(|| AsyncMutex::new(()))
+}
+
 async fn restart_index_daemon(index_base_dir: PathBuf) -> Result<SearchIndexDaemonStatus, String> {
+    let client = IndexClient::for_index_base_dir(index_base_dir);
+    let _recovery_guard = daemon_recovery_lock().lock().await;
     let restart_error = run_index_daemon_service_action(IndexDaemonServiceAction::Restart)
         .await
         .err();
-    let client = IndexClient::for_index_base_dir(index_base_dir);
     match probe_index_daemon_client(&client).await {
         Ok(()) => Ok(SearchIndexDaemonStatus::Reachable),
         Err(error) if index_daemon_probe_error_allows_local_launch(&error) => {
             start_local_index_daemon(&client).await?;
-            load_index_daemon_status(client.index_base_dir().to_path_buf()).await
+            match probe_index_daemon_client(&client).await {
+                Ok(()) => Ok(SearchIndexDaemonStatus::Reachable),
+                Err(error) => Ok(SearchIndexDaemonStatus::Unreachable(
+                    index_daemon_probe_error_message(&error, restart_error.as_deref()),
+                )),
+            }
         }
         Err(error) => Ok(SearchIndexDaemonStatus::Unreachable(
             index_daemon_probe_error_message(&error, restart_error.as_deref()),
@@ -148,21 +167,15 @@ async fn restart_index_daemon(index_base_dir: PathBuf) -> Result<SearchIndexDaem
 async fn load_index_daemon_status(
     index_base_dir: PathBuf,
 ) -> Result<SearchIndexDaemonStatus, String> {
-    match probe_index_daemon(index_base_dir).await {
+    match ensure_index_daemon_started(index_base_dir).await {
         Ok(()) => Ok(SearchIndexDaemonStatus::Reachable),
         Err(error) => Ok(SearchIndexDaemonStatus::Unreachable(error)),
     }
 }
 
-async fn probe_index_daemon(index_base_dir: PathBuf) -> Result<(), String> {
-    let client = IndexClient::for_index_base_dir(index_base_dir);
-    probe_index_daemon_client(&client)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 async fn probe_index_daemon_client(client: &IndexClient) -> Result<(), IndexDaemonProbeError> {
-    match client.execute(IndexServiceCommand::Ping).await {
+    let response = client.execute(IndexServiceCommand::Ping).await;
+    match response {
         Ok(IndexServiceEvent::Pong { daemon_version })
             if daemon_version == EXPECTED_INDEX_DAEMON_VERSION =>
         {
@@ -198,7 +211,7 @@ async fn run_index_daemon_service_action(action: IndexDaemonServiceAction) -> Re
         })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if stderr.is_empty() {
+        let message = if stderr.is_empty() {
             format!(
                 "could not {} index daemon service: systemctl exited with {}",
                 action.as_systemctl_arg(),
@@ -209,7 +222,8 @@ async fn run_index_daemon_service_action(action: IndexDaemonServiceAction) -> Re
                 "could not {} index daemon service: {stderr}",
                 action.as_systemctl_arg()
             )
-        });
+        };
+        return Err(message);
     }
     tokio::time::sleep(DAEMON_START_SETTLE_DELAY).await;
     Ok(())

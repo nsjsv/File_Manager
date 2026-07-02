@@ -4,8 +4,7 @@ use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::{
-    operation_store_command, search_index_profile_load_command, sidebar_devices_command,
-    sidebar_locations_command,
+    operation_store_command, sidebar_devices_command, sidebar_locations_command,
 };
 use crate::config::UserConfig;
 use crate::config::{SearchBackendMode, SearchModePromptStatus};
@@ -36,19 +35,16 @@ impl FileBrowser {
         self.search_index.home_dir = home.clone();
         self.sidebar_locations = vec![home_sidebar_location(&home)];
         let search_mode_prompt_command = self.refresh_search_mode_prompt();
-        let startup_index_setup_command = if self.user_config.search_mode
+        let should_load_indexed_profile = self.user_config.search_mode
             == SearchBackendMode::Indexed
-            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed
-        {
-            self.refresh_startup_index_setup_choices()
+            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed;
+        let search_index_profile_command = if should_load_indexed_profile {
+            self.load_search_index_profile_command()
         } else {
             Task::none()
         };
-        let search_index_profile_command = if self.user_config.search_mode
-            == SearchBackendMode::Indexed
-            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed
-        {
-            search_index_profile_load_command(self.user_config.clone())
+        let startup_index_setup_command = if should_load_indexed_profile {
+            self.refresh_startup_index_setup_choices()
         } else {
             Task::none()
         };
@@ -216,6 +212,7 @@ impl FileBrowser {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -347,6 +344,23 @@ mod tests {
         )));
 
         assert!(browser.search_mode_prompt.is_some());
+        assert!(browser.startup_index_setup.is_none());
+    }
+
+    #[test]
+    fn completed_indexed_startup_waits_for_profile_before_index_setup() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        let mut user_config = config::default_user_config();
+        user_config.search_mode = SearchBackendMode::Indexed;
+        user_config.search_mode_prompt = SearchModePromptStatus::Completed;
+
+        drop(browser.accept_startup_environment(startup_environment(
+            PathBuf::from("/home/user"),
+            user_config,
+            PathBuf::from("/tmp/state.sqlite"),
+        )));
+
+        assert!(browser.search_index.profile_loading);
         assert!(browser.startup_index_setup.is_none());
     }
 
