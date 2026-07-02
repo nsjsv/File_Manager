@@ -11,6 +11,7 @@ use super::types::{FileSearchMatch, FileSearchOptions, SearchResultSource};
 use super::{query, store};
 use crate::profile::MediaMetadataScope;
 use crate::{IndexError, SearchMode};
+use tokio_util::sync::CancellationToken;
 
 pub(crate) fn write_search_documents(
     pending_index_dir: &Path,
@@ -44,15 +45,18 @@ pub(crate) fn search_index_catalog_and_tantivy(
     runtime: &SearchQueryRuntime,
     query: &str,
     options: &FileSearchOptions,
+    cancel: &CancellationToken,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
+    ensure_not_cancelled(cancel)?;
     match options.mode {
-        SearchMode::Files => search_catalog_records(runtime, query, options),
+        SearchMode::Files => search_catalog_records(runtime, query, options, cancel),
         SearchMode::Contents => search_tantivy_source(
             runtime,
             query,
             &[SearchResultSource::Contents],
             options.content_index_enabled,
             options.limit,
+            cancel,
         ),
         SearchMode::Media => search_tantivy_source(
             runtime,
@@ -60,9 +64,10 @@ pub(crate) fn search_index_catalog_and_tantivy(
             &[SearchResultSource::Media],
             options.media_metadata_scope.includes_media(),
             options.limit,
+            cancel,
         ),
         SearchMode::All => {
-            let mut matches = search_catalog_records(runtime, query, options)?;
+            let mut matches = search_catalog_records(runtime, query, options, cancel)?;
             let mut sources = Vec::with_capacity(2);
             if options.content_index_enabled {
                 sources.push(SearchResultSource::Contents);
@@ -76,6 +81,7 @@ pub(crate) fn search_index_catalog_and_tantivy(
                     query,
                     &sources,
                     options.limit,
+                    cancel,
                 )?);
             }
             Ok(merge_search_matches(matches, options.limit.max(1)))
@@ -87,9 +93,10 @@ fn search_catalog_records(
     runtime: &SearchQueryRuntime,
     query_text: &str,
     options: &FileSearchOptions,
+    cancel: &CancellationToken,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
     let mut collector = query::SearchMatchCollector::new(query_text, options.limit.max(1));
-    store::scan_catalog_records(
+    store::scan_file_query_candidates_with_cancel(
         runtime.index_dir(),
         runtime.root(),
         options.include_hidden,
@@ -98,6 +105,9 @@ fn search_catalog_records(
         options.content_index_enabled,
         options.content_max_file_bytes,
         options.media_metadata_scope,
+        query_text,
+        options.limit.max(1),
+        cancel,
         |record| {
             collector.push_record(&record);
             Ok(())
@@ -112,11 +122,12 @@ fn search_tantivy_source(
     sources: &[SearchResultSource],
     enabled: bool,
     limit: usize,
+    cancel: &CancellationToken,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
     if !enabled {
         return Ok(Vec::new());
     }
-    search_tantivy_matches(runtime, query, sources, limit)
+    search_tantivy_matches(runtime, query, sources, limit, cancel)
 }
 
 fn search_tantivy_matches(
@@ -124,31 +135,43 @@ fn search_tantivy_matches(
     query: &str,
     sources: &[SearchResultSource],
     limit: usize,
+    cancel: &CancellationToken,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
+    ensure_not_cancelled(cancel)?;
     let full_text_runtime = runtime.full_text_runtime()?;
     full_text_hits_to_matches(
         runtime,
         search_tantivy_index(full_text_runtime.as_deref(), query, sources, limit)?,
+        cancel,
     )
 }
 
 fn full_text_hits_to_matches(
     runtime: &SearchQueryRuntime,
     hits: Vec<FullTextSearchHit>,
+    cancel: &CancellationToken,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
+    ensure_not_cancelled(cancel)?;
+    let read_session = store::CatalogReadSession::open(runtime.index_dir(), runtime.root())?;
+    let records_by_storage_key = read_session
+        .read_records_by_storage_keys(hits.iter().map(|hit| hit.storage_key.as_str()))?;
     let mut matches = Vec::with_capacity(hits.len());
     for hit in hits {
-        let Some(record) = store::read_catalog_record_by_storage_key(
-            runtime.index_dir(),
-            runtime.root(),
-            &hit.storage_key,
-        )?
-        else {
+        ensure_not_cancelled(cancel)?;
+        let Some(record) = records_by_storage_key.get(&hit.storage_key) else {
             continue;
         };
         matches.push(record.to_search_match(hit.score, hit.source, hit.snippet, hit.media));
     }
     Ok(matches)
+}
+
+fn ensure_not_cancelled(cancel: &CancellationToken) -> Result<(), IndexError> {
+    if cancel.is_cancelled() {
+        Err(IndexError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn merge_search_matches(matches: Vec<FileSearchMatch>, limit: usize) -> Vec<FileSearchMatch> {

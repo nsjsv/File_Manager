@@ -11,8 +11,9 @@ use crate::search::{
     build_file_search_index, build_file_search_index_for_paths,
     build_file_search_index_for_paths_with_progress, clear_file_search_index_failures,
     file_search_index_status, remove_file_search_index, scan_file_search_index_snapshot,
-    search_file_index, FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome,
-    FileSearchIndexProgress, FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome,
+    search_file_index_with_cancel, FileSearchIndexMode, FileSearchIndexOptions,
+    FileSearchIndexOutcome, FileSearchIndexProgress, FileSearchIndexStatus, FileSearchOptions,
+    FileSearchOutcome,
 };
 use crate::watch::{watch_index_root, IndexFileChangeBatch, WatchIndexRootOptions};
 use crate::IndexError;
@@ -218,8 +219,17 @@ impl IndexServiceCore {
     }
 
     pub async fn query(&self, query: SearchQuery) -> Result<IndexServiceEvent, IndexError> {
+        self.query_with_cancel(query, CancellationToken::new())
+            .await
+    }
+
+    pub async fn query_with_cancel(
+        &self,
+        query: SearchQuery,
+        cancel: CancellationToken,
+    ) -> Result<IndexServiceEvent, IndexError> {
         let profile = self.profile(&query.profile_id)?;
-        let outcome = search_file_index(
+        let outcome = search_file_index_with_cancel(
             self.index_dir_for_root(&query.root),
             query.root,
             query.text,
@@ -233,6 +243,7 @@ impl IndexServiceCore {
                 content_max_file_bytes: profile.content.max_file_bytes,
                 media_metadata_scope: profile.media.scope,
             },
+            cancel,
         )
         .await?;
         Ok(self.publish(IndexServiceEvent::QueryFinished(outcome)))

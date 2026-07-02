@@ -27,10 +27,7 @@ impl IndexError {
     pub(crate) fn store(path: impl Into<PathBuf>, error: impl ToString) -> Self {
         let path = path.into();
         let message = error.to_string();
-        Self::Store {
-            path,
-            message,
-        }
+        Self::Store { path, message }
     }
 }
 
@@ -47,11 +44,12 @@ pub use search::{
     build_file_search_index, build_file_search_index_for_paths,
     build_file_search_index_for_paths_with_progress, clear_file_search_index_failures,
     default_search_index_exclude_patterns, file_search_index_exists, file_search_index_snapshot,
-    file_search_index_status, remove_file_search_index, search_file_index, search_file_tree,
-    search_file_tree_with_cancel, DirectoryErrorPolicy, FileSearchIndexFailure,
-    FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchIndexProgress,
-    FileSearchIndexStatus, FileSearchMatch, FileSearchOptions, FileSearchOutcome, MediaExifField,
-    MediaSearchKind, MediaSearchMetadata, SearchIndexFileRecord, SearchResultSource,
+    file_search_index_status, remove_file_search_index, search_file_index,
+    search_file_index_with_cancel, search_file_tree, search_file_tree_with_cancel,
+    DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexOptions,
+    FileSearchIndexOutcome, FileSearchIndexProgress, FileSearchIndexStatus, FileSearchMatch,
+    FileSearchOptions, FileSearchOutcome, MediaExifField, MediaSearchKind, MediaSearchMetadata,
+    SearchIndexFileRecord, SearchResultSource,
 };
 pub use service::{
     BuildSelectedPathsRequest, IndexMaintenanceHandle, IndexService, IndexServiceCommand,

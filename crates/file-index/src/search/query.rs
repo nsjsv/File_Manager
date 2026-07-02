@@ -29,7 +29,7 @@ impl SearchMatchCollector {
     pub(crate) fn new(query: &str, limit: usize) -> Self {
         let limit = limit.max(1);
         Self {
-            normalized_query: normalize_search_text(query.trim()),
+            normalized_query: normalized_search_query(query),
             pattern: Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart),
             matcher: Matcher::new(Config::DEFAULT),
             limit,
@@ -67,7 +67,7 @@ pub(crate) fn search_catalog(
     query: &str,
     limit: usize,
 ) -> Vec<FileSearchMatch> {
-    let normalized_query = normalize_search_text(query.trim());
+    let normalized_query = normalized_search_query(query);
     if normalized_query.is_empty() {
         return Vec::new();
     }
@@ -93,26 +93,21 @@ fn collect_candidate_indices(
     normalized_query: &str,
     limit: usize,
 ) -> Vec<usize> {
-    let fallback_target = limit.saturating_mul(200).clamp(512, MAX_RANKED_CANDIDATES);
-    let query_len = normalized_query.chars().count();
+    let query_len = normalized_query_len(normalized_query);
     let mut indices = if query_len >= 3 {
         catalog.trigram_candidates(normalized_query)
     } else {
         Vec::new()
     };
 
-    if query_len < 3 || indices.len() < fallback_target {
+    if file_candidates_need_fallback(normalized_query, indices.len(), limit) {
         let mut seen = indices.iter().copied().collect::<HashSet<_>>();
         for (index, record) in catalog.records().iter().enumerate() {
-            let matches = if query_len < 3 {
-                structural_rank(record, normalized_query).is_some()
-                    || ordered_match(&record.normalized_name, normalized_query)
-                    || ordered_match(&record.normalized_path, normalized_query)
-            } else {
-                ordered_match(&record.normalized_name, normalized_query)
-                    || ordered_match(&record.normalized_path, normalized_query)
-            };
-            if matches {
+            if file_candidate_fallback_matches(
+                &record.normalized_name,
+                &record.normalized_path,
+                normalized_query,
+            ) {
                 push_candidate_index(index, &mut indices, &mut seen);
             }
             if indices.len() >= MAX_RANKED_CANDIDATES {
@@ -130,6 +125,38 @@ fn collect_candidate_indices(
 fn push_candidate_index(index: usize, indices: &mut Vec<usize>, seen: &mut HashSet<usize>) {
     if seen.insert(index) {
         indices.push(index);
+    }
+}
+
+pub(crate) fn normalized_search_query(query: &str) -> String {
+    normalize_search_text(query.trim())
+}
+
+pub(crate) fn max_ranked_file_candidates() -> usize {
+    MAX_RANKED_CANDIDATES
+}
+
+pub(crate) fn file_candidates_need_fallback(
+    normalized_query: &str,
+    candidate_count: usize,
+    limit: usize,
+) -> bool {
+    normalized_query_len(normalized_query) < 3
+        || candidate_count < file_candidate_fallback_target(limit)
+}
+
+pub(crate) fn file_candidate_fallback_matches(
+    normalized_name: &str,
+    normalized_path: &str,
+    normalized_query: &str,
+) -> bool {
+    if normalized_query_len(normalized_query) < 3 {
+        structural_text_matches(normalized_name, normalized_path, normalized_query)
+            || ordered_match(normalized_name, normalized_query)
+            || ordered_match(normalized_path, normalized_query)
+    } else {
+        ordered_match(normalized_name, normalized_query)
+            || ordered_match(normalized_path, normalized_query)
     }
 }
 
@@ -164,6 +191,28 @@ fn structural_rank(record: &SearchCatalogRecord, normalized_query: &str) -> Opti
     } else {
         None
     }
+}
+
+fn structural_text_matches(
+    normalized_name: &str,
+    normalized_path: &str,
+    normalized_query: &str,
+) -> bool {
+    normalized_name == normalized_query
+        || normalized_name.starts_with(normalized_query)
+        || normalized_path
+            .split(['/', '\\', ' ', '-', '_', '.'])
+            .any(|segment| segment.starts_with(normalized_query))
+        || normalized_name.contains(normalized_query)
+        || normalized_path.contains(normalized_query)
+}
+
+fn normalized_query_len(normalized_query: &str) -> usize {
+    normalized_query.chars().count()
+}
+
+fn file_candidate_fallback_target(limit: usize) -> usize {
+    limit.saturating_mul(200).clamp(512, MAX_RANKED_CANDIDATES)
 }
 
 fn short_path_bonus(record: &SearchCatalogRecord) -> u32 {

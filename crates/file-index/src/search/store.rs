@@ -1,7 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::fs as std_fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, Row};
+use tokio_util::sync::CancellationToken;
 
 use super::catalog::SearchCatalogRecord;
 use super::manifest::{
@@ -9,6 +11,7 @@ use super::manifest::{
     MANIFEST_INDEX_SIZE_BYTES,
 };
 use super::path_encoding::{path_from_bytes, path_storage_key, path_to_bytes};
+use super::query;
 use super::search_index_error;
 use super::types::{
     file_kind_from_key, file_kind_key, DirectoryErrorPolicy, FileSearchIndexFailure,
@@ -25,6 +28,12 @@ pub(crate) struct CatalogWriteSession {
     catalog_path: PathBuf,
     connection: Connection,
     record_count: usize,
+}
+
+pub(crate) struct CatalogReadSession {
+    index_dir: PathBuf,
+    root: PathBuf,
+    connection: Connection,
 }
 
 impl CatalogWriteSession {
@@ -49,8 +58,9 @@ impl CatalogWriteSession {
         self.connection
             .prepare_cached(
                 "INSERT INTO entries (
-                    path_key, path, kind, mtime_ms, size_bytes, changed_at_generation
-                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+                    path_key, path, kind, mtime_ms, size_bytes, normalized_name,
+                    normalized_path, changed_at_generation
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
             )
             .map_err(|error| search_index_error(&self.catalog_path, error))?
             .execute(params![
@@ -59,6 +69,8 @@ impl CatalogWriteSession {
                 file_kind_key(record.kind),
                 record.mtime_ms,
                 record.size_bytes.map(saturating_u64_to_i64),
+                record.normalized_name.as_str(),
+                record.normalized_path.as_str(),
             ])
             .map_err(|error| search_index_error(&self.catalog_path, error))?;
         self.record_count += 1;
@@ -86,6 +98,52 @@ impl CatalogWriteSession {
             .execute_batch("COMMIT;")
             .map_err(|error| search_index_error(&self.catalog_path, error))?;
         persist_catalog_size(&self.index_dir, manifest)
+    }
+}
+
+impl CatalogReadSession {
+    pub(crate) fn open(index_dir: &Path, root: &Path) -> Result<Self, IndexError> {
+        Ok(Self {
+            index_dir: index_dir.to_path_buf(),
+            root: root.to_path_buf(),
+            connection: open_catalog_connection(index_dir)?,
+        })
+    }
+
+    pub(crate) fn read_records_by_storage_keys<'a>(
+        &self,
+        storage_keys: impl IntoIterator<Item = &'a str>,
+    ) -> Result<HashMap<String, SearchCatalogRecord>, IndexError> {
+        let mut records = HashMap::new();
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT path, kind, mtime_ms, size_bytes
+                 FROM entries
+                 WHERE path_key = ?1",
+            )
+            .map_err(|error| search_index_error(&self.index_dir, error))?;
+
+        for storage_key in storage_keys {
+            if records.contains_key(storage_key) {
+                continue;
+            }
+            let record = {
+                let mut rows = statement
+                    .query(params![storage_key])
+                    .map_err(|error| search_index_error(&self.index_dir, error))?;
+                let Some(row) = rows
+                    .next()
+                    .map_err(|error| search_index_error(&self.index_dir, error))?
+                else {
+                    continue;
+                };
+                catalog_record_from_row(&self.index_dir, &self.root, row)?
+            };
+            records.insert(record.storage_key.clone(), record);
+        }
+
+        Ok(records)
     }
 }
 
@@ -182,8 +240,36 @@ pub(crate) fn scan_catalog_records(
     content_index_enabled: bool,
     content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
+    visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<SearchIndexManifest, IndexError> {
+    let cancel = CancellationToken::new();
+    scan_catalog_records_with_cancel(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_metadata_scope,
+        &cancel,
+        visit,
+    )
+}
+
+pub(crate) fn scan_catalog_records_with_cancel(
+    index_dir: &Path,
+    root: &Path,
+    include_hidden: bool,
+    exclude_patterns: &[String],
+    directory_error_policy: DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_metadata_scope: MediaMetadataScope,
+    cancel: &CancellationToken,
     mut visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
 ) -> Result<SearchIndexManifest, IndexError> {
+    ensure_not_cancelled(cancel)?;
     let connection = open_catalog_connection(index_dir)?;
     let manifest = read_manifest_from_connection(index_dir, &connection)?;
     manifest.validate_for(
@@ -207,35 +293,75 @@ pub(crate) fn scan_catalog_records(
         .next()
         .map_err(|error| search_index_error(index_dir, error))?
     {
+        ensure_not_cancelled(cancel)?;
         visit(catalog_record_from_row(index_dir, root, row)?)?;
     }
 
     Ok(manifest)
 }
 
-pub(crate) fn read_catalog_record_by_storage_key(
+pub(crate) fn scan_file_query_candidates_with_cancel(
     index_dir: &Path,
     root: &Path,
-    storage_key: &str,
-) -> Result<Option<SearchCatalogRecord>, IndexError> {
+    include_hidden: bool,
+    exclude_patterns: &[String],
+    directory_error_policy: DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_metadata_scope: MediaMetadataScope,
+    query_text: &str,
+    limit: usize,
+    cancel: &CancellationToken,
+    mut visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<SearchIndexManifest, IndexError> {
+    ensure_not_cancelled(cancel)?;
     let connection = open_catalog_connection(index_dir)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT path, kind, mtime_ms, size_bytes
-             FROM entries
-             WHERE path_key = ?1",
-        )
-        .map_err(|error| search_index_error(index_dir, error))?;
-    let mut rows = statement
-        .query(params![storage_key])
-        .map_err(|error| search_index_error(index_dir, error))?;
-    let Some(row) = rows
-        .next()
-        .map_err(|error| search_index_error(index_dir, error))?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(catalog_record_from_row(index_dir, root, row)?))
+    let manifest = read_manifest_from_connection(index_dir, &connection)?;
+    manifest.validate_for(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_metadata_scope,
+    )?;
+
+    let normalized_query = query::normalized_search_query(query_text);
+    if normalized_query.is_empty() {
+        return Ok(manifest);
+    }
+
+    let mut seen_entry_ids = HashSet::new();
+    scan_direct_file_candidate_records(
+        &connection,
+        index_dir,
+        root,
+        &normalized_query,
+        cancel,
+        &mut seen_entry_ids,
+        &mut visit,
+    )?;
+
+    if query::file_candidates_need_fallback(&normalized_query, seen_entry_ids.len(), limit.max(1)) {
+        let remaining_candidates =
+            query::max_ranked_file_candidates().saturating_sub(seen_entry_ids.len());
+        if remaining_candidates > 0 {
+            scan_file_candidate_fallback_records(
+                &connection,
+                index_dir,
+                root,
+                &normalized_query,
+                remaining_candidates,
+                cancel,
+                &mut seen_entry_ids,
+                &mut visit,
+            )?;
+        }
+    }
+
+    Ok(manifest)
 }
 
 pub(crate) fn read_index_status(
@@ -368,11 +494,13 @@ fn initialize_catalog_connection(
                 id INTEGER PRIMARY KEY,
                 path_key TEXT NOT NULL UNIQUE,
                 path BLOB NOT NULL,
-                kind TEXT NOT NULL,
-                mtime_ms INTEGER,
-                size_bytes INTEGER,
-                changed_at_generation TEXT
-             );
+                 kind TEXT NOT NULL,
+                 mtime_ms INTEGER,
+                 size_bytes INTEGER,
+                 normalized_name TEXT NOT NULL,
+                 normalized_path TEXT NOT NULL,
+                 changed_at_generation TEXT
+              );
              CREATE TABLE failures (
                 path_key TEXT PRIMARY KEY,
                 path BLOB NOT NULL,
@@ -502,6 +630,103 @@ fn catalog_record_from_row(
     ))
 }
 
+fn scan_direct_file_candidate_records(
+    connection: &Connection,
+    index_dir: &Path,
+    root: &Path,
+    normalized_query: &str,
+    cancel: &CancellationToken,
+    seen_entry_ids: &mut HashSet<i64>,
+    visit: &mut impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT path, kind, mtime_ms, size_bytes, id
+             FROM entries
+             WHERE instr(normalized_name, ?1) > 0 OR instr(normalized_path, ?1) > 0
+             ORDER BY id
+             LIMIT ?2",
+        )
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let mut rows = statement
+        .query(params![
+            normalized_query,
+            query::max_ranked_file_candidates() as i64
+        ])
+        .map_err(|error| search_index_error(index_dir, error))?;
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| search_index_error(index_dir, error))?
+    {
+        ensure_not_cancelled(cancel)?;
+        let entry_id = row
+            .get::<_, i64>(4)
+            .map_err(|error| search_index_error(index_dir, error))?;
+        if seen_entry_ids.insert(entry_id) {
+            visit(catalog_record_from_row(index_dir, root, row)?)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn scan_file_candidate_fallback_records(
+    connection: &Connection,
+    index_dir: &Path,
+    root: &Path,
+    normalized_query: &str,
+    remaining_candidates: usize,
+    cancel: &CancellationToken,
+    seen_entry_ids: &mut HashSet<i64>,
+    visit: &mut impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
+    let mut visited_count = 0usize;
+    let mut statement = connection
+        .prepare(
+            "SELECT path, kind, mtime_ms, size_bytes, id, normalized_name, normalized_path
+             FROM entries
+             ORDER BY id",
+        )
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| search_index_error(index_dir, error))?;
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| search_index_error(index_dir, error))?
+    {
+        ensure_not_cancelled(cancel)?;
+        let entry_id = row
+            .get::<_, i64>(4)
+            .map_err(|error| search_index_error(index_dir, error))?;
+        if seen_entry_ids.contains(&entry_id) {
+            continue;
+        }
+        let normalized_name = row
+            .get::<_, String>(5)
+            .map_err(|error| search_index_error(index_dir, error))?;
+        let normalized_path = row
+            .get::<_, String>(6)
+            .map_err(|error| search_index_error(index_dir, error))?;
+        if query::file_candidate_fallback_matches(
+            &normalized_name,
+            &normalized_path,
+            normalized_query,
+        ) && seen_entry_ids.insert(entry_id)
+        {
+            visit(catalog_record_from_row(index_dir, root, row)?)?;
+            visited_count += 1;
+            if visited_count >= remaining_candidates {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn failure_from_row(index_dir: &Path, row: &Row<'_>) -> Result<FileSearchIndexFailure, IndexError> {
     let path_bytes = row
         .get::<_, Vec<u8>>(0)
@@ -550,4 +775,12 @@ fn catalog_dir_size_inner(path: &Path) -> std::io::Result<u64> {
 
 fn saturating_u64_to_i64(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
+}
+
+fn ensure_not_cancelled(cancel: &CancellationToken) -> Result<(), IndexError> {
+    if cancel.is_cancelled() {
+        Err(IndexError::Cancelled)
+    } else {
+        Ok(())
+    }
 }

@@ -18,7 +18,7 @@ use crate::ipc::{
 };
 use crate::{
     BuildSelectedPathsRequest, IndexError, IndexMaintenanceHandle, IndexServiceCommand,
-    IndexServiceCore, IndexServiceEvent,
+    IndexServiceCore, IndexServiceEvent, SearchQuery,
 };
 
 const FLOCK_EXCLUSIVE: i32 = 2;
@@ -207,6 +207,9 @@ impl IndexDaemonState {
                     .await?;
                     return Ok(());
                 };
+                if let IndexServiceCommand::Query(query) = command {
+                    return stream_query(core, query, stream).await;
+                }
                 let response = match core.execute(command).await {
                     Ok(event) => IndexResponse::from_event(&event),
                     Err(error) => IndexResponse::Error(error.to_string()),
@@ -273,6 +276,14 @@ impl IndexDaemonCore {
         }
     }
 
+    async fn query_with_cancel(
+        &self,
+        query: SearchQuery,
+        cancel: CancellationToken,
+    ) -> Result<IndexServiceEvent, IndexError> {
+        self.service.query_with_cancel(query, cancel).await
+    }
+
     async fn build_selected_paths_with_cancel(
         &self,
         request: BuildSelectedPathsRequest,
@@ -301,6 +312,30 @@ impl IndexDaemonCore {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         handles.remove(profile_id);
     }
+}
+
+async fn stream_query(
+    core: Arc<IndexDaemonCore>,
+    query: SearchQuery,
+    stream: UnixStream,
+) -> Result<(), IndexClientError> {
+    let cancel = CancellationToken::new();
+    let query = core.query_with_cancel(query, cancel.clone());
+    tokio::pin!(query);
+    let (mut disconnect_reader, mut response_writer) = stream.into_split();
+    let disconnect_cancel = cancel.clone();
+    let disconnect_watch = tokio::spawn(async move {
+        let mut byte = [0; 1];
+        let _ = disconnect_reader.read(&mut byte).await;
+        disconnect_cancel.cancel();
+    });
+
+    let response = match query.await {
+        Ok(event) => IndexResponse::from_event(&event),
+        Err(error) => IndexResponse::Error(error.to_string()),
+    };
+    disconnect_watch.abort();
+    write_frame(&mut response_writer, &response).await
 }
 
 async fn stream_selected_build(

@@ -9,8 +9,9 @@ use std::os::unix::fs::PermissionsExt;
 use exif::{experimental::Writer as ExifWriter, Field, In, Tag, Value};
 use file_index::{
     build_file_search_index, build_file_search_index_for_paths, file_search_index_exists,
-    search_file_index, search_file_tree, search_file_tree_with_cancel, DirectoryErrorPolicy,
-    FileSearchIndexOptions, FileSearchOptions, IndexError,
+    search_file_index, search_file_index_with_cancel, search_file_tree,
+    search_file_tree_with_cancel, DirectoryErrorPolicy, FileSearchIndexOptions, FileSearchOptions,
+    IndexError,
 };
 use tempfile::tempdir;
 

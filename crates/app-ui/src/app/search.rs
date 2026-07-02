@@ -377,12 +377,13 @@ impl FileBrowser {
         }
 
         self.mark_active_search_loading();
-        self.clear_active_search_cancel_token();
+        let cancellation = self.replace_active_search_cancel_token();
         search_command(
             request,
             self.options.clone(),
             self.user_config.clone(),
             self.search_index.profile_id.clone(),
+            cancellation,
         )
     }
 

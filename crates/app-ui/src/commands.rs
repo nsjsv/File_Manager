@@ -166,10 +166,11 @@ pub(crate) fn search_command(
     options: ScanOptions,
     config: config::UserConfig,
     profile_id: String,
+    cancellation: CancellationToken,
 ) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
-        load_search_matches(request, options, config, profile_id),
+        load_search_matches(request, options, config, profile_id, cancellation),
         move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
     )
 }
@@ -545,8 +546,9 @@ async fn load_search_matches(
     _options: ScanOptions,
     config: config::UserConfig,
     profile_id: String,
+    cancellation: CancellationToken,
 ) -> Result<FileSearchOutcome, String> {
-    match search_index_daemon::execute_index_command(
+    match search_index_daemon::execute_index_command_with_cancel(
         config.search_index_dir,
         IndexServiceCommand::Query(SearchQuery {
             profile_id,
@@ -555,6 +557,7 @@ async fn load_search_matches(
             mode: request.mode,
             limit: SEARCH_MATCH_LIMIT,
         }),
+        cancellation,
     )
     .await?
     {

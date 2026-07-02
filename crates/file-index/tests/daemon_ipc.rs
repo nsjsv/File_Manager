@@ -2,10 +2,11 @@ use std::time::Duration;
 
 use file_index::daemon::{run, IndexDaemonConfig};
 use file_index::{
-    DirectoryErrorPolicy, IndexClient, IndexClientError, IndexProfile, IndexServiceCommand,
-    IndexServiceEvent, SearchMode, SearchQuery,
+    DirectoryErrorPolicy, IndexClient, IndexClientError, IndexError, IndexProfile,
+    IndexServiceCommand, IndexServiceEvent, SearchMode, SearchQuery,
 };
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn daemon_client_configures_builds_and_queries_profile() {
@@ -118,6 +119,64 @@ async fn daemon_subscribe_observes_until_explicit_start_maintenance() {
         }
     );
     wait_for_subscription_watch_started(&mut subscription, &root).await;
+    daemon.abort();
+}
+
+#[tokio::test]
+async fn daemon_query_with_cancel_returns_cancelled() {
+    let dir = tempdir().unwrap();
+    let socket_path = dir.path().join("file-indexd.sock");
+    let index_base_dir = dir.path().join("index-base");
+    let root = dir.path().join("root");
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    tokio::fs::write(root.join("needle.txt"), b"match")
+        .await
+        .unwrap();
+    let daemon = tokio::spawn(run(IndexDaemonConfig {
+        socket_path: socket_path.clone(),
+    }));
+    let client = IndexClient::new(index_base_dir, socket_path);
+    wait_for_daemon(&client).await;
+    client
+        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile {
+            id: "main".to_owned(),
+            roots: vec![root.clone()],
+            include_hidden: false,
+            exclude_patterns: Vec::new(),
+            directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
+            content: Default::default(),
+            media: Default::default(),
+        }))
+        .await
+        .unwrap();
+    client
+        .execute(IndexServiceCommand::Rebuild {
+            profile_id: "main".to_owned(),
+            root: root.clone(),
+        })
+        .await
+        .unwrap();
+
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let error = client
+        .execute_with_cancel(
+            IndexServiceCommand::Query(SearchQuery {
+                profile_id: "main".to_owned(),
+                root,
+                text: "needle".to_owned(),
+                mode: SearchMode::Files,
+                limit: 10,
+            }),
+            cancellation,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        IndexClientError::Service(message) if message == IndexError::Cancelled.to_string()
+    ));
     daemon.abort();
 }
 

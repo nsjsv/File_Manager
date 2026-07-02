@@ -7,7 +7,7 @@ use crate::profile::{MediaMetadataScope, SearchMode};
 
 pub(crate) const DEFAULT_SEARCH_LIMIT: usize = 50;
 pub(crate) const EXTRACTOR_VERSION: u32 = 4;
-pub(crate) const INDEX_FORMAT_VERSION: u32 = 7;
+pub(crate) const INDEX_FORMAT_VERSION: u32 = 8;
 pub(crate) const IGNORE_POLICY_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

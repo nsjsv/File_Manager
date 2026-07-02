@@ -92,6 +92,25 @@ pub(super) async fn execute_index_command(
     .await
 }
 
+pub(super) async fn execute_index_command_with_cancel(
+    index_base_dir: PathBuf,
+    command: IndexServiceCommand,
+    cancel: CancellationToken,
+) -> Result<IndexServiceEvent, String> {
+    ensure_index_daemon_started(index_base_dir.clone()).await?;
+    let client = IndexClient::for_index_base_dir(index_base_dir);
+    let command_for_retry = command.clone();
+    let cancel_for_retry = cancel.clone();
+    let first_result = client.execute_with_cancel(command.clone(), cancel).await;
+    run_with_protocol_retry(first_result, None, client.clone(), || {
+        let client = IndexClient::for_index_base_dir(client.index_base_dir().to_path_buf());
+        let command = command_for_retry.clone();
+        let cancel = cancel_for_retry.clone();
+        async move { client.execute_with_cancel(command, cancel).await }
+    })
+    .await
+}
+
 pub(super) async fn subscribe_index_maintenance(
     index_base_dir: PathBuf,
     profile_id: String,

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::{env, io};
 
 use tokio::net::UnixStream;
+use tokio_util::sync::CancellationToken;
 
 use crate::service::{IndexServiceCommand, IndexServiceEvent};
 use crate::{FileSearchIndexProgress, IndexError};
@@ -69,6 +70,15 @@ impl IndexClient {
         self.execute_with_progress(command, |_| {}).await
     }
 
+    pub async fn execute_with_cancel(
+        &self,
+        command: IndexServiceCommand,
+        cancel: CancellationToken,
+    ) -> Result<IndexServiceEvent, IndexClientError> {
+        self.execute_with_progress_and_cancel(command, cancel, |_| {})
+            .await
+    }
+
     pub async fn subscribe_maintenance(
         &self,
         profile_id: impl Into<String>,
@@ -94,7 +104,7 @@ impl IndexClient {
     pub async fn build_selected_paths_with_progress_and_cancel(
         &self,
         request: crate::BuildSelectedPathsRequest,
-        cancel: tokio_util::sync::CancellationToken,
+        cancel: CancellationToken,
         progress: impl FnMut(FileSearchIndexProgress) + Send,
     ) -> Result<IndexServiceEvent, IndexClientError> {
         self.execute_with_progress_and_cancel(
@@ -131,7 +141,7 @@ impl IndexClient {
     async fn execute_with_progress_and_cancel(
         &self,
         command: IndexServiceCommand,
-        cancel: tokio_util::sync::CancellationToken,
+        cancel: CancellationToken,
         mut progress: impl FnMut(FileSearchIndexProgress) + Send,
     ) -> Result<IndexServiceEvent, IndexClientError> {
         let mut stream = self.connect().await?;

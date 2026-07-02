@@ -203,6 +203,22 @@ fn indexed_contents_search_stale_index_waits_for_rebuild_without_tree_fallback()
         .contains(&PathBuf::from("/tmp")));
 }
 
+#[test]
+fn indexed_ready_search_keeps_cancel_token_for_superseding_queries() {
+    let mut browser = browser_with_search_state(search_state_for_request_generation(1));
+    browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
+    browser.search_index.statuses.insert(
+        PathBuf::from("/tmp"),
+        search_index_status(PathBuf::from("/tmp"), true, false),
+    );
+
+    let _command = browser.load_search_matches();
+
+    let search = browser.search.as_ref().expect("search state remains open");
+    assert!(search.is_loading);
+    assert!(search.search_cancel.is_some());
+}
+
 fn search_state_for_request_generation(request_generation: u64) -> SearchState {
     SearchState {
         scope: SearchScope::CurrentDirectory,

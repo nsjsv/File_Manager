@@ -13,7 +13,7 @@ pub(crate) const COLUMN_THUMBNAIL_SIZE: f32 = 18.0;
 pub(crate) const TRANSFER_CONFLICT_THUMBNAIL_EDGE: u32 = 96;
 pub(crate) const PREVIEW_THUMBNAIL_MAX_EDGE: u32 = 2048;
 
-const MAX_READY_THUMBNAILS: usize = 1200;
+const MAX_READY_THUMBNAILS: usize = 256;
 const MAX_IN_FLIGHT: usize = 2;
 const PREVIEW_IN_FLIGHT_EXTRA: usize = 1;
 const FAILURE_BACKOFF: Duration = Duration::from_secs(45);
@@ -573,5 +573,38 @@ mod tests {
 
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].request, sibling_request);
+    }
+
+    #[test]
+    fn ready_cache_trims_oldest_entries() {
+        let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
+        let first_request = thumbnail_request("image-0.png", 0);
+        let second_request = thumbnail_request("image-1.png", 1);
+        let newest_request = thumbnail_request("image-newest.png", 9999);
+
+        for index in 0..MAX_READY_THUMBNAILS {
+            let request = thumbnail_request(&format!("image-{index}.png"), index as u64);
+            cache.insert_ready(cached_thumbnail_for_request(&request), LIST_THUMBNAIL_EDGE);
+        }
+        cache.insert_ready(
+            cached_thumbnail_for_request(&newest_request),
+            LIST_THUMBNAIL_EDGE,
+        );
+
+        assert_eq!(cache.ready.len(), MAX_READY_THUMBNAILS);
+        assert!(cache.ready_for_request(&first_request).is_none());
+        assert!(cache.ready_for_request(&second_request).is_some());
+        assert!(cache.ready_for_request(&newest_request).is_some());
+    }
+
+    fn cached_thumbnail_for_request(request: &ThumbnailRequest) -> CachedThumbnail {
+        CachedThumbnail {
+            key: request.key(),
+            source: request.source.clone(),
+            output: PathBuf::from(format!("{}.thumb.png", request.key().as_str())),
+            width: LIST_THUMBNAIL_EDGE,
+            height: LIST_THUMBNAIL_EDGE,
+            cache_hit: true,
+        }
     }
 }

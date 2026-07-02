@@ -322,6 +322,33 @@ async fn file_search_index_respects_result_limit() {
     assert_eq!(search.matches.len(), 5);
 }
 
+#[tokio::test]
+async fn file_search_index_fallback_candidates_respect_result_limit() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    for index in 0..20 {
+        fs::write(
+            dir.path()
+                .join(format!("quarterly-search-memo-{index:02}.md")),
+            b"note",
+        )
+        .unwrap();
+    }
+
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
+    let search = search_file_index(index_dir.path(), dir.path(), "qsm", search_options(true, 5))
+        .await
+        .unwrap();
+
+    assert_eq!(search.matches.len(), 5);
+    assert!(search.matches.iter().all(|search_match| search_match
+        .name()
+        .to_string_lossy()
+        .contains("quarterly-search-memo")));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn file_search_index_records_unreadable_directory_and_continues() {
@@ -579,6 +606,30 @@ async fn search_file_tree_with_cancel_returns_cancelled() {
         search_file_tree_with_cancel(dir.path(), "note", search_options(true, 10), cancellation)
             .await
             .unwrap_err();
+
+    assert!(matches!(error, IndexError::Cancelled));
+}
+
+#[tokio::test]
+async fn file_search_index_with_cancel_returns_cancelled() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    fs::write(dir.path().join("note.txt"), b"note").unwrap();
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
+        .await
+        .unwrap();
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+
+    let error = search_file_index_with_cancel(
+        index_dir.path(),
+        dir.path(),
+        "note",
+        search_options(true, 10),
+        cancellation,
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, IndexError::Cancelled));
 }

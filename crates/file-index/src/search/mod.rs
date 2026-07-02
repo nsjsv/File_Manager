@@ -153,6 +153,16 @@ pub async fn search_file_index(
     query: impl AsRef<str>,
     options: FileSearchOptions,
 ) -> Result<FileSearchOutcome, IndexError> {
+    search_file_index_with_cancel(index_dir, root, query, options, CancellationToken::new()).await
+}
+
+pub async fn search_file_index_with_cancel(
+    index_dir: impl AsRef<Path>,
+    root: impl AsRef<Path>,
+    query: impl AsRef<str>,
+    options: FileSearchOptions,
+    cancel: CancellationToken,
+) -> Result<FileSearchOutcome, IndexError> {
     let root = root.as_ref().to_path_buf();
     let index_dir = index_dir.as_ref().to_path_buf();
     let query = query.as_ref().trim().to_owned();
@@ -162,6 +172,9 @@ pub async fn search_file_index(
     let join_root = root.clone();
 
     tokio::task::spawn_blocking(move || {
+        if cancel.is_cancelled() {
+            return Err(IndexError::Cancelled);
+        }
         let runtime = query_runtime_for_index(
             &index_dir,
             &root,
@@ -172,7 +185,7 @@ pub async fn search_file_index(
             options.content_max_file_bytes,
             options.media_metadata_scope,
         )?;
-        let matches = search_index_catalog_and_tantivy(&runtime, &query, &options)?;
+        let matches = search_index_catalog_and_tantivy(&runtime, &query, &options, &cancel)?;
         Ok(FileSearchOutcome {
             root,
             matches,
