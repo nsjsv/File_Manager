@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+mod control_snapshot;
 mod control_store;
 pub use control_store::ProfileStore;
 

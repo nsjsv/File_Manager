@@ -103,6 +103,97 @@ pub(crate) fn crawl_search_records(
     Ok((records, skipped))
 }
 
+pub(crate) fn crawl_search_records_with_callback(
+    root: &Path,
+    options: &SearchCrawlOptions,
+    mut visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<Vec<ScanWarning>, IndexError> {
+    std_fs::read_dir(root).map_err(|source| IndexError::ReadDirectory {
+        path: root.to_path_buf(),
+        source,
+    })?;
+
+    let mut skipped = Vec::new();
+    let mut skipped_roots = Vec::new();
+    let mut discarded_records = Vec::new();
+    let mut indexed_count = 0usize;
+
+    for result in search_walk_builder(root, root, options).build() {
+        options.ensure_not_cancelled()?;
+        let dir_entry = match result {
+            Ok(dir_entry) => dir_entry,
+            Err(error) => {
+                record_walk_error(
+                    root,
+                    error,
+                    options,
+                    &mut discarded_records,
+                    &mut skipped,
+                    &mut skipped_roots,
+                )?;
+                continue;
+            }
+        };
+        if dir_entry.depth() == 0 {
+            continue;
+        }
+
+        let path = dir_entry.into_path();
+        if skipped_roots
+            .iter()
+            .any(|skipped| path.starts_with(skipped))
+        {
+            continue;
+        }
+        let metadata = match std_fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(source) => {
+                skipped.push(ScanWarning {
+                    path,
+                    message: source.to_string(),
+                });
+                continue;
+            }
+        };
+
+        let kind = file_kind_from_metadata(&metadata);
+        if kind == FileKind::Directory {
+            match std_fs::read_dir(&path) {
+                Ok(_) => {}
+                Err(source) => {
+                    if options.directory_error_policy == DirectoryErrorPolicy::Abort {
+                        return Err(IndexError::ReadDirectory { path, source });
+                    }
+                    if !skipped_roots
+                        .iter()
+                        .any(|skipped| path.starts_with(skipped))
+                    {
+                        skipped_roots.push(path.clone());
+                    }
+                    if !skipped.iter().any(|warning| warning.path == path) {
+                        skipped.push(ScanWarning {
+                            path,
+                            message: source.to_string(),
+                        });
+                    }
+                    continue;
+                }
+            }
+        }
+
+        visit(SearchCatalogRecord::from_path_with_metadata(
+            root, path, kind, &metadata,
+        ))?;
+        indexed_count += 1;
+
+        if options.throttle && indexed_count % INDEX_THROTTLE_EVERY == 0 {
+            thread::sleep(INDEX_THROTTLE_SLEEP);
+        }
+    }
+
+    Ok(skipped)
+}
+
 pub(crate) fn crawl_selected_search_records_with_progress(
     catalog_root: &Path,
     selected_paths: &[PathBuf],

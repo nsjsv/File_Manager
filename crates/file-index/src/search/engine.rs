@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use file_core::ScanWarning;
 
 use super::cache::SearchQueryRuntime;
-use super::catalog::{SearchCatalog, SearchCatalogRecord};
+use super::catalog::SearchCatalogRecord;
 use super::extractor::{extract_media_documents, extract_text_documents};
 use super::full_text::{search_tantivy_index, write_tantivy_index, FullTextSearchHit};
-use super::query;
 use super::types::{FileSearchMatch, FileSearchOptions, SearchResultSource};
+use super::{query, store};
 use crate::profile::MediaMetadataScope;
 use crate::{IndexError, SearchMode};
 
@@ -46,11 +46,7 @@ pub(crate) fn search_index_catalog_and_tantivy(
     options: &FileSearchOptions,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
     match options.mode {
-        SearchMode::Files => Ok(query::search_catalog(
-            runtime.catalog(),
-            query,
-            options.limit.max(1),
-        )),
+        SearchMode::Files => search_catalog_records(runtime, query, options),
         SearchMode::Contents => search_tantivy_source(
             runtime,
             query,
@@ -66,7 +62,7 @@ pub(crate) fn search_index_catalog_and_tantivy(
             options.limit,
         ),
         SearchMode::All => {
-            let mut matches = query::search_catalog(runtime.catalog(), query, options.limit.max(1));
+            let mut matches = search_catalog_records(runtime, query, options)?;
             let mut sources = Vec::with_capacity(2);
             if options.content_index_enabled {
                 sources.push(SearchResultSource::Contents);
@@ -85,6 +81,29 @@ pub(crate) fn search_index_catalog_and_tantivy(
             Ok(merge_search_matches(matches, options.limit.max(1)))
         }
     }
+}
+
+fn search_catalog_records(
+    runtime: &SearchQueryRuntime,
+    query_text: &str,
+    options: &FileSearchOptions,
+) -> Result<Vec<FileSearchMatch>, IndexError> {
+    let mut collector = query::SearchMatchCollector::new(query_text, options.limit.max(1));
+    store::scan_catalog_records(
+        runtime.index_dir(),
+        runtime.root(),
+        options.include_hidden,
+        &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_metadata_scope,
+        |record| {
+            collector.push_record(&record);
+            Ok(())
+        },
+    )?;
+    Ok(collector.finish())
 }
 
 fn search_tantivy_source(
@@ -107,22 +126,29 @@ fn search_tantivy_matches(
     limit: usize,
 ) -> Result<Vec<FileSearchMatch>, IndexError> {
     let full_text_runtime = runtime.full_text_runtime()?;
-    Ok(full_text_hits_to_matches(
-        runtime.catalog(),
+    full_text_hits_to_matches(
+        runtime,
         search_tantivy_index(full_text_runtime.as_deref(), query, sources, limit)?,
-    ))
+    )
 }
 
 fn full_text_hits_to_matches(
-    catalog: &SearchCatalog,
+    runtime: &SearchQueryRuntime,
     hits: Vec<FullTextSearchHit>,
-) -> Vec<FileSearchMatch> {
-    hits.into_iter()
-        .filter_map(|hit| {
-            let record = catalog.record_by_storage_key(&hit.storage_key)?;
-            Some(record.to_search_match(hit.score, hit.source, hit.snippet, hit.media))
-        })
-        .collect()
+) -> Result<Vec<FileSearchMatch>, IndexError> {
+    let mut matches = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let Some(record) = store::read_catalog_record_by_storage_key(
+            runtime.index_dir(),
+            runtime.root(),
+            &hit.storage_key,
+        )?
+        else {
+            continue;
+        };
+        matches.push(record.to_search_match(hit.score, hit.source, hit.snippet, hit.media));
+    }
+    Ok(matches)
 }
 
 fn merge_search_matches(matches: Vec<FileSearchMatch>, limit: usize) -> Vec<FileSearchMatch> {

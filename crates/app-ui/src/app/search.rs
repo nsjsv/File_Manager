@@ -54,7 +54,7 @@ impl FileBrowser {
         });
 
         let index_command = if self.user_config.search_mode == SearchBackendMode::Indexed {
-            self.ensure_search_index(root)
+            self.refresh_search_index_status_for_root(root)
         } else {
             Task::none()
         };
@@ -124,7 +124,7 @@ impl FileBrowser {
         search.index_error = None;
         search.is_indexing = false;
         let index_command = if self.user_config.search_mode == SearchBackendMode::Indexed {
-            self.ensure_search_index(root)
+            self.refresh_search_index_status_for_root(root)
         } else {
             Task::none()
         };
@@ -345,14 +345,35 @@ impl FileBrowser {
         self.sync_active_search_index_status_for_root(&root);
         let status = self.search_index.statuses.get(&root).cloned();
 
+        if status.is_none() {
+            let status_command = self.refresh_search_index_status_for_root(root);
+            self.mark_active_search_loading();
+            self.clear_active_search_cancel_token();
+            return status_command;
+        }
+
         if status
             .as_ref()
-            .is_none_or(|status| !status.exists || status.stale)
+            .is_some_and(|status| !status.exists || status.stale)
         {
             let index_command = self.ensure_search_index(root);
             self.mark_active_search_loading();
-            self.clear_active_search_cancel_token();
-            return index_command;
+            if request.mode == SearchMode::Files {
+                let cancellation = self.replace_active_search_cancel_token();
+                return Task::batch([
+                    index_command,
+                    search_tree_command(
+                        request,
+                        self.options.clone(),
+                        self.user_config.search_index_exclude_patterns.clone(),
+                        self.user_config.search_index_directory_error_policy,
+                        cancellation,
+                    ),
+                ]);
+            } else {
+                self.clear_active_search_cancel_token();
+                return index_command;
+            }
         }
 
         self.mark_active_search_loading();

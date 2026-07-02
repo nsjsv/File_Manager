@@ -16,6 +16,52 @@ const FUZZY_NAME_BONUS: u32 = 20_000;
 const FUZZY_PATH_BONUS: u32 = 10_000;
 const MAX_RANKED_CANDIDATES: usize = 50_000;
 
+pub(crate) struct SearchMatchCollector {
+    normalized_query: String,
+    pattern: Pattern,
+    matcher: Matcher,
+    limit: usize,
+    spill_limit: usize,
+    matches: Vec<FileSearchMatch>,
+}
+
+impl SearchMatchCollector {
+    pub(crate) fn new(query: &str, limit: usize) -> Self {
+        let limit = limit.max(1);
+        Self {
+            normalized_query: normalize_search_text(query.trim()),
+            pattern: Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart),
+            matcher: Matcher::new(Config::DEFAULT),
+            limit,
+            spill_limit: limit.saturating_mul(2).max(128),
+            matches: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push_record(&mut self, record: &SearchCatalogRecord) {
+        if self.normalized_query.is_empty() {
+            return;
+        }
+        let Some(rank_score) = rank_record(
+            record,
+            &self.normalized_query,
+            &self.pattern,
+            &mut self.matcher,
+        ) else {
+            return;
+        };
+        self.matches.push(record.to_match(rank_score));
+        if self.matches.len() > self.spill_limit {
+            sort_limited_search_matches(&mut self.matches, self.limit);
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<FileSearchMatch> {
+        sort_limited_search_matches(&mut self.matches, self.limit);
+        self.matches
+    }
+}
+
 pub(crate) fn search_catalog(
     catalog: &SearchCatalog,
     query: &str,

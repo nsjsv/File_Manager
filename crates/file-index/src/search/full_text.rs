@@ -4,8 +4,8 @@ use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
 use tantivy::snippet::SnippetGenerator;
-use tantivy::IndexReader;
 use tantivy::{doc, Index, TantivyDocument};
+use tantivy::{IndexReader, IndexWriter};
 
 use super::extractor::{ExtractedMediaDocument, ExtractedTextDocument};
 use super::path_encoding::path_storage_key;
@@ -28,6 +28,7 @@ const TITLE_FIELD: &str = "title";
 const ARTIST_FIELD: &str = "artist";
 const EXIF_FIELD: &str = "exif";
 const RANK_HINT_FIELD: &str = "rank_hint";
+const TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 15_000_000;
 
 #[derive(Clone)]
 struct SearchSchema {
@@ -56,6 +57,12 @@ pub(crate) struct TantivySearchRuntime {
     tantivy_dir: PathBuf,
 }
 
+pub(crate) struct TantivyIndexWriter {
+    writer: IndexWriter,
+    schema: SearchSchema,
+    tantivy_dir: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FullTextSearchHit {
     pub(crate) storage_key: String,
@@ -70,64 +77,105 @@ pub(crate) fn write_tantivy_index(
     text_documents: &[ExtractedTextDocument],
     media_documents: &[ExtractedMediaDocument],
 ) -> Result<(), IndexError> {
-    let schema = search_schema();
-    let tantivy_dir = tantivy_dir(index_dir);
-    std::fs::create_dir_all(&tantivy_dir)
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-    let index = Index::create_in_dir(&tantivy_dir, schema.schema.clone())
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-    let mut writer = index
-        .writer(50_000_000)
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-
+    let mut writer = TantivyIndexWriter::create(index_dir)?;
     for text in text_documents {
+        writer.add_text_document(text)?;
+    }
+    for media in media_documents {
+        writer.add_media_document(media)?;
+    }
+    writer.finish()
+}
+
+impl TantivyIndexWriter {
+    pub(crate) fn create(index_dir: &Path) -> Result<Self, IndexError> {
+        let schema = search_schema();
+        let tantivy_dir = tantivy_dir(index_dir);
+        std::fs::create_dir_all(&tantivy_dir)
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+        let index = Index::create_in_dir(&tantivy_dir, schema.schema.clone())
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+        let writer = index
+            .writer(TANTIVY_WRITER_MEMORY_BUDGET_BYTES)
+            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+
+        Ok(Self {
+            writer,
+            schema,
+            tantivy_dir,
+        })
+    }
+
+    pub(crate) fn add_text_document(
+        &mut self,
+        text: &ExtractedTextDocument,
+    ) -> Result<(), IndexError> {
         let mut document = doc!(
-            schema.path_key => path_storage_key(&text.path),
-            schema.path => text.path.to_string_lossy().into_owned(),
-            schema.relative_path => text.relative_path.to_string_lossy().into_owned(),
-            schema.name => text.name.clone(),
-            schema.source => source_key(SearchResultSource::Contents),
-            schema.body => text.content.clone(),
-            schema.rank_hint => text.rank_hint,
+            self.schema.path_key => path_storage_key(&text.path),
+            self.schema.path => text.path.to_string_lossy().into_owned(),
+            self.schema.relative_path => text.relative_path.to_string_lossy().into_owned(),
+            self.schema.name => text.name.clone(),
+            self.schema.source => source_key(SearchResultSource::Contents),
+            self.schema.body => text.content.clone(),
+            self.schema.rank_hint => text.rank_hint,
         );
         if text.truncated {
-            document.add_text(schema.body, " content truncated");
+            document.add_text(self.schema.body, " content truncated");
         }
-        writer
+        self.writer
             .add_document(document)
-            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+            .map(|_| ())
+            .map_err(|error| IndexError::store(&self.tantivy_dir, error))
     }
 
-    for media in media_documents {
+    pub(crate) fn add_media_document(
+        &mut self,
+        media: &ExtractedMediaDocument,
+    ) -> Result<(), IndexError> {
         let metadata = &media.metadata;
         let mut document = doc!(
-            schema.path_key => path_storage_key(&media.path),
-            schema.path => media.path.to_string_lossy().into_owned(),
-            schema.relative_path => media.relative_path.to_string_lossy().into_owned(),
-            schema.name => media.name.clone(),
-            schema.source => source_key(SearchResultSource::Media),
-            schema.body => media.searchable_text.clone(),
-            schema.media_kind => media_kind_key(metadata.media_kind),
-            schema.rank_hint => media.rank_hint,
+            self.schema.path_key => path_storage_key(&media.path),
+            self.schema.path => media.path.to_string_lossy().into_owned(),
+            self.schema.relative_path => media.relative_path.to_string_lossy().into_owned(),
+            self.schema.name => media.name.clone(),
+            self.schema.source => source_key(SearchResultSource::Media),
+            self.schema.body => media.searchable_text.clone(),
+            self.schema.media_kind => media_kind_key(metadata.media_kind),
+            self.schema.rank_hint => media.rank_hint,
         );
-        add_optional_u64(&mut document, schema.width, metadata.width.map(u64::from));
-        add_optional_u64(&mut document, schema.height, metadata.height.map(u64::from));
-        add_optional_u64(&mut document, schema.duration_ms, metadata.duration_ms);
-        add_optional_text(&mut document, schema.codec, metadata.codec.as_deref());
-        add_optional_text(&mut document, schema.title, metadata.title.as_deref());
-        add_optional_text(&mut document, schema.artist, metadata.artist.as_deref());
+        add_optional_u64(
+            &mut document,
+            self.schema.width,
+            metadata.width.map(u64::from),
+        );
+        add_optional_u64(
+            &mut document,
+            self.schema.height,
+            metadata.height.map(u64::from),
+        );
+        add_optional_u64(&mut document, self.schema.duration_ms, metadata.duration_ms);
+        add_optional_text(&mut document, self.schema.codec, metadata.codec.as_deref());
+        add_optional_text(&mut document, self.schema.title, metadata.title.as_deref());
+        add_optional_text(
+            &mut document,
+            self.schema.artist,
+            metadata.artist.as_deref(),
+        );
         for exif in &metadata.exif {
-            document.add_text(schema.exif, format!("{}\t{}", exif.tag, exif.value));
+            document.add_text(self.schema.exif, format!("{}\t{}", exif.tag, exif.value));
         }
-        writer
+        self.writer
             .add_document(document)
-            .map_err(|error| IndexError::store(&tantivy_dir, error))?;
+            .map(|_| ())
+            .map_err(|error| IndexError::store(&self.tantivy_dir, error))
     }
 
-    writer
-        .commit()
-        .map_err(|error| IndexError::store(&tantivy_dir, error))?;
-    Ok(())
+    pub(crate) fn finish(mut self) -> Result<(), IndexError> {
+        self.writer
+            .commit()
+            .map_err(|error| IndexError::store(&self.tantivy_dir, error))?;
+        Ok(())
+    }
 }
 
 impl TantivySearchRuntime {

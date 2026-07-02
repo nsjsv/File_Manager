@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::catalog::SearchCatalog;
 use super::full_text::TantivySearchRuntime;
 use super::ignore_policy::exclude_rules_hash;
-use super::manifest::{SearchCatalogIdentity, SearchIndexManifest};
+use super::manifest::SearchCatalogIdentity;
 use super::path_encoding::path_storage_key;
 use super::store;
 use super::types::DirectoryErrorPolicy;
@@ -26,8 +25,8 @@ struct QueryRuntimeCacheKey {
 
 pub(crate) struct SearchQueryRuntime {
     index_dir: PathBuf,
+    root: PathBuf,
     identity: SearchCatalogIdentity,
-    catalog: Arc<SearchCatalog>,
     full_text_runtime: Mutex<Option<Option<Arc<TantivySearchRuntime>>>>,
 }
 
@@ -70,58 +69,13 @@ pub(crate) fn query_runtime_for_index(
         return Ok(runtime);
     }
 
-    let (manifest, records) = store::load_catalog(
-        index_dir,
-        root,
-        include_hidden,
-        exclude_patterns,
-        directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
-        media_metadata_scope,
-    )?;
-    let catalog = Arc::new(SearchCatalog::from_records(
-        root.to_path_buf(),
-        records,
-        Some(&manifest),
-    ));
     let runtime = Arc::new(SearchQueryRuntime::new(
         index_dir,
+        root,
         manifest.identity(),
-        catalog,
     ));
     cache_runtime(key, Arc::clone(&runtime));
     Ok(runtime)
-}
-
-pub(crate) fn cache_built_catalog(
-    index_dir: &Path,
-    root: &Path,
-    include_hidden: bool,
-    exclude_patterns: &[String],
-    directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
-    media_metadata_scope: MediaMetadataScope,
-    manifest: &SearchIndexManifest,
-    catalog: SearchCatalog,
-) {
-    let key = QueryRuntimeCacheKey::new(
-        index_dir,
-        root,
-        include_hidden,
-        exclude_patterns,
-        directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
-        media_metadata_scope,
-    );
-    let catalog = Arc::new(catalog);
-    let identity = manifest.identity();
-    if catalog.identity() == Some(&identity) {
-        let runtime = Arc::new(SearchQueryRuntime::new(index_dir, identity, catalog));
-        cache_runtime(key, runtime);
-    }
 }
 
 pub(crate) fn clear_query_cache() {
@@ -156,17 +110,21 @@ fn loaded_query_runtimes() -> &'static Mutex<HashMap<QueryRuntimeCacheKey, Arc<S
 }
 
 impl SearchQueryRuntime {
-    fn new(index_dir: &Path, identity: SearchCatalogIdentity, catalog: Arc<SearchCatalog>) -> Self {
+    fn new(index_dir: &Path, root: &Path, identity: SearchCatalogIdentity) -> Self {
         Self {
             index_dir: index_dir.to_path_buf(),
+            root: root.to_path_buf(),
             identity,
-            catalog,
             full_text_runtime: Mutex::new(None),
         }
     }
 
-    pub(crate) fn catalog(&self) -> &SearchCatalog {
-        self.catalog.as_ref()
+    pub(crate) fn index_dir(&self) -> &Path {
+        &self.index_dir
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 
     pub(crate) fn full_text_runtime(

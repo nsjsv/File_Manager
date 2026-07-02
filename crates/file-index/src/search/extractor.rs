@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -67,7 +67,7 @@ pub(crate) fn extract_media_documents(
     (documents, warnings)
 }
 
-fn extract_text_document(
+pub(crate) fn extract_text_document(
     record: &SearchCatalogRecord,
     max_file_bytes: u64,
 ) -> Result<Option<ExtractedTextDocument>, ScanWarning> {
@@ -75,17 +75,25 @@ fn extract_text_document(
         return Ok(None);
     }
 
-    let bytes = fs::read(&record.path).map_err(|error| ScanWarning {
+    let file = fs::File::open(&record.path).map_err(|error| ScanWarning {
         path: record.path.clone(),
         message: error.to_string(),
     })?;
+    let mut bytes = Vec::new();
+    let mut reader = file.take(max_file_bytes.saturating_add(1));
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| ScanWarning {
+            path: record.path.clone(),
+            message: error.to_string(),
+        })?;
     if looks_binary(&bytes) {
         return Ok(None);
     }
 
     let max_len = usize::try_from(max_file_bytes).unwrap_or(usize::MAX);
     let truncated = bytes.len() > max_len;
-    let indexed_bytes = if truncated { &bytes[..max_len] } else { &bytes };
+    let indexed_bytes = &bytes[..bytes.len().min(max_len)];
     let content = String::from_utf8_lossy(indexed_bytes).into_owned();
     if content.trim().is_empty() {
         return Ok(None);
@@ -143,7 +151,7 @@ fn looks_binary(bytes: &[u8]) -> bool {
     sample.contains(&0)
 }
 
-fn extract_media_document(
+pub(crate) fn extract_media_document(
     record: &SearchCatalogRecord,
     scope: MediaMetadataScope,
 ) -> Result<Option<ExtractedMediaDocument>, ScanWarning> {
@@ -194,17 +202,16 @@ fn media_metadata_for_path(
 ) -> Result<Option<MediaSearchMetadata>, image::ImageError> {
     match kind {
         SupportedMediaKind::Image => {
-            let (width, height) = image::image_dimensions(path)?;
-            Ok(Some(MediaSearchMetadata {
-                media_kind: MediaSearchKind::Image,
-                width: Some(width),
-                height: Some(height),
-                duration_ms: None,
-                codec: None,
-                title: None,
-                artist: None,
-                exif: image_exif_fields(path),
-            }))
+            let metadata = match image_dimensions_from_content(path) {
+                Ok((width, height)) => {
+                    image_metadata(Some(width), Some(height), image_exif_fields(path))
+                }
+                Err(image::ImageError::IoError(error)) => {
+                    return Err(image::ImageError::IoError(error));
+                }
+                Err(_) => image_metadata(None, None, Vec::new()),
+            };
+            Ok(Some(metadata))
         }
         SupportedMediaKind::Audio => Ok(Some(MediaSearchMetadata {
             media_kind: MediaSearchKind::Audio,
@@ -226,6 +233,29 @@ fn media_metadata_for_path(
             artist: None,
             exif: Vec::new(),
         })),
+    }
+}
+
+fn image_dimensions_from_content(path: &Path) -> Result<(u32, u32), image::ImageError> {
+    image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .into_dimensions()
+}
+
+fn image_metadata(
+    width: Option<u32>,
+    height: Option<u32>,
+    exif: Vec<MediaExifField>,
+) -> MediaSearchMetadata {
+    MediaSearchMetadata {
+        media_kind: MediaSearchKind::Image,
+        width,
+        height,
+        duration_ms: None,
+        codec: None,
+        title: None,
+        artist: None,
+        exif,
     }
 }
 
@@ -391,6 +421,91 @@ struct FfprobeTags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn text_extractor_reads_only_configured_prefix() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("long.md");
+        fs::write(&path, b"abcdef").unwrap();
+        let record = catalog_file_record(dir.path(), path);
+
+        let document = extract_text_document(&record, 4).unwrap().unwrap();
+
+        assert_eq!(document.content, "abcd");
+        assert!(document.truncated);
+    }
+
+    #[test]
+    fn media_extractor_indexes_unsupported_image_without_warning() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("logo.svg");
+        fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
+        let record = catalog_file_record(dir.path(), path);
+
+        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+
+        assert!(warnings.is_empty());
+        assert_eq!(documents.len(), 1);
+        let metadata = &documents[0].metadata;
+        assert_eq!(metadata.media_kind, MediaSearchKind::Image);
+        assert_eq!(metadata.width, None);
+        assert_eq!(metadata.height, None);
+        assert!(metadata.exif.is_empty());
+    }
+
+    #[test]
+    fn media_extractor_indexes_bad_image_bytes_without_warning() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wechat-thumb.jpg");
+        fs::write(&path, b"\x89PNG\r\n\x1a\nnot a complete image").unwrap();
+        let record = catalog_file_record(dir.path(), path);
+
+        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+
+        assert!(warnings.is_empty());
+        assert_eq!(documents.len(), 1);
+        let metadata = &documents[0].metadata;
+        assert_eq!(metadata.media_kind, MediaSearchKind::Image);
+        assert_eq!(metadata.width, None);
+        assert_eq!(metadata.height, None);
+        assert!(metadata.exif.is_empty());
+    }
+
+    #[test]
+    fn media_extractor_reads_dimensions_from_image_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wechat-thumb.jpg");
+        image::RgbImage::new(7, 11)
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        let record = catalog_file_record(dir.path(), path);
+
+        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+
+        assert!(warnings.is_empty());
+        assert_eq!(documents.len(), 1);
+        let metadata = &documents[0].metadata;
+        assert_eq!(metadata.width, Some(7));
+        assert_eq!(metadata.height, Some(11));
+    }
+
+    #[test]
+    fn media_extractor_warns_for_image_io_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing.png");
+        let record = catalog_file_record(dir.path(), path.clone());
+
+        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+
+        assert!(documents.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].path, path);
+    }
+
+    fn catalog_file_record(root: &Path, path: PathBuf) -> SearchCatalogRecord {
+        SearchCatalogRecord::from_path_with_index_metadata(root, path, FileKind::File, None, None)
+    }
 
     #[test]
     fn ffprobe_json_parser_reads_duration_codec_and_tags() {

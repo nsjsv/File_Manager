@@ -499,8 +499,11 @@ fn root_status_card<'a>(browser: &'a FileBrowser, root: PathBuf) -> Element<'a, 
 
     let mut details = Column::new()
         .spacing(6)
-        .push(readable_text(root_label).size(13))
-        .push(metadata_row("Index path", index_dir_label));
+        .push(readable_text(root_label).size(13));
+
+    if should_show_index_path(status, error) {
+        details = details.push(metadata_row("Index path", index_dir_label));
+    }
 
     if is_indexing {
         details = details.push(readable_text("Indexing is queued or running.").size(12));
@@ -533,6 +536,13 @@ fn root_status_card<'a>(browser: &'a FileBrowser, root: PathBuf) -> Element<'a, 
         .width(Length::Fill)
         .style(path_suggestion_item_style)
         .into()
+}
+
+fn should_show_index_path(status: Option<&FileSearchIndexStatus>, error: Option<&String>) -> bool {
+    error.is_some()
+        || status
+            .map(|status| status.stale || !status.failures.is_empty())
+            .unwrap_or(false)
 }
 
 fn index_status_rows(status: &FileSearchIndexStatus) -> Element<'static, Message> {
@@ -686,4 +696,62 @@ fn format_unix_ms(ms: i64) -> String {
     };
     time.map(format_system_time)
         .unwrap_or_else(|| "Out of range".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_show_index_path;
+    use file_index::{FileSearchIndexFailure, FileSearchIndexStatus, MediaMetadataScope};
+    use std::path::PathBuf;
+
+    #[test]
+    fn index_path_is_hidden_for_healthy_or_missing_status() {
+        assert!(!should_show_index_path(Some(&status(false, false)), None));
+        assert!(!should_show_index_path(Some(&status(false, true)), None));
+        assert!(!should_show_index_path(None, None));
+    }
+
+    #[test]
+    fn index_path_is_shown_for_problem_statuses() {
+        assert!(should_show_index_path(Some(&status(true, false)), None));
+        assert!(should_show_index_path(Some(&status_with_failures()), None));
+        assert!(should_show_index_path(
+            None,
+            Some(&"daemon error".to_owned())
+        ));
+    }
+
+    fn status(stale: bool, exists: bool) -> FileSearchIndexStatus {
+        FileSearchIndexStatus {
+            root: PathBuf::from("/root"),
+            index_dir: PathBuf::from("/index"),
+            exists,
+            stale,
+            reason: None,
+            include_hidden: false,
+            content_index_enabled: false,
+            content_max_file_bytes: 16 * 1024 * 1024,
+            media_metadata_scope: MediaMetadataScope::Off,
+            record_count: 0,
+            index_size_bytes: 0,
+            built_at_ms: None,
+            updated_at_ms: None,
+            failed_count: 0,
+            exclude_rules_hash: None,
+            extractor_version: None,
+            failures: Vec::new(),
+        }
+    }
+
+    fn status_with_failures() -> FileSearchIndexStatus {
+        let mut status = status(false, true);
+        status.failures.push(FileSearchIndexFailure {
+            path: PathBuf::from("/root/blocked"),
+            message: "permission denied".to_owned(),
+            first_failed_at_ms: 1,
+            last_failed_at_ms: 2,
+            retry_count: 0,
+        });
+        status
+    }
 }

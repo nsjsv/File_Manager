@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +20,13 @@ use crate::{
     BuildSelectedPathsRequest, IndexError, IndexMaintenanceHandle, IndexServiceCommand,
     IndexServiceCore, IndexServiceEvent,
 };
+
+const FLOCK_EXCLUSIVE: i32 = 2;
+const FLOCK_NONBLOCKING: i32 = 4;
+
+unsafe extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
 
 #[derive(Debug, Clone)]
 pub struct IndexDaemonConfig {
@@ -42,7 +52,13 @@ struct IndexDaemonCore {
     maintenance_handles: Mutex<HashMap<String, IndexMaintenanceHandle>>,
 }
 
+#[derive(Debug)]
+struct DaemonInstanceLock {
+    _file: File,
+}
+
 pub async fn run(config: IndexDaemonConfig) -> Result<(), IndexDaemonError> {
+    let _instance_lock = DaemonInstanceLock::acquire(&config.socket_path)?;
     let listener = bind_socket(&config.socket_path)?;
     let state = Arc::new(IndexDaemonState::default());
 
@@ -62,10 +78,38 @@ pub async fn run(config: IndexDaemonConfig) -> Result<(), IndexDaemonError> {
     }
 
     drop(listener);
-    match std::fs::remove_file(&config.socket_path) {
+    match fs::remove_file(&config.socket_path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
+    }
+}
+
+impl DaemonInstanceLock {
+    fn acquire(socket_path: &Path) -> Result<Self, io::Error> {
+        let lock_path = socket_path.with_extension("lock");
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(lock_path)?;
+        let lock_result = unsafe { flock(file.as_raw_fd(), FLOCK_EXCLUSIVE | FLOCK_NONBLOCKING) };
+        if lock_result == 0 {
+            return Ok(Self { _file: file });
+        }
+
+        let error = io::Error::last_os_error();
+        Err(if error.kind() == io::ErrorKind::WouldBlock {
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("index daemon is already running for socket {socket_path:?}"),
+            )
+        } else {
+            error
+        })
     }
 }
 
@@ -80,11 +124,17 @@ impl Default for IndexDaemonState {
 
 fn bind_socket(socket_path: &Path) -> Result<UnixListener, io::Error> {
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
     match std::fs::symlink_metadata(socket_path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
-            std::fs::remove_file(socket_path)?;
+            if socket_has_listener(socket_path) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("index daemon is already running at socket {socket_path:?}"),
+                ));
+            }
+            fs::remove_file(socket_path)?;
         }
         Ok(_) => {
             return Err(io::Error::new(
@@ -96,6 +146,10 @@ fn bind_socket(socket_path: &Path) -> Result<UnixListener, io::Error> {
         Err(error) => return Err(error),
     }
     UnixListener::bind(socket_path)
+}
+
+fn socket_has_listener(socket_path: &Path) -> bool {
+    StdUnixStream::connect(socket_path).is_ok()
 }
 
 impl IndexDaemonState {
@@ -336,4 +390,55 @@ fn maintenance_event_matches(event: &IndexServiceEvent, profile_id: &str) -> boo
                 ..
             } if event_profile_id == profile_id
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::UnixListener as StdUnixListener;
+
+    use super::*;
+
+    #[test]
+    fn bind_socket_refuses_live_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("file-indexd.sock");
+        let existing_listener = StdUnixListener::bind(&socket_path).unwrap();
+
+        let error = match bind_socket(&socket_path) {
+            Ok(_) => panic!("bind_socket replaced a live socket"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        drop(existing_listener);
+    }
+
+    #[tokio::test]
+    async fn bind_socket_replaces_stale_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("file-indexd.sock");
+        let stale_listener = StdUnixListener::bind(&socket_path).unwrap();
+        drop(stale_listener);
+
+        let listener = bind_socket(&socket_path).unwrap();
+
+        drop(listener);
+        let _ = fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn daemon_instance_lock_blocks_same_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("file-indexd.sock");
+        let first_lock = DaemonInstanceLock::acquire(&socket_path).unwrap();
+
+        let error = match DaemonInstanceLock::acquire(&socket_path) {
+            Ok(_) => panic!("second daemon acquired the same socket lock"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        drop(first_lock);
+        DaemonInstanceLock::acquire(&socket_path).unwrap();
+    }
 }

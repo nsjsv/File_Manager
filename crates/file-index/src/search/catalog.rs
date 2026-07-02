@@ -5,7 +5,6 @@ use std::time::UNIX_EPOCH;
 
 use nucleo::Utf32String;
 
-use super::manifest::{SearchCatalogIdentity, SearchIndexManifest};
 use super::path_encoding::path_storage_key;
 use super::types::{
     FileSearchMatch, MediaSearchMetadata, SearchIndexFileRecord, SearchResultSource,
@@ -16,8 +15,6 @@ use file_core::FileKind;
 pub(crate) struct SearchCatalog {
     records: Vec<SearchCatalogRecord>,
     trigram_index: HashMap<String, Vec<usize>>,
-    record_lookup: HashMap<String, usize>,
-    identity: Option<SearchCatalogIdentity>,
 }
 
 #[derive(Clone)]
@@ -37,39 +34,22 @@ pub(crate) struct SearchCatalogRecord {
 }
 
 impl SearchCatalog {
-    pub(crate) fn from_records(
-        _root: PathBuf,
-        records: Vec<SearchCatalogRecord>,
-        manifest: Option<&SearchIndexManifest>,
-    ) -> Self {
+    pub(crate) fn from_records(records: Vec<SearchCatalogRecord>) -> Self {
         let mut trigram_index: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut record_lookup = HashMap::with_capacity(records.len());
         for (index, record) in records.iter().enumerate() {
             for trigram in record.search_trigrams() {
                 trigram_index.entry(trigram).or_default().push(index);
             }
-            record_lookup.insert(record.storage_key.clone(), index);
         }
 
         Self {
             records,
             trigram_index,
-            record_lookup,
-            identity: manifest.map(SearchIndexManifest::identity),
         }
     }
 
     pub(crate) fn records(&self) -> &[SearchCatalogRecord] {
         &self.records
-    }
-
-    pub(crate) fn identity(&self) -> Option<&SearchCatalogIdentity> {
-        self.identity.as_ref()
-    }
-
-    pub(crate) fn record_by_storage_key(&self, storage_key: &str) -> Option<&SearchCatalogRecord> {
-        let index = self.record_lookup.get(storage_key)?;
-        self.records.get(*index)
     }
 
     pub(crate) fn trigram_candidates(&self, query: &str) -> Vec<usize> {

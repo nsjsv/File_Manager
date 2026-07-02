@@ -16,7 +16,7 @@ const CONTROL_EXTRACTOR_VERSION: u32 = crate::search::EXTRACTOR_VERSION;
 
 #[derive(Debug, Clone)]
 pub struct ProfileStore {
-    db_path: PathBuf,
+    pub(super) db_path: PathBuf,
 }
 
 impl ProfileStore {
@@ -666,7 +666,7 @@ impl ProfileStore {
     }
 }
 
-fn saturating_u64_to_i64(value: u64) -> i64 {
+pub(super) fn saturating_u64_to_i64(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
 
@@ -719,7 +719,7 @@ fn current_time_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn file_kind_key(kind: FileKind) -> &'static str {
+pub(super) fn file_kind_key(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Directory => "directory",
         FileKind::File => "file",

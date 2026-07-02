@@ -160,7 +160,7 @@ fn simple_mode_search_uses_tree_search_without_indexing() {
 }
 
 #[test]
-fn indexed_files_search_stale_index_waits_for_rebuild_without_tree_fallback() {
+fn indexed_files_search_stale_index_rebuilds_and_uses_tree_fallback() {
     let mut browser = browser_with_search_state(search_state_for_request_generation(1));
     browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
     browser.search_index.home_dir = PathBuf::from("/tmp");
@@ -173,7 +173,7 @@ fn indexed_files_search_stale_index_waits_for_rebuild_without_tree_fallback() {
 
     let search = browser.search.as_ref().expect("search state remains open");
     assert!(search.is_loading);
-    assert!(search.search_cancel.is_none());
+    assert!(search.search_cancel.is_some());
     assert!(browser
         .search_index
         .indexing_roots

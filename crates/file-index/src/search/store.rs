@@ -1,7 +1,7 @@
 use std::fs as std_fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Row};
 
 use super::catalog::SearchCatalogRecord;
 use super::manifest::{
@@ -19,6 +19,75 @@ use crate::IndexError;
 use file_core::FileKind;
 
 const CATALOG_FILE_NAME: &str = "catalog.sqlite";
+
+pub(crate) struct CatalogWriteSession {
+    index_dir: PathBuf,
+    catalog_path: PathBuf,
+    connection: Connection,
+    record_count: usize,
+}
+
+impl CatalogWriteSession {
+    pub(crate) fn create(index_dir: &Path) -> Result<Self, IndexError> {
+        let catalog_path = catalog_path(index_dir);
+        let connection = Connection::open(&catalog_path)
+            .map_err(|error| search_index_error(&catalog_path, error))?;
+        initialize_catalog_connection(&connection, &catalog_path)?;
+        connection
+            .execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|error| search_index_error(&catalog_path, error))?;
+
+        Ok(Self {
+            index_dir: index_dir.to_path_buf(),
+            catalog_path,
+            connection,
+            record_count: 0,
+        })
+    }
+
+    pub(crate) fn add_record(&mut self, record: &SearchCatalogRecord) -> Result<(), IndexError> {
+        self.connection
+            .prepare_cached(
+                "INSERT INTO entries (
+                    path_key, path, kind, mtime_ms, size_bytes, changed_at_generation
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            )
+            .map_err(|error| search_index_error(&self.catalog_path, error))?
+            .execute(params![
+                record.storage_key.as_str(),
+                path_to_bytes(&record.path),
+                file_kind_key(record.kind),
+                record.mtime_ms,
+                record.size_bytes.map(saturating_u64_to_i64),
+            ])
+            .map_err(|error| search_index_error(&self.catalog_path, error))?;
+        self.record_count += 1;
+        Ok(())
+    }
+
+    pub(crate) fn record_count(&self) -> usize {
+        self.record_count
+    }
+
+    pub(crate) fn finish(
+        self,
+        manifest: &mut SearchIndexManifest,
+        failures: &[FileSearchIndexFailure],
+    ) -> Result<(), IndexError> {
+        write_manifest_entries(&self.connection, &self.catalog_path, manifest)?;
+        self.connection
+            .execute(
+                "UPDATE entries SET changed_at_generation = ?1",
+                params![manifest.generation.as_str()],
+            )
+            .map_err(|error| search_index_error(&self.catalog_path, error))?;
+        write_failure_entries(&self.connection, &self.catalog_path, failures)?;
+        self.connection
+            .execute_batch("COMMIT;")
+            .map_err(|error| search_index_error(&self.catalog_path, error))?;
+        persist_catalog_size(&self.index_dir, manifest)
+    }
+}
 
 pub(crate) fn prepare_catalog_dir(root: &Path, pending_index_dir: &Path) -> Result<(), IndexError> {
     if let Some(parent) = pending_index_dir.parent() {
@@ -68,93 +137,11 @@ pub(crate) fn write_catalog(
     records: &[SearchCatalogRecord],
     failures: &[FileSearchIndexFailure],
 ) -> Result<(), IndexError> {
-    let catalog_path = catalog_path(index_dir);
-    let mut connection = Connection::open(&catalog_path)
-        .map_err(|error| search_index_error(&catalog_path, error))?;
-    connection
-        .execute_batch(
-            "PRAGMA journal_mode = OFF;
-             PRAGMA synchronous = NORMAL;
-             CREATE TABLE manifest (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE entries (
-                id INTEGER PRIMARY KEY,
-                path_key TEXT NOT NULL UNIQUE,
-                path BLOB NOT NULL,
-                kind TEXT NOT NULL,
-                mtime_ms INTEGER,
-                size_bytes INTEGER,
-                changed_at_generation TEXT
-             );
-             CREATE TABLE failures (
-                path_key TEXT PRIMARY KEY,
-                path BLOB NOT NULL,
-                message TEXT NOT NULL,
-                first_failed_at_ms INTEGER NOT NULL,
-                last_failed_at_ms INTEGER NOT NULL,
-                retry_count INTEGER NOT NULL
-             );",
-        )
-        .map_err(|error| search_index_error(&catalog_path, error))?;
-
-    let tx = connection
-        .transaction()
-        .map_err(|error| search_index_error(&catalog_path, error))?;
-    {
-        let mut insert_manifest = tx
-            .prepare("INSERT INTO manifest (key, value) VALUES (?1, ?2)")
-            .map_err(|error| search_index_error(&catalog_path, error))?;
-        for (key, value) in manifest.entries() {
-            insert_manifest
-                .execute(params![key, value])
-                .map_err(|error| search_index_error(&catalog_path, error))?;
-        }
+    let mut session = CatalogWriteSession::create(index_dir)?;
+    for record in records {
+        session.add_record(record)?;
     }
-    {
-        let mut insert_entry = tx
-            .prepare(
-                "INSERT INTO entries (
-                    path_key, path, kind, mtime_ms, size_bytes, changed_at_generation
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )
-            .map_err(|error| search_index_error(&catalog_path, error))?;
-        for record in records {
-            insert_entry
-                .execute(params![
-                    record.storage_key.as_str(),
-                    path_to_bytes(&record.path),
-                    file_kind_key(record.kind),
-                    record.mtime_ms,
-                    record.size_bytes.map(saturating_u64_to_i64),
-                    manifest.generation.as_str(),
-                ])
-                .map_err(|error| search_index_error(&catalog_path, error))?;
-        }
-    }
-    {
-        let mut insert_failure = tx
-            .prepare(
-                "INSERT INTO failures (
-                    path_key, path, message, first_failed_at_ms, last_failed_at_ms, retry_count
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )
-            .map_err(|error| search_index_error(&catalog_path, error))?;
-        for failure in failures {
-            insert_failure
-                .execute(params![
-                    path_storage_key(&failure.path),
-                    path_to_bytes(&failure.path),
-                    failure.message.as_str(),
-                    failure.first_failed_at_ms,
-                    failure.last_failed_at_ms,
-                    i64::from(failure.retry_count),
-                ])
-                .map_err(|error| search_index_error(&catalog_path, error))?;
-        }
-    }
-    tx.commit()
-        .map_err(|error| search_index_error(&catalog_path, error))?;
-
-    persist_catalog_size(index_dir, manifest)
+    session.finish(manifest, failures)
 }
 
 pub(crate) fn load_catalog(
@@ -167,6 +154,36 @@ pub(crate) fn load_catalog(
     content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
 ) -> Result<(SearchIndexManifest, Vec<SearchCatalogRecord>), IndexError> {
+    let mut records = Vec::new();
+    let manifest = scan_catalog_records(
+        index_dir,
+        root,
+        include_hidden,
+        exclude_patterns,
+        directory_error_policy,
+        content_index_enabled,
+        content_max_file_bytes,
+        media_metadata_scope,
+        |record| {
+            records.push(record);
+            Ok(())
+        },
+    )?;
+
+    Ok((manifest, records))
+}
+
+pub(crate) fn scan_catalog_records(
+    index_dir: &Path,
+    root: &Path,
+    include_hidden: bool,
+    exclude_patterns: &[String],
+    directory_error_policy: DirectoryErrorPolicy,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_metadata_scope: MediaMetadataScope,
+    mut visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<SearchIndexManifest, IndexError> {
     let connection = open_catalog_connection(index_dir)?;
     let manifest = read_manifest_from_connection(index_dir, &connection)?;
     manifest.validate_for(
@@ -185,36 +202,40 @@ pub(crate) fn load_catalog(
     let mut rows = statement
         .query([])
         .map_err(|error| search_index_error(index_dir, error))?;
-    let mut records = Vec::with_capacity(manifest.record_count);
 
     while let Some(row) = rows
         .next()
         .map_err(|error| search_index_error(index_dir, error))?
     {
-        let path_bytes = row
-            .get::<_, Vec<u8>>(0)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let kind_key = row
-            .get::<_, String>(1)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let mtime_ms = row
-            .get::<_, Option<i64>>(2)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let size_bytes = row
-            .get::<_, Option<i64>>(3)
-            .map_err(|error| search_index_error(index_dir, error))?
-            .and_then(|value| u64::try_from(value).ok());
-        let kind = file_kind_from_key(&kind_key).unwrap_or(FileKind::Other);
-        records.push(SearchCatalogRecord::from_path_with_index_metadata(
-            root,
-            path_from_bytes(path_bytes),
-            kind,
-            mtime_ms,
-            size_bytes,
-        ));
+        visit(catalog_record_from_row(index_dir, root, row)?)?;
     }
 
-    Ok((manifest, records))
+    Ok(manifest)
+}
+
+pub(crate) fn read_catalog_record_by_storage_key(
+    index_dir: &Path,
+    root: &Path,
+    storage_key: &str,
+) -> Result<Option<SearchCatalogRecord>, IndexError> {
+    let connection = open_catalog_connection(index_dir)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT path, kind, mtime_ms, size_bytes
+             FROM entries
+             WHERE path_key = ?1",
+        )
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let mut rows = statement
+        .query(params![storage_key])
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let Some(row) = rows
+        .next()
+        .map_err(|error| search_index_error(index_dir, error))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(catalog_record_from_row(index_dir, root, row)?))
 }
 
 pub(crate) fn read_index_status(
@@ -271,8 +292,20 @@ pub(crate) fn read_index_status(
 }
 
 pub(crate) fn read_failures(index_dir: &Path) -> Result<Vec<FileSearchIndexFailure>, IndexError> {
+    let mut failures = Vec::new();
+    scan_failures(index_dir, |failure| {
+        failures.push(failure);
+        Ok(())
+    })?;
+    Ok(failures)
+}
+
+pub(crate) fn scan_failures(
+    index_dir: &Path,
+    mut visit: impl FnMut(FileSearchIndexFailure) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
     let connection = open_catalog_connection(index_dir)?;
-    read_failures_from_connection(index_dir, &connection)
+    scan_failures_from_connection(index_dir, &connection, |failure| visit(failure))
 }
 
 pub(crate) fn clear_failures(index_dir: &Path) -> Result<(), IndexError> {
@@ -322,6 +355,79 @@ fn persist_catalog_size(
     Ok(())
 }
 
+fn initialize_catalog_connection(
+    connection: &Connection,
+    catalog_path: &Path,
+) -> Result<(), IndexError> {
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = OFF;
+             PRAGMA synchronous = NORMAL;
+             CREATE TABLE manifest (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE entries (
+                id INTEGER PRIMARY KEY,
+                path_key TEXT NOT NULL UNIQUE,
+                path BLOB NOT NULL,
+                kind TEXT NOT NULL,
+                mtime_ms INTEGER,
+                size_bytes INTEGER,
+                changed_at_generation TEXT
+             );
+             CREATE TABLE failures (
+                path_key TEXT PRIMARY KEY,
+                path BLOB NOT NULL,
+                message TEXT NOT NULL,
+                first_failed_at_ms INTEGER NOT NULL,
+                last_failed_at_ms INTEGER NOT NULL,
+                retry_count INTEGER NOT NULL
+             );",
+        )
+        .map_err(|error| search_index_error(catalog_path, error))
+}
+
+fn write_manifest_entries(
+    connection: &Connection,
+    catalog_path: &Path,
+    manifest: &SearchIndexManifest,
+) -> Result<(), IndexError> {
+    let mut insert_manifest = connection
+        .prepare_cached("INSERT INTO manifest (key, value) VALUES (?1, ?2)")
+        .map_err(|error| search_index_error(catalog_path, error))?;
+    for (key, value) in manifest.entries() {
+        insert_manifest
+            .execute(params![key, value])
+            .map_err(|error| search_index_error(catalog_path, error))?;
+    }
+    Ok(())
+}
+
+fn write_failure_entries(
+    connection: &Connection,
+    catalog_path: &Path,
+    failures: &[FileSearchIndexFailure],
+) -> Result<(), IndexError> {
+    let mut insert_failure = connection
+        .prepare_cached(
+            "INSERT INTO failures (
+                path_key, path, message, first_failed_at_ms, last_failed_at_ms, retry_count
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .map_err(|error| search_index_error(catalog_path, error))?;
+    for failure in failures {
+        insert_failure
+            .execute(params![
+                path_storage_key(&failure.path),
+                path_to_bytes(&failure.path),
+                failure.message.as_str(),
+                failure.first_failed_at_ms,
+                failure.last_failed_at_ms,
+                i64::from(failure.retry_count),
+            ])
+            .map_err(|error| search_index_error(catalog_path, error))?;
+    }
+    Ok(())
+}
+
 fn open_catalog_connection(index_dir: &Path) -> Result<Connection, IndexError> {
     let catalog_path = catalog_path(index_dir);
     if !catalog_path.is_file() {
@@ -334,6 +440,19 @@ fn read_failures_from_connection(
     index_dir: &Path,
     connection: &Connection,
 ) -> Result<Vec<FileSearchIndexFailure>, IndexError> {
+    let mut failures = Vec::new();
+    scan_failures_from_connection(index_dir, connection, |failure| {
+        failures.push(failure);
+        Ok(())
+    })?;
+    Ok(failures)
+}
+
+fn scan_failures_from_connection(
+    index_dir: &Path,
+    connection: &Connection,
+    mut visit: impl FnMut(FileSearchIndexFailure) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
     let mut statement = connection
         .prepare(
             "SELECT path, message, first_failed_at_ms, last_failed_at_ms, retry_count
@@ -344,37 +463,68 @@ fn read_failures_from_connection(
     let mut rows = statement
         .query([])
         .map_err(|error| search_index_error(index_dir, error))?;
-    let mut failures = Vec::new();
 
     while let Some(row) = rows
         .next()
         .map_err(|error| search_index_error(index_dir, error))?
     {
-        let path_bytes = row
-            .get::<_, Vec<u8>>(0)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let message = row
-            .get::<_, String>(1)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let first_failed_at_ms = row
-            .get::<_, i64>(2)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let last_failed_at_ms = row
-            .get::<_, i64>(3)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        let retry_count = row
-            .get::<_, i64>(4)
-            .map_err(|error| search_index_error(index_dir, error))?;
-        failures.push(FileSearchIndexFailure {
-            path: path_from_bytes(path_bytes),
-            message,
-            first_failed_at_ms,
-            last_failed_at_ms,
-            retry_count: u32::try_from(retry_count).unwrap_or(u32::MAX),
-        });
+        visit(failure_from_row(index_dir, row)?)?;
     }
 
-    Ok(failures)
+    Ok(())
+}
+
+fn catalog_record_from_row(
+    index_dir: &Path,
+    root: &Path,
+    row: &Row<'_>,
+) -> Result<SearchCatalogRecord, IndexError> {
+    let path_bytes = row
+        .get::<_, Vec<u8>>(0)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let kind_key = row
+        .get::<_, String>(1)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let mtime_ms = row
+        .get::<_, Option<i64>>(2)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let size_bytes = row
+        .get::<_, Option<i64>>(3)
+        .map_err(|error| search_index_error(index_dir, error))?
+        .and_then(|value| u64::try_from(value).ok());
+    let kind = file_kind_from_key(&kind_key).unwrap_or(FileKind::Other);
+    Ok(SearchCatalogRecord::from_path_with_index_metadata(
+        root,
+        path_from_bytes(path_bytes),
+        kind,
+        mtime_ms,
+        size_bytes,
+    ))
+}
+
+fn failure_from_row(index_dir: &Path, row: &Row<'_>) -> Result<FileSearchIndexFailure, IndexError> {
+    let path_bytes = row
+        .get::<_, Vec<u8>>(0)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let message = row
+        .get::<_, String>(1)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let first_failed_at_ms = row
+        .get::<_, i64>(2)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let last_failed_at_ms = row
+        .get::<_, i64>(3)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    let retry_count = row
+        .get::<_, i64>(4)
+        .map_err(|error| search_index_error(index_dir, error))?;
+    Ok(FileSearchIndexFailure {
+        path: path_from_bytes(path_bytes),
+        message,
+        first_failed_at_ms,
+        last_failed_at_ms,
+        retry_count: u32::try_from(retry_count).unwrap_or(u32::MAX),
+    })
 }
 
 fn catalog_path(index_dir: &Path) -> PathBuf {

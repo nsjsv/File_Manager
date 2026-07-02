@@ -15,7 +15,7 @@ mod types;
 use std::path::{Path, PathBuf};
 
 use cache::query_runtime_for_index;
-use catalog::{SearchCatalog, SearchCatalogRecord};
+use catalog::SearchCatalog;
 use crawl::crawl_search_records;
 use engine::search_index_catalog_and_tantivy;
 use store::{clear_failures, read_index_status, remove_catalog_dir};
@@ -69,7 +69,7 @@ pub async fn search_file_tree_with_cancel(
                 cancel: Some(cancel),
             },
         )?;
-        let catalog = SearchCatalog::from_records(search_root, records, None);
+        let catalog = SearchCatalog::from_records(records);
         Ok::<_, IndexError>((catalog, skipped))
     })
     .await
@@ -222,25 +222,46 @@ pub async fn file_search_index_snapshot(
     let join_root = root.clone();
 
     tokio::task::spawn_blocking(move || {
-        let (_, records) = store::load_catalog(
+        let mut records = Vec::new();
+        let mut failures = Vec::new();
+        scan_file_search_index_snapshot(
             &index_dir,
             &root,
-            options.include_hidden,
-            &options.exclude_patterns,
-            options.directory_error_policy,
-            options.content_index_enabled,
-            options.content_max_file_bytes,
-            options.media_metadata_scope,
+            options,
+            |record| {
+                records.push(record);
+                Ok(())
+            },
+            |failure| {
+                failures.push(failure);
+                Ok(())
+            },
         )?;
-        let records = records
-            .iter()
-            .map(SearchCatalogRecord::to_file_record)
-            .collect();
-        let failures = store::read_failures(&index_dir)?;
         Ok((records, failures))
     })
     .await
     .map_err(|error| search_index_error(&join_root, error))?
+}
+
+pub(crate) fn scan_file_search_index_snapshot(
+    index_dir: &Path,
+    root: &Path,
+    options: FileSearchIndexOptions,
+    mut record_sink: impl FnMut(SearchIndexFileRecord) -> Result<(), IndexError>,
+    mut failure_sink: impl FnMut(FileSearchIndexFailure) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
+    store::scan_catalog_records(
+        index_dir,
+        root,
+        options.include_hidden,
+        &options.exclude_patterns,
+        options.directory_error_policy,
+        options.content_index_enabled,
+        options.content_max_file_bytes,
+        options.media_metadata_scope,
+        |record| record_sink(record.to_file_record()),
+    )?;
+    store::scan_failures(index_dir, |failure| failure_sink(failure))
 }
 
 pub async fn clear_file_search_index_failures(
