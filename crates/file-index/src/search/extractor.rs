@@ -35,38 +35,6 @@ pub(crate) struct ExtractedMediaDocument {
     pub(crate) rank_hint: u64,
 }
 
-pub(crate) fn extract_text_documents(
-    records: &[SearchCatalogRecord],
-    max_file_bytes: u64,
-) -> (Vec<ExtractedTextDocument>, Vec<ScanWarning>) {
-    let mut documents = Vec::new();
-    let mut warnings = Vec::new();
-    for record in records {
-        match extract_text_document(record, max_file_bytes) {
-            Ok(Some(document)) => documents.push(document),
-            Ok(None) => {}
-            Err(warning) => warnings.push(warning),
-        }
-    }
-    (documents, warnings)
-}
-
-pub(crate) fn extract_media_documents(
-    records: &[SearchCatalogRecord],
-    scope: MediaMetadataScope,
-) -> (Vec<ExtractedMediaDocument>, Vec<ScanWarning>) {
-    let mut documents = Vec::new();
-    let mut warnings = Vec::new();
-    for record in records {
-        match extract_media_document(record, scope) {
-            Ok(Some(document)) => documents.push(document),
-            Ok(None) => {}
-            Err(warning) => warnings.push(warning),
-        }
-    }
-    (documents, warnings)
-}
-
 pub(crate) fn extract_text_document(
     record: &SearchCatalogRecord,
     max_file_bytes: u64,
@@ -443,11 +411,11 @@ mod tests {
         fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
         let record = catalog_file_record(dir.path(), path);
 
-        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+        let document = extract_media_document(&record, MediaMetadataScope::All)
+            .unwrap()
+            .unwrap();
 
-        assert!(warnings.is_empty());
-        assert_eq!(documents.len(), 1);
-        let metadata = &documents[0].metadata;
+        let metadata = &document.metadata;
         assert_eq!(metadata.media_kind, MediaSearchKind::Image);
         assert_eq!(metadata.width, None);
         assert_eq!(metadata.height, None);
@@ -461,11 +429,11 @@ mod tests {
         fs::write(&path, b"\x89PNG\r\n\x1a\nnot a complete image").unwrap();
         let record = catalog_file_record(dir.path(), path);
 
-        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+        let document = extract_media_document(&record, MediaMetadataScope::All)
+            .unwrap()
+            .unwrap();
 
-        assert!(warnings.is_empty());
-        assert_eq!(documents.len(), 1);
-        let metadata = &documents[0].metadata;
+        let metadata = &document.metadata;
         assert_eq!(metadata.media_kind, MediaSearchKind::Image);
         assert_eq!(metadata.width, None);
         assert_eq!(metadata.height, None);
@@ -481,11 +449,11 @@ mod tests {
             .unwrap();
         let record = catalog_file_record(dir.path(), path);
 
-        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+        let document = extract_media_document(&record, MediaMetadataScope::All)
+            .unwrap()
+            .unwrap();
 
-        assert!(warnings.is_empty());
-        assert_eq!(documents.len(), 1);
-        let metadata = &documents[0].metadata;
+        let metadata = &document.metadata;
         assert_eq!(metadata.width, Some(7));
         assert_eq!(metadata.height, Some(11));
     }
@@ -496,11 +464,9 @@ mod tests {
         let path = dir.path().join("missing.png");
         let record = catalog_file_record(dir.path(), path.clone());
 
-        let (documents, warnings) = extract_media_documents(&[record], MediaMetadataScope::All);
+        let warning = extract_media_document(&record, MediaMetadataScope::All).unwrap_err();
 
-        assert!(documents.is_empty());
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].path, path);
+        assert_eq!(warning.path, path);
     }
 
     fn catalog_file_record(root: &Path, path: PathBuf) -> SearchCatalogRecord {

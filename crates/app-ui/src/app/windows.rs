@@ -468,12 +468,13 @@ impl FileBrowser {
         status: event::Status,
     ) -> Task<Message> {
         if self.settings_window == Some(window) {
-            return match (button, status, self.selected_settings_category) {
-                (mouse::Button::Left, event::Status::Ignored, SettingsCategory::SearchIndex) => {
-                    self.commit_search_index_path_rule_editor()
-                }
-                _ => Task::none(),
-            };
+            if button == mouse::Button::Left
+                && status == event::Status::Ignored
+                && self.selected_settings_category == SettingsCategory::SearchIndex
+            {
+                return self.commit_search_index_path_rule_editor();
+            }
+            return Task::none();
         }
 
         if window != self.main_window {

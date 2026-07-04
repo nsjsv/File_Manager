@@ -37,17 +37,15 @@ pub(crate) fn search_results_id() -> iced::widget::Id {
 
 pub(crate) fn view_search_window(
     search: Option<&SearchState>,
-    search_backend_mode: SearchBackendMode,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     search
-        .map(|search| search_panel(search, search_backend_mode, scrollbar_visibility))
+        .map(|search| search_panel(search, scrollbar_visibility))
         .unwrap_or_else(|| auxiliary_window_message("Search window is closed"))
 }
 
 fn search_panel(
     search: &SearchState,
-    search_backend_mode: SearchBackendMode,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     let root = search.root.to_string_lossy();
@@ -74,15 +72,18 @@ fn search_panel(
     .size(16)
     .width(Length::Fill);
 
-    let content = column![
-        header,
-        search_mode_selector(search.mode, search_backend_mode),
-        input,
-        search_results_panel(search, scrollbar_visibility),
-        search_footer(search)
-    ]
-    .spacing(10)
-    .width(Length::Fill);
+    let mut content = column![header].spacing(10).width(Length::Fill);
+    if let Some(notice) = search_runtime_notice(search) {
+        content = content.push(notice);
+    }
+    content = content
+        .push(search_mode_selector(
+            search.mode,
+            search.session_backend_mode,
+        ))
+        .push(input)
+        .push(search_results_panel(search, scrollbar_visibility))
+        .push(search_footer(search));
 
     container(content)
         .padding(14)
@@ -156,6 +157,31 @@ fn search_message(message: &str) -> Element<'_, Message> {
         .width(Length::Fill)
         .padding([12, 8])
         .into()
+}
+
+fn search_runtime_notice(search: &SearchState) -> Option<Element<'static, Message>> {
+    let message = if search.show_index_ready_reopen_hint {
+        if crate::localization::current_language_is_chinese() {
+            "索引已准备，请重开搜索框"
+        } else {
+            "Indexed search is ready. Close and reopen Search to use it."
+        }
+    } else if search.indexed_fallback_session {
+        if crate::localization::current_language_is_chinese() {
+            "索引准备中，当前先按文件名和路径搜索"
+        } else {
+            "Indexed search is preparing. This window is using filename and path search for now."
+        }
+    } else {
+        return None;
+    };
+
+    Some(
+        container(readable_text(message).size(12))
+            .width(Length::Fill)
+            .padding([2, 0])
+            .into(),
+    )
 }
 
 fn search_match_row(search_match: &FileSearchMatch, is_selected: bool) -> Element<'_, Message> {

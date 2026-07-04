@@ -1,45 +1,12 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use file_core::ScanWarning;
+use std::path::PathBuf;
 
 use super::cache::SearchQueryRuntime;
-use super::catalog::SearchCatalogRecord;
-use super::extractor::{extract_media_documents, extract_text_documents};
-use super::full_text::{search_tantivy_index, write_tantivy_index, FullTextSearchHit};
+use super::full_text::{search_tantivy_index, FullTextSearchHit};
 use super::types::{FileSearchMatch, FileSearchOptions, SearchResultSource};
 use super::{query, store};
-use crate::profile::MediaMetadataScope;
 use crate::{IndexError, SearchMode};
 use tokio_util::sync::CancellationToken;
-
-pub(crate) fn write_search_documents(
-    pending_index_dir: &Path,
-    records: &[SearchCatalogRecord],
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
-    media_metadata_scope: MediaMetadataScope,
-) -> Result<Vec<ScanWarning>, IndexError> {
-    let mut warnings = Vec::new();
-    let text_documents = if content_index_enabled {
-        extract_text_documents(records, content_max_file_bytes)
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let (text_documents, text_warnings) = text_documents;
-    warnings.extend(text_warnings);
-
-    let media_documents = if media_metadata_scope.includes_media() {
-        extract_media_documents(records, media_metadata_scope)
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let (media_documents, media_warnings) = media_documents;
-    warnings.extend(media_warnings);
-
-    write_tantivy_index(pending_index_dir, &text_documents, &media_documents)?;
-    Ok(warnings)
-}
 
 pub(crate) fn search_index_catalog_and_tantivy(
     runtime: &SearchQueryRuntime,

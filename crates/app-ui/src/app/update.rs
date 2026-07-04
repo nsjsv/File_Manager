@@ -538,6 +538,8 @@ impl FileBrowser {
             | Message::SearchIndexProfileSaved(_, _)
             | Message::SearchIndexProfileDeleted(_)
             | Message::SearchIndexDaemonStatusLoaded(_)
+            | Message::SearchIndexSettingsSectionSelected(_)
+            | Message::SearchIndexErrorCopyRequested(_)
             | Message::SearchIndexDaemonRestartRequested
             | Message::SearchIndexDaemonRestarted(_)
             | Message::SearchIndexMaintenanceEvent(_, _)
@@ -549,12 +551,17 @@ impl FileBrowser {
             | Message::SearchIndexMaintenancePauseToggled
             | Message::SearchIndexFailuresClearRequested(_)
             | Message::SearchIndexPathRuleSelected(_)
-            | Message::SearchIndexPathRuleKindChanged(_, _)
-            | Message::SearchIndexPathRuleKindSelected(_)
+            | Message::SearchIndexIndexedPathAddRequested
+            | Message::SearchIndexExcludeRuleAddRequested
+            | Message::SearchIndexPathRuleEditRequested(_)
+            | Message::SearchIndexPathRuleRemoveRequested(_)
             | Message::SearchIndexPathRuleInputChanged(_)
+            | Message::SearchIndexPathRuleInputStabilized(_)
+            | Message::SearchIndexPathRuleSuggestionsLoaded(_, _)
+            | Message::SearchIndexPathRuleSuggestionSelected(_)
             | Message::SearchIndexPathRuleEditorCommitted
+            | Message::SearchIndexPathRuleEditCanceled
             | Message::SearchIndexPathRuleAdded
-            | Message::SearchIndexPathRuleRemoved
             | Message::SearchIndexPathRuleUpdated
             | Message::SearchIndexDirectoryErrorPolicySelected(_)
             | Message::SearchIndexContentEnabledToggled(_)

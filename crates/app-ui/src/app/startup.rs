@@ -35,16 +35,11 @@ impl FileBrowser {
         self.search_index.home_dir = home.clone();
         self.sidebar_locations = vec![home_sidebar_location(&home)];
         let search_mode_prompt_command = self.refresh_search_mode_prompt();
-        let should_load_indexed_profile = self.user_config.search_mode
+        let should_bootstrap_indexed_search = self.user_config.search_mode
             == SearchBackendMode::Indexed
             && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed;
-        let search_index_profile_command = if should_load_indexed_profile {
-            self.load_search_index_profile_command()
-        } else {
-            Task::none()
-        };
-        let startup_index_setup_command = if should_load_indexed_profile {
-            self.refresh_startup_index_setup_choices()
+        let search_index_bootstrap_command = if should_bootstrap_indexed_search {
+            self.start_indexed_search_bootstrap()
         } else {
             Task::none()
         };
@@ -59,14 +54,13 @@ impl FileBrowser {
 
         Task::batch([
             search_mode_prompt_command,
-            startup_index_setup_command,
+            search_index_bootstrap_command,
             startup_command,
             sidebar_locations_command(home, configured_favorites),
             sidebar_devices_command(),
             self.refresh_network_mount_states(),
             self.startup_auto_connect_network_connections(),
             operation_store_command(state_database_path),
-            search_index_profile_command,
         ])
     }
 
@@ -86,10 +80,7 @@ impl FileBrowser {
         } else {
             Task::none()
         };
-        if self.startup_index_setup.is_some()
-            || (self.user_config.search_mode == SearchBackendMode::Indexed
-                && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed)
-        {
+        if self.startup_index_setup.is_some() {
             Task::batch([
                 persist_imported_favorites,
                 self.refresh_startup_index_setup_choices(),
@@ -223,7 +214,8 @@ mod tests {
     use crate::model::{
         BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
         BrowserTabSession, BrowserViewMode, ColumnBrowserViewport, ExpandedDirectoryStatus,
-        LoadedOperationStore, SidebarLocation, SidebarLocationKind, SplitAxis, StartupEnvironment,
+        LoadedOperationStore, SearchIndexDaemonStatus, SidebarLocation, SidebarLocationKind,
+        SplitAxis, StartupEnvironment,
     };
     use crate::network_connections::SavedNetworkConnection;
     use crate::startup_rendering::{
@@ -359,8 +351,14 @@ mod tests {
             PathBuf::from("/tmp/state.sqlite"),
         )));
 
-        assert!(browser.search_index.profile_loading);
+        assert!(browser.search_index.daemon_status_loading);
+        assert!(!browser.search_index.profile_loading);
         assert!(browser.startup_index_setup.is_none());
+
+        drop(browser.accept_search_index_daemon_status(Ok(SearchIndexDaemonStatus::Reachable)));
+
+        assert!(!browser.search_index.daemon_status_loading);
+        assert!(browser.search_index.profile_loading);
     }
 
     #[test]

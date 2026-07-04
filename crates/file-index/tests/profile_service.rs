@@ -3,6 +3,8 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use file_core::FileKind;
@@ -187,6 +189,38 @@ fn profile_store_persists_root_file_metadata_and_failures() {
     let snapshot = store.load_root_snapshot("main", &root).unwrap();
     assert_eq!(snapshot.records, vec![record]);
     assert_eq!(snapshot.failures, vec![failure]);
+}
+
+#[test]
+fn profile_store_waits_for_short_write_lock_overlap() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("root");
+    let control_db = dir.path().join("control.sqlite");
+    let store = ProfileStore::open(&control_db).unwrap();
+    store
+        .save_profile(&IndexProfile::new("main", vec![root.clone()]))
+        .unwrap();
+    let (lock_ready_tx, lock_ready_rx) = mpsc::channel();
+    let lock_db = control_db.clone();
+
+    let lock_holder = thread::spawn(move || {
+        let connection = rusqlite::Connection::open(lock_db).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        lock_ready_tx.send(()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        connection.execute_batch("COMMIT;").unwrap();
+    });
+
+    lock_ready_rx.recv().unwrap();
+    store
+        .save_task_status(
+            "main",
+            Some(&root),
+            IndexTaskPhase::Running,
+            Some("briefly blocked"),
+        )
+        .unwrap();
+    lock_holder.join().unwrap();
 }
 
 #[cfg(unix)]
@@ -521,31 +555,6 @@ async fn index_service_rebuild_and_pause_update_task_status() {
         .expect("root task status");
     assert_eq!(status.phase, IndexTaskPhase::Paused);
     assert!(status.extractor_version > 0);
-}
-
-#[tokio::test]
-async fn index_service_rebuild_mirrors_catalog_metadata_to_control_db() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("root");
-    let file = root.join("mirror-note.txt");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(&file, "body").unwrap();
-    let control_db = dir.path().join("control.sqlite");
-    let service = IndexService::open(&control_db, dir.path().join("indexes")).unwrap();
-    service
-        .configure_profile(IndexProfile::new("main", vec![root.clone()]))
-        .unwrap();
-
-    service.rebuild("main", root.clone()).await.unwrap();
-
-    let snapshot = ProfileStore::open(control_db)
-        .unwrap()
-        .load_root_snapshot("main", &root)
-        .unwrap();
-    assert!(snapshot
-        .records
-        .iter()
-        .any(|record| record.path == file && record.size_bytes == Some(4)));
 }
 
 #[tokio::test]

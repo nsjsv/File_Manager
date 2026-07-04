@@ -164,12 +164,7 @@ fn search_index_exclude_path_from_input(
     if !path.is_absolute() {
         return Ok(None);
     }
-    let normalized = normalize_search_index_path(&path)?;
-    if root_is_inside_home(&normalized, home) {
-        Ok(Some(normalized))
-    } else {
-        Ok(None)
-    }
+    normalize_search_index_path(&path).map(Some)
 }
 
 pub(super) fn remove_path_rule_from_search_index(
@@ -472,19 +467,37 @@ mod tests {
     }
 
     #[test]
-    fn outside_absolute_exclude_input_is_kept_as_pattern() {
+    fn absolute_home_exclude_input_is_converted_to_root_relative_pattern() {
         let mut roots = vec![PathBuf::from("/home/user")];
         let mut excludes = Vec::new();
 
         add_path_rule_to_search_index(
             &mut roots,
             &mut excludes,
-            "/var/cache/",
+            "/home/user/cache/",
             SearchIndexPathRuleKind::Excluded,
             Path::new("/home/user"),
         )
         .unwrap();
 
-        assert_eq!(excludes, vec!["/var/cache/".to_owned()]);
+        assert_eq!(excludes, vec!["/cache/".to_owned()]);
+    }
+
+    #[test]
+    fn outside_absolute_exclude_input_requires_indexed_parent() {
+        let mut roots = vec![PathBuf::from("/home/user")];
+        let mut excludes = Vec::new();
+
+        let error = add_path_rule_to_search_index(
+            &mut roots,
+            &mut excludes,
+            "/var/cache/",
+            SearchIndexPathRuleKind::Excluded,
+            Path::new("/home/user"),
+        )
+        .expect_err("outside indexed parent");
+
+        assert_eq!(error, EXCLUDE_REQUIRES_INDEXED_PARENT_ERROR);
+        assert!(excludes.is_empty());
     }
 }

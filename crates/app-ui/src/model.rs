@@ -86,9 +86,9 @@ pub(crate) use preview::{
 };
 mod search;
 pub(crate) use search::{
-    SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
-    SearchIndexPathRuleSelection, SearchIndexProfileSaveReason, SearchIndexRuntime, SearchRequest,
-    SearchScope, SearchState,
+    SearchIndexDaemonStatus, SearchIndexErrorCopyTarget, SearchIndexPathRuleEditMode,
+    SearchIndexPathRuleKind, SearchIndexPathRuleSelection, SearchIndexProfileSaveReason,
+    SearchIndexRuntime, SearchIndexSettingsSection, SearchRequest, SearchScope, SearchState,
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
@@ -338,6 +338,8 @@ pub(crate) enum Message {
     SearchIndexDaemonRestarted(Result<SearchIndexDaemonStatus, String>),
     SearchIndexMaintenanceEvent(u64, IndexServiceEvent),
     SearchIndexMaintenanceUpdated(u64, Result<bool, String>),
+    SearchIndexSettingsSectionSelected(SearchIndexSettingsSection),
+    SearchIndexErrorCopyRequested(SearchIndexErrorCopyTarget),
     SearchIndexStatusRefreshRequested,
     SearchIndexManualBuildRequested(PathBuf, FileSearchIndexMode),
     SearchIndexRemoveRequested(PathBuf),
@@ -345,12 +347,17 @@ pub(crate) enum Message {
     SearchIndexMaintenancePauseToggled,
     SearchIndexFailuresClearRequested(PathBuf),
     SearchIndexPathRuleSelected(SearchIndexPathRuleSelection),
-    SearchIndexPathRuleKindChanged(SearchIndexPathRuleSelection, SearchIndexPathRuleKind),
-    SearchIndexPathRuleKindSelected(SearchIndexPathRuleKind),
+    SearchIndexIndexedPathAddRequested,
+    SearchIndexExcludeRuleAddRequested,
+    SearchIndexPathRuleEditRequested(SearchIndexPathRuleSelection),
+    SearchIndexPathRuleRemoveRequested(SearchIndexPathRuleSelection),
     SearchIndexPathRuleInputChanged(String),
+    SearchIndexPathRuleInputStabilized(PathSuggestionRequest),
+    SearchIndexPathRuleSuggestionsLoaded(PathSuggestionRequest, Vec<PathBuf>),
+    SearchIndexPathRuleSuggestionSelected(PathBuf),
     SearchIndexPathRuleEditorCommitted,
+    SearchIndexPathRuleEditCanceled,
     SearchIndexPathRuleAdded,
-    SearchIndexPathRuleRemoved,
     SearchIndexPathRuleUpdated,
     SearchIndexDirectoryErrorPolicySelected(DirectoryErrorPolicy),
     SearchIndexContentEnabledToggled(bool),

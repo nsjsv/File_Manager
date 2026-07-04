@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use file_index::FileSearchIndexStatus;
@@ -15,6 +16,26 @@ enum SearchIndexStatusRefresh {
 }
 
 impl FileBrowser {
+    pub(crate) fn search_index_setting_roots(&self) -> Vec<PathBuf> {
+        let mut seen = HashSet::new();
+        let mut roots = Vec::new();
+
+        for root in &self.search_index.profile_roots {
+            push_unique_root(&mut roots, &mut seen, root.clone());
+        }
+        for root in self.search_index.statuses.keys() {
+            push_unique_root(&mut roots, &mut seen, root.clone());
+        }
+        for root in &self.search_index.indexing_roots {
+            push_unique_root(&mut roots, &mut seen, root.clone());
+        }
+        for root in self.search_index.root_errors.keys() {
+            push_unique_root(&mut roots, &mut seen, root.clone());
+        }
+
+        roots
+    }
+
     pub(crate) fn refresh_search_index_status_for_root(&mut self, root: PathBuf) -> Task<Message> {
         self.refresh_search_index_status_for_root_with_mode(
             root,
@@ -88,5 +109,11 @@ impl FileBrowser {
         }
         self.sync_search_index_status_for_active_search(&root);
         Task::none()
+    }
+}
+
+fn push_unique_root(roots: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, root: PathBuf) {
+    if seen.insert(root.clone()) {
+        roots.push(root);
     }
 }

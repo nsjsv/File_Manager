@@ -232,6 +232,7 @@ impl FileBrowser {
         self.user_config.search_index_content_enabled = content_enabled;
         self.user_config.search_index_media_scope = media_metadata_scope;
         self.search_index.reset_path_rule_order_from_current_rules();
+        self.search_index.profile_loading = true;
         self.search_index.service_generation = self.search_index.service_generation.wrapping_add(1);
         self.search_index.pending_startup_index_builds = index_requests;
 

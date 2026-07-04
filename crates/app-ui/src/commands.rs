@@ -161,6 +161,18 @@ pub(crate) fn path_suggestions_command(
     )
 }
 
+pub(crate) fn search_index_path_rule_suggestions_command(
+    request: PathSuggestionRequest,
+) -> Task<Message> {
+    let issued_request = request.clone();
+    Task::perform(
+        load_path_suggestions(request.input, request.current_dir),
+        move |suggestions| {
+            Message::SearchIndexPathRuleSuggestionsLoaded(issued_request.clone(), suggestions)
+        },
+    )
+}
+
 pub(crate) fn search_command(
     request: SearchRequest,
     options: ScanOptions,

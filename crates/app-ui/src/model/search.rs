@@ -7,6 +7,7 @@ use file_index::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::config::SearchBackendMode;
 use crate::startup_index_tree::StartupIndexBuildRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +29,7 @@ pub(crate) struct SearchRequest {
 pub(crate) struct SearchState {
     pub(crate) scope: SearchScope,
     pub(crate) mode: SearchMode,
+    pub(crate) session_backend_mode: SearchBackendMode,
     pub(crate) root: PathBuf,
     pub(crate) query: String,
     pub(crate) request_generation: u64,
@@ -39,6 +41,8 @@ pub(crate) struct SearchState {
     pub(crate) skipped_count: usize,
     pub(crate) error: Option<String>,
     pub(crate) index_error: Option<String>,
+    pub(crate) indexed_fallback_session: bool,
+    pub(crate) show_index_ready_reopen_hint: bool,
 }
 
 impl SearchState {
@@ -57,6 +61,22 @@ impl SearchState {
 pub(crate) enum SearchIndexPathRuleKind {
     Indexed,
     Excluded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchIndexSettingsSection {
+    Overview,
+    Errors,
+    PathRules,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SearchIndexErrorCopyTarget {
+    All,
+    DaemonStatus,
+    ProfileError,
+    RootError(PathBuf),
+    Failure { root: PathBuf, index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,11 +119,14 @@ pub(crate) enum SearchIndexDaemonStatus {
 pub(crate) struct SearchIndexRuntime {
     pub(crate) base_dir: PathBuf,
     pub(crate) home_dir: PathBuf,
+    pub(crate) selected_settings_section: SearchIndexSettingsSection,
     pub(crate) profile_id: String,
     pub(crate) profile_roots: Vec<PathBuf>,
     pub(crate) profile_loading: bool,
     pub(crate) profile_error: Option<String>,
+    pub(crate) path_rule_error: Option<String>,
     pub(crate) maintenance_paused: bool,
+    pub(crate) bootstrap_in_progress: bool,
     pub(crate) service_generation: u64,
     pub(crate) status_generation: u64,
     pub(crate) daemon_status: Option<SearchIndexDaemonStatus>,
@@ -118,6 +141,8 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) selected_path_rule: Option<SearchIndexPathRuleSelection>,
     pub(crate) path_rule_editor: Option<SearchIndexPathRuleEditMode>,
     pub(crate) path_rule_input: String,
+    pub(crate) path_rule_suggestions: Vec<PathBuf>,
+    pub(crate) path_rule_suggestion_generation: u64,
     pub(crate) path_rule_kind: SearchIndexPathRuleKind,
     pub(crate) directory_error_policy: DirectoryErrorPolicy,
     pub(crate) content_index_enabled: bool,
@@ -129,11 +154,14 @@ impl SearchIndexRuntime {
         Self {
             base_dir,
             home_dir: PathBuf::new(),
+            selected_settings_section: SearchIndexSettingsSection::Overview,
             profile_id: "default".to_owned(),
             profile_roots: Vec::new(),
             profile_loading: false,
             profile_error: None,
+            path_rule_error: None,
             maintenance_paused: false,
+            bootstrap_in_progress: false,
             service_generation: 0,
             status_generation: 0,
             daemon_status: None,
@@ -148,6 +176,8 @@ impl SearchIndexRuntime {
             selected_path_rule: None,
             path_rule_editor: None,
             path_rule_input: "~".to_owned(),
+            path_rule_suggestions: Vec::new(),
+            path_rule_suggestion_generation: 0,
             path_rule_kind: SearchIndexPathRuleKind::Indexed,
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
             content_index_enabled: false,

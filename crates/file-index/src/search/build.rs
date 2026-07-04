@@ -10,13 +10,11 @@ use super::crawl::{
     crawl_search_records, crawl_search_records_with_callback,
     crawl_selected_search_records_with_progress, SearchCrawlOptions,
 };
-use super::engine::write_search_documents;
 use super::extractor::{extract_media_document, extract_text_document};
 use super::full_text::TantivyIndexWriter;
 use super::manifest::{current_time_ms, SearchIndexManifest};
 use super::store::{
-    self, catalog_dir_size, prepare_catalog_dir, replace_catalog_dir, write_catalog,
-    CatalogWriteSession,
+    self, catalog_dir_size, prepare_catalog_dir, replace_catalog_dir, CatalogWriteSession,
 };
 use super::types::{
     FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome,
@@ -59,23 +57,23 @@ pub(super) fn build_file_search_index_blocking(
         );
     }
 
-    build_file_search_index_full_rebuild_blocking(root, index_dir, options)
+    build_file_search_index_full_rebuild_blocking(root, index_dir, options, None)
 }
 
 fn build_file_search_index_full_rebuild_blocking(
     root: &Path,
     index_dir: &Path,
     options: FileSearchIndexOptions,
+    cancel: Option<CancellationToken>,
 ) -> Result<FileSearchIndexOutcome, IndexError> {
     let pending_index_dir = index_dir.with_extension("building");
     prepare_catalog_dir(root, &pending_index_dir)?;
     let mut catalog = CatalogWriteSession::create(&pending_index_dir)?;
-    let mut tantivy =
-        if options.content_index_enabled || options.media_metadata_scope.includes_media() {
-            Some(TantivyIndexWriter::create(&pending_index_dir)?)
-        } else {
-            None
-        };
+    let mut tantivy = tantivy_writer_for_indexing(
+        &pending_index_dir,
+        options.content_index_enabled,
+        options.media_metadata_scope,
+    )?;
     let mut skipped = Vec::new();
     let crawl_skipped = crawl_search_records_with_callback(
         root,
@@ -85,11 +83,18 @@ fn build_file_search_index_full_rebuild_blocking(
             directory_error_policy: options.directory_error_policy,
             excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
             throttle: true,
-            cancel: None,
+            cancel,
         },
         |record| {
             if let Some(writer) = tantivy.as_mut() {
-                write_full_text_record(writer, &record, &options, &mut skipped)?;
+                write_full_text_record(
+                    writer,
+                    &record,
+                    options.content_index_enabled,
+                    options.content_max_file_bytes,
+                    options.media_metadata_scope,
+                    &mut skipped,
+                )?;
             }
             catalog.add_record(&record)
         },
@@ -128,21 +133,78 @@ fn build_file_search_index_full_rebuild_blocking(
     })
 }
 
+fn tantivy_writer_for_indexing(
+    index_dir: &Path,
+    content_index_enabled: bool,
+    media_metadata_scope: MediaMetadataScope,
+) -> Result<Option<TantivyIndexWriter>, IndexError> {
+    if content_index_enabled || media_metadata_scope.includes_media() {
+        Ok(Some(TantivyIndexWriter::create(index_dir)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn write_collected_records_to_pending_index(
+    pending_index_dir: &Path,
+    records: &[SearchCatalogRecord],
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_metadata_scope: MediaMetadataScope,
+    skipped: &mut Vec<ScanWarning>,
+    cancel: Option<&CancellationToken>,
+) -> Result<CatalogWriteSession, IndexError> {
+    let mut catalog = CatalogWriteSession::create(pending_index_dir)?;
+    let mut tantivy = tantivy_writer_for_indexing(
+        pending_index_dir,
+        content_index_enabled,
+        media_metadata_scope,
+    )?;
+    for record in records {
+        ensure_not_cancelled(cancel)?;
+        if let Some(writer) = tantivy.as_mut() {
+            write_full_text_record(
+                writer,
+                record,
+                content_index_enabled,
+                content_max_file_bytes,
+                media_metadata_scope,
+                skipped,
+            )?;
+        }
+        catalog.add_record(record)?;
+    }
+    if let Some(writer) = tantivy {
+        writer.finish()?;
+    }
+    Ok(catalog)
+}
+
+fn ensure_not_cancelled(cancel: Option<&CancellationToken>) -> Result<(), IndexError> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        Err(IndexError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
 fn write_full_text_record(
     writer: &mut TantivyIndexWriter,
     record: &SearchCatalogRecord,
-    options: &FileSearchIndexOptions,
+    content_index_enabled: bool,
+    content_max_file_bytes: u64,
+    media_metadata_scope: MediaMetadataScope,
     skipped: &mut Vec<ScanWarning>,
 ) -> Result<(), IndexError> {
-    if options.content_index_enabled {
-        match extract_text_document(record, options.content_max_file_bytes) {
+    if content_index_enabled {
+        match extract_text_document(record, content_max_file_bytes) {
             Ok(Some(document)) => writer.add_text_document(&document)?,
             Ok(None) => {}
             Err(warning) => skipped.push(warning),
         }
     }
-    if options.media_metadata_scope.includes_media() {
-        match extract_media_document(record, options.media_metadata_scope) {
+    if media_metadata_scope.includes_media() {
+        match extract_media_document(record, media_metadata_scope) {
             Ok(Some(document)) => writer.add_media_document(&document)?,
             Ok(None) => {}
             Err(warning) => skipped.push(warning),
@@ -186,9 +248,23 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
         );
     }
 
+    let selected_paths_include_root = selected_paths.iter().any(|path| path == root);
+
+    if selected_paths_include_root {
+        let outcome =
+            build_file_search_index_full_rebuild_blocking(root, index_dir, options, cancel)?;
+        progress(FileSearchIndexProgress::IndexedPaths {
+            completed_paths: 1,
+            total_paths: 1,
+            indexed_count: outcome.indexed_count,
+        });
+        return Ok(outcome);
+    }
+
     let pending_index_dir = index_dir.with_extension("building");
     prepare_catalog_dir(root, &pending_index_dir)?;
     let total_paths = selected_paths.len().max(1);
+    let crawl_cancel = cancel.clone();
     let (records, skipped) = crawl_selected_search_records_with_progress(
         root,
         &selected_paths,
@@ -198,7 +274,7 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
             directory_error_policy: options.directory_error_policy,
             excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
             throttle: true,
-            cancel,
+            cancel: crawl_cancel,
         },
         |completed_paths, indexed_count| {
             progress(FileSearchIndexProgress::IndexedPaths {
@@ -209,14 +285,17 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
         },
     )?;
     let mut skipped = skipped;
-    skipped.extend(write_search_documents(
+    let catalog = write_collected_records_to_pending_index(
         &pending_index_dir,
         &records,
         options.content_index_enabled,
         options.content_max_file_bytes,
         options.media_metadata_scope,
-    )?);
+        &mut skipped,
+        cancel.as_ref(),
+    )?;
     let failures = warnings_to_failures(&skipped);
+    let indexed_count = catalog.record_count();
     let mut manifest = SearchIndexManifest::new(
         root,
         options.include_hidden,
@@ -225,16 +304,14 @@ pub(super) fn build_file_search_index_for_paths_blocking_with_progress(
         options.content_index_enabled,
         options.content_max_file_bytes,
         options.media_metadata_scope,
-        records.len(),
+        indexed_count,
         failures.len(),
         None,
     );
-    write_catalog(&pending_index_dir, &mut manifest, &records, &failures)?;
+    catalog.finish(&mut manifest, &failures)?;
     replace_catalog_dir(index_dir, &pending_index_dir)?;
     manifest.index_size_bytes = catalog_dir_size(index_dir)?;
     clear_query_cache();
-
-    let indexed_count = records.len();
 
     Ok(FileSearchIndexOutcome {
         root: root.to_path_buf(),
@@ -278,6 +355,7 @@ fn build_file_search_index_incremental_blocking(
     let mut rescanned_roots = None;
     let (records, skipped) = match scope {
         SearchIndexBuildScope::Root => {
+            let crawl_cancel = cancel.clone();
             let (scanned_records, skipped) = crawl_search_records(
                 root,
                 &SearchCrawlOptions {
@@ -286,7 +364,7 @@ fn build_file_search_index_incremental_blocking(
                     directory_error_policy: options.directory_error_policy,
                     excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
                     throttle: true,
-                    cancel,
+                    cancel: crawl_cancel,
                 },
             )?;
             progress(FileSearchIndexProgress::IndexedPaths {
@@ -302,6 +380,7 @@ fn build_file_search_index_incremental_blocking(
         SearchIndexBuildScope::Selected(selected_paths) => {
             let selected_roots = non_nested_index_roots(&selected_paths);
             let total_paths = selected_roots.len().max(1);
+            let crawl_cancel = cancel.clone();
             let (scanned_records, skipped) = crawl_selected_search_records_with_progress(
                 root,
                 &selected_roots,
@@ -311,7 +390,7 @@ fn build_file_search_index_incremental_blocking(
                     directory_error_policy: options.directory_error_policy,
                     excluded_index_dir: Some(crawl_excluded_index_dir(&options, index_dir)),
                     throttle: true,
-                    cancel,
+                    cancel: crawl_cancel,
                 },
                 |completed_paths, indexed_count| {
                     progress(FileSearchIndexProgress::IndexedPaths {
@@ -351,6 +430,7 @@ fn build_file_search_index_incremental_blocking(
         options.content_max_file_bytes,
         options.media_metadata_scope,
         options.directory_error_policy,
+        cancel.as_ref(),
     )
 }
 
@@ -398,17 +478,20 @@ fn write_records_to_index(
     content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
     directory_error_policy: super::types::DirectoryErrorPolicy,
+    cancel: Option<&CancellationToken>,
 ) -> Result<FileSearchIndexOutcome, IndexError> {
     let pending_index_dir = index_dir.with_extension("building");
     prepare_catalog_dir(root, &pending_index_dir)?;
     let mut skipped = skipped;
-    skipped.extend(write_search_documents(
+    let catalog = write_collected_records_to_pending_index(
         &pending_index_dir,
         &records,
         content_index_enabled,
         content_max_file_bytes,
         media_metadata_scope,
-    )?);
+        &mut skipped,
+        cancel,
+    )?;
     let failures = merge_scan_failures(&skipped, previous_failures, rescanned_roots);
     let mut manifest = SearchIndexManifest::new(
         root,
@@ -418,11 +501,11 @@ fn write_records_to_index(
         content_index_enabled,
         content_max_file_bytes,
         media_metadata_scope,
-        records.len(),
+        catalog.record_count(),
         failures.len(),
         built_at_ms,
     );
-    write_catalog(&pending_index_dir, &mut manifest, &records, &failures)?;
+    catalog.finish(&mut manifest, &failures)?;
     replace_catalog_dir(index_dir, &pending_index_dir)?;
     manifest.index_size_bytes = catalog_dir_size(index_dir)?;
     clear_query_cache();

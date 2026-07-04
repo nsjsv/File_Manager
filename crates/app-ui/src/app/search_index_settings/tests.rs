@@ -4,7 +4,7 @@ use super::*;
 use crate::app::FileBrowser;
 use crate::model::{
     SearchIndexDaemonStatus, SearchIndexPathRuleEditMode, SearchIndexPathRuleKind,
-    SearchIndexPathRuleSelection,
+    SearchIndexPathRuleSelection, SearchIndexSettingsSection, SettingsCategory,
 };
 
 #[test]
@@ -203,7 +203,7 @@ fn add_button_first_opens_default_path_rule_editor() {
         browser.search_index.path_rule_editor,
         Some(SearchIndexPathRuleEditMode::Adding)
     );
-    assert_eq!(browser.search_index.path_rule_input, "~");
+    assert_eq!(browser.search_index.path_rule_input, "~/");
     assert_eq!(
         browser.search_index.path_rule_kind,
         SearchIndexPathRuleKind::Indexed
@@ -306,7 +306,7 @@ fn exclude_radio_click_keeps_index_root_when_no_parent_exists() {
     assert_eq!(browser.search_index.selected_path_rule, None);
     assert_eq!(browser.search_index.path_rule_editor, None);
     assert_eq!(
-        browser.search_index.profile_error.as_deref(),
+        browser.search_index.path_rule_error.as_deref(),
         Some("Add an indexed parent path before excluding this path.")
     );
 }
@@ -540,6 +540,20 @@ fn status_response_for_other_root_survives_unrelated_forced_refresh() {
         .status_loading_roots
         .contains_key(&second_root));
     assert!(browser.search_index.statuses.contains_key(&second_root));
+}
+
+#[test]
+fn reopening_search_index_settings_resets_section_to_overview() {
+    let mut browser = browser_with_search_index_home();
+    browser.selected_settings_category = SettingsCategory::SearchIndex;
+    browser.search_index.selected_settings_section = SearchIndexSettingsSection::Errors;
+
+    let _task = browser.prepare_search_index_settings_if_selected();
+
+    assert_eq!(
+        browser.search_index.selected_settings_section,
+        SearchIndexSettingsSection::Overview
+    );
 }
 
 fn browser_with_search_index_home() -> FileBrowser {

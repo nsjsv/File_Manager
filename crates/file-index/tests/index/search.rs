@@ -492,6 +492,58 @@ async fn file_search_index_queries_image_media_metadata_when_enabled() {
 }
 
 #[tokio::test]
+async fn selected_path_full_rebuild_queries_content_and_media_metadata() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    let selected = dir.path().join("selected");
+    fs::create_dir_all(&selected).unwrap();
+    fs::write(selected.join("briefing.md"), "quarterly runway").unwrap();
+    let image_path = selected.join("product-shot.png");
+    image::RgbImage::new(31, 17).save(&image_path).unwrap();
+    let all_search_options = |mode| FileSearchOptions {
+        mode,
+        content_index_enabled: true,
+        media_metadata_scope: file_index::MediaMetadataScope::All,
+        ..search_options(true, 10)
+    };
+
+    build_file_search_index_for_paths(
+        dir.path(),
+        index_dir.path(),
+        vec![selected],
+        all_index_options(true),
+    )
+    .await
+    .unwrap();
+
+    let content = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "runway",
+        all_search_options(file_index::SearchMode::Contents),
+    )
+    .await
+    .unwrap();
+    let media = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "product",
+        all_search_options(file_index::SearchMode::Media),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(content.matches.len(), 1);
+    assert_eq!(
+        content.matches[0].path,
+        dir.path().join("selected/briefing.md")
+    );
+    assert_eq!(media.matches[0].path, image_path);
+    let media_metadata = media.matches[0].media.as_ref().expect("media metadata");
+    assert_eq!(media_metadata.width, Some(31));
+}
+
+#[tokio::test]
 async fn file_search_index_queries_image_exif_when_enabled() {
     let dir = tempdir().unwrap();
     let index_dir = tempdir().unwrap();
@@ -735,6 +787,14 @@ fn media_index_options_with_scope(
 ) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         media_metadata_scope,
+        ..index_options(include_hidden)
+    }
+}
+
+fn all_index_options(include_hidden: bool) -> FileSearchIndexOptions {
+    FileSearchIndexOptions {
+        content_index_enabled: true,
+        media_metadata_scope: file_index::MediaMetadataScope::All,
         ..index_options(include_hidden)
     }
 }

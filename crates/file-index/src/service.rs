@@ -10,10 +10,9 @@ use crate::profile::{IndexProfile, IndexTaskPhase, ProfileStore, SearchMode};
 use crate::search::{
     build_file_search_index, build_file_search_index_for_paths,
     build_file_search_index_for_paths_with_progress, clear_file_search_index_failures,
-    file_search_index_status, remove_file_search_index, scan_file_search_index_snapshot,
-    search_file_index_with_cancel, FileSearchIndexMode, FileSearchIndexOptions,
-    FileSearchIndexOutcome, FileSearchIndexProgress, FileSearchIndexStatus, FileSearchOptions,
-    FileSearchOutcome,
+    file_search_index_status, remove_file_search_index, search_file_index_with_cancel,
+    FileSearchIndexMode, FileSearchIndexOptions, FileSearchIndexOutcome, FileSearchIndexProgress,
+    FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome,
 };
 use crate::watch::{watch_index_root, IndexFileChangeBatch, WatchIndexRootOptions};
 use crate::IndexError;
@@ -270,8 +269,6 @@ impl IndexServiceCore {
             self.index_options_for_profile(&profile),
         )
         .await?;
-        self.save_control_snapshot(profile_id, &root, &profile)
-            .await?;
         self.inner.profile_store.save_task_status(
             profile_id,
             Some(&root),
@@ -317,8 +314,6 @@ impl IndexServiceCore {
             move |update| progress(update),
         )
         .await?;
-        self.save_control_snapshot(&request.profile_id, &request.root, &profile)
-            .await?;
         self.inner.profile_store.save_task_status(
             &request.profile_id,
             Some(&request.root),
@@ -350,8 +345,6 @@ impl IndexServiceCore {
     ) -> Result<IndexServiceEvent, IndexError> {
         let profile = self.profile(profile_id)?;
         clear_file_search_index_failures(self.index_dir_for_root(&root)).await?;
-        self.save_control_snapshot(profile_id, &root, &profile)
-            .await?;
         let status = file_search_index_status(
             self.index_dir_for_root(&root),
             &root,
@@ -374,9 +367,6 @@ impl IndexServiceCore {
             IndexTaskPhase::Deleted,
             Some("root index removed"),
         )?;
-        self.inner
-            .profile_store
-            .save_root_snapshot(profile_id, &root, &[], &[])?;
         let status = file_search_index_status(
             self.index_dir_for_root(&root),
             &root,
@@ -593,10 +583,6 @@ impl IndexServiceCore {
 
         match outcome {
             Ok(outcome) => {
-                if let Err(error) = self.save_control_snapshot(profile_id, root, &profile).await {
-                    self.publish_incremental_failure(profile_id, root, error.to_string());
-                    return;
-                }
                 let _ = self.inner.profile_store.save_task_status(
                     profile_id,
                     Some(root),
@@ -623,35 +609,6 @@ impl IndexServiceCore {
             .ok_or_else(|| {
                 IndexError::store(&self.inner.index_base_dir, format!("missing profile {id}"))
             })
-    }
-
-    async fn save_control_snapshot(
-        &self,
-        profile_id: &str,
-        root: &Path,
-        profile: &IndexProfile,
-    ) -> Result<(), IndexError> {
-        let profile_store = self.inner.profile_store.clone();
-        let profile_id = profile_id.to_owned();
-        let root = root.to_path_buf();
-        let index_dir = self.index_dir_for_root(&root);
-        let options = self.index_options_for_profile(profile);
-        let join_root = root.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let snapshot =
-                std::cell::RefCell::new(profile_store.begin_root_snapshot(&profile_id, &root)?);
-            scan_file_search_index_snapshot(
-                &index_dir,
-                &root,
-                options,
-                |record| snapshot.borrow_mut().add_record(&record),
-                |failure| snapshot.borrow_mut().add_failure(&failure),
-            )?;
-            snapshot.into_inner().finish()
-        })
-        .await
-        .map_err(|error| IndexError::store(&join_root, error))?
     }
 
     fn index_dir_for_root(&self, root: &Path) -> PathBuf {

@@ -48,6 +48,10 @@ impl FileBrowser {
             | Message::SearchIndexDaemonRestarted(outcome) => {
                 self.accept_search_index_daemon_status(outcome)
             }
+            Message::SearchIndexSettingsSectionSelected(section) => {
+                self.select_search_index_settings_section(section)
+            }
+            Message::SearchIndexErrorCopyRequested(target) => self.copy_search_index_error(target),
             Message::SearchIndexDaemonRestartRequested => {
                 self.request_search_index_daemon_restart()
             }
@@ -76,20 +80,35 @@ impl FileBrowser {
             Message::SearchIndexPathRuleSelected(selection) => {
                 self.select_search_index_path_rule(selection)
             }
-            Message::SearchIndexPathRuleKindChanged(selection, kind) => {
-                self.change_search_index_path_rule_kind(selection, kind)
+            Message::SearchIndexIndexedPathAddRequested => {
+                self.start_adding_search_index_indexed_path()
             }
-            Message::SearchIndexPathRuleKindSelected(kind) => {
-                self.select_search_index_path_rule_kind(kind)
+            Message::SearchIndexExcludeRuleAddRequested => {
+                self.start_adding_search_index_exclude_rule()
+            }
+            Message::SearchIndexPathRuleEditRequested(selection) => {
+                self.request_search_index_path_rule_edit(selection)
+            }
+            Message::SearchIndexPathRuleRemoveRequested(selection) => {
+                self.request_search_index_path_rule_removal(selection)
             }
             Message::SearchIndexPathRuleInputChanged(input) => {
                 self.update_search_index_path_rule_input(input)
             }
+            Message::SearchIndexPathRuleInputStabilized(request) => {
+                self.load_stable_search_index_path_rule_suggestions(request)
+            }
+            Message::SearchIndexPathRuleSuggestionsLoaded(request, suggestions) => {
+                self.accept_search_index_path_rule_suggestions(request, suggestions)
+            }
+            Message::SearchIndexPathRuleSuggestionSelected(path) => {
+                self.select_search_index_path_rule_suggestion(path)
+            }
             Message::SearchIndexPathRuleEditorCommitted => {
                 self.commit_search_index_path_rule_editor()
             }
+            Message::SearchIndexPathRuleEditCanceled => self.cancel_search_index_path_rule_edit(),
             Message::SearchIndexPathRuleAdded => self.add_search_index_path_rule(),
-            Message::SearchIndexPathRuleRemoved => self.remove_selected_search_index_path_rule(),
             Message::SearchIndexPathRuleUpdated => self.update_selected_search_index_path_rule(),
             Message::SearchIndexDirectoryErrorPolicySelected(policy) => {
                 self.select_search_index_directory_error_policy(policy)
@@ -115,7 +134,12 @@ impl FileBrowser {
 fn search_index_message_commits_path_rule_editor(message: &Message) -> bool {
     matches!(
         message,
-        Message::SearchIndexStatusRefreshRequested
+        Message::SearchIndexSettingsSectionSelected(_)
+            | Message::SearchIndexIndexedPathAddRequested
+            | Message::SearchIndexExcludeRuleAddRequested
+            | Message::SearchIndexPathRuleEditRequested(_)
+            | Message::SearchIndexPathRuleRemoveRequested(_)
+            | Message::SearchIndexStatusRefreshRequested
             | Message::SearchIndexManualBuildRequested(_, _)
             | Message::SearchIndexRemoveRequested(_)
             | Message::SearchIndexProfileDeleteRequested

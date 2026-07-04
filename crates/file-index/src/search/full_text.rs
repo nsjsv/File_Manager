@@ -72,21 +72,6 @@ pub(crate) struct FullTextSearchHit {
     pub(crate) media: Option<MediaSearchMetadata>,
 }
 
-pub(crate) fn write_tantivy_index(
-    index_dir: &Path,
-    text_documents: &[ExtractedTextDocument],
-    media_documents: &[ExtractedMediaDocument],
-) -> Result<(), IndexError> {
-    let mut writer = TantivyIndexWriter::create(index_dir)?;
-    for text in text_documents {
-        writer.add_text_document(text)?;
-    }
-    for media in media_documents {
-        writer.add_media_document(media)?;
-    }
-    writer.finish()
-}
-
 impl TantivyIndexWriter {
     pub(crate) fn create(index_dir: &Path) -> Result<Self, IndexError> {
         let schema = search_schema();
@@ -173,8 +158,8 @@ impl TantivyIndexWriter {
     pub(crate) fn finish(mut self) -> Result<(), IndexError> {
         self.writer
             .commit()
-            .map_err(|error| IndexError::store(&self.tantivy_dir, error))?;
-        Ok(())
+            .map(|_| ())
+            .map_err(|error| IndexError::store(&self.tantivy_dir, error))
     }
 }
 

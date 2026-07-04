@@ -26,6 +26,9 @@ const SEARCH_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(150);
 impl FileBrowser {
     pub(super) fn open_search(&mut self) -> Task<Message> {
         let root = self.search_root_for_scope(SearchScope::CurrentDirectory);
+        let session_backend_mode = self.effective_search_backend_mode();
+        let indexed_fallback_session = self.user_config.search_mode == SearchBackendMode::Indexed
+            && session_backend_mode == SearchBackendMode::Simple;
         self.context_menu = None;
         self.open_with = None;
         self.archive_creation = None;
@@ -40,6 +43,7 @@ impl FileBrowser {
         self.search = Some(SearchState {
             scope: SearchScope::CurrentDirectory,
             mode: SearchMode::Files,
+            session_backend_mode,
             root: root.clone(),
             query: String::new(),
             request_generation: 0,
@@ -51,9 +55,11 @@ impl FileBrowser {
             skipped_count: 0,
             error: None,
             index_error: None,
+            indexed_fallback_session,
+            show_index_ready_reopen_hint: false,
         });
 
-        let index_command = if self.user_config.search_mode == SearchBackendMode::Indexed {
+        let index_command = if session_backend_mode == SearchBackendMode::Indexed {
             self.refresh_search_index_status_for_root(root)
         } else {
             Task::none()
@@ -123,7 +129,7 @@ impl FileBrowser {
         search.error = None;
         search.index_error = None;
         search.is_indexing = false;
-        let index_command = if self.user_config.search_mode == SearchBackendMode::Indexed {
+        let index_command = if search.session_backend_mode == SearchBackendMode::Indexed {
             self.refresh_search_index_status_for_root(root)
         } else {
             Task::none()
@@ -136,12 +142,12 @@ impl FileBrowser {
     }
 
     pub(super) fn select_search_mode(&mut self, mode: SearchMode) -> Task<Message> {
-        if self.user_config.search_mode == SearchBackendMode::Simple && mode != SearchMode::Files {
-            return Task::none();
-        }
         let Some(search) = &mut self.search else {
             return Task::none();
         };
+        if search.session_backend_mode == SearchBackendMode::Simple && mode != SearchMode::Files {
+            return Task::none();
+        }
         if search.mode == mode {
             return Task::none();
         }
@@ -329,7 +335,11 @@ impl FileBrowser {
             self.clear_active_search_results();
             return Task::none();
         }
-        if self.user_config.search_mode == SearchBackendMode::Simple {
+        if self
+            .search
+            .as_ref()
+            .is_some_and(|search| search.session_backend_mode == SearchBackendMode::Simple)
+        {
             self.mark_active_search_loading();
             self.clear_active_search_index_status_for_root(&request.root);
             let cancellation = self.replace_active_search_cancel_token();

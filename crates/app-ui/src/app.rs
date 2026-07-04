@@ -594,7 +594,6 @@ impl FileBrowser {
         if self.search_window == Some(window) {
             view_search_window(
                 self.search.as_ref(),
-                self.user_config.search_mode,
                 self.scrollbar_visibility_for(&ScrollbarRegion::SearchResults),
             )
         } else if self.settings_window == Some(window) {

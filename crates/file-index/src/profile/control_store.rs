@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use file_core::FileKind;
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -13,98 +15,103 @@ use crate::IndexError;
 
 const SCHEMA_VERSION: u32 = 6;
 const CONTROL_EXTRACTOR_VERSION: u32 = crate::search::EXTRACTOR_VERSION;
+const CONTROL_DB_BUSY_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct ProfileStore {
     pub(super) db_path: PathBuf,
+    write_gate: Arc<Mutex<()>>,
 }
 
 impl ProfileStore {
     pub fn open(db_path: impl Into<PathBuf>) -> Result<Self, IndexError> {
         let store = Self {
             db_path: db_path.into(),
+            write_gate: Arc::new(Mutex::new(())),
         };
         store.initialize()?;
         Ok(store)
     }
 
     pub fn save_profile(&self, profile: &IndexProfile) -> Result<(), IndexError> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        transaction
-            .execute(
-                "INSERT INTO profiles (
-                    id, include_hidden, content_enabled, content_max_file_bytes,
-                    media_scope, directory_error_policy
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(id) DO UPDATE SET
-                    include_hidden = excluded.include_hidden,
-                    content_enabled = excluded.content_enabled,
-                    content_max_file_bytes = excluded.content_max_file_bytes,
-                    media_scope = excluded.media_scope,
-                    directory_error_policy = excluded.directory_error_policy",
-                params![
-                    profile.id,
-                    profile.include_hidden,
-                    profile.content.enabled,
-                    saturating_u64_to_i64(profile.content.max_file_bytes),
-                    profile.media.scope.config_value(),
-                    profile.directory_error_policy.config_value(),
-                ],
-            )
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        transaction
-            .execute(
-                "DELETE FROM profile_roots WHERE profile_id = ?1",
-                params![profile.id],
-            )
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        transaction
-            .execute(
-                "DELETE FROM profile_exclude_patterns WHERE profile_id = ?1",
-                params![profile.id],
-            )
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        {
-            let mut insert_root = transaction
-                .prepare(
-                    "INSERT INTO profile_roots (profile_id, ordinal, path_text, path)
-                     VALUES (?1, ?2, ?3, ?4)",
+        self.with_write_lock(|| {
+            let mut connection = self.connection()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| IndexError::store(&self.db_path, error))?;
+            transaction
+                .execute(
+                    "INSERT INTO profiles (
+                        id, include_hidden, content_enabled, content_max_file_bytes,
+                        media_scope, directory_error_policy
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(id) DO UPDATE SET
+                        include_hidden = excluded.include_hidden,
+                        content_enabled = excluded.content_enabled,
+                        content_max_file_bytes = excluded.content_max_file_bytes,
+                        media_scope = excluded.media_scope,
+                        directory_error_policy = excluded.directory_error_policy",
+                    params![
+                        profile.id,
+                        profile.include_hidden,
+                        profile.content.enabled,
+                        saturating_u64_to_i64(profile.content.max_file_bytes),
+                        profile.media.scope.config_value(),
+                        profile.directory_error_policy.config_value(),
+                    ],
                 )
                 .map_err(|error| IndexError::store(&self.db_path, error))?;
-            for (ordinal, root) in profile.roots.iter().enumerate() {
-                insert_root
-                    .execute(params![
-                        profile.id,
-                        saturating_usize_to_i64(ordinal),
-                        root.to_string_lossy(),
-                        path_to_bytes(root),
-                    ])
-                    .map_err(|error| IndexError::store(&self.db_path, error))?;
-            }
-        }
-        {
-            let mut insert_pattern = transaction
-                .prepare(
-                    "INSERT INTO profile_exclude_patterns (profile_id, ordinal, pattern)
-                     VALUES (?1, ?2, ?3)",
+            transaction
+                .execute(
+                    "DELETE FROM profile_roots WHERE profile_id = ?1",
+                    params![profile.id],
                 )
                 .map_err(|error| IndexError::store(&self.db_path, error))?;
-            for (ordinal, pattern) in profile.exclude_patterns.iter().enumerate() {
-                insert_pattern
-                    .execute(params![
-                        profile.id,
-                        saturating_usize_to_i64(ordinal),
-                        pattern.as_str()
-                    ])
+            transaction
+                .execute(
+                    "DELETE FROM profile_exclude_patterns WHERE profile_id = ?1",
+                    params![profile.id],
+                )
+                .map_err(|error| IndexError::store(&self.db_path, error))?;
+            {
+                let mut insert_root = transaction
+                    .prepare(
+                        "INSERT INTO profile_roots (profile_id, ordinal, path_text, path)
+                         VALUES (?1, ?2, ?3, ?4)",
+                    )
                     .map_err(|error| IndexError::store(&self.db_path, error))?;
+                for (ordinal, root) in profile.roots.iter().enumerate() {
+                    insert_root
+                        .execute(params![
+                            profile.id,
+                            saturating_usize_to_i64(ordinal),
+                            root.to_string_lossy(),
+                            path_to_bytes(root),
+                        ])
+                        .map_err(|error| IndexError::store(&self.db_path, error))?;
+                }
             }
-        }
-        transaction
-            .commit()
-            .map_err(|error| IndexError::store(&self.db_path, error))
+            {
+                let mut insert_pattern = transaction
+                    .prepare(
+                        "INSERT INTO profile_exclude_patterns (profile_id, ordinal, pattern)
+                         VALUES (?1, ?2, ?3)",
+                    )
+                    .map_err(|error| IndexError::store(&self.db_path, error))?;
+                for (ordinal, pattern) in profile.exclude_patterns.iter().enumerate() {
+                    insert_pattern
+                        .execute(params![
+                            profile.id,
+                            saturating_usize_to_i64(ordinal),
+                            pattern.as_str()
+                        ])
+                        .map_err(|error| IndexError::store(&self.db_path, error))?;
+                }
+            }
+            transaction
+                .commit()
+                .map_err(|error| IndexError::store(&self.db_path, error))
+        })
     }
 
     pub fn load_profiles(&self) -> Result<Vec<IndexProfile>, IndexError> {
@@ -180,10 +187,12 @@ impl ProfileStore {
     }
 
     pub fn delete_profile(&self, id: &str) -> Result<(), IndexError> {
-        self.connection()?
-            .execute("DELETE FROM profiles WHERE id = ?1", params![id])
-            .map(|_| ())
-            .map_err(|error| IndexError::store(&self.db_path, error))
+        self.with_write_lock(|| {
+            self.connection()?
+                .execute("DELETE FROM profiles WHERE id = ?1", params![id])
+                .map(|_| ())
+                .map_err(|error| IndexError::store(&self.db_path, error))
+        })
     }
 
     pub fn save_task_status(
@@ -196,33 +205,35 @@ impl ProfileStore {
         let root_text = root.map(|root| root.to_string_lossy().into_owned());
         let root_path = root.map(path_to_bytes);
         let task_key = task_key(profile_id, root);
-        self.connection()?
-            .execute(
-                "INSERT INTO index_tasks (
-                    profile_id, root_text, root_path, task_key, phase, message,
-                    updated_at_ms, extractor_version
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                 ON CONFLICT(task_key) DO UPDATE SET
-                    profile_id = excluded.profile_id,
-                    root_text = excluded.root_text,
-                    root_path = excluded.root_path,
-                    phase = excluded.phase,
-                    message = excluded.message,
-                    updated_at_ms = excluded.updated_at_ms,
-                    extractor_version = excluded.extractor_version",
-                params![
-                    profile_id,
-                    root_text,
-                    root_path,
-                    task_key,
-                    phase.as_str(),
-                    message,
-                    current_time_ms(),
-                    i64::from(CONTROL_EXTRACTOR_VERSION),
-                ],
-            )
-            .map(|_| ())
-            .map_err(|error| IndexError::store(&self.db_path, error))
+        self.with_write_lock(|| {
+            self.connection()?
+                .execute(
+                    "INSERT INTO index_tasks (
+                        profile_id, root_text, root_path, task_key, phase, message,
+                        updated_at_ms, extractor_version
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(task_key) DO UPDATE SET
+                        profile_id = excluded.profile_id,
+                        root_text = excluded.root_text,
+                        root_path = excluded.root_path,
+                        phase = excluded.phase,
+                        message = excluded.message,
+                        updated_at_ms = excluded.updated_at_ms,
+                        extractor_version = excluded.extractor_version",
+                    params![
+                        profile_id,
+                        root_text,
+                        root_path,
+                        task_key,
+                        phase.as_str(),
+                        message,
+                        current_time_ms(),
+                        i64::from(CONTROL_EXTRACTOR_VERSION),
+                    ],
+                )
+                .map(|_| ())
+                .map_err(|error| IndexError::store(&self.db_path, error))
+        })
     }
 
     pub fn load_task_statuses(&self) -> Result<Vec<IndexTaskStatus>, IndexError> {
@@ -284,83 +295,85 @@ impl ProfileStore {
         records: &[SearchIndexFileRecord],
         failures: &[FileSearchIndexFailure],
     ) -> Result<(), IndexError> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        let root_text = root.to_string_lossy().into_owned();
-        let root_path = path_to_bytes(root);
-        transaction
-            .execute(
-                "DELETE FROM indexed_files
-                 WHERE profile_id = ?1 AND (root_path = ?2 OR root_text = ?3)",
-                params![profile_id, root_path, root_text],
-            )
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        transaction
-            .execute(
-                "DELETE FROM index_failures
-                 WHERE profile_id = ?1 AND (root_path = ?2 OR root_text = ?3)",
-                params![profile_id, root_path, root_text],
-            )
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        {
-            let mut insert_record = transaction
-                .prepare(
-                    "INSERT INTO indexed_files (
-                        profile_id, root_text, root_path, path_text, path,
-                        relative_path_text, relative_path,
-                        kind, mtime_ms, size_bytes, extractor_version
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        self.with_write_lock(|| {
+            let mut connection = self.connection()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| IndexError::store(&self.db_path, error))?;
+            let root_text = root.to_string_lossy().into_owned();
+            let root_path = path_to_bytes(root);
+            transaction
+                .execute(
+                    "DELETE FROM indexed_files
+                     WHERE profile_id = ?1 AND (root_path = ?2 OR root_text = ?3)",
+                    params![profile_id, root_path, root_text],
                 )
                 .map_err(|error| IndexError::store(&self.db_path, error))?;
-            for record in records {
-                insert_record
-                    .execute(params![
-                        profile_id,
-                        root_text,
-                        root_path,
-                        record.path.to_string_lossy(),
-                        path_to_bytes(&record.path),
-                        record.relative_path.to_string_lossy(),
-                        path_to_bytes(&record.relative_path),
-                        file_kind_key(record.kind),
-                        record.mtime_ms,
-                        record.size_bytes.map(saturating_u64_to_i64),
-                        i64::from(CONTROL_EXTRACTOR_VERSION),
-                    ])
-                    .map_err(|error| IndexError::store(&self.db_path, error))?;
-            }
-        }
-        {
-            let mut insert_failure = transaction
-                .prepare(
-                    "INSERT INTO index_failures (
-                        profile_id, root_text, root_path, path_text, path, message,
-                        first_failed_at_ms, last_failed_at_ms, retry_count
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            transaction
+                .execute(
+                    "DELETE FROM index_failures
+                     WHERE profile_id = ?1 AND (root_path = ?2 OR root_text = ?3)",
+                    params![profile_id, root_path, root_text],
                 )
                 .map_err(|error| IndexError::store(&self.db_path, error))?;
-            for failure in failures {
-                insert_failure
-                    .execute(params![
-                        profile_id,
-                        root_text,
-                        root_path,
-                        failure.path.to_string_lossy(),
-                        path_to_bytes(&failure.path),
-                        failure.message.as_str(),
-                        failure.first_failed_at_ms,
-                        failure.last_failed_at_ms,
-                        i64::from(failure.retry_count),
-                    ])
+            {
+                let mut insert_record = transaction
+                    .prepare(
+                        "INSERT INTO indexed_files (
+                            profile_id, root_text, root_path, path_text, path,
+                            relative_path_text, relative_path,
+                            kind, mtime_ms, size_bytes, extractor_version
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    )
                     .map_err(|error| IndexError::store(&self.db_path, error))?;
+                for record in records {
+                    insert_record
+                        .execute(params![
+                            profile_id,
+                            root_text,
+                            root_path,
+                            record.path.to_string_lossy(),
+                            path_to_bytes(&record.path),
+                            record.relative_path.to_string_lossy(),
+                            path_to_bytes(&record.relative_path),
+                            file_kind_key(record.kind),
+                            record.mtime_ms,
+                            record.size_bytes.map(saturating_u64_to_i64),
+                            i64::from(CONTROL_EXTRACTOR_VERSION),
+                        ])
+                        .map_err(|error| IndexError::store(&self.db_path, error))?;
+                }
             }
-        }
-        transaction
-            .commit()
-            .map_err(|error| IndexError::store(&self.db_path, error))?;
-        Ok(())
+            {
+                let mut insert_failure = transaction
+                    .prepare(
+                        "INSERT INTO index_failures (
+                            profile_id, root_text, root_path, path_text, path, message,
+                            first_failed_at_ms, last_failed_at_ms, retry_count
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    )
+                    .map_err(|error| IndexError::store(&self.db_path, error))?;
+                for failure in failures {
+                    insert_failure
+                        .execute(params![
+                            profile_id,
+                            root_text,
+                            root_path,
+                            failure.path.to_string_lossy(),
+                            path_to_bytes(&failure.path),
+                            failure.message.as_str(),
+                            failure.first_failed_at_ms,
+                            failure.last_failed_at_ms,
+                            i64::from(failure.retry_count),
+                        ])
+                        .map_err(|error| IndexError::store(&self.db_path, error))?;
+                }
+            }
+            transaction
+                .commit()
+                .map_err(|error| IndexError::store(&self.db_path, error))?;
+            Ok(())
+        })
     }
 
     pub fn load_root_snapshot(
@@ -662,8 +675,24 @@ impl ProfileStore {
         Ok(values)
     }
 
+    fn with_write_lock<T>(
+        &self,
+        write: impl FnOnce() -> Result<T, IndexError>,
+    ) -> Result<T, IndexError> {
+        let _guard = self
+            .write_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        write()
+    }
+
     fn connection(&self) -> Result<Connection, IndexError> {
-        Connection::open(&self.db_path).map_err(|error| IndexError::store(&self.db_path, error))
+        let connection = Connection::open(&self.db_path)
+            .map_err(|error| IndexError::store(&self.db_path, error))?;
+        connection
+            .busy_timeout(CONTROL_DB_BUSY_TIMEOUT)
+            .map_err(|error| IndexError::store(&self.db_path, error))?;
+        Ok(connection)
     }
 }
 

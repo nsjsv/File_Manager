@@ -123,6 +123,7 @@ fn simple_mode_rejects_content_media_search_modes() {
 #[test]
 fn indexed_mode_selecting_search_mode_advances_generation_and_clears_results() {
     let mut search = search_state_for_request_generation(4);
+    search.session_backend_mode = crate::config::SearchBackendMode::Indexed;
     search.matches = vec![search_match_at_path("/tmp/current")];
     search.selected_match = Some(0);
     search.skipped_count = 2;
@@ -161,7 +162,9 @@ fn simple_mode_search_uses_tree_search_without_indexing() {
 
 #[test]
 fn indexed_files_search_stale_index_rebuilds_and_uses_tree_fallback() {
-    let mut browser = browser_with_search_state(search_state_for_request_generation(1));
+    let mut search = search_state_for_request_generation(1);
+    search.session_backend_mode = crate::config::SearchBackendMode::Indexed;
+    let mut browser = browser_with_search_state(search);
     browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
     browser.search_index.home_dir = PathBuf::from("/tmp");
     browser.search_index.statuses.insert(
@@ -184,6 +187,7 @@ fn indexed_files_search_stale_index_rebuilds_and_uses_tree_fallback() {
 fn indexed_contents_search_stale_index_waits_for_rebuild_without_tree_fallback() {
     let mut search = search_state_for_request_generation(1);
     search.mode = SearchMode::Contents;
+    search.session_backend_mode = crate::config::SearchBackendMode::Indexed;
     let mut browser = browser_with_search_state(search);
     browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
     browser.search_index.home_dir = PathBuf::from("/tmp");
@@ -205,7 +209,9 @@ fn indexed_contents_search_stale_index_waits_for_rebuild_without_tree_fallback()
 
 #[test]
 fn indexed_ready_search_keeps_cancel_token_for_superseding_queries() {
-    let mut browser = browser_with_search_state(search_state_for_request_generation(1));
+    let mut search = search_state_for_request_generation(1);
+    search.session_backend_mode = crate::config::SearchBackendMode::Indexed;
+    let mut browser = browser_with_search_state(search);
     browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
     browser.search_index.statuses.insert(
         PathBuf::from("/tmp"),
@@ -219,10 +225,53 @@ fn indexed_ready_search_keeps_cancel_token_for_superseding_queries() {
     assert!(search.search_cancel.is_some());
 }
 
+#[test]
+fn opening_search_before_indexed_runtime_is_ready_locks_simple_fallback_session() {
+    let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+    browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
+
+    let _command = browser.open_search();
+
+    let search = browser.search.as_ref().expect("search state remains open");
+    assert_eq!(
+        search.session_backend_mode,
+        crate::config::SearchBackendMode::Simple
+    );
+    assert!(search.indexed_fallback_session);
+    assert!(!search.show_index_ready_reopen_hint);
+}
+
+#[test]
+fn fallback_search_session_keeps_simple_mode_after_indexed_runtime_becomes_ready() {
+    let mut browser = browser_with_search_state(SearchState {
+        session_backend_mode: crate::config::SearchBackendMode::Simple,
+        indexed_fallback_session: true,
+        ..search_state_for_request_generation(1)
+    });
+    browser.user_config.search_mode = crate::config::SearchBackendMode::Indexed;
+    browser.search_index.daemon_status = Some(crate::model::SearchIndexDaemonStatus::Reachable);
+    browser.search_index.home_dir = PathBuf::from("/tmp");
+
+    let _task = browser.accept_search_index_profile(Ok(Some(file_index::IndexProfile::new(
+        "default",
+        vec![PathBuf::from("/tmp")],
+    ))));
+    let _task = browser.select_search_mode(SearchMode::Contents);
+
+    let search = browser.search.as_ref().expect("search state remains open");
+    assert!(search.show_index_ready_reopen_hint);
+    assert_eq!(
+        search.session_backend_mode,
+        crate::config::SearchBackendMode::Simple
+    );
+    assert_eq!(search.mode, SearchMode::Files);
+}
+
 fn search_state_for_request_generation(request_generation: u64) -> SearchState {
     SearchState {
         scope: SearchScope::CurrentDirectory,
         mode: SearchMode::Files,
+        session_backend_mode: crate::config::SearchBackendMode::Simple,
         root: PathBuf::from("/tmp"),
         query: "needle".to_owned(),
         request_generation,
@@ -234,6 +283,8 @@ fn search_state_for_request_generation(request_generation: u64) -> SearchState {
         skipped_count: 0,
         error: None,
         index_error: None,
+        indexed_fallback_session: false,
+        show_index_ready_reopen_hint: false,
     }
 }
 

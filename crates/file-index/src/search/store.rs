@@ -189,19 +189,6 @@ pub(crate) fn read_manifest(index_dir: &Path) -> Result<SearchIndexManifest, Ind
     read_manifest_from_connection(index_dir, &connection)
 }
 
-pub(crate) fn write_catalog(
-    index_dir: &Path,
-    manifest: &mut SearchIndexManifest,
-    records: &[SearchCatalogRecord],
-    failures: &[FileSearchIndexFailure],
-) -> Result<(), IndexError> {
-    let mut session = CatalogWriteSession::create(index_dir)?;
-    for record in records {
-        session.add_record(record)?;
-    }
-    session.finish(manifest, failures)
-}
-
 pub(crate) fn load_catalog(
     index_dir: &Path,
     root: &Path,
@@ -327,7 +314,6 @@ pub(crate) fn scan_file_query_candidates_with_cancel(
         content_max_file_bytes,
         media_metadata_scope,
     )?;
-
     let normalized_query = query::normalized_search_query(query_text);
     if normalized_query.is_empty() {
         return Ok(manifest);
