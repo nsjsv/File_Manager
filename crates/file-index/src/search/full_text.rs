@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
-use tantivy::snippet::SnippetGenerator;
 use tantivy::{doc, Index, TantivyDocument};
 use tantivy::{IndexReader, IndexWriter};
 
@@ -34,7 +33,6 @@ const TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 15_000_000;
 struct SearchSchema {
     schema: Schema,
     path_key: Field,
-    path: Field,
     relative_path: Field,
     name: Field,
     source: Field,
@@ -97,7 +95,6 @@ impl TantivyIndexWriter {
     ) -> Result<(), IndexError> {
         let mut document = doc!(
             self.schema.path_key => path_storage_key(&text.path),
-            self.schema.path => text.path.to_string_lossy().into_owned(),
             self.schema.relative_path => text.relative_path.to_string_lossy().into_owned(),
             self.schema.name => text.name.clone(),
             self.schema.source => source_key(SearchResultSource::Contents),
@@ -120,7 +117,6 @@ impl TantivyIndexWriter {
         let metadata = &media.metadata;
         let mut document = doc!(
             self.schema.path_key => path_storage_key(&media.path),
-            self.schema.path => media.path.to_string_lossy().into_owned(),
             self.schema.relative_path => media.relative_path.to_string_lossy().into_owned(),
             self.schema.name => media.name.clone(),
             self.schema.source => source_key(SearchResultSource::Media),
@@ -218,7 +214,6 @@ pub(crate) fn search_tantivy_index(
     let top_docs = searcher
         .search(&query, &TopDocs::with_limit(limit.max(1)).order_by_score())
         .map_err(|error| IndexError::store(&runtime.tantivy_dir, error))?;
-    let snippet_generator = SnippetGenerator::create(&searcher, &*query, runtime.schema.body).ok();
     let allowed_sources = sources.iter().copied().map(source_key).collect::<Vec<_>>();
     let mut hits = Vec::new();
 
@@ -238,16 +233,12 @@ pub(crate) fn search_tantivy_index(
         let Some(storage_key) = first_text(&document, runtime.schema.path_key) else {
             continue;
         };
-        let snippet = snippet_generator
-            .as_ref()
-            .map(|generator| generator.snippet_from_doc(&document).fragment().to_owned())
-            .filter(|snippet| !snippet.trim().is_empty());
 
         hits.push(FullTextSearchHit {
             storage_key: storage_key.to_owned(),
             source,
             score: score_to_rank(score),
-            snippet,
+            snippet: None,
             media: media_metadata_from_document(&document, &runtime.schema, source),
         });
     }
@@ -258,11 +249,11 @@ pub(crate) fn search_tantivy_index(
 fn search_schema() -> SearchSchema {
     let mut builder = Schema::builder();
     let path_key = builder.add_text_field(PATH_KEY_FIELD, STRING | STORED);
-    let path = builder.add_text_field(PATH_FIELD, STRING | STORED);
-    let relative_path = builder.add_text_field(RELATIVE_PATH_FIELD, TEXT | STORED);
-    let name = builder.add_text_field(NAME_FIELD, TEXT | STORED);
+    builder.add_text_field(PATH_FIELD, STRING);
+    let relative_path = builder.add_text_field(RELATIVE_PATH_FIELD, TEXT);
+    let name = builder.add_text_field(NAME_FIELD, TEXT);
     let source = builder.add_text_field(SOURCE_FIELD, STRING | STORED);
-    let body = builder.add_text_field(BODY_FIELD, TEXT | STORED);
+    let body = builder.add_text_field(BODY_FIELD, TEXT);
     let media_kind = builder.add_text_field(MEDIA_KIND_FIELD, STRING | STORED);
     let width = builder.add_u64_field(WIDTH_FIELD, STORED);
     let height = builder.add_u64_field(HEIGHT_FIELD, STORED);
@@ -276,7 +267,6 @@ fn search_schema() -> SearchSchema {
     SearchSchema {
         schema,
         path_key,
-        path,
         relative_path,
         name,
         source,

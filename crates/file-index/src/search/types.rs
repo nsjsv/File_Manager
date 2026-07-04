@@ -3,10 +3,10 @@ use std::path::PathBuf;
 
 use file_core::{FileKind, ScanWarning};
 
-use crate::profile::{MediaMetadataScope, SearchMode};
+use crate::profile::{MediaMetadataScope, SearchMode, DEFAULT_CONTENT_MAX_FILE_BYTES};
 
 pub(crate) const DEFAULT_SEARCH_LIMIT: usize = 50;
-pub(crate) const EXTRACTOR_VERSION: u32 = 4;
+pub(crate) const EXTRACTOR_VERSION: u32 = 5;
 pub(crate) const INDEX_FORMAT_VERSION: u32 = 8;
 pub(crate) const IGNORE_POLICY_VERSION: u32 = 2;
 
@@ -30,7 +30,7 @@ impl Default for FileSearchOptions {
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
             limit: DEFAULT_SEARCH_LIMIT,
             mode: SearchMode::Files,
-            content_max_file_bytes: 16 * 1024 * 1024,
+            content_max_file_bytes: DEFAULT_CONTENT_MAX_FILE_BYTES,
             content_index_enabled: false,
             media_metadata_scope: MediaMetadataScope::Off,
         }
@@ -65,7 +65,7 @@ impl Default for FileSearchIndexOptions {
             excluded_index_dir: None,
             mode: FileSearchIndexMode::FullRebuild,
             content_index_enabled: false,
-            content_max_file_bytes: 16 * 1024 * 1024,
+            content_max_file_bytes: DEFAULT_CONTENT_MAX_FILE_BYTES,
             media_metadata_scope: MediaMetadataScope::Off,
         }
     }

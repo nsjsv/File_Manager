@@ -11,7 +11,7 @@ use super::types::{
     DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexStatus, EXTRACTOR_VERSION,
     IGNORE_POLICY_VERSION, INDEX_FORMAT_VERSION,
 };
-use crate::profile::MediaMetadataScope;
+use crate::profile::{MediaMetadataScope, DEFAULT_CONTENT_MAX_FILE_BYTES};
 use crate::IndexError;
 
 const MANIFEST_FORMAT_VERSION: &str = "format_version";
@@ -316,7 +316,7 @@ pub(crate) fn read_manifest_from_connection(
             &values,
             MANIFEST_CONTENT_MAX_FILE_BYTES,
         )?
-        .unwrap_or(16 * 1024 * 1024),
+        .unwrap_or(DEFAULT_CONTENT_MAX_FILE_BYTES),
         media_metadata_scope: optional_manifest_media_metadata_scope(index_dir, &values)?
             .unwrap_or(MediaMetadataScope::Off),
     })

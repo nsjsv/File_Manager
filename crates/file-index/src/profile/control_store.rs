@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use super::{
     ContentIndexPolicy, IndexProfile, IndexRootSnapshot, IndexTaskPhase, IndexTaskStatus,
-    MediaMetadataPolicy, MediaMetadataScope,
+    MediaMetadataPolicy, MediaMetadataScope, DEFAULT_CONTENT_MAX_FILE_BYTES,
 };
 use crate::search::path_encoding::{path_from_bytes, path_storage_key, path_to_bytes};
 use crate::search::{DirectoryErrorPolicy, FileSearchIndexFailure, SearchIndexFileRecord};
@@ -16,6 +16,7 @@ use crate::IndexError;
 const SCHEMA_VERSION: u32 = 6;
 const CONTROL_EXTRACTOR_VERSION: u32 = crate::search::EXTRACTOR_VERSION;
 const CONTROL_DB_BUSY_TIMEOUT: Duration = Duration::from_millis(500);
+const LEGACY_DEFAULT_CONTENT_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ProfileStore {
@@ -177,7 +178,7 @@ impl ProfileStore {
                 directory_error_policy,
                 content: ContentIndexPolicy {
                     enabled: content_enabled,
-                    max_file_bytes,
+                    max_file_bytes: normalize_content_max_file_bytes(max_file_bytes),
                 },
                 media: MediaMetadataPolicy { scope: media_scope },
             });
@@ -740,6 +741,14 @@ fn optional_path_from_row(
     row.get::<_, Option<String>>(text_column)
         .map(|path| path.map(PathBuf::from))
         .map_err(|error| IndexError::store(db_path, error))
+}
+
+fn normalize_content_max_file_bytes(max_file_bytes: u64) -> u64 {
+    if max_file_bytes == LEGACY_DEFAULT_CONTENT_MAX_FILE_BYTES {
+        DEFAULT_CONTENT_MAX_FILE_BYTES
+    } else {
+        max_file_bytes
+    }
 }
 
 fn current_time_ms() -> i64 {

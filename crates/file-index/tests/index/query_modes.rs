@@ -141,10 +141,7 @@ async fn file_search_index_all_mode_merges_duplicate_sources() {
         search.matches[0].source,
         file_index::SearchResultSource::Contents
     );
-    assert!(search.matches[0]
-        .snippet
-        .as_deref()
-        .is_some_and(|snippet| snippet.contains("roadmap")));
+    assert!(search.matches[0].snippet.is_none());
 }
 
 #[tokio::test]
@@ -182,7 +179,7 @@ fn content_search_options(include_hidden: bool, limit: usize) -> FileSearchOptio
     FileSearchOptions {
         mode: file_index::SearchMode::Contents,
         content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
+        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         include_hidden,
         limit,
         ..FileSearchOptions::default()
@@ -201,7 +198,7 @@ fn all_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
     FileSearchOptions {
         mode: file_index::SearchMode::All,
         content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
+        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         media_metadata_scope: file_index::MediaMetadataScope::All,
         include_hidden,
         limit,
@@ -212,7 +209,7 @@ fn all_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
 fn content_index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
+        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         include_hidden,
         ..FileSearchIndexOptions::default()
     }
@@ -228,7 +225,7 @@ fn index_options(include_hidden: bool) -> FileSearchIndexOptions {
 fn all_index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
+        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         media_metadata_scope: file_index::MediaMetadataScope::All,
         include_hidden,
         ..FileSearchIndexOptions::default()

@@ -194,6 +194,7 @@ pub(crate) fn crawl_search_records_with_callback(
     Ok(skipped)
 }
 
+#[cfg(test)]
 pub(crate) fn crawl_selected_search_records_with_progress(
     catalog_root: &Path,
     selected_paths: &[PathBuf],
@@ -272,6 +273,88 @@ pub(crate) fn crawl_selected_search_records_with_progress(
     Ok((records, skipped))
 }
 
+pub(crate) fn crawl_selected_search_records_with_callback_and_progress(
+    catalog_root: &Path,
+    selected_paths: &[PathBuf],
+    options: &SearchCrawlOptions,
+    mut progress: impl FnMut(usize, usize),
+    mut visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<Vec<ScanWarning>, IndexError> {
+    std_fs::read_dir(catalog_root).map_err(|source| IndexError::ReadDirectory {
+        path: catalog_root.to_path_buf(),
+        source,
+    })?;
+
+    let mut skipped = Vec::new();
+    let mut seen_keys = HashSet::new();
+    let mut indexed_count = 0usize;
+    let selected_paths = non_nested_selected_paths(selected_paths);
+    let custom_excludes = custom_exclude_matcher(catalog_root, &options.exclude_patterns);
+
+    for (index, selected_path) in selected_paths.into_iter().enumerate() {
+        options.ensure_not_cancelled()?;
+        if selected_path != catalog_root
+            && selected_path_is_hidden(&selected_path)
+            && !options.include_hidden
+        {
+            progress(index + 1, indexed_count);
+            continue;
+        }
+
+        let metadata = match std_fs::symlink_metadata(&selected_path) {
+            Ok(metadata) => metadata,
+            Err(source) => {
+                skipped.push(ScanWarning {
+                    path: selected_path,
+                    message: source.to_string(),
+                });
+                progress(index + 1, indexed_count);
+                continue;
+            }
+        };
+
+        let kind = file_kind_from_metadata(&metadata);
+        if path_matches_custom_excludes(
+            custom_excludes.as_ref(),
+            catalog_root,
+            &selected_path,
+            kind == FileKind::Directory,
+        ) {
+            progress(index + 1, indexed_count);
+            continue;
+        }
+        if selected_path != catalog_root {
+            visit_selected_record_if_new(
+                SearchCatalogRecord::from_path_with_metadata(
+                    catalog_root,
+                    selected_path.clone(),
+                    kind,
+                    &metadata,
+                ),
+                &mut seen_keys,
+                &mut indexed_count,
+                &mut visit,
+            )?;
+        }
+
+        if kind == FileKind::Directory {
+            crawl_selected_directory_children_with_callback(
+                catalog_root,
+                &selected_path,
+                options,
+                &mut skipped,
+                &mut seen_keys,
+                &mut indexed_count,
+                &mut visit,
+            )?;
+        }
+        progress(index + 1, indexed_count);
+    }
+
+    Ok(skipped)
+}
+
+#[cfg(test)]
 fn crawl_selected_directory_children(
     catalog_root: &Path,
     selected_path: &Path,
@@ -330,6 +413,73 @@ fn crawl_selected_directory_children(
         );
 
         if options.throttle && records.len() % INDEX_THROTTLE_EVERY == 0 {
+            thread::sleep(INDEX_THROTTLE_SLEEP);
+        }
+    }
+    Ok(())
+}
+
+fn crawl_selected_directory_children_with_callback(
+    catalog_root: &Path,
+    selected_path: &Path,
+    options: &SearchCrawlOptions,
+    skipped: &mut Vec<ScanWarning>,
+    seen_keys: &mut HashSet<String>,
+    indexed_count: &mut usize,
+    visit: &mut impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
+    let mut skipped_roots = Vec::new();
+    let mut discarded_records = Vec::new();
+    for result in search_walk_builder(selected_path, catalog_root, options).build() {
+        options.ensure_not_cancelled()?;
+        let dir_entry = match result {
+            Ok(dir_entry) => dir_entry,
+            Err(error) => {
+                record_walk_error(
+                    selected_path,
+                    error,
+                    options,
+                    &mut discarded_records,
+                    skipped,
+                    &mut skipped_roots,
+                )?;
+                continue;
+            }
+        };
+        if dir_entry.depth() == 0 {
+            continue;
+        }
+
+        let path = dir_entry.into_path();
+        if skipped_roots
+            .iter()
+            .any(|skipped_root| path.starts_with(skipped_root))
+        {
+            continue;
+        }
+        let metadata = match std_fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(source) => {
+                skipped.push(ScanWarning {
+                    path,
+                    message: source.to_string(),
+                });
+                continue;
+            }
+        };
+        visit_selected_record_if_new(
+            SearchCatalogRecord::from_path_with_metadata(
+                catalog_root,
+                path,
+                file_kind_from_metadata(&metadata),
+                &metadata,
+            ),
+            seen_keys,
+            indexed_count,
+            visit,
+        )?;
+
+        if options.throttle && *indexed_count % INDEX_THROTTLE_EVERY == 0 {
             thread::sleep(INDEX_THROTTLE_SLEEP);
         }
     }
@@ -477,6 +627,7 @@ fn file_kind_from_metadata(metadata: &std_fs::Metadata) -> FileKind {
     }
 }
 
+#[cfg(test)]
 fn push_unique_record(
     record: SearchCatalogRecord,
     records: &mut Vec<SearchCatalogRecord>,
@@ -485,6 +636,19 @@ fn push_unique_record(
     if seen_keys.insert(record.storage_key.clone()) {
         records.push(record);
     }
+}
+
+fn visit_selected_record_if_new(
+    record: SearchCatalogRecord,
+    seen_keys: &mut HashSet<String>,
+    indexed_count: &mut usize,
+    visit: &mut impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
+) -> Result<(), IndexError> {
+    if seen_keys.insert(record.storage_key.clone()) {
+        visit(record)?;
+        *indexed_count += 1;
+    }
+    Ok(())
 }
 
 fn record_walk_error(

@@ -434,17 +434,14 @@ async fn file_search_index_queries_text_contents_when_enabled() {
         search.matches[0].source,
         file_index::SearchResultSource::Contents
     );
-    assert!(search.matches[0]
-        .snippet
-        .as_deref()
-        .is_some_and(|snippet| snippet.contains("runway")));
+    assert!(search.matches[0].snippet.is_none());
 }
 
 #[tokio::test]
 async fn file_search_index_skips_binary_text_candidates() {
     let dir = tempdir().unwrap();
     let index_dir = tempdir().unwrap();
-    fs::write(dir.path().join("binary.log"), b"needle\0hidden").unwrap();
+    fs::write(dir.path().join("binary.txt"), b"needle\0hidden").unwrap();
 
     build_file_search_index(dir.path(), index_dir.path(), content_index_options(true))
         .await
@@ -453,6 +450,28 @@ async fn file_search_index_skips_binary_text_candidates() {
         index_dir.path(),
         dir.path(),
         "needle",
+        content_search_options(true, 10),
+    )
+    .await
+    .unwrap();
+
+    assert!(search.matches.is_empty());
+}
+
+#[tokio::test]
+async fn file_search_index_skips_log_and_csv_contents_by_default() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    fs::write(dir.path().join("events.log"), "roadmap").unwrap();
+    fs::write(dir.path().join("report.csv"), "roadmap").unwrap();
+
+    build_file_search_index(dir.path(), index_dir.path(), content_index_options(true))
+        .await
+        .unwrap();
+    let search = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "roadmap",
         content_search_options(true, 10),
     )
     .await
@@ -538,9 +557,135 @@ async fn selected_path_full_rebuild_queries_content_and_media_metadata() {
         content.matches[0].path,
         dir.path().join("selected/briefing.md")
     );
+    assert!(content.matches[0].snippet.is_none());
     assert_eq!(media.matches[0].path, image_path);
     let media_metadata = media.matches[0].media.as_ref().expect("media metadata");
     assert_eq!(media_metadata.width, Some(31));
+}
+
+#[tokio::test]
+async fn selected_path_incremental_rebuild_preserves_unaffected_content_and_media() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    let selected = dir.path().join("selected");
+    let notes = dir.path().join("notes");
+    let photos = dir.path().join("photos");
+    fs::create_dir_all(&selected).unwrap();
+    fs::create_dir_all(&notes).unwrap();
+    fs::create_dir_all(&photos).unwrap();
+    fs::write(selected.join("briefing.md"), "quarterly runway").unwrap();
+    fs::write(notes.join("summary.md"), "kept content").unwrap();
+    let image_path = photos.join("product-shot.png");
+    image::RgbImage::new(31, 17).save(&image_path).unwrap();
+    let all_search_options = |mode| FileSearchOptions {
+        mode,
+        content_index_enabled: true,
+        media_metadata_scope: file_index::MediaMetadataScope::All,
+        ..search_options(true, 10)
+    };
+
+    build_file_search_index(dir.path(), index_dir.path(), all_index_options(true))
+        .await
+        .unwrap();
+
+    fs::write(selected.join("briefing.md"), "launch signal").unwrap();
+    build_file_search_index_for_paths(
+        dir.path(),
+        index_dir.path(),
+        vec![selected.clone()],
+        FileSearchIndexOptions {
+            mode: file_index::FileSearchIndexMode::Incremental,
+            ..all_index_options(true)
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated_content = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "signal",
+        all_search_options(file_index::SearchMode::Contents),
+    )
+    .await
+    .unwrap();
+    let retained_content = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "kept",
+        all_search_options(file_index::SearchMode::Contents),
+    )
+    .await
+    .unwrap();
+    let retained_media = search_file_index(
+        index_dir.path(),
+        dir.path(),
+        "product",
+        all_search_options(file_index::SearchMode::Media),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated_content.matches.len(), 1);
+    assert_eq!(
+        updated_content.matches[0].path,
+        selected.join("briefing.md")
+    );
+    assert_eq!(retained_content.matches.len(), 1);
+    assert_eq!(retained_content.matches[0].path, notes.join("summary.md"));
+    assert_eq!(retained_media.matches.len(), 1);
+    assert_eq!(retained_media.matches[0].path, image_path);
+    assert_eq!(
+        retained_media.matches[0]
+            .media
+            .as_ref()
+            .and_then(|media| media.width),
+        Some(31)
+    );
+}
+
+#[tokio::test]
+async fn selected_path_incremental_rebuild_does_not_report_unaffected_extractor_failures() {
+    let dir = tempdir().unwrap();
+    let index_dir = tempdir().unwrap();
+    let selected = dir.path().join("selected");
+    let notes = dir.path().join("notes");
+    fs::create_dir_all(&selected).unwrap();
+    fs::create_dir_all(&notes).unwrap();
+    fs::write(selected.join("briefing.md"), "launch signal").unwrap();
+    let outside = notes.join("stale.md");
+    fs::write(&outside, "kept content").unwrap();
+
+    build_file_search_index(dir.path(), index_dir.path(), content_index_options(true))
+        .await
+        .unwrap();
+
+    fs::remove_file(&outside).unwrap();
+    fs::write(selected.join("briefing.md"), "updated launch signal").unwrap();
+    let outcome = build_file_search_index_for_paths(
+        dir.path(),
+        index_dir.path(),
+        vec![selected],
+        FileSearchIndexOptions {
+            mode: file_index::FileSearchIndexMode::Incremental,
+            ..content_index_options(true)
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.failed_count, 0);
+    assert!(outcome.skipped.is_empty());
+
+    let status = file_index::file_search_index_status(
+        index_dir.path(),
+        dir.path(),
+        content_index_options(true),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status.failed_count, 0);
+    assert!(status.failures.is_empty());
 }
 
 #[tokio::test]
@@ -741,7 +886,7 @@ fn content_search_options(include_hidden: bool, limit: usize) -> FileSearchOptio
     FileSearchOptions {
         mode: file_index::SearchMode::Contents,
         content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
+        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         ..search_options(include_hidden, limit)
     }
 }
@@ -772,7 +917,7 @@ fn index_options(include_hidden: bool) -> FileSearchIndexOptions {
 fn content_index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
+        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         ..index_options(include_hidden)
     }
 }

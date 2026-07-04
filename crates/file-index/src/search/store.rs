@@ -189,35 +189,6 @@ pub(crate) fn read_manifest(index_dir: &Path) -> Result<SearchIndexManifest, Ind
     read_manifest_from_connection(index_dir, &connection)
 }
 
-pub(crate) fn load_catalog(
-    index_dir: &Path,
-    root: &Path,
-    include_hidden: bool,
-    exclude_patterns: &[String],
-    directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
-    media_metadata_scope: MediaMetadataScope,
-) -> Result<(SearchIndexManifest, Vec<SearchCatalogRecord>), IndexError> {
-    let mut records = Vec::new();
-    let manifest = scan_catalog_records(
-        index_dir,
-        root,
-        include_hidden,
-        exclude_patterns,
-        directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
-        media_metadata_scope,
-        |record| {
-            records.push(record);
-            Ok(())
-        },
-    )?;
-
-    Ok((manifest, records))
-}
-
 pub(crate) fn scan_catalog_records(
     index_dir: &Path,
     root: &Path,

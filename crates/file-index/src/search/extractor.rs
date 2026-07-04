@@ -109,8 +109,6 @@ fn is_text_index_candidate(path: &Path) -> bool {
             | "fish"
             | "zsh"
             | "sql"
-            | "csv"
-            | "log"
     )
 }
 
@@ -402,6 +400,16 @@ mod tests {
 
         assert_eq!(document.content, "abcd");
         assert!(document.truncated);
+    }
+
+    #[test]
+    fn text_extractor_skips_log_and_csv_candidates_by_default() {
+        let dir = tempdir().unwrap();
+        let log_record = catalog_file_record(dir.path(), dir.path().join("events.log"));
+        let csv_record = catalog_file_record(dir.path(), dir.path().join("report.csv"));
+
+        assert!(extract_text_document(&log_record, 1024).unwrap().is_none());
+        assert!(extract_text_document(&csv_record, 1024).unwrap().is_none());
     }
 
     #[test]

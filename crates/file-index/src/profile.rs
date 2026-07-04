@@ -5,6 +5,8 @@ pub use control_store::ProfileStore;
 
 use crate::search::{DirectoryErrorPolicy, FileSearchIndexFailure, SearchIndexFileRecord};
 
+pub const DEFAULT_CONTENT_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchMode {
     Files,
@@ -23,7 +25,7 @@ impl Default for ContentIndexPolicy {
     fn default() -> Self {
         Self {
             enabled: false,
-            max_file_bytes: 16 * 1024 * 1024,
+            max_file_bytes: DEFAULT_CONTENT_MAX_FILE_BYTES,
         }
     }
 }
@@ -187,6 +189,16 @@ mod tests {
                 PathBuf::from("/workspace/project"),
                 PathBuf::from("/workspace/archive"),
             ]
+        );
+    }
+
+    #[test]
+    fn index_profile_uses_five_mib_content_limit_by_default() {
+        let profile = IndexProfile::new("main", vec![PathBuf::from("/workspace")]);
+
+        assert_eq!(
+            profile.content.max_file_bytes,
+            DEFAULT_CONTENT_MAX_FILE_BYTES
         );
     }
 }

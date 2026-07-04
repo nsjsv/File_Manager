@@ -60,6 +60,44 @@ fn default_search_index_excludes_are_public_policy_patterns() {
 }
 
 #[test]
+fn index_profile_defaults_to_five_mib_content_limit() {
+    let profile = IndexProfile::new("main", vec![PathBuf::from("/tmp/projects")]);
+
+    assert_eq!(
+        profile.content.max_file_bytes,
+        file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES
+    );
+}
+
+#[test]
+fn profile_store_normalizes_legacy_default_content_limit() {
+    let dir = tempdir().unwrap();
+    let control_db = dir.path().join("control.sqlite");
+    let store = ProfileStore::open(&control_db).unwrap();
+    store
+        .save_profile(&IndexProfile::new(
+            "main",
+            vec![PathBuf::from("/tmp/projects")],
+        ))
+        .unwrap();
+    rusqlite::Connection::open(&control_db)
+        .unwrap()
+        .execute(
+            "UPDATE profiles SET content_max_file_bytes = ?1 WHERE id = 'main'",
+            [16_i64 * 1024 * 1024],
+        )
+        .unwrap();
+
+    let profiles = store.load_profiles().unwrap();
+
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(
+        profiles[0].content.max_file_bytes,
+        file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES
+    );
+}
+
+#[test]
 fn index_service_configure_profile_preserves_explicit_nested_roots() {
     let dir = tempdir().unwrap();
     let service =
@@ -321,7 +359,7 @@ async fn index_service_queries_content_mode_when_profile_enables_content() {
         &index_dir,
         FileSearchIndexOptions {
             content_index_enabled: true,
-            content_max_file_bytes: 16 * 1024 * 1024,
+            content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
             ..FileSearchIndexOptions::default()
         },
     )
@@ -352,10 +390,7 @@ async fn index_service_queries_content_mode_when_profile_enables_content() {
         outcome.matches[0].source,
         file_index::SearchResultSource::Contents
     );
-    assert!(outcome.matches[0]
-        .snippet
-        .as_deref()
-        .is_some_and(|snippet| snippet.contains("roadmap")));
+    assert!(outcome.matches[0].snippet.is_none());
 }
 
 #[tokio::test]
