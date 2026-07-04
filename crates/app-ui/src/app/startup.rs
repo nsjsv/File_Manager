@@ -103,7 +103,7 @@ impl FileBrowser {
                     loaded_store.task_queue_store,
                     loaded_store.restored_tasks,
                 ) {
-                    self.error = Some(error);
+                    self.show_global_error(error);
                 }
                 for task in self.operation_queue.tasks() {
                     if let QueuedFileOperation::BuildSearchIndex { root, .. } = &task.operation {
@@ -136,7 +136,7 @@ impl FileBrowser {
                 ]);
             }
             Err(error) => {
-                self.error = Some(format!(
+                self.show_global_error(format!(
                     "Failed to initialize file operation queue storage: {error}"
                 ));
                 if self.user_config.startup_location_policy

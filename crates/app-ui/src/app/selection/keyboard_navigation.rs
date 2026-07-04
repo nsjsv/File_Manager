@@ -329,7 +329,7 @@ impl FileBrowser {
         if is_animated_image_preview {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
-            self.error = None;
+            self.clear_global_error();
             let generation = self.next_animated_image_preview_generation();
             return Task::batch([
                 close_window_command,
@@ -340,7 +340,7 @@ impl FileBrowser {
         if is_image_preview {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
-            self.error = None;
+            self.clear_global_error();
             return Task::batch([
                 close_window_command,
                 image_preview_dimensions_command(path),
@@ -350,7 +350,7 @@ impl FileBrowser {
         if is_video_preview {
             let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
-            self.error = None;
+            self.clear_global_error();
             return Task::batch([
                 close_window_command,
                 preview_command(
@@ -371,7 +371,7 @@ impl FileBrowser {
         let window_command = self.ensure_preview_window(window_profile);
         self.clear_preview();
         self.preview = Some(PreviewState::Loading(path.clone()));
-        self.error = None;
+        self.clear_global_error();
         if is_audio_preview {
             self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
             return Task::batch([

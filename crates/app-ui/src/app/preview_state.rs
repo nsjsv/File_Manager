@@ -77,7 +77,7 @@ impl FileBrowser {
                     }
                 };
                 self.preview = Some(PreviewState::Ready(preview));
-                self.error = None;
+                self.clear_global_error();
                 command
             }
             Err(error) => {
@@ -312,7 +312,7 @@ impl FileBrowser {
             }
             Err(error) => {
                 playback.error = Some(error.clone());
-                self.error = Some(error);
+                self.show_global_error(error);
             }
         }
 

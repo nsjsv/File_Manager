@@ -41,13 +41,13 @@ impl FileBrowser {
         match applications {
             Ok(applications) => {
                 if open_with.accept_application_list(applications) {
-                    self.error = None;
+                    self.clear_global_error();
                 }
             }
             Err(error) => {
                 let fallback_error = open_with.fallback_error().map(str::to_owned);
                 self.open_with = None;
-                self.error = Some(open_with_error_with_fallback(
+                self.show_global_error(open_with_error_with_fallback(
                     fallback_error.as_deref(),
                     &error,
                 ));
@@ -70,7 +70,7 @@ impl FileBrowser {
         let path = open_with.path().clone();
         let launch_mode = open_with.launch_mode();
         self.open_with = None;
-        self.error = None;
+        self.clear_global_error();
         open_with_application_command(path, desktop_id, launch_mode)
     }
 
@@ -79,8 +79,8 @@ impl FileBrowser {
         result: Result<(), String>,
     ) -> Task<Message> {
         match result {
-            Ok(()) => self.error = None,
-            Err(error) => self.error = Some(error),
+            Ok(()) => self.clear_global_error(),
+            Err(error) => self.show_global_error(error),
         }
         Task::none()
     }

@@ -54,7 +54,7 @@ impl FileBrowser {
         let queue_result = result.as_ref().map(|_| ()).map_err(|error| error.clone());
         let (finished, storage_error) = self.operation_queue.finish(task_id, queue_result);
         if let Some(error) = storage_error {
-            self.error = Some(error);
+            self.show_global_error(error);
         }
 
         if let (Some(root), Some(index_result)) = (search_index_root, search_index_result) {
@@ -174,9 +174,9 @@ impl FileBrowser {
         operation: QueuedFileOperation,
         pending_history: Option<PendingHistoryOperation>,
     ) -> Task<Message> {
-        self.error = None;
+        self.clear_global_error();
         if let Some(error) = self.operation_queue.enqueue(operation) {
-            self.error = Some(error);
+            self.show_global_error(error);
         }
         if let Some(pending_history) = pending_history {
             if let Some(task) = self.operation_queue.tasks().last() {

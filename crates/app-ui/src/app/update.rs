@@ -55,7 +55,7 @@ impl FileBrowser {
                     pane.directory_loading_placeholder_entries.clear();
                     pane.directory_load_cancel = None;
                 }
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
             Message::TrashLoaded(pane_id, Ok(scan)) => self.accept_trash_scan(pane_id, scan),
@@ -67,11 +67,11 @@ impl FileBrowser {
                     pane.is_loading = false;
                     pane.directory_loading_placeholder_entries.clear();
                 }
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
             Message::OpenFileFinished(_, Ok(())) => {
-                self.error = None;
+                self.clear_global_error();
                 Task::none()
             }
             Message::OpenFileFinished(path, Err(error)) => {
@@ -91,11 +91,11 @@ impl FileBrowser {
                 self.accept_open_with_application_finished(result)
             }
             Message::OpenTerminalFinished(Ok(())) => {
-                self.error = None;
+                self.clear_global_error();
                 Task::none()
             }
             Message::OpenTerminalFinished(Err(error)) => {
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
             Message::PreviewLoaded(path, preview_outcome) => {
@@ -206,7 +206,7 @@ impl FileBrowser {
             }
             Message::FileOperationProgressed(task_id, progress) => {
                 if let Some(error) = self.operation_queue.update_progress(task_id, progress) {
-                    self.error = Some(error);
+                    self.show_global_error(error);
                 }
                 Task::none()
             }
@@ -238,13 +238,13 @@ impl FileBrowser {
             }
             Message::FileOperationPauseToggled(task_id) => {
                 if let Some(error) = self.operation_queue.toggle_pause(task_id) {
-                    self.error = Some(error);
+                    self.show_global_error(error);
                 }
                 Task::none()
             }
             Message::FileOperationCancelRequested(task_id) => {
                 if let Some(error) = self.operation_queue.cancel(task_id) {
-                    self.error = Some(error);
+                    self.show_global_error(error);
                 }
                 Task::none()
             }

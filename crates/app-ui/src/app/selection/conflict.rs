@@ -28,7 +28,7 @@ impl FileBrowser {
             return self.enqueue_transfer_operation(mode, transfers);
         }
 
-        self.error = None;
+        self.clear_global_error();
         self.context_menu = None;
         self.operation_queue.close_panel();
         self.transfer_conflict = Some(TransferConflictState {

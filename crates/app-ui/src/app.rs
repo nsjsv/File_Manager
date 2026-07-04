@@ -5,6 +5,7 @@ mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
+mod error_history;
 mod events;
 mod file_operations;
 mod list_directory_summaries;
@@ -216,7 +217,8 @@ pub(crate) struct FileBrowser {
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) rename_input: String,
     pub(crate) is_loading: bool,
-    pub(crate) error: Option<String>,
+    error: Option<String>,
+    error_history: Vec<String>,
     system_language: UiLanguage,
     pub(crate) cursor_position: Point,
     pub(crate) main_window_width: f32,
@@ -443,6 +445,7 @@ impl FileBrowser {
             rename_input: String::new(),
             is_loading: true,
             error: None,
+            error_history: Vec::new(),
             system_language: UiLanguage::English,
             cursor_position: Point::new(0.0, 0.0),
             main_window_width: MAIN_WINDOW_INITIAL_WIDTH,

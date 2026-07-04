@@ -365,6 +365,76 @@ async fn move_conflict_keep_both_moves_to_alternate_path() {
 }
 
 #[tokio::test]
+async fn copy_conflict_replace_rejects_target_directory_containing_source_path() {
+    let dir = tempdir().unwrap();
+    let outer = dir.path().join("nest");
+    let inner = outer.join("nest");
+    let source = inner.join("nest");
+    let sibling = inner.join("sibling.txt");
+    fs::create_dir_all(&inner).unwrap();
+    fs::write(&source, b"payload").unwrap();
+    fs::write(&sibling, b"keep").unwrap();
+
+    let error = copy_path_with_options(
+        &source,
+        &inner,
+        FileTransferOptions::running(tokio_util::sync::CancellationToken::new())
+            .with_conflict_strategy(TransferConflictStrategy::Replace),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        FileError::InvalidInput { path, message } => {
+            assert_eq!(path, inner);
+            assert_eq!(
+                message,
+                "cannot replace a target directory that contains the source path"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(inner.is_dir());
+    assert_eq!(fs::read(&source).unwrap(), b"payload");
+    assert_eq!(fs::read(&sibling).unwrap(), b"keep");
+}
+
+#[tokio::test]
+async fn move_conflict_replace_rejects_target_directory_containing_source_path() {
+    let dir = tempdir().unwrap();
+    let outer = dir.path().join("nest");
+    let inner = outer.join("nest");
+    let source = inner.join("nest");
+    let sibling = inner.join("sibling.txt");
+    fs::create_dir_all(&inner).unwrap();
+    fs::write(&source, b"payload").unwrap();
+    fs::write(&sibling, b"keep").unwrap();
+
+    let error = move_path_with_options(
+        &source,
+        &inner,
+        FileTransferOptions::running(tokio_util::sync::CancellationToken::new())
+            .with_conflict_strategy(TransferConflictStrategy::Replace),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        FileError::InvalidInput { path, message } => {
+            assert_eq!(path, inner);
+            assert_eq!(
+                message,
+                "cannot replace a target directory that contains the source path"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(inner.is_dir());
+    assert_eq!(fs::read(&source).unwrap(), b"payload");
+    assert_eq!(fs::read(&sibling).unwrap(), b"keep");
+}
+
+#[tokio::test]
 async fn transfer_conflict_check_ignores_missing_target() {
     let dir = tempdir().unwrap();
     let source = dir.path().join("source.txt");

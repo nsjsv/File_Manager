@@ -145,6 +145,21 @@ fn already_exists_error() -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, "target already exists")
 }
 
+pub(super) fn ensure_replace_target_does_not_contain_source_path(
+    from: &Path,
+    to: &Path,
+    target_metadata: &std::fs::Metadata,
+) -> Result<(), FileError> {
+    if target_metadata.is_dir() && from.starts_with(to) {
+        return Err(FileError::InvalidInput {
+            path: to.to_path_buf(),
+            message: "cannot replace a target directory that contains the source path".to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
 pub async fn move_path(
     from: impl AsRef<Path>,
     to: impl AsRef<Path>,
@@ -248,6 +263,7 @@ async fn prepare_move_target(
             source: already_exists_error(),
         }),
         TransferConflictStrategy::Replace => {
+            ensure_replace_target_does_not_contain_source_path(from, to, target_metadata)?;
             remove_move_target(from, to, target_metadata).await?;
             Ok(Some(to.to_path_buf()))
         }

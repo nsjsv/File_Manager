@@ -35,7 +35,7 @@ impl FileBrowser {
         action: &'static str,
     ) -> Task<Message> {
         if let Err(error) = result {
-            self.error = Some(format!("{action}: {error}"));
+            self.show_global_error(format!("{action}: {error}"));
         }
         Task::none()
     }

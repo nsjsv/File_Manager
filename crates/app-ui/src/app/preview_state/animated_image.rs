@@ -47,7 +47,7 @@ impl FileBrowser {
                 self.clear_audio_preview();
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview)));
-                self.error = None;
+                self.clear_global_error();
                 self.open_image_preview_window_for_dimensions(width, height)
             }
             Err(error) => {

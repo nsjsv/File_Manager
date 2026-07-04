@@ -75,7 +75,7 @@ impl FileBrowser {
                 Task::none()
             }
             (false, false) => {
-                self.error = Some(
+                self.show_global_error(
                     "Delete local and network items separately so local files can use Trash"
                         .to_owned(),
                 );
@@ -200,8 +200,8 @@ impl FileBrowser {
         result: Result<(), String>,
     ) -> Task<Message> {
         match result {
-            Ok(()) => self.error = None,
-            Err(error) => self.error = Some(error),
+            Ok(()) => self.clear_global_error(),
+            Err(error) => self.show_global_error(error),
         }
         Task::none()
     }
@@ -219,7 +219,7 @@ impl FileBrowser {
                 if fallback_operation.is_some() {
                     self.paste_optional_operation(paste_directory, fallback_operation)
                 } else {
-                    self.error = Some(error);
+                    self.show_global_error(error);
                     Task::none()
                 }
             }
@@ -236,7 +236,7 @@ impl FileBrowser {
                 self.reload_current_preserving_list_directory_summaries()
             }
             Err(error) => {
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
         }
@@ -255,7 +255,7 @@ impl FileBrowser {
                 WaylandDndDropOrigin::Internal => self.accept_internal_wayland_file_drop(drop),
             },
             Err(error) => {
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
         }
@@ -314,8 +314,9 @@ impl FileBrowser {
             || self.file_drop_prompt.is_some()
             || self.transfer_conflict.is_some()
         {
-            self.error =
-                Some("Finish the current file operation prompt before dropping files".to_owned());
+            self.show_global_error(
+                "Finish the current file operation prompt before dropping files".to_owned(),
+            );
             return Task::none();
         }
         self.context_menu = None;

@@ -28,7 +28,7 @@ impl FileBrowser {
         self.preview = Some(PreviewState::DownloadingNetworkFile(
             NetworkPreviewDownload::new(source_path.clone(), generation),
         ));
-        self.error = None;
+        self.clear_global_error();
 
         Task::batch([
             window_command,

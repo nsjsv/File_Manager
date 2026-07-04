@@ -11,7 +11,7 @@ use crate::transfer_conflict::{
 };
 use crate::FileError;
 
-use super::already_exists_error;
+use super::{already_exists_error, ensure_replace_target_does_not_contain_source_path};
 
 const COPY_BUFFER_SIZE: usize = 1024 * 1024;
 
@@ -646,6 +646,7 @@ async fn prepare_copy_target(
             source: already_exists_error(),
         }),
         TransferConflictStrategy::Replace => {
+            ensure_replace_target_does_not_contain_source_path(from, to, &target_metadata)?;
             remove_copy_target(from, to, &target_metadata).await?;
             Ok(Some(to.to_path_buf()))
         }

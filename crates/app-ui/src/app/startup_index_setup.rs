@@ -268,7 +268,7 @@ impl FileBrowser {
                         mode: FileSearchIndexMode::FullRebuild,
                     })
             {
-                self.error = Some(error);
+                self.show_global_error(error);
             }
             queued_index_task = true;
         }

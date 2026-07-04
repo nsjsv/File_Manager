@@ -125,7 +125,7 @@ impl FileBrowser {
         let request = match ArchiveExtractionRequest::from_archive_path(archive, None) {
             Ok(request) => request,
             Err(error) => {
-                self.error = Some(error.to_string());
+                self.show_global_error(error.to_string());
                 return Task::none();
             }
         };
@@ -199,7 +199,7 @@ impl FileBrowser {
                 Task::none()
             }
             ArchiveExtractionInspection::Failed(error) => {
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
         }
@@ -220,6 +220,6 @@ impl FileBrowser {
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
         self.renaming = None;
-        self.error = None;
+        self.clear_global_error();
     }
 }

@@ -99,7 +99,7 @@ impl FileBrowser {
         self.back_stack.clear();
         self.forward_stack.clear();
         self.is_loading = true;
-        self.error = error;
+        self.replace_global_error(error);
         self.tabs = vec![{
             let mut tab = crate::model::BrowserTab::directory(0, directory.clone());
             tab.view_mode = self.view_mode;
@@ -146,7 +146,7 @@ impl FileBrowser {
         self.pane_layout = self.pane_layout.with_active(active_pane.id);
         self.restore_pane_snapshot(active_pane);
         self.is_loading = true;
-        self.error = None;
+        self.clear_global_error();
         self.sync_active_pane_state();
 
         Task::batch([

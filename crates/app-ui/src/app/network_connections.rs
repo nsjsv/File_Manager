@@ -309,7 +309,7 @@ impl FileBrowser {
         error: Option<String>,
     ) -> Task<Message> {
         if let Some(error) = error {
-            self.error = Some(error);
+            self.show_global_error(error);
         }
         match fallback {
             NetworkConnectionCredentialFallback::OpenEditor => {
@@ -331,7 +331,7 @@ impl FileBrowser {
         result: Result<(), String>,
     ) -> Task<Message> {
         if let Err(error) = result {
-            self.error = Some(format!(
+            self.show_global_error(format!(
                 "Connected, but could not save network password: {error}"
             ));
         }
@@ -344,7 +344,7 @@ impl FileBrowser {
         result: Result<(), String>,
     ) -> Task<Message> {
         if let Err(error) = result {
-            self.error = Some(format!("Could not remove saved network password: {error}"));
+            self.show_global_error(format!("Could not remove saved network password: {error}"));
         }
         Task::none()
     }
@@ -406,7 +406,7 @@ impl FileBrowser {
                 {
                     return Task::none();
                 }
-                self.error = Some(format!("Could not connect network location: {error}"));
+                self.show_global_error(format!("Could not connect network location: {error}"));
                 clear_command
             }
         }
@@ -436,7 +436,7 @@ impl FileBrowser {
             Err(error) => {
                 let id = expected_connection.id;
                 self.network_connections.pending_actions.remove(&id);
-                self.error = Some(format!("Could not disconnect network location: {error}"));
+                self.show_global_error(format!("Could not disconnect network location: {error}"));
                 Task::none()
             }
         }

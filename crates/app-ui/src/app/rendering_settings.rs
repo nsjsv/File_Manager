@@ -32,7 +32,7 @@ impl FileBrowser {
         match startup_rendering::restart_current_process(&environment) {
             Ok(()) => Task::none(),
             Err(error) => {
-                self.error = Some(error);
+                self.show_global_error(error);
                 Task::none()
             }
         }

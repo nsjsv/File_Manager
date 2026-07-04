@@ -142,7 +142,7 @@ impl FileBrowser {
             ]),
             Ok(_) => refresh_command,
             Err(error) => {
-                self.error = Some(format!(
+                self.show_global_error(format!(
                     "Could not {} storage device: {error}",
                     sidebar_device_action_error_verb(action)
                 ));

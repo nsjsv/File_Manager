@@ -301,7 +301,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if let Some(error) = browser.error.as_deref() {
+    if let Some(error) = browser.current_error() {
         floating.push(FloatingContent {
             element: error_notification_panel(error),
             placement: FloatingPlacement::At(iced::Point::new(
@@ -312,7 +312,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     }
 
     if browser.renderer_restart_notice_visible {
-        let notice_y = if browser.error.is_some() {
+        let notice_y = if browser.current_error().is_some() {
             ERROR_NOTIFICATION_FLOAT_Y + RENDERER_RESTART_NOTICE_ERROR_OFFSET_Y
         } else {
             ERROR_NOTIFICATION_FLOAT_Y

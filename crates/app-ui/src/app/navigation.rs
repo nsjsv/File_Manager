@@ -199,7 +199,7 @@ impl FileBrowser {
         self.reveal_pending_search_match();
         self.is_loading = false;
         self.directory_load_cancel = None;
-        self.error = None;
+        self.clear_global_error();
         startup_trace::mark_once("initial_directory_ready");
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
@@ -261,7 +261,7 @@ impl FileBrowser {
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
         self.is_loading = false;
-        self.error = None;
+        self.clear_global_error();
         self.sync_active_tab_state();
         Task::batch([
             delayed_thumbnail_refresh_command(pane_id, self.current_dir.clone()),
@@ -291,7 +291,7 @@ impl FileBrowser {
         self.column_viewports.clear();
         self.clear_selection_context();
         self.is_loading = true;
-        self.error = None;
+        self.clear_global_error();
         self.sync_active_tab_state();
         let request = self.next_directory_load_request(path);
         let cancellation = self.directory_load_cancellation(&request);
@@ -323,7 +323,7 @@ impl FileBrowser {
         self.column_viewports.clear();
         self.clear_selection_context();
         self.is_loading = true;
-        self.error = None;
+        self.clear_global_error();
         self.cancel_active_directory_load();
         self.sync_active_tab_state();
         Task::batch([
@@ -345,7 +345,7 @@ impl FileBrowser {
             self.clear_transient_interaction_state();
             self.directory_loading_placeholder_entries.clear();
             self.is_loading = true;
-            self.error = None;
+            self.clear_global_error();
             self.cancel_active_directory_load();
             self.deepest_open_column_directory = None;
             self.cancel_active_expanded_directory_loads();
@@ -359,7 +359,7 @@ impl FileBrowser {
         self.clear_transient_interaction_state();
         self.directory_loading_placeholder_entries.clear();
         self.is_loading = true;
-        self.error = None;
+        self.clear_global_error();
 
         let mut commands = self.refresh_expanded_directory_commands();
         let request = self.next_directory_load_request(self.current_dir.clone());
@@ -593,7 +593,7 @@ impl FileBrowser {
                 self.remember_loaded_list_directory_children(&request.path, loaded_child_count);
             }
             if let Some(error) = pending_error {
-                self.error = Some(error);
+                self.show_global_error(error);
             }
             return self.schedule_visible_list_directory_summaries_for_pane(request.pane_id);
         }
@@ -617,7 +617,7 @@ impl FileBrowser {
             Err(error) => {
                 expanded.entries.clear();
                 expanded.status = ExpandedDirectoryStatus::Error;
-                self.error = Some(error);
+                self.show_global_error(error);
             }
         }
 

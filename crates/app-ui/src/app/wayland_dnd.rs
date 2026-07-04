@@ -36,7 +36,7 @@ impl FileBrowser {
                 tracing::debug!("Wayland drag-and-drop unavailable for this window backend");
                 self.wayland_dnd = None;
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => self.show_global_error(error),
         }
         Task::none()
     }
