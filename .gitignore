@@ -2,6 +2,7 @@
 **/*.rs.bk
 .idea/
 .vscode/Trellis Instructions
+.macos-kvm
 
 .ace-tool/
 .cursor

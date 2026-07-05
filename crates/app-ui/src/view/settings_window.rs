@@ -127,15 +127,21 @@ fn error_messages_settings_detail(
         .spacing(10)
         .width(Length::Fill);
 
-    if browser.error_history().is_empty() {
+    let messages = browser.displayed_error_messages();
+    if messages.is_empty() {
         content = content.push(readable_text("No error messages yet.").size(13));
     } else {
-        for error in browser.error_history().iter().rev() {
-            content = content.push(
-                container(readable_text(error).size(12).width(Length::Fill))
-                    .padding([6, 0])
-                    .width(Length::Fill),
-            );
+        for message in messages {
+            let mut error_content = column![].spacing(2).width(Length::Fill);
+            if let Some(title) = message.title {
+                error_content = error_content.push(readable_text(title).size(13));
+            }
+            for detail in message.details {
+                error_content = error_content.push(readable_text(detail).size(12));
+            }
+            error_content =
+                error_content.push(readable_text(message.message).size(12).width(Length::Fill));
+            content = content.push(container(error_content).padding([6, 0]).width(Length::Fill));
         }
     }
 

@@ -160,6 +160,108 @@ pub(super) fn ensure_replace_target_does_not_contain_source_path(
     Ok(())
 }
 
+async fn try_collapse_replace_move_into_empty_target_parent(
+    from: &Path,
+    to: &Path,
+    source_metadata: &std::fs::Metadata,
+    target_metadata: Option<&std::fs::Metadata>,
+) -> Result<Option<PathBuf>, FileError> {
+    let Some(target_metadata) = target_metadata else {
+        return Ok(None);
+    };
+
+    if !source_metadata.is_dir() || !target_metadata.is_dir() {
+        return Ok(None);
+    }
+    if from.parent() != Some(to) || from.file_name() != to.file_name() {
+        return Ok(None);
+    }
+
+    let source_file_type = fs::symlink_metadata(from)
+        .await
+        .map_err(|source| FileError::Move {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        })?
+        .file_type();
+    if !source_file_type.is_dir() {
+        return Ok(None);
+    }
+    if !target_directory_contains_only_source_path(from, to).await? {
+        return Ok(None);
+    }
+
+    let collapsed_target =
+        available_transfer_target_path_candidate(to)
+            .await
+            .map_err(|source| FileError::Move {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+                source,
+            })?;
+    fs::rename(from, &collapsed_target)
+        .await
+        .map_err(|source| FileError::Move {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        })?;
+
+    if let Err(source) = fs::remove_dir(to).await {
+        let _ = fs::rename(&collapsed_target, from).await;
+        return Err(FileError::Move {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        });
+    }
+
+    if let Err(source) = fs::rename(&collapsed_target, to).await {
+        // 这里先尽量恢复原始父目录，再把临时目录放回去，避免把源目录丢成孤儿路径。
+        let _ = fs::create_dir(to).await;
+        let _ = fs::rename(&collapsed_target, from).await;
+        return Err(FileError::Move {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        });
+    }
+
+    Ok(Some(to.to_path_buf()))
+}
+
+async fn target_directory_contains_only_source_path(
+    from: &Path,
+    to: &Path,
+) -> Result<bool, FileError> {
+    let mut entries = fs::read_dir(to).await.map_err(|source| FileError::Move {
+        from: from.to_path_buf(),
+        to: to.to_path_buf(),
+        source,
+    })?;
+    let mut found_source = false;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|source| FileError::Move {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        })?
+    {
+        if entry.path() == from {
+            found_source = true;
+            continue;
+        }
+
+        return Ok(false);
+    }
+
+    Ok(found_source)
+}
+
 pub async fn move_path(
     from: impl AsRef<Path>,
     to: impl AsRef<Path>,
@@ -222,6 +324,20 @@ pub async fn move_path_with_options(
         move_directory_merge(&from, &to, &mut controls, verification).await?;
         send_move_progress(progress, from, to.clone(), total);
         return Ok(Some(to));
+    }
+
+    if conflict_strategy == TransferConflictStrategy::Replace {
+        if let Some(collapsed_target) = try_collapse_replace_move_into_empty_target_parent(
+            &from,
+            &to,
+            &source_metadata,
+            target_metadata.as_ref(),
+        )
+        .await?
+        {
+            send_move_progress(progress, from, collapsed_target.clone(), total);
+            return Ok(Some(collapsed_target));
+        }
     }
 
     let Some(to) =
