@@ -5,29 +5,12 @@ pub use control_store::ProfileStore;
 
 use crate::search::{DirectoryErrorPolicy, FileSearchIndexFailure, SearchIndexFileRecord};
 
-pub const DEFAULT_CONTENT_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchMode {
     Files,
     Contents,
     Media,
     All,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContentIndexPolicy {
-    pub enabled: bool,
-    pub max_file_bytes: u64,
-}
-
-impl Default for ContentIndexPolicy {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            max_file_bytes: DEFAULT_CONTENT_MAX_FILE_BYTES,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +63,6 @@ pub struct IndexProfile {
     pub include_hidden: bool,
     pub exclude_patterns: Vec<String>,
     pub directory_error_policy: DirectoryErrorPolicy,
-    pub content: ContentIndexPolicy,
     pub media: MediaMetadataPolicy,
 }
 
@@ -88,7 +70,6 @@ pub struct IndexProfile {
 pub enum IndexTaskPhase {
     Queued,
     Running,
-    Paused,
     Finished,
     Failed,
     Deleted,
@@ -99,7 +80,6 @@ impl IndexTaskPhase {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
-            Self::Paused => "paused",
             Self::Finished => "finished",
             Self::Failed => "failed",
             Self::Deleted => "deleted",
@@ -110,7 +90,6 @@ impl IndexTaskPhase {
         match value {
             "queued" => Some(Self::Queued),
             "running" => Some(Self::Running),
-            "paused" => Some(Self::Paused),
             "finished" => Some(Self::Finished),
             "failed" => Some(Self::Failed),
             "deleted" => Some(Self::Deleted),
@@ -145,7 +124,6 @@ impl IndexProfile {
             include_hidden: false,
             exclude_patterns: Vec::new(),
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-            content: ContentIndexPolicy::default(),
             media: MediaMetadataPolicy::default(),
         }
     }
@@ -189,16 +167,6 @@ mod tests {
                 PathBuf::from("/workspace/project"),
                 PathBuf::from("/workspace/archive"),
             ]
-        );
-    }
-
-    #[test]
-    fn index_profile_uses_five_mib_content_limit_by_default() {
-        let profile = IndexProfile::new("main", vec![PathBuf::from("/workspace")]);
-
-        assert_eq!(
-            profile.content.max_file_bytes,
-            DEFAULT_CONTENT_MAX_FILE_BYTES
         );
     }
 }

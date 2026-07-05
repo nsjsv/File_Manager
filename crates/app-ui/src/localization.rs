@@ -309,12 +309,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Choose folders or files from Home." => Some("从主目录中选择文件夹或文件。"),
         "Filenames" => Some("文件名"),
         "Filename and path catalog." => Some("建立文件名和路径目录。"),
-        "Filenames + text" => Some("文件名 + 文本"),
-        "Filename and text content catalog." => Some("建立文件名和文本内容目录。"),
-        "Filenames + text + images" => Some("文件名 + 文本 + 图像"),
-        "Filename, text content, and image metadata catalog." => {
-            Some("建立文件名、文本内容和图像元数据目录。")
-        }
+        "Filenames + images" => Some("文件名 + 图像"),
+        "Filename/path catalog plus image metadata." => Some("建立文件名/路径目录，并附带图像元数据。"),
         "No common locations found" => Some("未找到常用位置"),
         "No indexable locations found" => Some("未找到可索引的位置"),
         "Loading..." => Some("加载中..."),
@@ -328,14 +324,13 @@ fn exact_translation(text: &str) -> Option<&'static str> {
             Some("实时搜索文件名和路径。不构建也不维护索引。")
         }
         "Indexed search" => Some("索引搜索"),
-        "Uses configured indexed paths and enables content or media indexing options." => {
-            Some("使用已配置的索引路径，并启用内容或媒体索引选项。")
+        "Uses configured indexed paths and optional media metadata indexing." => {
+            Some("使用已配置的索引路径，并可选建立媒体元数据索引。")
         }
         "Profile" => Some("配置档"),
         "Service" => Some("服务"),
         "Profile id" => Some("配置档 ID"),
         "Roots" => Some("根路径"),
-        "Maintenance" => Some("维护"),
         "Restart service" => Some("重启服务"),
         "Delete profile" => Some("删除配置档"),
         "Filename and path catalog" => Some("文件名和路径目录"),
@@ -354,8 +349,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Image metadata plus audio and video metadata." => {
             Some("包含图像元数据，以及音频和视频元数据。")
         }
-        "Changing content or media indexing applies to future rebuilds and updates." => {
-            Some("内容或媒体索引设置会在后续重建和更新时生效。")
+        "Changing media indexing applies to future rebuilds." => {
+            Some("媒体元数据索引设置会在后续重建时生效。")
         }
         "Checking..." => Some("检查中..."),
         "Connected" => Some("已连接"),
@@ -536,8 +531,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Simple Search" => Some("简单搜索"),
         "Find file names live without building an index." => Some("无需建立索引，实时查找文件名。"),
         "Indexed Search" => Some("索引搜索"),
-        "Build indexed paths for faster catalog, content, and media search." => {
-            Some("建立索引路径，以更快搜索目录、内容和媒体。")
+        "Build indexed paths for faster filename, path, and media search. File contents use live rg search." => {
+            Some("建立索引路径，以更快搜索文件名、路径和媒体；文件内容始终使用实时 rg 搜索。")
         }
         "Next" => Some("下一步"),
         "Format" => Some("格式"),

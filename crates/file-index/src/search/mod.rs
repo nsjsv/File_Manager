@@ -9,6 +9,7 @@ mod ignore_policy;
 mod manifest;
 pub(crate) mod path_encoding;
 mod query;
+mod rg;
 mod store;
 mod types;
 
@@ -23,14 +24,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::IndexError;
 
-pub(crate) use crawl::{watchable_search_directories, SearchCrawlOptions};
+pub(crate) use crawl::SearchCrawlOptions;
+pub(crate) use engine::merge_search_matches;
 pub use ignore_policy::default_search_index_exclude_patterns;
 pub(crate) use types::EXTRACTOR_VERSION;
 pub use types::{
-    DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexOptions,
-    FileSearchIndexOutcome, FileSearchIndexProgress, FileSearchIndexStatus, FileSearchMatch,
-    FileSearchOptions, FileSearchOutcome, MediaExifField, MediaSearchKind, MediaSearchMetadata,
-    SearchIndexFileRecord, SearchResultSource,
+    DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexOptions, FileSearchIndexOutcome,
+    FileSearchIndexProgress, FileSearchIndexStatus, FileSearchMatch, FileSearchOptions,
+    FileSearchOutcome, MediaExifField, MediaSearchKind, MediaSearchMetadata, SearchIndexFileRecord,
+    SearchResultSource,
 };
 
 pub async fn search_file_tree(
@@ -39,6 +41,29 @@ pub async fn search_file_tree(
     options: FileSearchOptions,
 ) -> Result<FileSearchOutcome, IndexError> {
     search_file_tree_with_cancel(root, query, options, CancellationToken::new()).await
+}
+
+pub async fn search_file_contents(
+    root: impl AsRef<Path>,
+    query: impl AsRef<str>,
+    options: FileSearchOptions,
+) -> Result<FileSearchOutcome, IndexError> {
+    search_file_contents_with_cancel(root, query, options, CancellationToken::new()).await
+}
+
+pub async fn search_file_contents_with_cancel(
+    root: impl AsRef<Path>,
+    query: impl AsRef<str>,
+    options: FileSearchOptions,
+    cancel: CancellationToken,
+) -> Result<FileSearchOutcome, IndexError> {
+    let root = root.as_ref().to_path_buf();
+    let query = query.as_ref().trim().to_owned();
+    if query.is_empty() {
+        return Ok(empty_search_outcome(root));
+    }
+
+    rg::search_file_contents_with_cancel(root, query, options, cancel).await
 }
 
 pub async fn search_file_tree_with_cancel(
@@ -169,6 +194,46 @@ pub async fn search_file_index_with_cancel(
     if query.is_empty() {
         return Ok(empty_search_outcome(root));
     }
+    match options.mode {
+        crate::SearchMode::Contents => {
+            search_file_contents_with_cancel(root, query, options, cancel).await
+        }
+        crate::SearchMode::All => {
+            let limit = options.limit.max(1);
+            let indexed = search_index_query_with_cancel(
+                index_dir,
+                root.clone(),
+                query.clone(),
+                options.clone(),
+                cancel.child_token(),
+            )
+            .await?;
+            let mut content_options = options;
+            content_options.mode = crate::SearchMode::Contents;
+            let content =
+                search_file_contents_with_cancel(root.clone(), query, content_options, cancel)
+                    .await?;
+            let mut matches = indexed.matches;
+            matches.extend(content.matches);
+            let mut skipped = indexed.skipped;
+            skipped.extend(content.skipped);
+            Ok(FileSearchOutcome {
+                root,
+                matches: merge_search_matches(matches, limit),
+                skipped,
+            })
+        }
+        _ => search_index_query_with_cancel(index_dir, root, query, options, cancel).await,
+    }
+}
+
+async fn search_index_query_with_cancel(
+    index_dir: PathBuf,
+    root: PathBuf,
+    query: String,
+    options: FileSearchOptions,
+    cancel: CancellationToken,
+) -> Result<FileSearchOutcome, IndexError> {
     let join_root = root.clone();
 
     tokio::task::spawn_blocking(move || {
@@ -181,8 +246,6 @@ pub async fn search_file_index_with_cancel(
             options.include_hidden,
             &options.exclude_patterns,
             options.directory_error_policy,
-            options.content_index_enabled,
-            options.content_max_file_bytes,
             options.media_metadata_scope,
         )?;
         let matches = search_index_catalog_and_tantivy(&runtime, &query, &options, &cancel)?;
@@ -216,8 +279,6 @@ pub async fn file_search_index_status(
             options.include_hidden,
             &options.exclude_patterns,
             options.directory_error_policy,
-            options.content_index_enabled,
-            options.content_max_file_bytes,
             options.media_metadata_scope,
         )
     })
@@ -269,8 +330,6 @@ pub(crate) fn scan_file_search_index_snapshot(
         options.include_hidden,
         &options.exclude_patterns,
         options.directory_error_policy,
-        options.content_index_enabled,
-        options.content_max_file_bytes,
         options.media_metadata_scope,
         |record| record_sink(record.to_file_record()),
     )?;

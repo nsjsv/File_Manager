@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use file_index::IndexProfile;
-use file_index::{FileSearchIndexMode, MediaMetadataScope};
+use file_index::MediaMetadataScope;
 use iced::Task;
 
 use super::FileBrowser;
@@ -20,7 +20,6 @@ use crate::model::{
 use crate::operation_queue::QueuedFileOperation;
 
 mod diagnostics;
-mod maintenance;
 mod path_rule_suggestions;
 mod path_rules;
 mod sections;
@@ -154,11 +153,7 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn request_search_index_manual_build(
-        &mut self,
-        root: PathBuf,
-        mode: FileSearchIndexMode,
-    ) -> Task<Message> {
+    pub(super) fn request_search_index_manual_build(&mut self, root: PathBuf) -> Task<Message> {
         if self.user_config.search_mode != crate::config::SearchBackendMode::Indexed {
             return Task::none();
         }
@@ -189,7 +184,6 @@ impl FileBrowser {
                 root: root.clone(),
                 index_base_dir: self.search_index.base_dir.clone(),
                 selected_paths: vec![root],
-                mode,
             }),
         ])
     }
@@ -270,18 +264,6 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn toggle_search_index_content(&mut self, enabled: bool) -> Task<Message> {
-        if self.search_index.content_index_enabled == enabled {
-            return Task::none();
-        }
-        self.search_index.content_index_enabled = enabled;
-        self.user_config.search_index_content_enabled = enabled;
-        Task::batch([
-            self.persist_user_preferences_command(),
-            self.save_current_search_index_profile(),
-        ])
-    }
-
     pub(super) fn select_search_index_media_scope(
         &mut self,
         scope: MediaMetadataScope,
@@ -330,7 +312,6 @@ impl FileBrowser {
                 self.search_index.exclude_pattern_inputs = profile.exclude_patterns.clone();
                 self.user_config.search_index_directory_error_policy =
                     profile.directory_error_policy;
-                self.user_config.search_index_content_enabled = profile.content.enabled;
                 self.user_config.search_index_media_scope = profile.media.scope;
                 self.search_index.apply_profile(&profile);
                 self.startup_index_setup = None;

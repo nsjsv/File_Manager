@@ -125,7 +125,6 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) profile_loading: bool,
     pub(crate) profile_error: Option<String>,
     pub(crate) path_rule_error: Option<String>,
-    pub(crate) maintenance_paused: bool,
     pub(crate) bootstrap_in_progress: bool,
     pub(crate) service_generation: u64,
     pub(crate) status_generation: u64,
@@ -145,7 +144,6 @@ pub(crate) struct SearchIndexRuntime {
     pub(crate) path_rule_suggestion_generation: u64,
     pub(crate) path_rule_kind: SearchIndexPathRuleKind,
     pub(crate) directory_error_policy: DirectoryErrorPolicy,
-    pub(crate) content_index_enabled: bool,
     pub(crate) media_metadata_scope: MediaMetadataScope,
 }
 
@@ -160,7 +158,6 @@ impl SearchIndexRuntime {
             profile_loading: false,
             profile_error: None,
             path_rule_error: None,
-            maintenance_paused: false,
             bootstrap_in_progress: false,
             service_generation: 0,
             status_generation: 0,
@@ -180,7 +177,6 @@ impl SearchIndexRuntime {
             path_rule_suggestion_generation: 0,
             path_rule_kind: SearchIndexPathRuleKind::Indexed,
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-            content_index_enabled: false,
             media_metadata_scope: MediaMetadataScope::Off,
         }
     }
@@ -189,7 +185,6 @@ impl SearchIndexRuntime {
         self.profile_id = profile.id.clone();
         self.profile_roots = profile.roots.clone();
         self.directory_error_policy = profile.directory_error_policy;
-        self.content_index_enabled = profile.content.enabled;
         self.media_metadata_scope = profile.media.scope;
         self.profile_loading = false;
         self.profile_error = None;

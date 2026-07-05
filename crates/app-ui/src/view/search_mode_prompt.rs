@@ -34,7 +34,7 @@ pub(super) fn search_mode_prompt_panel(
         ),
         selectable_choice_row(
             "Indexed Search",
-            "Build indexed paths for faster catalog, content, and media search.",
+            "Build indexed paths for faster filename, path, and media search. File contents use live rg search.",
             prompt.selected_mode == Some(SearchBackendMode::Indexed),
             Message::SearchModePromptModeSelected(SearchBackendMode::Indexed),
         ),

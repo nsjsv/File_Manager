@@ -259,8 +259,6 @@ fn query_policy_base(include_hidden: bool, limit: usize) -> FileSearchOptions {
     FileSearchOptions {
         include_hidden,
         limit,
-        content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
         media_metadata_scope: file_index::MediaMetadataScope::All,
         ..FileSearchOptions::default()
     }
@@ -269,8 +267,6 @@ fn query_policy_base(include_hidden: bool, limit: usize) -> FileSearchOptions {
 fn all_index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
         include_hidden,
-        content_index_enabled: true,
-        content_max_file_bytes: 16 * 1024 * 1024,
         media_metadata_scope: file_index::MediaMetadataScope::All,
         ..FileSearchIndexOptions::default()
     }

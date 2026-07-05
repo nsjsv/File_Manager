@@ -81,7 +81,6 @@ use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
     MAIN_WINDOW_INITIAL_WIDTH,
 };
-use crate::commands::search_index_maintenance_subscription;
 use crate::commands::{
     file_operation_subscription, startup_environment_command, wayland_dnd_window_handle_command,
 };
@@ -526,17 +525,6 @@ impl FileBrowser {
 
         if let Some(operation) = self.operation_queue.active_subscription() {
             subscriptions.push(file_operation_subscription(operation));
-        }
-
-        if self.user_config.search_mode == config::SearchBackendMode::Indexed
-            && self.search_index.has_active_profile_roots()
-            && !self.search_index.maintenance_paused
-        {
-            subscriptions.push(search_index_maintenance_subscription(
-                self.search_index.profile_id.clone(),
-                self.user_config.clone(),
-                self.search_index.service_generation,
-            ));
         }
 
         if self.preview_tree_animation_is_active() {

@@ -1,5 +1,11 @@
 use super::*;
 use rusqlite::Connection;
+use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 #[tokio::test]
 async fn file_search_index_files_mode_keeps_catalog_only_old_extractor_queryable() {
@@ -32,55 +38,43 @@ async fn file_search_index_files_mode_keeps_catalog_only_old_extractor_queryable
 }
 
 #[tokio::test]
-async fn file_search_index_full_text_modes_require_current_extractor_version() {
+async fn content_search_uses_rg_even_when_catalog_extractor_version_is_old() {
     let dir = tempdir().unwrap();
     let index_dir = tempdir().unwrap();
     fs::write(dir.path().join("alpha-note.md"), "alpha runway").unwrap();
 
-    build_file_search_index(dir.path(), index_dir.path(), content_index_options(true))
+    build_file_search_index(dir.path(), index_dir.path(), index_options(true))
         .await
         .unwrap();
     set_manifest_extractor_version(index_dir.path(), 2);
 
-    let status = file_index::file_search_index_status(
-        index_dir.path(),
-        dir.path(),
-        content_index_options(true),
-    )
-    .await
-    .unwrap();
+    let status =
+        file_index::file_search_index_status(index_dir.path(), dir.path(), index_options(true))
+            .await
+            .unwrap();
     assert!(status.exists);
-    assert!(status.stale);
-    assert_eq!(
-        status.reason.as_deref(),
-        Some("search index extractor version is outdated")
-    );
+    assert!(!status.stale);
+    assert!(status.reason.is_none());
 
-    let error = search_file_index(
+    let search = search_file_index(
         index_dir.path(),
         dir.path(),
         "alpha",
         content_search_options(true, 10),
     )
     .await
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        IndexError::Store { message, .. } if message.contains("extractor version is outdated")
-    ));
+    .unwrap();
+    assert_eq!(search.matches.len(), 1);
+    assert_eq!(search.matches[0].snippet.as_deref(), Some("alpha runway"));
 }
 
 #[tokio::test]
-async fn file_search_index_rebuild_invalidates_cached_full_text_runtime() {
+async fn content_search_reads_live_files_without_rebuild() {
     let dir = tempdir().unwrap();
-    let index_dir = tempdir().unwrap();
     fs::write(dir.path().join("first-note.md"), "alpha runway").unwrap();
 
-    build_file_search_index(dir.path(), index_dir.path(), content_index_options(true))
-        .await
-        .unwrap();
     let first = search_file_index(
-        index_dir.path(),
+        dir.path().join("unused-index"),
         dir.path(),
         "alpha",
         content_search_options(true, 10),
@@ -91,12 +85,9 @@ async fn file_search_index_rebuild_invalidates_cached_full_text_runtime() {
 
     fs::remove_file(dir.path().join("first-note.md")).unwrap();
     fs::write(dir.path().join("second-note.md"), "beta runway").unwrap();
-    build_file_search_index(dir.path(), index_dir.path(), content_index_options(true))
-        .await
-        .unwrap();
 
     let stale = search_file_index(
-        index_dir.path(),
+        dir.path().join("unused-index"),
         dir.path(),
         "alpha",
         content_search_options(true, 10),
@@ -104,7 +95,7 @@ async fn file_search_index_rebuild_invalidates_cached_full_text_runtime() {
     .await
     .unwrap();
     let refreshed = search_file_index(
-        index_dir.path(),
+        dir.path().join("unused-index"),
         dir.path(),
         "beta",
         content_search_options(true, 10),
@@ -115,6 +106,31 @@ async fn file_search_index_rebuild_invalidates_cached_full_text_runtime() {
     assert!(stale.matches.is_empty());
     assert_eq!(refreshed.matches.len(), 1);
     assert_eq!(refreshed.matches[0].path, dir.path().join("second-note.md"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn content_search_preserves_non_utf8_match_paths() {
+    let dir = tempdir().unwrap();
+    let non_utf8_name = OsString::from_vec(b"bad\xffname.txt".to_vec());
+    let path = dir.path().join(&non_utf8_name);
+    fs::write(&path, "alpha runway").unwrap();
+
+    let search = search_file_index(
+        dir.path().join("unused-index"),
+        dir.path(),
+        "alpha",
+        content_search_options(true, 10),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(search.matches.len(), 1);
+    assert_eq!(search.matches[0].path, path);
+    assert_eq!(
+        search.matches[0].relative_path,
+        PathBuf::from(non_utf8_name)
+    );
 }
 
 #[tokio::test]
@@ -141,7 +157,7 @@ async fn file_search_index_all_mode_merges_duplicate_sources() {
         search.matches[0].source,
         file_index::SearchResultSource::Contents
     );
-    assert!(search.matches[0].snippet.is_none());
+    assert_eq!(search.matches[0].snippet.as_deref(), Some("roadmap body"));
 }
 
 #[tokio::test]
@@ -178,8 +194,6 @@ async fn file_search_index_all_mode_preserves_media_source() {
 fn content_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
     FileSearchOptions {
         mode: file_index::SearchMode::Contents,
-        content_index_enabled: true,
-        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         include_hidden,
         limit,
         ..FileSearchOptions::default()
@@ -197,21 +211,10 @@ fn search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
 fn all_search_options(include_hidden: bool, limit: usize) -> FileSearchOptions {
     FileSearchOptions {
         mode: file_index::SearchMode::All,
-        content_index_enabled: true,
-        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         media_metadata_scope: file_index::MediaMetadataScope::All,
         include_hidden,
         limit,
         ..FileSearchOptions::default()
-    }
-}
-
-fn content_index_options(include_hidden: bool) -> FileSearchIndexOptions {
-    FileSearchIndexOptions {
-        content_index_enabled: true,
-        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
-        include_hidden,
-        ..FileSearchIndexOptions::default()
     }
 }
 
@@ -224,8 +227,6 @@ fn index_options(include_hidden: bool) -> FileSearchIndexOptions {
 
 fn all_index_options(include_hidden: bool) -> FileSearchIndexOptions {
     FileSearchIndexOptions {
-        content_index_enabled: true,
-        content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
         media_metadata_scope: file_index::MediaMetadataScope::All,
         include_hidden,
         ..FileSearchIndexOptions::default()

@@ -2,11 +2,10 @@ use std::path::PathBuf;
 
 use file_core::FileKind;
 
-use crate::profile::{ContentIndexPolicy, IndexProfile, MediaMetadataPolicy, MediaMetadataScope};
+use crate::profile::{IndexProfile, MediaMetadataPolicy, MediaMetadataScope};
 use crate::search::{
-    DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexMode, FileSearchIndexStatus,
-    FileSearchMatch, FileSearchOutcome, MediaExifField, MediaSearchKind, MediaSearchMetadata,
-    SearchResultSource,
+    DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexStatus, FileSearchMatch,
+    FileSearchOutcome, MediaExifField, MediaSearchKind, MediaSearchMetadata, SearchResultSource,
 };
 use crate::service::{IndexServiceCommand, IndexServiceEvent};
 
@@ -14,7 +13,7 @@ use super::{IndexRequest, IndexRequestCommand, IndexResponse, WirePath};
 
 #[test]
 fn protocol_version_changes_when_wire_schema_changes() {
-    assert_eq!(super::INDEX_PROTOCOL_VERSION, 3);
+    assert_eq!(super::INDEX_PROTOCOL_VERSION, 4);
 }
 
 #[test]
@@ -30,14 +29,12 @@ fn new_command_variants_are_appended_after_version_one_commands() {
         }),
         5
     );
-    assert_eq!(command_discriminant(&IndexRequestCommand::Ping), 12);
     assert_eq!(
-        command_discriminant(&IndexRequestCommand::StartMaintenance {
-            profile_id: "main".to_owned(),
-        }),
-        13
+        command_discriminant(&IndexRequestCommand::DeleteProfile("main".to_owned())),
+        8
     );
-    assert_eq!(command_discriminant(&IndexRequestCommand::Shutdown), 14);
+    assert_eq!(command_discriminant(&IndexRequestCommand::Ping), 9);
+    assert_eq!(command_discriminant(&IndexRequestCommand::Shutdown), 10);
 }
 
 #[test]
@@ -56,10 +53,6 @@ fn command_round_trip_preserves_profile_paths() {
         include_hidden: true,
         exclude_patterns: vec!["target/".to_owned()],
         directory_error_policy: DirectoryErrorPolicy::Abort,
-        content: ContentIndexPolicy {
-            enabled: true,
-            max_file_bytes: 4096,
-        },
         media: MediaMetadataPolicy {
             scope: MediaMetadataScope::All,
         },
@@ -78,7 +71,6 @@ fn selected_path_command_round_trip_preserves_paths() {
             profile_id: "main".to_owned(),
             root: PathBuf::from("/tmp/root"),
             selected_paths: vec![PathBuf::from("/tmp/root/src")],
-            mode: FileSearchIndexMode::Incremental,
         });
 
     let request = IndexRequest::from_command("/cache/index", command.clone());
@@ -141,8 +133,6 @@ fn status_response_round_trip_preserves_readiness_and_failures() {
         stale: true,
         reason: Some("search index media policy is outdated".to_owned()),
         include_hidden: true,
-        content_index_enabled: true,
-        content_max_file_bytes: 4096,
         media_metadata_scope: MediaMetadataScope::All,
         record_count: 7,
         index_size_bytes: 2048,

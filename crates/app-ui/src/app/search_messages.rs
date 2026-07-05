@@ -55,24 +55,15 @@ impl FileBrowser {
             Message::SearchIndexDaemonRestartRequested => {
                 self.request_search_index_daemon_restart()
             }
-            Message::SearchIndexMaintenanceEvent(generation, event) => {
-                self.accept_search_index_maintenance_event(generation, event)
-            }
-            Message::SearchIndexMaintenanceUpdated(generation, outcome) => {
-                self.accept_search_index_maintenance_update(generation, outcome)
-            }
             Message::SearchIndexStatusRefreshRequested => {
                 self.refresh_search_index_settings_statuses()
             }
-            Message::SearchIndexManualBuildRequested(root, mode) => {
-                self.request_search_index_manual_build(root, mode)
+            Message::SearchIndexManualBuildRequested(root) => {
+                self.request_search_index_manual_build(root)
             }
             Message::SearchIndexRemoveRequested(root) => self.request_search_index_removal(root),
             Message::SearchIndexProfileDeleteRequested => {
                 self.request_search_index_profile_delete()
-            }
-            Message::SearchIndexMaintenancePauseToggled => {
-                self.toggle_search_index_maintenance_pause()
             }
             Message::SearchIndexFailuresClearRequested(root) => {
                 self.request_search_index_failures_clear(root)
@@ -113,9 +104,6 @@ impl FileBrowser {
             Message::SearchIndexDirectoryErrorPolicySelected(policy) => {
                 self.select_search_index_directory_error_policy(policy)
             }
-            Message::SearchIndexContentEnabledToggled(enabled) => {
-                self.toggle_search_index_content(enabled)
-            }
             Message::SearchIndexMediaScopeSelected(scope) => {
                 self.select_search_index_media_scope(scope)
             }
@@ -140,14 +128,12 @@ fn search_index_message_commits_path_rule_editor(message: &Message) -> bool {
             | Message::SearchIndexPathRuleEditRequested(_)
             | Message::SearchIndexPathRuleRemoveRequested(_)
             | Message::SearchIndexStatusRefreshRequested
-            | Message::SearchIndexManualBuildRequested(_, _)
+            | Message::SearchIndexManualBuildRequested(_)
             | Message::SearchIndexRemoveRequested(_)
             | Message::SearchIndexProfileDeleteRequested
             | Message::SearchIndexDaemonRestartRequested
-            | Message::SearchIndexMaintenancePauseToggled
             | Message::SearchIndexFailuresClearRequested(_)
             | Message::SearchIndexDirectoryErrorPolicySelected(_)
-            | Message::SearchIndexContentEnabledToggled(_)
             | Message::SearchIndexMediaScopeSelected(_)
             | Message::SearchBackendModeSelected(_)
     )

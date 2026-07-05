@@ -47,8 +47,7 @@ pub(crate) enum StartupIndexTargetMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartupIndexCapability {
     Filenames,
-    Text,
-    TextAndImageMetadata,
+    ImageMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -597,14 +596,10 @@ impl StartupIndexEntrySelection {
 }
 
 impl StartupIndexCapability {
-    pub(crate) fn content_enabled(self) -> bool {
-        matches!(self, Self::Text | Self::TextAndImageMetadata)
-    }
-
     pub(crate) fn media_metadata_scope(self) -> MediaMetadataScope {
         match self {
-            Self::Filenames | Self::Text => MediaMetadataScope::Off,
-            Self::TextAndImageMetadata => MediaMetadataScope::Images,
+            Self::Filenames => MediaMetadataScope::Off,
+            Self::ImageMetadata => MediaMetadataScope::Images,
         }
     }
 }

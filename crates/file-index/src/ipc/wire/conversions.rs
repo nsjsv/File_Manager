@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use file_core::ScanWarning;
 
-use crate::profile::{ContentIndexPolicy, IndexProfile, MediaMetadataPolicy};
+use crate::profile::{IndexProfile, MediaMetadataPolicy};
 use crate::search::path_encoding::{path_from_bytes, path_to_bytes};
 use crate::search::{
     FileSearchIndexFailure, FileSearchIndexOutcome, FileSearchIndexProgress, FileSearchIndexStatus,
@@ -17,12 +17,11 @@ use crate::service::{
 
 use super::{
     IndexRequest, IndexRequestCommand, IndexResponse, WireBuildSelectedPathsRequest,
-    WireContentIndexPolicy, WireDirectoryErrorPolicy, WireFileKind, WireFileSearchIndexFailure,
-    WireFileSearchIndexMode, WireFileSearchIndexOutcome, WireFileSearchIndexStatus,
-    WireFileSearchMatch, WireFileSearchOutcome, WireIndexProfile, WireIndexServiceEvent,
-    WireMediaExifField, WireMediaMetadataPolicy, WireMediaMetadataScope, WireMediaSearchKind,
-    WireMediaSearchMetadata, WireOsString, WirePath, WireScanWarning, WireSearchMode,
-    WireSearchQuery, WireSearchResultSource, INDEX_PROTOCOL_VERSION,
+    WireDirectoryErrorPolicy, WireFileKind, WireFileSearchIndexFailure, WireFileSearchIndexOutcome,
+    WireFileSearchIndexStatus, WireFileSearchMatch, WireFileSearchOutcome, WireIndexProfile,
+    WireIndexServiceEvent, WireMediaExifField, WireMediaMetadataPolicy, WireMediaMetadataScope,
+    WireMediaSearchKind, WireMediaSearchMetadata, WireOsString, WirePath, WireScanWarning,
+    WireSearchMode, WireSearchQuery, WireSearchResultSource, INDEX_PROTOCOL_VERSION,
 };
 
 impl IndexRequest {
@@ -31,19 +30,6 @@ impl IndexRequest {
             version: INDEX_PROTOCOL_VERSION,
             index_base_dir: WirePath::from_path(index_base_dir.as_ref()),
             command: IndexRequestCommand::from(command),
-        }
-    }
-
-    pub fn subscribe_maintenance(
-        index_base_dir: impl AsRef<Path>,
-        profile_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            version: INDEX_PROTOCOL_VERSION,
-            index_base_dir: WirePath::from_path(index_base_dir.as_ref()),
-            command: IndexRequestCommand::SubscribeMaintenance {
-                profile_id: profile_id.into(),
-            },
         }
     }
 
@@ -81,13 +67,7 @@ impl IndexRequestCommand {
                 profile_id,
                 root: root.to_path_buf(),
             },
-            Self::Pause => IndexServiceCommand::Pause,
-            Self::Resume => IndexServiceCommand::Resume,
-            Self::StartMaintenance { profile_id } => {
-                IndexServiceCommand::StartMaintenance { profile_id }
-            }
             Self::DeleteProfile(profile_id) => IndexServiceCommand::DeleteProfile(profile_id),
-            Self::SubscribeMaintenance { .. } => return None,
         })
     }
 }
@@ -121,11 +101,6 @@ impl From<IndexServiceCommand> for IndexRequestCommand {
                 profile_id,
                 root: WirePath::from_path(&root),
             },
-            IndexServiceCommand::Pause => Self::Pause,
-            IndexServiceCommand::Resume => Self::Resume,
-            IndexServiceCommand::StartMaintenance { profile_id } => {
-                Self::StartMaintenance { profile_id }
-            }
             IndexServiceCommand::DeleteProfile(profile_id) => Self::DeleteProfile(profile_id),
         }
     }
@@ -177,10 +152,6 @@ impl WireIndexProfile {
             include_hidden: profile.include_hidden,
             exclude_patterns: profile.exclude_patterns.clone(),
             directory_error_policy: WireDirectoryErrorPolicy::from(profile.directory_error_policy),
-            content: WireContentIndexPolicy {
-                enabled: profile.content.enabled,
-                max_file_bytes: profile.content.max_file_bytes,
-            },
             media: WireMediaMetadataPolicy {
                 scope: WireMediaMetadataScope::from(profile.media.scope),
             },
@@ -198,10 +169,6 @@ impl WireIndexProfile {
             include_hidden: self.include_hidden,
             exclude_patterns: self.exclude_patterns,
             directory_error_policy: self.directory_error_policy.into(),
-            content: ContentIndexPolicy {
-                enabled: self.content.enabled,
-                max_file_bytes: self.content.max_file_bytes,
-            },
             media: MediaMetadataPolicy {
                 scope: self.media.scope.into(),
             },
@@ -241,7 +208,6 @@ impl WireBuildSelectedPathsRequest {
                 .iter()
                 .map(|path| WirePath::from_path(path))
                 .collect(),
-            mode: WireFileSearchIndexMode::from(request.mode),
         }
     }
 
@@ -254,7 +220,6 @@ impl WireBuildSelectedPathsRequest {
                 .into_iter()
                 .map(|path| path.to_path_buf())
                 .collect(),
-            mode: self.mode.into(),
         }
     }
 }
@@ -285,50 +250,7 @@ impl WireIndexServiceEvent {
             IndexServiceEvent::RootRemoved(status) => {
                 Self::RootRemoved(WireFileSearchIndexStatus::from_domain(status))
             }
-            IndexServiceEvent::IncrementalUpdateStarted {
-                profile_id,
-                root,
-                changed_paths,
-            } => Self::IncrementalUpdateStarted {
-                profile_id: profile_id.clone(),
-                root: WirePath::from_path(root),
-                changed_paths: *changed_paths,
-            },
-            IndexServiceEvent::IncrementalUpdateFinished {
-                profile_id,
-                outcome,
-            } => Self::IncrementalUpdateFinished {
-                profile_id: profile_id.clone(),
-                outcome: WireFileSearchIndexOutcome::from_domain(outcome),
-            },
-            IndexServiceEvent::IncrementalUpdateFailed {
-                profile_id,
-                root,
-                message,
-            } => Self::IncrementalUpdateFailed {
-                profile_id: profile_id.clone(),
-                root: WirePath::from_path(root),
-                message: message.clone(),
-            },
-            IndexServiceEvent::Paused => Self::Paused,
-            IndexServiceEvent::Resumed => Self::Resumed,
-            IndexServiceEvent::MaintenanceStarted { profile_id } => Self::MaintenanceStarted {
-                profile_id: profile_id.clone(),
-            },
             IndexServiceEvent::ProfileDeleted(id) => Self::ProfileDeleted(id.clone()),
-            IndexServiceEvent::WatchStarted { profile_id, root } => Self::WatchStarted {
-                profile_id: profile_id.clone(),
-                root: WirePath::from_path(root),
-            },
-            IndexServiceEvent::WatchFailed {
-                profile_id,
-                root,
-                message,
-            } => Self::WatchFailed {
-                profile_id: profile_id.clone(),
-                root: WirePath::from_path(root),
-                message: message.clone(),
-            },
         }
     }
 
@@ -349,50 +271,7 @@ impl WireIndexServiceEvent {
                 IndexServiceEvent::FailuresCleared(status.into_domain())
             }
             Self::RootRemoved(status) => IndexServiceEvent::RootRemoved(status.into_domain()),
-            Self::IncrementalUpdateStarted {
-                profile_id,
-                root,
-                changed_paths,
-            } => IndexServiceEvent::IncrementalUpdateStarted {
-                profile_id,
-                root: root.to_path_buf(),
-                changed_paths,
-            },
-            Self::IncrementalUpdateFinished {
-                profile_id,
-                outcome,
-            } => IndexServiceEvent::IncrementalUpdateFinished {
-                profile_id,
-                outcome: outcome.into_domain(),
-            },
-            Self::IncrementalUpdateFailed {
-                profile_id,
-                root,
-                message,
-            } => IndexServiceEvent::IncrementalUpdateFailed {
-                profile_id,
-                root: root.to_path_buf(),
-                message,
-            },
-            Self::Paused => IndexServiceEvent::Paused,
-            Self::Resumed => IndexServiceEvent::Resumed,
-            Self::MaintenanceStarted { profile_id } => {
-                IndexServiceEvent::MaintenanceStarted { profile_id }
-            }
             Self::ProfileDeleted(id) => IndexServiceEvent::ProfileDeleted(id),
-            Self::WatchStarted { profile_id, root } => IndexServiceEvent::WatchStarted {
-                profile_id,
-                root: root.to_path_buf(),
-            },
-            Self::WatchFailed {
-                profile_id,
-                root,
-                message,
-            } => IndexServiceEvent::WatchFailed {
-                profile_id,
-                root: root.to_path_buf(),
-                message,
-            },
         }
     }
 }
@@ -557,8 +436,6 @@ impl WireFileSearchIndexStatus {
             stale: status.stale,
             reason: status.reason.clone(),
             include_hidden: status.include_hidden,
-            content_index_enabled: status.content_index_enabled,
-            content_max_file_bytes: status.content_max_file_bytes,
             media_metadata_scope: WireMediaMetadataScope::from(status.media_metadata_scope),
             record_count: status.record_count,
             index_size_bytes: status.index_size_bytes,
@@ -583,8 +460,6 @@ impl WireFileSearchIndexStatus {
             stale: self.stale,
             reason: self.reason,
             include_hidden: self.include_hidden,
-            content_index_enabled: self.content_index_enabled,
-            content_max_file_bytes: self.content_max_file_bytes,
             media_metadata_scope: self.media_metadata_scope.into(),
             record_count: self.record_count,
             index_size_bytes: self.index_size_bytes,

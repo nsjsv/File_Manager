@@ -162,7 +162,6 @@ impl FileBrowser {
 
     fn clear_indexed_search_state(&mut self) {
         self.reset_indexed_runtime_for_bootstrap();
-        self.search_index.maintenance_paused = false;
         if let Some(search) = &mut self.search {
             if search.mode != SearchMode::Files {
                 search.mode = SearchMode::Files;
@@ -260,7 +259,6 @@ mod tests {
     fn switching_to_simple_clears_index_runtime_activity() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         browser.user_config.search_mode = SearchBackendMode::Indexed;
-        browser.search_index.maintenance_paused = true;
         browser
             .search_index
             .indexing_roots
@@ -293,7 +291,6 @@ mod tests {
         assert_eq!(browser.user_config.search_mode, SearchBackendMode::Simple);
         assert!(browser.search_index.profile_roots.is_empty());
         assert!(browser.search_index.statuses.is_empty());
-        assert!(!browser.search_index.maintenance_paused);
         assert!(browser.search_index.indexing_roots.is_empty());
         assert!(browser.search_index.status_loading_roots.is_empty());
         let search = browser.search.as_ref().expect("search remains open");

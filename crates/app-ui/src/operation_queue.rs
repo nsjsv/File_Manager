@@ -5,7 +5,6 @@ use file_core::{
     BatchRenameItem, FileOperationControls, FileOperationRunState, FileOperationVerification,
     TransferConflictStrategy, TrashRestoreEntry,
 };
-use file_index::FileSearchIndexMode;
 use file_operation_store::{
     StoredOperation, StoredProgress, StoredTask, StoredTaskStatus, TaskQueueStore,
 };
@@ -73,7 +72,6 @@ pub(crate) enum QueuedFileOperation {
         root: PathBuf,
         index_base_dir: PathBuf,
         selected_paths: Vec<PathBuf>,
-        mode: FileSearchIndexMode,
     },
 }
 

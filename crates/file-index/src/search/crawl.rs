@@ -529,6 +529,7 @@ fn search_walk_builder(
     builder
 }
 
+#[cfg(test)]
 pub(crate) fn watchable_search_directories(
     root: &Path,
     options: &SearchCrawlOptions,

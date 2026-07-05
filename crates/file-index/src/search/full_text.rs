@@ -6,14 +6,13 @@ use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
 use tantivy::{doc, Index, TantivyDocument};
 use tantivy::{IndexReader, IndexWriter};
 
-use super::extractor::{ExtractedMediaDocument, ExtractedTextDocument};
+use super::extractor::ExtractedMediaDocument;
 use super::path_encoding::path_storage_key;
 use super::types::{MediaSearchKind, MediaSearchMetadata, SearchResultSource};
 use crate::IndexError;
 
 const TANTIVY_DIR_NAME: &str = "tantivy";
 const PATH_KEY_FIELD: &str = "path_key";
-const PATH_FIELD: &str = "path";
 const RELATIVE_PATH_FIELD: &str = "relative_path";
 const NAME_FIELD: &str = "name";
 const SOURCE_FIELD: &str = "source";
@@ -87,27 +86,6 @@ impl TantivyIndexWriter {
             schema,
             tantivy_dir,
         })
-    }
-
-    pub(crate) fn add_text_document(
-        &mut self,
-        text: &ExtractedTextDocument,
-    ) -> Result<(), IndexError> {
-        let mut document = doc!(
-            self.schema.path_key => path_storage_key(&text.path),
-            self.schema.relative_path => text.relative_path.to_string_lossy().into_owned(),
-            self.schema.name => text.name.clone(),
-            self.schema.source => source_key(SearchResultSource::Contents),
-            self.schema.body => text.content.clone(),
-            self.schema.rank_hint => text.rank_hint,
-        );
-        if text.truncated {
-            document.add_text(self.schema.body, " content truncated");
-        }
-        self.writer
-            .add_document(document)
-            .map(|_| ())
-            .map_err(|error| IndexError::store(&self.tantivy_dir, error))
     }
 
     pub(crate) fn add_media_document(
@@ -249,7 +227,6 @@ pub(crate) fn search_tantivy_index(
 fn search_schema() -> SearchSchema {
     let mut builder = Schema::builder();
     let path_key = builder.add_text_field(PATH_KEY_FIELD, STRING | STORED);
-    builder.add_text_field(PATH_FIELD, STRING);
     let relative_path = builder.add_text_field(RELATIVE_PATH_FIELD, TEXT);
     let name = builder.add_text_field(NAME_FIELD, TEXT);
     let source = builder.add_text_field(SOURCE_FIELD, STRING | STORED);
@@ -343,15 +320,14 @@ fn media_exif_from_text(text: &str) -> Option<super::types::MediaExifField> {
 fn source_key(source: SearchResultSource) -> &'static str {
     match source {
         SearchResultSource::Files => "files",
-        SearchResultSource::Contents => "contents",
         SearchResultSource::Media => "media",
+        SearchResultSource::Contents => unreachable!("contents search is routed through rg"),
     }
 }
 
 fn source_from_key(key: &str) -> Option<SearchResultSource> {
     match key {
         "files" => Some(SearchResultSource::Files),
-        "contents" => Some(SearchResultSource::Contents),
         "media" => Some(SearchResultSource::Media),
         _ => None,
     }

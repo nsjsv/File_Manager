@@ -184,7 +184,7 @@ fn indexed_files_search_stale_index_rebuilds_and_uses_tree_fallback() {
 }
 
 #[test]
-fn indexed_contents_search_stale_index_waits_for_rebuild_without_tree_fallback() {
+fn indexed_contents_search_uses_direct_query_without_rebuild() {
     let mut search = search_state_for_request_generation(1);
     search.mode = SearchMode::Contents;
     search.session_backend_mode = crate::config::SearchBackendMode::Indexed;
@@ -200,8 +200,8 @@ fn indexed_contents_search_stale_index_waits_for_rebuild_without_tree_fallback()
 
     let search = browser.search.as_ref().expect("search state remains open");
     assert!(search.is_loading);
-    assert!(search.search_cancel.is_none());
-    assert!(browser
+    assert!(search.search_cancel.is_some());
+    assert!(!browser
         .search_index
         .indexing_roots
         .contains(&PathBuf::from("/tmp")));
@@ -333,10 +333,8 @@ fn search_index_status(
         index_dir: PathBuf::from("/tmp/index"),
         exists,
         stale,
-        reason: stale.then(|| "search index content policy is outdated".to_owned()),
+        reason: stale.then(|| "search index media policy is outdated".to_owned()),
         include_hidden: false,
-        content_index_enabled: false,
-        content_max_file_bytes: 16 * 1024 * 1024,
         media_metadata_scope: file_index::MediaMetadataScope::Off,
         record_count: 0,
         index_size_bytes: 0,

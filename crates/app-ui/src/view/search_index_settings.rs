@@ -5,7 +5,7 @@ mod path_rules;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
-use file_index::{DirectoryErrorPolicy, FileSearchIndexMode, MediaMetadataScope};
+use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 use iced::widget::{button, column, container, row, Button, Column};
 use iced::{Alignment, Element, Length};
 
@@ -17,7 +17,6 @@ use crate::model::{Message, SearchIndexDaemonStatus, SearchIndexSettingsSection}
 use crate::typography::readable_text;
 
 use super::option_controls::selectable_choice_row;
-use super::toggle_switch::switch_control;
 
 pub(super) const ROOT_PATH_MAX_CHARS: usize = 72;
 pub(super) const INDEX_DIR_MAX_CHARS: usize = 76;
@@ -80,7 +79,7 @@ fn search_mode_panel(browser: &FileBrowser) -> Element<'static, Message> {
         ),
         selectable_choice_row(
             "Indexed search",
-            "Uses configured indexed paths and enables content or media indexing options.",
+            "Uses configured indexed paths and optional media metadata indexing.",
             mode == SearchBackendMode::Indexed,
             Message::SearchBackendModeSelected(SearchBackendMode::Indexed),
         ),
@@ -100,13 +99,6 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
             browser.search_index.profile_roots.len()
         )
     };
-    let maintenance_state = if browser.search_index.maintenance_paused {
-        "Paused"
-    } else if browser.search_index.profile_roots.is_empty() {
-        "No roots"
-    } else {
-        "Running"
-    };
     let daemon_state = search_index_daemon_status_label(
         browser.search_index.daemon_status.as_ref(),
         browser.search_index.daemon_status_loading,
@@ -118,19 +110,10 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
         metadata_row("Service", daemon_state),
         metadata_row("Profile id", browser.search_index.profile_id.clone()),
         metadata_row("Roots", roots_label),
-        metadata_row("Maintenance", maintenance_state.to_owned()),
         row![
             action_button(
                 "Restart service",
                 daemon_controls_enabled.then_some(Message::SearchIndexDaemonRestartRequested),
-            ),
-            action_button(
-                if browser.search_index.maintenance_paused {
-                    "Resume"
-                } else {
-                    "Pause"
-                },
-                Some(Message::SearchIndexMaintenancePauseToggled),
             ),
             action_button(
                 "Delete profile",
@@ -146,11 +129,6 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
         directory_error_policy_row(
             directory_error_state,
             browser.search_index.directory_error_policy,
-        ),
-        profile_switch_row(
-            "Contents",
-            browser.search_index.content_index_enabled,
-            Message::SearchIndexContentEnabledToggled(!browser.search_index.content_index_enabled),
         ),
         media_scope_row(
             "No media metadata",
@@ -172,10 +150,8 @@ fn profile_policy_panel<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
         ),
     ];
 
-    profile = profile.push(
-        readable_text("Changing content or media indexing applies to future rebuilds and updates.")
-            .size(12),
-    );
+    profile =
+        profile.push(readable_text("Changing media indexing applies to future rebuilds.").size(12));
 
     section_panel(profile)
 }
@@ -242,25 +218,6 @@ fn media_scope_row(
     )
 }
 
-fn profile_switch_row(
-    label: &'static str,
-    enabled: bool,
-    message: Message,
-) -> Element<'static, Message> {
-    let content = row![
-        readable_text(label).size(12).width(Length::Fill),
-        switch_control(enabled),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(content).padding([5, 8]).width(Length::Fill))
-        .on_press(message)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-        .into()
-}
-
 pub(super) fn root_action_row(
     root: PathBuf,
     is_busy: bool,
@@ -269,18 +226,8 @@ pub(super) fn root_action_row(
 ) -> Element<'static, Message> {
     row![
         action_button(
-            "Update",
-            (!is_busy).then_some(Message::SearchIndexManualBuildRequested(
-                root.clone(),
-                FileSearchIndexMode::Incremental,
-            )),
-        ),
-        action_button(
             "Rebuild",
-            (!is_busy).then_some(Message::SearchIndexManualBuildRequested(
-                root.clone(),
-                FileSearchIndexMode::FullRebuild,
-            )),
+            (!is_busy).then_some(Message::SearchIndexManualBuildRequested(root.clone())),
         ),
         action_button(
             "Delete index",
@@ -300,22 +247,10 @@ pub(super) fn root_action_row_without_status(
     root: PathBuf,
     is_busy: bool,
 ) -> Element<'static, Message> {
-    row![
-        action_button(
-            "Update",
-            (!is_busy).then_some(Message::SearchIndexManualBuildRequested(
-                root.clone(),
-                FileSearchIndexMode::Incremental,
-            )),
-        ),
-        action_button(
-            "Rebuild",
-            (!is_busy).then_some(Message::SearchIndexManualBuildRequested(
-                root,
-                FileSearchIndexMode::FullRebuild,
-            )),
-        ),
-    ]
+    row![action_button(
+        "Rebuild",
+        (!is_busy).then_some(Message::SearchIndexManualBuildRequested(root)),
+    ),]
     .spacing(8)
     .align_y(Alignment::Center)
     .into()

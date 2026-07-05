@@ -16,7 +16,6 @@ use crate::network_connections::SavedNetworkConnection;
 
 const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
 const SEARCH_INDEX_EXCLUDE_PATTERNS_KEY: &str = "search_index_exclude_patterns";
-const SEARCH_INDEX_CONTENT_ENABLED_KEY: &str = "search_index_content_enabled";
 const SEARCH_INDEX_MEDIA_SCOPE_KEY: &str = "search_index_media_scope";
 const SEARCH_INDEX_MEDIA_ENABLED_KEY: &str = "search_index_media_enabled";
 const SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY: &str = "search_index_directory_error_policy";
@@ -66,12 +65,6 @@ pub(super) fn parse_toml_user_config(content: &str, default: UserConfig) -> User
     }
     if let Some(patterns) = toml_string_array(&document, SEARCH_INDEX_EXCLUDE_PATTERNS_KEY) {
         config.search_index_exclude_patterns = normalize_search_index_exclude_patterns(patterns);
-    }
-    if let Some(value) = document
-        .get(SEARCH_INDEX_CONTENT_ENABLED_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.search_index_content_enabled = value;
     }
     if let Some(value) = toml_string(&document, SEARCH_INDEX_MEDIA_SCOPE_KEY) {
         if let Some(scope) = MediaMetadataScope::from_config_value(value) {

@@ -228,7 +228,6 @@ fn user_preferences_round_trip_through_sqlite() {
     config.file_operation_verification = FileOperationVerification::Strong;
     config.search_mode = SearchBackendMode::Indexed;
     config.search_mode_prompt = SearchModePromptStatus::Completed;
-    config.search_index_content_enabled = true;
     config.search_index_media_scope = MediaMetadataScope::Images;
     config.search_index_directory_error_policy = DirectoryErrorPolicy::Abort;
     config.network_list_thumbnail_downloads_enabled = true;
@@ -300,7 +299,6 @@ fn user_preferences_round_trip_through_sqlite() {
     );
     assert_eq!(loaded.search_mode, SearchBackendMode::Indexed);
     assert_eq!(loaded.search_mode_prompt, SearchModePromptStatus::Completed);
-    assert!(loaded.search_index_content_enabled);
     assert_eq!(loaded.search_index_media_scope, MediaMetadataScope::Images);
     assert_eq!(
         loaded.search_index_directory_error_policy,

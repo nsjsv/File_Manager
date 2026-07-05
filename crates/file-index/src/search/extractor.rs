@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -12,18 +12,7 @@ use super::catalog::SearchCatalogRecord;
 use super::types::{MediaExifField, MediaSearchKind, MediaSearchMetadata};
 use crate::profile::MediaMetadataScope;
 
-const BINARY_SNIFF_BYTES: usize = 8192;
 const FFMPEG_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-
-#[derive(Debug, Clone)]
-pub(crate) struct ExtractedTextDocument {
-    pub(crate) path: PathBuf,
-    pub(crate) relative_path: PathBuf,
-    pub(crate) name: String,
-    pub(crate) content: String,
-    pub(crate) truncated: bool,
-    pub(crate) rank_hint: u64,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExtractedMediaDocument {
@@ -33,88 +22,6 @@ pub(crate) struct ExtractedMediaDocument {
     pub(crate) metadata: MediaSearchMetadata,
     pub(crate) searchable_text: String,
     pub(crate) rank_hint: u64,
-}
-
-pub(crate) fn extract_text_document(
-    record: &SearchCatalogRecord,
-    max_file_bytes: u64,
-) -> Result<Option<ExtractedTextDocument>, ScanWarning> {
-    if record.kind != FileKind::File || !is_text_index_candidate(&record.path) {
-        return Ok(None);
-    }
-
-    let file = fs::File::open(&record.path).map_err(|error| ScanWarning {
-        path: record.path.clone(),
-        message: error.to_string(),
-    })?;
-    let mut bytes = Vec::new();
-    let mut reader = file.take(max_file_bytes.saturating_add(1));
-    reader
-        .read_to_end(&mut bytes)
-        .map_err(|error| ScanWarning {
-            path: record.path.clone(),
-            message: error.to_string(),
-        })?;
-    if looks_binary(&bytes) {
-        return Ok(None);
-    }
-
-    let max_len = usize::try_from(max_file_bytes).unwrap_or(usize::MAX);
-    let truncated = bytes.len() > max_len;
-    let indexed_bytes = &bytes[..bytes.len().min(max_len)];
-    let content = String::from_utf8_lossy(indexed_bytes).into_owned();
-    if content.trim().is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(ExtractedTextDocument {
-        path: record.path.clone(),
-        relative_path: record.relative_path.clone(),
-        name: record.name.to_string_lossy().into_owned(),
-        content,
-        truncated,
-        rank_hint: record.size_bytes.unwrap_or_default(),
-    }))
-}
-
-fn is_text_index_candidate(path: &Path) -> bool {
-    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
-        return false;
-    };
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "txt"
-            | "md"
-            | "markdown"
-            | "rs"
-            | "toml"
-            | "json"
-            | "yaml"
-            | "yml"
-            | "xml"
-            | "html"
-            | "css"
-            | "js"
-            | "ts"
-            | "tsx"
-            | "jsx"
-            | "py"
-            | "go"
-            | "java"
-            | "c"
-            | "h"
-            | "cpp"
-            | "hpp"
-            | "sh"
-            | "fish"
-            | "zsh"
-            | "sql"
-    )
-}
-
-fn looks_binary(bytes: &[u8]) -> bool {
-    let sample = &bytes[..bytes.len().min(BINARY_SNIFF_BYTES)];
-    sample.contains(&0)
 }
 
 pub(crate) fn extract_media_document(
@@ -388,29 +295,6 @@ struct FfprobeTags {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    #[test]
-    fn text_extractor_reads_only_configured_prefix() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("long.md");
-        fs::write(&path, b"abcdef").unwrap();
-        let record = catalog_file_record(dir.path(), path);
-
-        let document = extract_text_document(&record, 4).unwrap().unwrap();
-
-        assert_eq!(document.content, "abcd");
-        assert!(document.truncated);
-    }
-
-    #[test]
-    fn text_extractor_skips_log_and_csv_candidates_by_default() {
-        let dir = tempdir().unwrap();
-        let log_record = catalog_file_record(dir.path(), dir.path().join("events.log"));
-        let csv_record = catalog_file_record(dir.path(), dir.path().join("report.csv"));
-
-        assert!(extract_text_document(&log_record, 1024).unwrap().is_none());
-        assert!(extract_text_document(&csv_record, 1024).unwrap().is_none());
-    }
 
     #[test]
     fn media_extractor_indexes_unsupported_image_without_warning() {

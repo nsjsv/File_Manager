@@ -195,8 +195,6 @@ pub(crate) fn scan_catalog_records(
     include_hidden: bool,
     exclude_patterns: &[String],
     directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
     visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
 ) -> Result<SearchIndexManifest, IndexError> {
@@ -207,8 +205,6 @@ pub(crate) fn scan_catalog_records(
         include_hidden,
         exclude_patterns,
         directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
         media_metadata_scope,
         &cancel,
         visit,
@@ -221,8 +217,6 @@ pub(crate) fn scan_catalog_records_with_cancel(
     include_hidden: bool,
     exclude_patterns: &[String],
     directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
     cancel: &CancellationToken,
     mut visit: impl FnMut(SearchCatalogRecord) -> Result<(), IndexError>,
@@ -236,8 +230,6 @@ pub(crate) fn scan_catalog_records_with_cancel(
         include_hidden,
         exclude_patterns,
         directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
         media_metadata_scope,
     )?;
     let mut statement = connection
@@ -264,8 +256,6 @@ pub(crate) fn scan_file_query_candidates_with_cancel(
     include_hidden: bool,
     exclude_patterns: &[String],
     directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
     query_text: &str,
     limit: usize,
@@ -281,8 +271,6 @@ pub(crate) fn scan_file_query_candidates_with_cancel(
         include_hidden,
         exclude_patterns,
         directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
         media_metadata_scope,
     )?;
     let normalized_query = query::normalized_search_query(query_text);
@@ -327,8 +315,6 @@ pub(crate) fn read_index_status(
     include_hidden: bool,
     exclude_patterns: &[String],
     directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
 ) -> Result<FileSearchIndexStatus, IndexError> {
     let connection = match open_catalog_connection(index_dir) {
@@ -338,8 +324,6 @@ pub(crate) fn read_index_status(
                 root.to_path_buf(),
                 index_dir.to_path_buf(),
                 include_hidden,
-                content_index_enabled,
-                content_max_file_bytes,
                 media_metadata_scope,
             ));
         }
@@ -350,16 +334,12 @@ pub(crate) fn read_index_status(
         include_hidden,
         exclude_patterns,
         directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
         media_metadata_scope,
     ) {
         return Ok(FileSearchIndexStatus::stale(
             root.to_path_buf(),
             index_dir.to_path_buf(),
             include_hidden,
-            content_index_enabled,
-            content_max_file_bytes,
             media_metadata_scope,
             reason,
         ));
@@ -372,15 +352,6 @@ pub(crate) fn read_index_status(
         failures,
         index_size_bytes,
     ))
-}
-
-pub(crate) fn read_failures(index_dir: &Path) -> Result<Vec<FileSearchIndexFailure>, IndexError> {
-    let mut failures = Vec::new();
-    scan_failures(index_dir, |failure| {
-        failures.push(failure);
-        Ok(())
-    })?;
-    Ok(failures)
 }
 
 pub(crate) fn scan_failures(

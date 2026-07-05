@@ -9,8 +9,8 @@ use desktop_linux::{
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 pub(crate) use file_index::SearchMode;
 use file_index::{
-    DirectoryErrorPolicy, FileSearchIndexMode, FileSearchIndexOutcome, FileSearchIndexStatus,
-    FileSearchOutcome, IndexProfile, IndexServiceEvent, MediaMetadataScope,
+    DirectoryErrorPolicy, FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOutcome,
+    IndexProfile, MediaMetadataScope,
 };
 use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
@@ -336,15 +336,12 @@ pub(crate) enum Message {
     SearchIndexDaemonStatusLoaded(Result<SearchIndexDaemonStatus, String>),
     SearchIndexDaemonRestartRequested,
     SearchIndexDaemonRestarted(Result<SearchIndexDaemonStatus, String>),
-    SearchIndexMaintenanceEvent(u64, IndexServiceEvent),
-    SearchIndexMaintenanceUpdated(u64, Result<bool, String>),
     SearchIndexSettingsSectionSelected(SearchIndexSettingsSection),
     SearchIndexErrorCopyRequested(SearchIndexErrorCopyTarget),
     SearchIndexStatusRefreshRequested,
-    SearchIndexManualBuildRequested(PathBuf, FileSearchIndexMode),
+    SearchIndexManualBuildRequested(PathBuf),
     SearchIndexRemoveRequested(PathBuf),
     SearchIndexProfileDeleteRequested,
-    SearchIndexMaintenancePauseToggled,
     SearchIndexFailuresClearRequested(PathBuf),
     SearchIndexPathRuleSelected(SearchIndexPathRuleSelection),
     SearchIndexIndexedPathAddRequested,
@@ -360,7 +357,6 @@ pub(crate) enum Message {
     SearchIndexPathRuleAdded,
     SearchIndexPathRuleUpdated,
     SearchIndexDirectoryErrorPolicySelected(DirectoryErrorPolicy),
-    SearchIndexContentEnabledToggled(bool),
     SearchIndexMediaScopeSelected(MediaMetadataScope),
     SearchBackendModeSelected(SearchBackendMode),
     SearchModePromptModeSelected(SearchBackendMode),

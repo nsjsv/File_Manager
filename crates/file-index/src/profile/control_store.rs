@@ -6,17 +6,16 @@ use file_core::FileKind;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use super::{
-    ContentIndexPolicy, IndexProfile, IndexRootSnapshot, IndexTaskPhase, IndexTaskStatus,
-    MediaMetadataPolicy, MediaMetadataScope, DEFAULT_CONTENT_MAX_FILE_BYTES,
+    IndexProfile, IndexRootSnapshot, IndexTaskPhase, IndexTaskStatus, MediaMetadataPolicy,
+    MediaMetadataScope,
 };
 use crate::search::path_encoding::{path_from_bytes, path_storage_key, path_to_bytes};
 use crate::search::{DirectoryErrorPolicy, FileSearchIndexFailure, SearchIndexFileRecord};
 use crate::IndexError;
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 const CONTROL_EXTRACTOR_VERSION: u32 = crate::search::EXTRACTOR_VERSION;
 const CONTROL_DB_BUSY_TIMEOUT: Duration = Duration::from_millis(500);
-const LEGACY_DEFAULT_CONTENT_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ProfileStore {
@@ -43,20 +42,15 @@ impl ProfileStore {
             transaction
                 .execute(
                     "INSERT INTO profiles (
-                        id, include_hidden, content_enabled, content_max_file_bytes,
-                        media_scope, directory_error_policy
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                        id, include_hidden, media_scope, directory_error_policy
+                     ) VALUES (?1, ?2, ?3, ?4)
                      ON CONFLICT(id) DO UPDATE SET
                         include_hidden = excluded.include_hidden,
-                        content_enabled = excluded.content_enabled,
-                        content_max_file_bytes = excluded.content_max_file_bytes,
                         media_scope = excluded.media_scope,
                         directory_error_policy = excluded.directory_error_policy",
                     params![
                         profile.id,
                         profile.include_hidden,
-                        profile.content.enabled,
-                        saturating_u64_to_i64(profile.content.max_file_bytes),
                         profile.media.scope.config_value(),
                         profile.directory_error_policy.config_value(),
                     ],
@@ -119,8 +113,7 @@ impl ProfileStore {
         let connection = self.connection()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, include_hidden, content_enabled, content_max_file_bytes,
-                    media_scope, directory_error_policy
+                "SELECT id, include_hidden, media_scope, directory_error_policy
                  FROM profiles
                  ORDER BY id",
             )
@@ -140,17 +133,8 @@ impl ProfileStore {
             let include_hidden = row
                 .get::<_, bool>(1)
                 .map_err(|error| IndexError::store(&self.db_path, error))?;
-            let content_enabled = row
-                .get::<_, bool>(2)
-                .map_err(|error| IndexError::store(&self.db_path, error))?;
-            let max_file_bytes = row
-                .get::<_, i64>(3)
-                .map_err(|error| IndexError::store(&self.db_path, error))
-                .and_then(|value| {
-                    u64::try_from(value).map_err(|error| IndexError::store(&self.db_path, error))
-                })?;
             let media_scope = row
-                .get::<_, String>(4)
+                .get::<_, String>(2)
                 .map_err(|error| IndexError::store(&self.db_path, error))?;
             let media_scope =
                 MediaMetadataScope::from_config_value(&media_scope).ok_or_else(|| {
@@ -160,7 +144,7 @@ impl ProfileStore {
                     )
                 })?;
             let directory_error_policy = row
-                .get::<_, String>(5)
+                .get::<_, String>(3)
                 .map_err(|error| IndexError::store(&self.db_path, error))
                 .and_then(|value| {
                     DirectoryErrorPolicy::from_config_value(&value).ok_or_else(|| {
@@ -176,10 +160,6 @@ impl ProfileStore {
                 id,
                 include_hidden,
                 directory_error_policy,
-                content: ContentIndexPolicy {
-                    enabled: content_enabled,
-                    max_file_bytes: normalize_content_max_file_bytes(max_file_bytes),
-                },
                 media: MediaMetadataPolicy { scope: media_scope },
             });
         }
@@ -479,8 +459,6 @@ impl ProfileStore {
                  CREATE TABLE IF NOT EXISTS profiles (
                     id TEXT PRIMARY KEY,
                     include_hidden INTEGER NOT NULL,
-                    content_enabled INTEGER NOT NULL,
-                    content_max_file_bytes INTEGER NOT NULL,
                     media_scope TEXT NOT NULL DEFAULT 'off',
                     directory_error_policy TEXT NOT NULL DEFAULT 'skip_unreadable'
                  );
@@ -741,14 +719,6 @@ fn optional_path_from_row(
     row.get::<_, Option<String>>(text_column)
         .map(|path| path.map(PathBuf::from))
         .map_err(|error| IndexError::store(db_path, error))
-}
-
-fn normalize_content_max_file_bytes(max_file_bytes: u64) -> u64 {
-    if max_file_bytes == LEGACY_DEFAULT_CONTENT_MAX_FILE_BYTES {
-        DEFAULT_CONTENT_MAX_FILE_BYTES
-    } else {
-        max_file_bytes
-    }
 }
 
 fn current_time_ms() -> i64 {

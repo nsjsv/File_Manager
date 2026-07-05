@@ -119,10 +119,7 @@ fn simple_search_mode_does_not_start_index_status_or_build() {
     browser.search_index.profile_roots = vec![PathBuf::from("/home/user")];
 
     let _status_task = browser.refresh_search_index_statuses();
-    let _build_task = browser.request_search_index_manual_build(
-        PathBuf::from("/home/user"),
-        file_index::FileSearchIndexMode::FullRebuild,
-    );
+    let _build_task = browser.request_search_index_manual_build(PathBuf::from("/home/user"));
 
     assert!(browser.search_index.status_loading_roots.is_empty());
     assert!(browser.search_index.indexing_roots.is_empty());
@@ -573,8 +570,6 @@ fn missing_status(root: PathBuf, index_dir: PathBuf) -> file_index::FileSearchIn
         stale: false,
         reason: None,
         include_hidden: false,
-        content_index_enabled: false,
-        content_max_file_bytes: 16 * 1024 * 1024,
         media_metadata_scope: file_index::MediaMetadataScope::Off,
         record_count: 0,
         index_size_bytes: 0,

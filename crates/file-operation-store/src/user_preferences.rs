@@ -9,7 +9,6 @@ pub const USER_PREFERENCES_KEY: &str = "main";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredUserPreferences {
     pub search_index_exclude_patterns: Vec<String>,
-    pub search_index_content_enabled: bool,
     pub search_index_media_scope: String,
     pub search_index_directory_error_policy: String,
     pub search_mode: String,
@@ -43,7 +42,6 @@ impl Default for StoredUserPreferences {
     fn default() -> Self {
         Self {
             search_index_exclude_patterns: Vec::new(),
-            search_index_content_enabled: false,
             search_index_media_scope: "off".to_owned(),
             search_index_directory_error_policy: "skip_unreadable".to_owned(),
             search_mode: "simple".to_owned(),

@@ -31,7 +31,6 @@ use crate::shortcuts::ShortcutConfig;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserPreferences {
     pub(crate) search_index_exclude_patterns: Vec<String>,
-    pub(crate) search_index_content_enabled: bool,
     pub(crate) search_index_media_scope: MediaMetadataScope,
     pub(crate) search_index_directory_error_policy: DirectoryErrorPolicy,
     pub(crate) search_mode: SearchBackendMode,
@@ -60,7 +59,6 @@ impl UserPreferences {
             search_index_exclude_patterns: normalize_search_index_exclude_patterns(
                 config.search_index_exclude_patterns.clone(),
             ),
-            search_index_content_enabled: config.search_index_content_enabled,
             search_index_media_scope: config.search_index_media_scope,
             search_index_directory_error_policy: config.search_index_directory_error_policy,
             search_mode: config.search_mode,
@@ -87,7 +85,6 @@ impl UserPreferences {
 
     pub(crate) fn apply_to_user_config(&self, config: &mut UserConfig) {
         config.search_index_exclude_patterns = self.search_index_exclude_patterns.clone();
-        config.search_index_content_enabled = self.search_index_content_enabled;
         config.search_index_media_scope = self.search_index_media_scope;
         config.search_index_directory_error_policy = self.search_index_directory_error_policy;
         config.search_mode = self.search_mode;
@@ -114,7 +111,6 @@ impl UserPreferences {
     pub(crate) fn to_stored(&self) -> StoredUserPreferences {
         StoredUserPreferences {
             search_index_exclude_patterns: self.search_index_exclude_patterns.clone(),
-            search_index_content_enabled: self.search_index_content_enabled,
             search_index_media_scope: self.search_index_media_scope.config_value().to_owned(),
             search_index_directory_error_policy: self
                 .search_index_directory_error_policy
@@ -167,7 +163,6 @@ impl UserPreferences {
             search_index_exclude_patterns: normalize_search_index_exclude_patterns(
                 stored.search_index_exclude_patterns,
             ),
-            search_index_content_enabled: stored.search_index_content_enabled,
             search_index_media_scope: MediaMetadataScope::from_config_value(
                 &stored.search_index_media_scope,
             )

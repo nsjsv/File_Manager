@@ -15,9 +15,8 @@ use file_core::{
     TransferConflictItem, TrashScan,
 };
 use file_index::{
-    search_file_tree_with_cancel, BuildSelectedPathsRequest, FileSearchIndexMode,
-    FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOptions, FileSearchOutcome,
-    IndexServiceCommand, IndexServiceEvent, SearchQuery,
+    search_file_tree_with_cancel, FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOptions,
+    FileSearchOutcome, IndexServiceCommand, IndexServiceEvent, SearchQuery,
 };
 use file_operation_store::{StoreError, TaskQueueStore};
 use iced::Task;
@@ -75,10 +74,8 @@ pub(crate) use search_index_daemon::{
 };
 mod search_index_profile;
 pub(crate) use search_index_profile::{
-    default_search_index_profile, default_search_profile_id,
-    search_index_maintenance_pause_command, search_index_maintenance_subscription,
-    search_index_profile_delete_command, search_index_profile_load_command,
-    search_index_profile_save_command,
+    default_search_index_profile, default_search_profile_id, search_index_profile_delete_command,
+    search_index_profile_load_command, search_index_profile_save_command,
 };
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
@@ -211,11 +208,10 @@ pub(crate) fn search_index_command(
     root: PathBuf,
     config: config::UserConfig,
     profile_id: String,
-    mode: FileSearchIndexMode,
 ) -> Task<Message> {
     let issued_root = root.clone();
     Task::perform(
-        build_search_index(root, config, profile_id, mode),
+        build_search_index(root, config, profile_id),
         move |outcome| Message::SearchIndexBuilt(issued_root.clone(), outcome),
     )
 }
@@ -594,8 +590,6 @@ async fn load_search_tree_matches(
             directory_error_policy,
             limit: SEARCH_MATCH_LIMIT,
             mode: request.mode,
-            content_index_enabled: false,
-            content_max_file_bytes: 16 * 1024 * 1024,
             media_metadata_scope: file_index::MediaMetadataScope::Off,
         },
         cancellation,
@@ -608,19 +602,9 @@ async fn build_search_index(
     root: PathBuf,
     config: config::UserConfig,
     profile_id: String,
-    mode: FileSearchIndexMode,
 ) -> Result<FileSearchIndexOutcome, String> {
     let index_base_dir = config.search_index_dir.clone();
-    let command = if mode == FileSearchIndexMode::Incremental {
-        IndexServiceCommand::BuildSelectedPaths(BuildSelectedPathsRequest {
-            profile_id,
-            root: root.clone(),
-            selected_paths: vec![root],
-            mode,
-        })
-    } else {
-        IndexServiceCommand::Rebuild { profile_id, root }
-    };
+    let command = IndexServiceCommand::Rebuild { profile_id, root };
     let event =
         search_index_daemon::execute_index_command(config.search_index_dir, command).await?;
     match event {

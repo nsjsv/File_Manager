@@ -17,14 +17,10 @@ pub(crate) fn search_index_catalog_and_tantivy(
     ensure_not_cancelled(cancel)?;
     match options.mode {
         SearchMode::Files => search_catalog_records(runtime, query, options, cancel),
-        SearchMode::Contents => search_tantivy_source(
-            runtime,
-            query,
-            &[SearchResultSource::Contents],
-            options.content_index_enabled,
-            options.limit,
-            cancel,
-        ),
+        SearchMode::Contents => Err(IndexError::store(
+            runtime.index_dir(),
+            "contents search is routed through rg",
+        )),
         SearchMode::Media => search_tantivy_source(
             runtime,
             query,
@@ -35,18 +31,11 @@ pub(crate) fn search_index_catalog_and_tantivy(
         ),
         SearchMode::All => {
             let mut matches = search_catalog_records(runtime, query, options, cancel)?;
-            let mut sources = Vec::with_capacity(2);
-            if options.content_index_enabled {
-                sources.push(SearchResultSource::Contents);
-            }
             if options.media_metadata_scope.includes_media() {
-                sources.push(SearchResultSource::Media);
-            }
-            if !sources.is_empty() {
                 matches.extend(search_tantivy_matches(
                     runtime,
                     query,
-                    &sources,
+                    &[SearchResultSource::Media],
                     options.limit,
                     cancel,
                 )?);
@@ -69,8 +58,6 @@ fn search_catalog_records(
         options.include_hidden,
         &options.exclude_patterns,
         options.directory_error_policy,
-        options.content_index_enabled,
-        options.content_max_file_bytes,
         options.media_metadata_scope,
         query_text,
         options.limit.max(1),
@@ -141,7 +128,10 @@ fn ensure_not_cancelled(cancel: &CancellationToken) -> Result<(), IndexError> {
     }
 }
 
-fn merge_search_matches(matches: Vec<FileSearchMatch>, limit: usize) -> Vec<FileSearchMatch> {
+pub(crate) fn merge_search_matches(
+    matches: Vec<FileSearchMatch>,
+    limit: usize,
+) -> Vec<FileSearchMatch> {
     let mut by_path = HashMap::<PathBuf, FileSearchMatch>::new();
     for search_match in matches {
         by_path

@@ -11,7 +11,7 @@ use super::types::{
     DirectoryErrorPolicy, FileSearchIndexFailure, FileSearchIndexStatus, EXTRACTOR_VERSION,
     IGNORE_POLICY_VERSION, INDEX_FORMAT_VERSION,
 };
-use crate::profile::{MediaMetadataScope, DEFAULT_CONTENT_MAX_FILE_BYTES};
+use crate::profile::MediaMetadataScope;
 use crate::IndexError;
 
 const MANIFEST_FORMAT_VERSION: &str = "format_version";
@@ -28,8 +28,6 @@ const MANIFEST_UPDATED_AT_MS: &str = "updated_at_ms";
 pub(crate) const MANIFEST_INDEX_SIZE_BYTES: &str = "index_size_bytes";
 pub(crate) const MANIFEST_FAILED_COUNT: &str = "failed_count";
 const MANIFEST_EXTRACTOR_VERSION: &str = "extractor_version";
-const MANIFEST_CONTENT_INDEX_ENABLED: &str = "content_index_enabled";
-const MANIFEST_CONTENT_MAX_FILE_BYTES: &str = "content_max_file_bytes";
 const MANIFEST_MEDIA_INDEX_ENABLED: &str = "media_index_enabled";
 const MANIFEST_MEDIA_METADATA_SCOPE: &str = "media_metadata_scope";
 
@@ -55,8 +53,6 @@ pub(crate) struct SearchIndexManifest {
     pub(crate) index_size_bytes: u64,
     pub(crate) failed_count: usize,
     pub(crate) extractor_version: u32,
-    pub(crate) content_index_enabled: bool,
-    pub(crate) content_max_file_bytes: u64,
     pub(crate) media_metadata_scope: MediaMetadataScope,
 }
 
@@ -66,8 +62,6 @@ impl SearchIndexManifest {
         include_hidden: bool,
         exclude_patterns: &[String],
         directory_error_policy: DirectoryErrorPolicy,
-        content_index_enabled: bool,
-        content_max_file_bytes: u64,
         media_metadata_scope: MediaMetadataScope,
         record_count: usize,
         failed_count: usize,
@@ -96,8 +90,6 @@ impl SearchIndexManifest {
             index_size_bytes: 0,
             failed_count,
             extractor_version: EXTRACTOR_VERSION,
-            content_index_enabled,
-            content_max_file_bytes,
             media_metadata_scope,
         }
     }
@@ -116,8 +108,6 @@ impl SearchIndexManifest {
         include_hidden: bool,
         exclude_patterns: &[String],
         directory_error_policy: DirectoryErrorPolicy,
-        content_index_enabled: bool,
-        content_max_file_bytes: u64,
         media_metadata_scope: MediaMetadataScope,
     ) -> Result<(), IndexError> {
         if let Some(reason) = self.stale_reason_for(
@@ -125,8 +115,6 @@ impl SearchIndexManifest {
             include_hidden,
             exclude_patterns,
             directory_error_policy,
-            content_index_enabled,
-            content_max_file_bytes,
             media_metadata_scope,
         ) {
             return Err(search_index_error(index_dir, reason));
@@ -140,8 +128,6 @@ impl SearchIndexManifest {
         include_hidden: bool,
         exclude_patterns: &[String],
         directory_error_policy: DirectoryErrorPolicy,
-        content_index_enabled: bool,
-        content_max_file_bytes: u64,
         media_metadata_scope: MediaMetadataScope,
     ) -> Option<String> {
         if self.format_version != INDEX_FORMAT_VERSION {
@@ -164,18 +150,10 @@ impl SearchIndexManifest {
         if self.directory_error_policy != directory_error_policy {
             return Some("search index directory error policy is outdated".to_owned());
         }
-        if self.content_index_enabled != content_index_enabled {
-            return Some("search index content policy is outdated".to_owned());
-        }
-        if self.content_max_file_bytes != content_max_file_bytes {
-            return Some("search index content size policy is outdated".to_owned());
-        }
         if self.media_metadata_scope != media_metadata_scope {
             return Some("search index media policy is outdated".to_owned());
         }
-        if self.extractor_version != EXTRACTOR_VERSION
-            && (content_index_enabled || media_metadata_scope.includes_media())
-        {
+        if self.extractor_version != EXTRACTOR_VERSION && media_metadata_scope.includes_media() {
             return Some("search index extractor version is outdated".to_owned());
         }
         None
@@ -195,8 +173,6 @@ impl SearchIndexManifest {
             stale: false,
             reason: None,
             include_hidden: self.include_hidden,
-            content_index_enabled: self.content_index_enabled,
-            content_max_file_bytes: self.content_max_file_bytes,
             media_metadata_scope: self.media_metadata_scope,
             record_count: self.record_count,
             index_size_bytes,
@@ -233,14 +209,6 @@ impl SearchIndexManifest {
             (
                 MANIFEST_EXTRACTOR_VERSION,
                 self.extractor_version.to_string(),
-            ),
-            (
-                MANIFEST_CONTENT_INDEX_ENABLED,
-                self.content_index_enabled.to_string(),
-            ),
-            (
-                MANIFEST_CONTENT_MAX_FILE_BYTES,
-                self.content_max_file_bytes.to_string(),
             ),
             (
                 MANIFEST_MEDIA_METADATA_SCOPE,
@@ -305,18 +273,6 @@ pub(crate) fn read_manifest_from_connection(
         index_size_bytes: parse_manifest_u64(index_dir, &values, MANIFEST_INDEX_SIZE_BYTES)?,
         failed_count: parse_manifest_usize(index_dir, &values, MANIFEST_FAILED_COUNT)?,
         extractor_version: parse_manifest_u32(index_dir, &values, MANIFEST_EXTRACTOR_VERSION)?,
-        content_index_enabled: optional_manifest_bool(
-            index_dir,
-            &values,
-            MANIFEST_CONTENT_INDEX_ENABLED,
-        )?
-        .unwrap_or(false),
-        content_max_file_bytes: optional_manifest_u64(
-            index_dir,
-            &values,
-            MANIFEST_CONTENT_MAX_FILE_BYTES,
-        )?
-        .unwrap_or(DEFAULT_CONTENT_MAX_FILE_BYTES),
         media_metadata_scope: optional_manifest_media_metadata_scope(index_dir, &values)?
             .unwrap_or(MediaMetadataScope::Off),
     })
@@ -368,21 +324,6 @@ fn parse_manifest_u64(
     required_manifest_value(index_dir, values, key)?
         .parse()
         .map_err(|error| search_index_error(index_dir, error))
-}
-
-fn optional_manifest_u64(
-    index_dir: &Path,
-    values: &HashMap<String, String>,
-    key: &str,
-) -> Result<Option<u64>, IndexError> {
-    values
-        .get(key)
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|error| search_index_error(index_dir, error))
-        })
-        .transpose()
 }
 
 fn parse_manifest_usize(

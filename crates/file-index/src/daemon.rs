@@ -5,7 +5,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
@@ -17,8 +17,8 @@ use crate::ipc::{
     INDEX_PROTOCOL_VERSION,
 };
 use crate::{
-    BuildSelectedPathsRequest, IndexError, IndexMaintenanceHandle, IndexServiceCommand,
-    IndexServiceCore, IndexServiceEvent, SearchQuery,
+    BuildSelectedPathsRequest, IndexError, IndexServiceCommand, IndexServiceCore,
+    IndexServiceEvent, SearchQuery,
 };
 
 const FLOCK_EXCLUSIVE: i32 = 2;
@@ -49,7 +49,6 @@ struct IndexDaemonState {
 struct IndexDaemonCore {
     service: IndexServiceCore,
     manual_build_queue: AsyncMutex<()>,
-    maintenance_handles: Mutex<HashMap<String, IndexMaintenanceHandle>>,
 }
 
 #[derive(Debug)]
@@ -191,10 +190,6 @@ impl IndexDaemonState {
 
         let core = self.core_for(request_index_base_dir).await?;
         match request.command {
-            IndexRequestCommand::SubscribeMaintenance { profile_id } => {
-                let events = core.service.status_stream();
-                stream_maintenance_events(profile_id, stream, events).await
-            }
             IndexRequestCommand::BuildSelectedPaths(request) => {
                 stream_selected_build(core, request.into_domain(), stream).await
             }
@@ -233,44 +228,17 @@ impl IndexDaemonState {
 
 impl IndexDaemonCore {
     fn open(index_base_dir: PathBuf) -> Result<Self, IndexError> {
-        let service =
-            IndexServiceCore::open(index_base_dir.join("control.sqlite"), index_base_dir)?;
-        let core = Self {
-            service,
+        Ok(Self {
+            service: IndexServiceCore::open(index_base_dir.join("control.sqlite"), index_base_dir)?,
             manual_build_queue: AsyncMutex::new(()),
-            maintenance_handles: Mutex::new(HashMap::new()),
-        };
-        Ok(core)
+        })
     }
 
     async fn execute(&self, command: IndexServiceCommand) -> Result<IndexServiceEvent, IndexError> {
         match command {
-            IndexServiceCommand::ConfigureProfile(profile) => {
-                self.service
-                    .execute(IndexServiceCommand::ConfigureProfile(profile))
-                    .await
-            }
-            IndexServiceCommand::DeleteProfile(profile_id) => {
-                let event = self
-                    .service
-                    .execute(IndexServiceCommand::DeleteProfile(profile_id.clone()))
-                    .await?;
-                self.stop_profile_maintenance(&profile_id);
-                Ok(event)
-            }
             IndexServiceCommand::Rebuild { .. } => {
                 let _manual_build = self.manual_build_queue.lock().await;
                 self.service.execute(command).await
-            }
-            IndexServiceCommand::StartMaintenance { profile_id } => {
-                let event = self
-                    .service
-                    .execute(IndexServiceCommand::StartMaintenance {
-                        profile_id: profile_id.clone(),
-                    })
-                    .await?;
-                self.start_profile_maintenance(&profile_id);
-                Ok(event)
             }
             command => self.service.execute(command).await,
         }
@@ -294,23 +262,6 @@ impl IndexDaemonCore {
         self.service
             .build_selected_paths_with_cancel(request, cancel, progress)
             .await
-    }
-
-    fn start_profile_maintenance(&self, profile_id: &str) {
-        let handle = self.service.maintain_profile(profile_id.to_owned());
-        let mut handles = self
-            .maintenance_handles
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        handles.insert(profile_id.to_owned(), handle);
-    }
-
-    fn stop_profile_maintenance(&self, profile_id: &str) {
-        let mut handles = self
-            .maintenance_handles
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        handles.remove(profile_id);
     }
 }
 
@@ -382,52 +333,6 @@ async fn stream_selected_build(
     }
 }
 
-async fn stream_maintenance_events(
-    profile_id: String,
-    mut stream: UnixStream,
-    mut events: tokio::sync::broadcast::Receiver<IndexServiceEvent>,
-) -> Result<(), IndexClientError> {
-    loop {
-        match events.recv().await {
-            Ok(event) if maintenance_event_matches(&event, &profile_id) => {
-                write_frame(&mut stream, &IndexResponse::from_event(&event)).await?;
-            }
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
-        }
-    }
-}
-
-fn maintenance_event_matches(event: &IndexServiceEvent, profile_id: &str) -> bool {
-    matches!(
-        event,
-            IndexServiceEvent::WatchStarted {
-                profile_id: event_profile_id,
-                ..
-            }
-            | IndexServiceEvent::MaintenanceStarted {
-                profile_id: event_profile_id,
-            }
-            | IndexServiceEvent::WatchFailed {
-                profile_id: event_profile_id,
-                ..
-            }
-            | IndexServiceEvent::IncrementalUpdateStarted {
-                profile_id: event_profile_id,
-                ..
-            }
-            | IndexServiceEvent::IncrementalUpdateFinished {
-                profile_id: event_profile_id,
-                ..
-            }
-            | IndexServiceEvent::IncrementalUpdateFailed {
-                profile_id: event_profile_id,
-                ..
-            } if event_profile_id == profile_id
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixListener as StdUnixListener;
@@ -457,24 +362,9 @@ mod tests {
         drop(stale_listener);
 
         let listener = bind_socket(&socket_path).unwrap();
+        let client = tokio::net::UnixStream::connect(&socket_path).await;
 
+        assert!(client.is_ok(), "new listener should accept connections");
         drop(listener);
-        let _ = fs::remove_file(socket_path);
-    }
-
-    #[test]
-    fn daemon_instance_lock_blocks_same_socket() {
-        let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("file-indexd.sock");
-        let first_lock = DaemonInstanceLock::acquire(&socket_path).unwrap();
-
-        let error = match DaemonInstanceLock::acquire(&socket_path) {
-            Ok(_) => panic!("second daemon acquired the same socket lock"),
-            Err(error) => error,
-        };
-
-        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-        drop(first_lock);
-        DaemonInstanceLock::acquire(&socket_path).unwrap();
     }
 }

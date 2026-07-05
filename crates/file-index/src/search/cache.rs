@@ -18,8 +18,6 @@ struct QueryRuntimeCacheKey {
     include_hidden: bool,
     exclude_rules_hash: String,
     directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
 }
 
@@ -40,8 +38,6 @@ pub(crate) fn query_runtime_for_index(
     include_hidden: bool,
     exclude_patterns: &[String],
     directory_error_policy: DirectoryErrorPolicy,
-    content_index_enabled: bool,
-    content_max_file_bytes: u64,
     media_metadata_scope: MediaMetadataScope,
 ) -> Result<Arc<SearchQueryRuntime>, IndexError> {
     let manifest = store::read_manifest(index_dir)?;
@@ -51,8 +47,6 @@ pub(crate) fn query_runtime_for_index(
         include_hidden,
         exclude_patterns,
         directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
         media_metadata_scope,
     )?;
     let key = QueryRuntimeCacheKey::new(
@@ -61,8 +55,6 @@ pub(crate) fn query_runtime_for_index(
         include_hidden,
         exclude_patterns,
         directory_error_policy,
-        content_index_enabled,
-        content_max_file_bytes,
         media_metadata_scope,
     );
     if let Some(runtime) = cached_runtime(&key, &manifest.identity()) {
@@ -162,8 +154,6 @@ impl QueryRuntimeCacheKey {
         include_hidden: bool,
         exclude_patterns: &[String],
         directory_error_policy: DirectoryErrorPolicy,
-        content_index_enabled: bool,
-        content_max_file_bytes: u64,
         media_metadata_scope: MediaMetadataScope,
     ) -> Self {
         Self {
@@ -172,8 +162,6 @@ impl QueryRuntimeCacheKey {
             include_hidden,
             exclude_rules_hash: exclude_rules_hash(exclude_patterns),
             directory_error_policy,
-            content_index_enabled,
-            content_max_file_bytes,
             media_metadata_scope,
         }
     }

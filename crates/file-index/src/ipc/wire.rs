@@ -6,7 +6,7 @@ mod tests;
 
 use serde::{Deserialize, Serialize};
 
-pub const INDEX_PROTOCOL_VERSION: u16 = 3;
+pub const INDEX_PROTOCOL_VERSION: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexRequest {
@@ -25,12 +25,8 @@ pub enum IndexRequestCommand {
     Status { profile_id: String, root: WirePath },
     ClearFailures { profile_id: String, root: WirePath },
     RemoveRoot { profile_id: String, root: WirePath },
-    Pause,
-    Resume,
     DeleteProfile(String),
-    SubscribeMaintenance { profile_id: String },
     Ping,
-    StartMaintenance { profile_id: String },
     Shutdown,
 }
 
@@ -67,12 +63,6 @@ pub enum WireDirectoryErrorPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WireFileSearchIndexMode {
-    FullRebuild,
-    Incremental,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WireFileKind {
     Directory,
     File,
@@ -102,12 +92,6 @@ pub enum WireMediaMetadataScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WireContentIndexPolicy {
-    pub enabled: bool,
-    pub max_file_bytes: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireMediaMetadataPolicy {
     pub scope: WireMediaMetadataScope,
 }
@@ -119,7 +103,6 @@ pub struct WireIndexProfile {
     pub include_hidden: bool,
     pub exclude_patterns: Vec<String>,
     pub directory_error_policy: WireDirectoryErrorPolicy,
-    pub content: WireContentIndexPolicy,
     pub media: WireMediaMetadataPolicy,
 }
 
@@ -137,7 +120,6 @@ pub struct WireBuildSelectedPathsRequest {
     pub profile_id: String,
     pub root: WirePath,
     pub selected_paths: Vec<WirePath>,
-    pub mode: WireFileSearchIndexMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,38 +131,8 @@ pub enum WireIndexServiceEvent {
     StatusLoaded(WireFileSearchIndexStatus),
     FailuresCleared(WireFileSearchIndexStatus),
     RootRemoved(WireFileSearchIndexStatus),
-    IncrementalUpdateStarted {
-        profile_id: String,
-        root: WirePath,
-        changed_paths: usize,
-    },
-    IncrementalUpdateFinished {
-        profile_id: String,
-        outcome: WireFileSearchIndexOutcome,
-    },
-    IncrementalUpdateFailed {
-        profile_id: String,
-        root: WirePath,
-        message: String,
-    },
-    Paused,
-    Resumed,
     ProfileDeleted(String),
-    WatchStarted {
-        profile_id: String,
-        root: WirePath,
-    },
-    WatchFailed {
-        profile_id: String,
-        root: WirePath,
-        message: String,
-    },
-    Pong {
-        daemon_version: String,
-    },
-    MaintenanceStarted {
-        profile_id: String,
-    },
+    Pong { daemon_version: String },
     Shutdown,
 }
 
@@ -255,8 +207,6 @@ pub struct WireFileSearchIndexStatus {
     pub stale: bool,
     pub reason: Option<String>,
     pub include_hidden: bool,
-    pub content_index_enabled: bool,
-    pub content_max_file_bytes: u64,
     pub media_metadata_scope: WireMediaMetadataScope,
     pub record_count: usize,
     pub index_size_bytes: u64,

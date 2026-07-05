@@ -174,7 +174,6 @@ impl FileBrowser {
         user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
         self.search_index.base_dir = user_config.search_index_dir.clone();
         self.search_index.directory_error_policy = user_config.search_index_directory_error_policy;
-        self.search_index.content_index_enabled = user_config.search_index_content_enabled;
         self.search_index.media_metadata_scope = user_config.search_index_media_scope;
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());

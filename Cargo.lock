@@ -1617,7 +1617,6 @@ dependencies = [
  "ignore",
  "image",
  "kamadak-exif",
- "notify",
  "nucleo",
  "rusqlite",
  "serde",

@@ -276,7 +276,6 @@ pub(crate) fn list_directory_size_display_mode_config_value(
 pub(crate) struct UserConfig {
     pub(crate) search_index_dir: PathBuf,
     pub(crate) search_index_exclude_patterns: Vec<String>,
-    pub(crate) search_index_content_enabled: bool,
     pub(crate) search_index_media_scope: MediaMetadataScope,
     pub(crate) search_index_directory_error_policy: DirectoryErrorPolicy,
     pub(crate) search_mode: SearchBackendMode,
@@ -324,7 +323,6 @@ pub(crate) fn default_user_config() -> UserConfig {
     UserConfig {
         search_index_dir: app_cache_base.join("search-index"),
         search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
-        search_index_content_enabled: false,
         search_index_media_scope: MediaMetadataScope::Off,
         search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
         search_mode: SearchBackendMode::Simple,
@@ -354,7 +352,6 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
     UserConfig {
         search_index_dir: PathBuf::new(),
         search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
-        search_index_content_enabled: false,
         search_index_media_scope: MediaMetadataScope::Off,
         search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
         search_mode: SearchBackendMode::Simple,

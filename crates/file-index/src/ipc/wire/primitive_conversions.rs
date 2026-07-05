@@ -2,13 +2,12 @@ use file_core::FileKind;
 
 use crate::profile::{MediaMetadataScope, SearchMode};
 use crate::search::{
-    DirectoryErrorPolicy, FileSearchIndexMode, FileSearchIndexProgress, MediaSearchKind,
-    SearchResultSource,
+    DirectoryErrorPolicy, FileSearchIndexProgress, MediaSearchKind, SearchResultSource,
 };
 
 use super::{
-    WireDirectoryErrorPolicy, WireFileKind, WireFileSearchIndexMode, WireFileSearchIndexProgress,
-    WireMediaMetadataScope, WireMediaSearchKind, WireSearchMode, WireSearchResultSource,
+    WireDirectoryErrorPolicy, WireFileKind, WireFileSearchIndexProgress, WireMediaMetadataScope,
+    WireMediaSearchKind, WireSearchMode, WireSearchResultSource,
 };
 
 impl From<SearchMode> for WireSearchMode {
@@ -47,24 +46,6 @@ impl From<WireDirectoryErrorPolicy> for DirectoryErrorPolicy {
         match policy {
             WireDirectoryErrorPolicy::Abort => Self::Abort,
             WireDirectoryErrorPolicy::SkipUnreadable => Self::SkipUnreadable,
-        }
-    }
-}
-
-impl From<FileSearchIndexMode> for WireFileSearchIndexMode {
-    fn from(mode: FileSearchIndexMode) -> Self {
-        match mode {
-            FileSearchIndexMode::FullRebuild => Self::FullRebuild,
-            FileSearchIndexMode::Incremental => Self::Incremental,
-        }
-    }
-}
-
-impl From<WireFileSearchIndexMode> for FileSearchIndexMode {
-    fn from(mode: WireFileSearchIndexMode) -> Self {
-        match mode {
-            WireFileSearchIndexMode::FullRebuild => Self::FullRebuild,
-            WireFileSearchIndexMode::Incremental => Self::Incremental,
         }
     }
 }

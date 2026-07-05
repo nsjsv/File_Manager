@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use file_core::{DirectoryEntry, ScanOptions};
-use file_index::FileSearchIndexMode;
 use iced::Task;
 
 use super::FileBrowser;
@@ -217,7 +216,6 @@ impl FileBrowser {
         let capability = setup
             .capability
             .expect("startup index setup accept requires selected capability");
-        let content_enabled = capability.content_enabled();
         let media_metadata_scope = capability.media_metadata_scope();
         let index_requests = setup.selected_index_requests();
         let profile_roots = index_requests
@@ -225,11 +223,9 @@ impl FileBrowser {
             .map(|request| request.root.clone())
             .collect::<Vec<_>>();
         self.search_index.profile_roots = profile_roots.clone();
-        self.search_index.content_index_enabled = content_enabled;
         self.search_index.media_metadata_scope = media_metadata_scope;
         self.user_config.search_mode = SearchBackendMode::Indexed;
         self.user_config.search_mode_prompt = SearchModePromptStatus::Completed;
-        self.user_config.search_index_content_enabled = content_enabled;
         self.user_config.search_index_media_scope = media_metadata_scope;
         self.search_index.reset_path_rule_order_from_current_rules();
         self.search_index.profile_loading = true;
@@ -265,7 +261,6 @@ impl FileBrowser {
                         root: request.root,
                         index_base_dir: self.search_index.base_dir.clone(),
                         selected_paths: request.selected_paths,
-                        mode: FileSearchIndexMode::FullRebuild,
                     })
             {
                 self.show_global_error(error);
@@ -460,7 +455,7 @@ mod tests {
         )
         .expect("startup index setup");
         setup.select_target_mode(StartupIndexTargetMode::Common);
-        setup.select_capability(StartupIndexCapability::TextAndImageMetadata);
+        setup.select_capability(StartupIndexCapability::ImageMetadata);
         browser.startup_index_setup = Some(setup);
 
         let _task = browser.accept_startup_index_setup();
@@ -469,12 +464,10 @@ mod tests {
             browser.search_index.profile_roots,
             vec![PathBuf::from("/home/user")]
         );
-        assert!(browser.user_config.search_index_content_enabled);
         assert_eq!(
             browser.user_config.search_index_media_scope,
             MediaMetadataScope::Images
         );
-        assert!(browser.search_index.content_index_enabled);
         assert_eq!(
             browser.search_index.media_metadata_scope,
             MediaMetadataScope::Images
@@ -488,7 +481,6 @@ mod tests {
 
         let mut saved_profile =
             file_index::IndexProfile::new("default", vec![PathBuf::from("/home/user")]);
-        saved_profile.content.enabled = true;
         saved_profile.media.scope = MediaMetadataScope::Images;
         let _task = browser.accept_search_index_profile_save(
             SearchIndexProfileSaveReason::StartupIndexSetup,
@@ -504,13 +496,11 @@ mod tests {
                 root,
                 index_base_dir,
                 selected_paths,
-                mode,
             } => {
                 assert_eq!(profile_id, "default");
                 assert_eq!(root, &PathBuf::from("/home/user"));
                 assert_eq!(index_base_dir, &PathBuf::from("/tmp/search-index"));
                 assert_eq!(selected_paths, &vec![PathBuf::from("/home/user")]);
-                assert_eq!(*mode, FileSearchIndexMode::FullRebuild);
             }
             operation => panic!("expected search index build task, got {operation:?}"),
         }
@@ -532,7 +522,7 @@ mod tests {
         )
         .expect("startup index setup");
         setup.select_target_mode(StartupIndexTargetMode::Common);
-        setup.select_capability(StartupIndexCapability::Text);
+        setup.select_capability(StartupIndexCapability::Filenames);
         browser.startup_index_setup = Some(setup);
 
         let _task = browser.accept_startup_index_setup();

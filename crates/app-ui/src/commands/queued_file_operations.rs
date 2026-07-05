@@ -12,9 +12,7 @@ use file_core::{
     FileOperationControls, FileOperationVerification, FileTransferOptions,
     TransferConflictStrategy, TrashRestoreEntry,
 };
-use file_index::{
-    BuildSelectedPathsRequest, FileSearchIndexMode, FileSearchIndexProgress, IndexServiceEvent,
-};
+use file_index::{BuildSelectedPathsRequest, FileSearchIndexProgress, IndexServiceEvent};
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::stream::BoxStream;
@@ -174,14 +172,12 @@ async fn run_queued_file_operation(
             root,
             index_base_dir,
             selected_paths,
-            mode,
         } => {
             run_queued_search_index(
                 profile_id,
                 root,
                 index_base_dir,
                 selected_paths,
-                mode,
                 controls,
                 task_id,
                 output,
@@ -282,7 +278,6 @@ async fn run_queued_search_index(
     root: PathBuf,
     index_base_dir: PathBuf,
     selected_paths: Vec<PathBuf>,
-    mode: FileSearchIndexMode,
     mut controls: FileOperationControls,
     task_id: u64,
     output: &mut IcedSender<Message>,
@@ -302,7 +297,6 @@ async fn run_queued_search_index(
             profile_id,
             root,
             selected_paths,
-            mode,
         },
         cancel,
         move |progress| {

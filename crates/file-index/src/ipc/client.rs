@@ -18,11 +18,6 @@ pub struct IndexClient {
     index_base_dir: PathBuf,
 }
 
-#[derive(Debug)]
-pub struct IndexMaintenanceSubscription {
-    stream: UnixStream,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum IndexClientError {
     #[error("could not connect to index daemon {path:?}: {source}")]
@@ -77,19 +72,6 @@ impl IndexClient {
     ) -> Result<IndexServiceEvent, IndexClientError> {
         self.execute_with_progress_and_cancel(command, cancel, |_| {})
             .await
-    }
-
-    pub async fn subscribe_maintenance(
-        &self,
-        profile_id: impl Into<String>,
-    ) -> Result<IndexMaintenanceSubscription, IndexClientError> {
-        let mut stream = self.connect().await?;
-        write_frame(
-            &mut stream,
-            &IndexRequest::subscribe_maintenance(&self.index_base_dir, profile_id),
-        )
-        .await?;
-        Ok(IndexMaintenanceSubscription { stream })
     }
 
     pub async fn build_selected_paths_with_progress(
@@ -175,28 +157,6 @@ impl IndexClient {
                 path: self.socket_path.clone(),
                 source,
             })
-    }
-}
-
-impl IndexMaintenanceSubscription {
-    pub async fn next_event(&mut self) -> Result<Option<IndexServiceEvent>, IndexClientError> {
-        let response = match read_frame(&mut self.stream).await {
-            Ok(response) => response,
-            Err(IndexClientError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
-        };
-        match response {
-            IndexResponse::Event(event) => Ok(Some(event.into_domain())),
-            IndexResponse::Error(message) => Err(IndexClientError::Service(message)),
-            IndexResponse::ProtocolMismatch { expected, actual } => {
-                Err(IndexClientError::ProtocolMismatch { expected, actual })
-            }
-            IndexResponse::Progress(_) => Err(IndexClientError::Protocol(
-                "index daemon sent progress on a maintenance stream".to_owned(),
-            )),
-        }
     }
 }
 

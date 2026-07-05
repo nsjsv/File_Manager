@@ -246,7 +246,6 @@ fn user_preferences_roundtrip_replace() {
     assert_eq!(store.read_user_preferences().unwrap(), None);
     let first = StoredUserPreferences {
         search_index_exclude_patterns: vec!["target".to_owned(), ".git".to_owned()],
-        search_index_content_enabled: true,
         search_index_media_scope: "images".to_owned(),
         search_index_directory_error_policy: "abort".to_owned(),
         search_mode: "indexed".to_owned(),

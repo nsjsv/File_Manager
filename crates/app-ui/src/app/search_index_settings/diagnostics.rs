@@ -246,8 +246,6 @@ mod tests {
             stale: false,
             reason: None,
             include_hidden: false,
-            content_index_enabled: false,
-            content_max_file_bytes: 16 * 1024 * 1024,
             media_metadata_scope: MediaMetadataScope::Off,
             record_count: 0,
             index_size_bytes: 0,

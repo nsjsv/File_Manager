@@ -120,16 +120,10 @@ fn startup_index_capability_choices(setup: &StartupIndexSetupState) -> Column<'s
             Message::StartupIndexCapabilitySelected(StartupIndexCapability::Filenames),
         ),
         selectable_choice_row(
-            "Filenames + text",
-            "Filename and text content catalog.",
-            setup.capability == Some(StartupIndexCapability::Text),
-            Message::StartupIndexCapabilitySelected(StartupIndexCapability::Text),
-        ),
-        selectable_choice_row(
-            "Filenames + text + images",
-            "Filename, text content, and image metadata catalog.",
-            setup.capability == Some(StartupIndexCapability::TextAndImageMetadata),
-            Message::StartupIndexCapabilitySelected(StartupIndexCapability::TextAndImageMetadata),
+            "Filenames + images",
+            "Filename/path catalog plus image metadata.",
+            setup.capability == Some(StartupIndexCapability::ImageMetadata),
+            Message::StartupIndexCapabilitySelected(StartupIndexCapability::ImageMetadata),
         ),
     ]
     .spacing(6)

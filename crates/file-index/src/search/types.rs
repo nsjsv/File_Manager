@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use file_core::{FileKind, ScanWarning};
 
-use crate::profile::{MediaMetadataScope, SearchMode, DEFAULT_CONTENT_MAX_FILE_BYTES};
+use crate::profile::{MediaMetadataScope, SearchMode};
 
 pub(crate) const DEFAULT_SEARCH_LIMIT: usize = 50;
 pub(crate) const EXTRACTOR_VERSION: u32 = 5;
@@ -17,8 +17,6 @@ pub struct FileSearchOptions {
     pub directory_error_policy: DirectoryErrorPolicy,
     pub limit: usize,
     pub mode: SearchMode,
-    pub content_max_file_bytes: u64,
-    pub content_index_enabled: bool,
     pub media_metadata_scope: MediaMetadataScope,
 }
 
@@ -30,8 +28,6 @@ impl Default for FileSearchOptions {
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
             limit: DEFAULT_SEARCH_LIMIT,
             mode: SearchMode::Files,
-            content_max_file_bytes: DEFAULT_CONTENT_MAX_FILE_BYTES,
-            content_index_enabled: false,
             media_metadata_scope: MediaMetadataScope::Off,
         }
     }
@@ -50,9 +46,6 @@ pub struct FileSearchIndexOptions {
     pub exclude_patterns: Vec<String>,
     pub directory_error_policy: DirectoryErrorPolicy,
     pub excluded_index_dir: Option<PathBuf>,
-    pub mode: FileSearchIndexMode,
-    pub content_index_enabled: bool,
-    pub content_max_file_bytes: u64,
     pub media_metadata_scope: MediaMetadataScope,
 }
 
@@ -63,9 +56,6 @@ impl Default for FileSearchIndexOptions {
             exclude_patterns: Vec::new(),
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
             excluded_index_dir: None,
-            mode: FileSearchIndexMode::FullRebuild,
-            content_index_enabled: false,
-            content_max_file_bytes: DEFAULT_CONTENT_MAX_FILE_BYTES,
             media_metadata_scope: MediaMetadataScope::Off,
         }
     }
@@ -93,13 +83,6 @@ impl DirectoryErrorPolicy {
             Self::SkipUnreadable => "skip_unreadable",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum FileSearchIndexMode {
-    #[default]
-    FullRebuild,
-    Incremental,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,8 +157,6 @@ pub struct FileSearchIndexStatus {
     pub stale: bool,
     pub reason: Option<String>,
     pub include_hidden: bool,
-    pub content_index_enabled: bool,
-    pub content_max_file_bytes: u64,
     pub media_metadata_scope: MediaMetadataScope,
     pub record_count: usize,
     pub index_size_bytes: u64,
@@ -192,8 +173,6 @@ impl FileSearchIndexStatus {
         root: PathBuf,
         index_dir: PathBuf,
         include_hidden: bool,
-        content_index_enabled: bool,
-        content_max_file_bytes: u64,
         media_metadata_scope: MediaMetadataScope,
     ) -> Self {
         Self {
@@ -203,8 +182,6 @@ impl FileSearchIndexStatus {
             stale: false,
             reason: None,
             include_hidden,
-            content_index_enabled,
-            content_max_file_bytes,
             media_metadata_scope,
             record_count: 0,
             index_size_bytes: 0,
@@ -221,8 +198,6 @@ impl FileSearchIndexStatus {
         root: PathBuf,
         index_dir: PathBuf,
         include_hidden: bool,
-        content_index_enabled: bool,
-        content_max_file_bytes: u64,
         media_metadata_scope: MediaMetadataScope,
         reason: String,
     ) -> Self {
@@ -233,8 +208,6 @@ impl FileSearchIndexStatus {
             stale: true,
             reason: Some(reason),
             include_hidden,
-            content_index_enabled,
-            content_max_file_bytes,
             media_metadata_scope,
             record_count: 0,
             index_size_bytes: 0,

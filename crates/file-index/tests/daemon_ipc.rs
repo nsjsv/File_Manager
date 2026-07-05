@@ -33,7 +33,6 @@ async fn daemon_client_configures_builds_and_queries_profile() {
         include_hidden: false,
         exclude_patterns: Vec::new(),
         directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-        content: Default::default(),
         media: Default::default(),
     };
 
@@ -75,54 +74,6 @@ async fn daemon_client_configures_builds_and_queries_profile() {
 }
 
 #[tokio::test]
-async fn daemon_subscribe_observes_until_explicit_start_maintenance() {
-    let dir = tempdir().unwrap();
-    let socket_path = dir.path().join("file-indexd.sock");
-    let index_base_dir = dir.path().join("index-base");
-    let root = dir.path().join("root");
-    tokio::fs::create_dir_all(&root).await.unwrap();
-    let daemon = tokio::spawn(run(IndexDaemonConfig {
-        socket_path: socket_path.clone(),
-    }));
-    let client = IndexClient::new(index_base_dir, socket_path);
-    wait_for_daemon(&client).await;
-    client
-        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile {
-            id: "main".to_owned(),
-            roots: vec![root.clone()],
-            include_hidden: false,
-            exclude_patterns: Vec::new(),
-            directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-            content: Default::default(),
-            media: Default::default(),
-        }))
-        .await
-        .unwrap();
-    let mut subscription = client.subscribe_maintenance("main").await.unwrap();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), subscription.next_event())
-            .await
-            .is_err(),
-        "subscription must not start maintenance by itself"
-    );
-
-    let started = client
-        .execute(IndexServiceCommand::StartMaintenance {
-            profile_id: "main".to_owned(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        started,
-        IndexServiceEvent::MaintenanceStarted {
-            profile_id: "main".to_owned()
-        }
-    );
-    wait_for_subscription_watch_started(&mut subscription, &root).await;
-    daemon.abort();
-}
-
-#[tokio::test]
 async fn daemon_query_with_cancel_returns_cancelled() {
     let dir = tempdir().unwrap();
     let socket_path = dir.path().join("file-indexd.sock");
@@ -144,7 +95,6 @@ async fn daemon_query_with_cancel_returns_cancelled() {
             include_hidden: false,
             exclude_patterns: Vec::new(),
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-            content: Default::default(),
             media: Default::default(),
         }))
         .await
@@ -200,7 +150,6 @@ async fn daemon_restart_loads_stored_profile() {
         include_hidden: true,
         exclude_patterns: vec!["target/".to_owned()],
         directory_error_policy: DirectoryErrorPolicy::Abort,
-        content: Default::default(),
         media: Default::default(),
     };
     client
@@ -263,21 +212,4 @@ async fn wait_for_daemon(client: &IndexClient) {
         }
     }
     panic!("daemon socket was not created");
-}
-
-async fn wait_for_subscription_watch_started(
-    subscription: &mut file_index::IndexMaintenanceSubscription,
-    root: &std::path::Path,
-) {
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(5), subscription.next_event())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        if matches!(event, IndexServiceEvent::WatchStarted { root: event_root, .. } if event_root == root)
-        {
-            return;
-        }
-    }
 }

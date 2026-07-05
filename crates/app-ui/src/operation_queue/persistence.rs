@@ -1,8 +1,7 @@
 use file_core::{ArchiveCompressionLevel, ArchiveFormat, BatchRenameItem, TrashRestoreEntry};
-use file_index::FileSearchIndexMode;
 use file_operation_store::{
     StoredArchiveCompressionLevel, StoredArchiveFormat, StoredBatchRenameItem, StoredOperation,
-    StoredPath, StoredSearchIndexMode, StoredTransfer, StoredTrashEntry,
+    StoredPath, StoredTransfer, StoredTrashEntry,
 };
 
 use super::{QueuedFileOperation, QueuedTransfer};
@@ -74,7 +73,6 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
             root,
             index_base_dir,
             selected_paths,
-            mode,
             ..
         } => StoredOperation::SearchIndex {
             root: StoredPath::from_path(root),
@@ -83,7 +81,6 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
                 .iter()
                 .map(|path| StoredPath::from_path(path))
                 .collect(),
-            mode: stored_search_index_mode(*mode),
         },
     }
 }
@@ -96,7 +93,6 @@ pub(super) fn queued_operation_from_stored(
             root,
             index_base_dir,
             selected_paths,
-            mode,
         } => Some(QueuedFileOperation::BuildSearchIndex {
             profile_id: crate::commands::default_search_profile_id().to_owned(),
             root: root.to_path_buf(),
@@ -105,7 +101,6 @@ pub(super) fn queued_operation_from_stored(
                 .into_iter()
                 .map(|path| path.to_path_buf())
                 .collect(),
-            mode: file_search_index_mode_from_stored(mode),
         }),
         _ => None,
     }
@@ -161,20 +156,6 @@ fn stored_archive_compression_level(
     }
 }
 
-fn stored_search_index_mode(mode: FileSearchIndexMode) -> StoredSearchIndexMode {
-    match mode {
-        FileSearchIndexMode::FullRebuild => StoredSearchIndexMode::FullRebuild,
-        FileSearchIndexMode::Incremental => StoredSearchIndexMode::Incremental,
-    }
-}
-
-fn file_search_index_mode_from_stored(mode: StoredSearchIndexMode) -> FileSearchIndexMode {
-    match mode {
-        StoredSearchIndexMode::FullRebuild => FileSearchIndexMode::FullRebuild,
-        StoredSearchIndexMode::Incremental => FileSearchIndexMode::Incremental,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,7 +168,6 @@ mod tests {
             root: PathBuf::from("/workspace"),
             index_base_dir: PathBuf::from("/cache/file-manager/search-index"),
             selected_paths: vec![PathBuf::from("/workspace")],
-            mode: FileSearchIndexMode::Incremental,
         };
 
         let stored = queued_operation_to_stored(&operation);

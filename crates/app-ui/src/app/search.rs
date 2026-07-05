@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use file_core::FileKind;
-use file_index::{FileSearchIndexMode, FileSearchIndexOutcome, FileSearchOutcome};
+use file_index::{FileSearchIndexOutcome, FileSearchOutcome};
 use iced::widget::scrollable;
 use iced::Task;
 use tokio_util::sync::CancellationToken;
@@ -351,6 +351,17 @@ impl FileBrowser {
                 cancellation,
             );
         }
+        if request.mode == SearchMode::Contents {
+            self.mark_active_search_loading();
+            let cancellation = self.replace_active_search_cancel_token();
+            return search_command(
+                request,
+                self.options.clone(),
+                self.user_config.clone(),
+                self.search_index.profile_id.clone(),
+                cancellation,
+            );
+        }
         let root = request.root.clone();
         self.sync_active_search_index_status_for_root(&root);
         let status = self.search_index.statuses.get(&root).cloned();
@@ -446,7 +457,6 @@ impl FileBrowser {
             root,
             self.user_config.clone(),
             self.search_index.profile_id.clone(),
-            FileSearchIndexMode::FullRebuild,
         )
     }
 

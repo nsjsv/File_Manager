@@ -542,13 +542,10 @@ impl FileBrowser {
             | Message::SearchIndexErrorCopyRequested(_)
             | Message::SearchIndexDaemonRestartRequested
             | Message::SearchIndexDaemonRestarted(_)
-            | Message::SearchIndexMaintenanceEvent(_, _)
-            | Message::SearchIndexMaintenanceUpdated(_, _)
             | Message::SearchIndexStatusRefreshRequested
-            | Message::SearchIndexManualBuildRequested(_, _)
+            | Message::SearchIndexManualBuildRequested(_)
             | Message::SearchIndexRemoveRequested(_)
             | Message::SearchIndexProfileDeleteRequested
-            | Message::SearchIndexMaintenancePauseToggled
             | Message::SearchIndexFailuresClearRequested(_)
             | Message::SearchIndexPathRuleSelected(_)
             | Message::SearchIndexIndexedPathAddRequested
@@ -564,7 +561,6 @@ impl FileBrowser {
             | Message::SearchIndexPathRuleAdded
             | Message::SearchIndexPathRuleUpdated
             | Message::SearchIndexDirectoryErrorPolicySelected(_)
-            | Message::SearchIndexContentEnabledToggled(_)
             | Message::SearchIndexMediaScopeSelected(_)
             | Message::SearchBackendModeSelected(_)
             | Message::SearchModePromptModeSelected(_)

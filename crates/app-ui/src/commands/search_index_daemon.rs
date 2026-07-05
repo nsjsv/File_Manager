@@ -6,7 +6,7 @@ use std::{fmt, future::Future, io};
 
 use file_index::{
     BuildSelectedPathsRequest, FileSearchIndexProgress, IndexClient, IndexClientError,
-    IndexMaintenanceSubscription, IndexServiceCommand, IndexServiceEvent,
+    IndexServiceCommand, IndexServiceEvent,
 };
 use iced::Task;
 use tokio::process::Command;
@@ -109,18 +109,6 @@ pub(super) async fn execute_index_command_with_cancel(
         async move { client.execute_with_cancel(command, cancel).await }
     })
     .await
-}
-
-pub(super) async fn subscribe_index_maintenance(
-    index_base_dir: PathBuf,
-    profile_id: String,
-) -> Result<IndexMaintenanceSubscription, String> {
-    ensure_index_daemon_started(index_base_dir.clone()).await?;
-    let client = IndexClient::for_index_base_dir(index_base_dir);
-    client
-        .subscribe_maintenance(profile_id)
-        .await
-        .map_err(|error| index_daemon_error_message(&error, None))
 }
 
 pub(super) async fn build_selected_paths_with_progress(

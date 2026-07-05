@@ -11,7 +11,6 @@ file-core = { path = "../file-core" }
 ignore = "0.4.25"
 image.workspace = true
 kamadak-exif = "0.6.1"
-notify.workspace = true
 nucleo.workspace = true
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }

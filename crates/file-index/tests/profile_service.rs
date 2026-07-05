@@ -10,10 +10,10 @@ use std::time::Duration;
 use file_core::FileKind;
 use file_index::{
     build_file_search_index, default_search_index_exclude_patterns, search_index_dir_for_root,
-    BuildSelectedPathsRequest, ContentIndexPolicy, DirectoryErrorPolicy, FileSearchIndexFailure,
-    FileSearchIndexMode, FileSearchIndexOptions, IndexProfile, IndexService, IndexServiceCommand,
-    IndexServiceEvent, IndexTaskPhase, MediaMetadataPolicy, MediaMetadataScope, ProfileStore,
-    SearchIndexFileRecord, SearchMode, SearchQuery,
+    BuildSelectedPathsRequest, DirectoryErrorPolicy, FileSearchIndexFailure,
+    FileSearchIndexOptions, IndexProfile, IndexService, IndexServiceCommand, IndexServiceEvent,
+    IndexTaskPhase, MediaMetadataPolicy, MediaMetadataScope, ProfileStore, SearchIndexFileRecord,
+    SearchMode, SearchQuery,
 };
 use tempfile::tempdir;
 
@@ -30,10 +30,6 @@ fn profile_store_preserves_explicit_roots_and_policies() {
         include_hidden: true,
         exclude_patterns: vec!["target/".to_owned(), "*.log".to_owned()],
         directory_error_policy: DirectoryErrorPolicy::Abort,
-        content: ContentIndexPolicy {
-            enabled: true,
-            max_file_bytes: 1024,
-        },
         media: MediaMetadataPolicy {
             scope: MediaMetadataScope::All,
         },
@@ -60,44 +56,6 @@ fn default_search_index_excludes_are_public_policy_patterns() {
 }
 
 #[test]
-fn index_profile_defaults_to_five_mib_content_limit() {
-    let profile = IndexProfile::new("main", vec![PathBuf::from("/tmp/projects")]);
-
-    assert_eq!(
-        profile.content.max_file_bytes,
-        file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES
-    );
-}
-
-#[test]
-fn profile_store_normalizes_legacy_default_content_limit() {
-    let dir = tempdir().unwrap();
-    let control_db = dir.path().join("control.sqlite");
-    let store = ProfileStore::open(&control_db).unwrap();
-    store
-        .save_profile(&IndexProfile::new(
-            "main",
-            vec![PathBuf::from("/tmp/projects")],
-        ))
-        .unwrap();
-    rusqlite::Connection::open(&control_db)
-        .unwrap()
-        .execute(
-            "UPDATE profiles SET content_max_file_bytes = ?1 WHERE id = 'main'",
-            [16_i64 * 1024 * 1024],
-        )
-        .unwrap();
-
-    let profiles = store.load_profiles().unwrap();
-
-    assert_eq!(profiles.len(), 1);
-    assert_eq!(
-        profiles[0].content.max_file_bytes,
-        file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES
-    );
-}
-
-#[test]
 fn index_service_configure_profile_preserves_explicit_nested_roots() {
     let dir = tempdir().unwrap();
     let service =
@@ -114,7 +72,6 @@ fn index_service_configure_profile_preserves_explicit_nested_roots() {
             include_hidden: false,
             exclude_patterns: Vec::new(),
             directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-            content: ContentIndexPolicy::default(),
             media: MediaMetadataPolicy::default(),
         })
         .unwrap();
@@ -347,28 +304,16 @@ async fn index_service_queries_files_mode_from_configured_profile() {
 }
 
 #[tokio::test]
-async fn index_service_queries_content_mode_when_profile_enables_content() {
+async fn index_service_queries_contents_mode_via_rg_without_catalog() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("meeting.md"), "quarterly roadmap signal").unwrap();
     let index_base = dir.path().join("indexes");
-    let index_dir = search_index_dir_for_root(&index_base, &root);
-    build_file_search_index(
-        &root,
-        &index_dir,
-        FileSearchIndexOptions {
-            content_index_enabled: true,
-            content_max_file_bytes: file_index::profile::DEFAULT_CONTENT_MAX_FILE_BYTES,
-            ..FileSearchIndexOptions::default()
-        },
-    )
-    .await
-    .unwrap();
     let service = IndexService::open(dir.path().join("control.sqlite"), &index_base).unwrap();
-    let mut profile = IndexProfile::new("main", vec![root.clone()]);
-    profile.content.enabled = true;
-    service.configure_profile(profile).unwrap();
+    service
+        .configure_profile(IndexProfile::new("main", vec![root.clone()]))
+        .unwrap();
 
     let event = service
         .query(SearchQuery {
@@ -390,109 +335,10 @@ async fn index_service_queries_content_mode_when_profile_enables_content() {
         outcome.matches[0].source,
         file_index::SearchResultSource::Contents
     );
-    assert!(outcome.matches[0].snippet.is_none());
-}
-
-#[tokio::test]
-async fn index_service_execute_publishes_status_events() {
-    let dir = tempdir().unwrap();
-    let service = IndexService::open(
-        dir.path().join("control.sqlite"),
-        dir.path().join("indexes"),
-    )
-    .unwrap();
-    let mut events = service.status_stream();
-    let profile = IndexProfile::new("main", vec![dir.path().join("root")]);
-
-    let event = service
-        .execute(file_index::IndexServiceCommand::ConfigureProfile(profile))
-        .await
-        .unwrap();
-
     assert_eq!(
-        event,
-        IndexServiceEvent::ProfileConfigured("main".to_owned())
+        outcome.matches[0].snippet.as_deref(),
+        Some("quarterly roadmap signal")
     );
-    assert_eq!(
-        events.recv().await.unwrap(),
-        IndexServiceEvent::ProfileConfigured("main".to_owned())
-    );
-}
-
-#[tokio::test]
-async fn index_service_read_only_commands_do_not_start_maintenance() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    let service = IndexService::open(
-        dir.path().join("control.sqlite"),
-        dir.path().join("indexes"),
-    )
-    .unwrap();
-    let mut events = service.status_stream();
-
-    service
-        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile::new(
-            "main",
-            vec![root.clone()],
-        )))
-        .await
-        .unwrap();
-    service
-        .execute(IndexServiceCommand::LoadProfile("main".to_owned()))
-        .await
-        .unwrap();
-    service
-        .execute(IndexServiceCommand::Status {
-            profile_id: "main".to_owned(),
-            root,
-        })
-        .await
-        .unwrap();
-
-    assert_no_watch_started(&mut events).await;
-}
-
-#[tokio::test]
-async fn index_service_start_maintenance_command_validates_profile_without_starting_watcher() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    let service = IndexService::open(
-        dir.path().join("control.sqlite"),
-        dir.path().join("indexes"),
-    )
-    .unwrap();
-    let mut events = service.status_stream();
-    service
-        .execute(IndexServiceCommand::ConfigureProfile(IndexProfile::new(
-            "main",
-            vec![root],
-        )))
-        .await
-        .unwrap();
-
-    let event = service
-        .execute(IndexServiceCommand::StartMaintenance {
-            profile_id: "main".to_owned(),
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(
-        event,
-        IndexServiceEvent::MaintenanceStarted {
-            profile_id: "main".to_owned()
-        }
-    );
-    assert_no_watch_started(&mut events).await;
-    let error = service
-        .execute(IndexServiceCommand::StartMaintenance {
-            profile_id: "missing".to_owned(),
-        })
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("missing profile missing"));
 }
 
 #[tokio::test]
@@ -517,7 +363,6 @@ async fn index_service_command_covers_build_status_clear_failures_remove_root_an
                 profile_id: "main".to_owned(),
                 root: root.clone(),
                 selected_paths: vec![root.clone()],
-                mode: FileSearchIndexMode::FullRebuild,
             },
         ))
         .await
@@ -566,7 +411,7 @@ async fn index_service_command_covers_build_status_clear_failures_remove_root_an
 }
 
 #[tokio::test]
-async fn index_service_rebuild_and_pause_update_task_status() {
+async fn index_service_rebuild_updates_task_status() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -578,7 +423,6 @@ async fn index_service_rebuild_and_pause_update_task_status() {
         .unwrap();
 
     service.rebuild("main", root.clone()).await.unwrap();
-    service.pause().unwrap();
 
     let statuses = ProfileStore::open(control_db)
         .unwrap()
@@ -588,7 +432,7 @@ async fn index_service_rebuild_and_pause_update_task_status() {
         .iter()
         .find(|status| status.root.as_ref() == Some(&root))
         .expect("root task status");
-    assert_eq!(status.phase, IndexTaskPhase::Paused);
+    assert_eq!(status.phase, IndexTaskPhase::Finished);
     assert!(status.extractor_version > 0);
 }
 
@@ -621,171 +465,6 @@ async fn index_service_rebuild_excludes_index_base_inside_hidden_root() {
     };
 
     assert!(outcome.matches.is_empty());
-}
-
-#[tokio::test]
-async fn index_service_maintains_root_after_file_create_modify_and_delete() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("initial.txt"), "initial body").unwrap();
-    let index_base = dir.path().join("indexes");
-    let index_dir = search_index_dir_for_root(&index_base, &root);
-    build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
-        .await
-        .unwrap();
-    let service = IndexService::open(dir.path().join("control.sqlite"), &index_base).unwrap();
-    service
-        .configure_profile(IndexProfile::new("main", vec![root.clone()]))
-        .unwrap();
-    let mut events = service.status_stream();
-
-    let _maintenance = service.maintain_profile("main");
-    wait_for_watch_started(&mut events, &root).await;
-
-    let created = root.join("created-note.txt");
-    std::fs::write(&created, "created").unwrap();
-    wait_for_incremental_finish(&mut events, &root).await;
-    assert_file_query_count(&service, &root, "created", 1).await;
-
-    std::fs::write(&created, "created plus modified").unwrap();
-    wait_for_incremental_finish(&mut events, &root).await;
-    assert_file_query_count(&service, &root, "created", 1).await;
-
-    std::fs::remove_file(&created).unwrap();
-    wait_for_incremental_finish(&mut events, &root).await;
-    assert_file_query_count(&service, &root, "created", 0).await;
-}
-
-#[tokio::test]
-async fn index_service_maintains_root_after_file_rename() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    let source = root.join("draft-note.txt");
-    let renamed = root.join("published-note.txt");
-    std::fs::write(&source, "draft").unwrap();
-    let index_base = dir.path().join("indexes");
-    let index_dir = search_index_dir_for_root(&index_base, &root);
-    build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
-        .await
-        .unwrap();
-    let service = IndexService::open(dir.path().join("control.sqlite"), &index_base).unwrap();
-    service
-        .configure_profile(IndexProfile::new("main", vec![root.clone()]))
-        .unwrap();
-    let mut events = service.status_stream();
-
-    let _maintenance = service.maintain_profile("main");
-    wait_for_watch_started(&mut events, &root).await;
-
-    std::fs::rename(&source, &renamed).unwrap();
-    wait_for_incremental_finish(&mut events, &root).await;
-
-    assert_file_query_count(&service, &root, "draft", 0).await;
-    assert_file_query_count(&service, &root, "published", 1).await;
-}
-
-#[tokio::test]
-async fn index_service_maintenance_does_not_reconcile_changes_missed_while_stopped() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("root");
-    std::fs::create_dir_all(&root).unwrap();
-    let missed = root.join("offline-note.txt");
-    std::fs::write(root.join("initial.txt"), "initial").unwrap();
-    let index_base = dir.path().join("indexes");
-    let index_dir = search_index_dir_for_root(&index_base, &root);
-    build_file_search_index(&root, &index_dir, FileSearchIndexOptions::default())
-        .await
-        .unwrap();
-    let control_db = dir.path().join("control.sqlite");
-    let service = IndexService::open(&control_db, &index_base).unwrap();
-    service
-        .configure_profile(IndexProfile::new("main", vec![root.clone()]))
-        .unwrap();
-    drop(service);
-    std::fs::write(&missed, "missed while stopped").unwrap();
-
-    let service = IndexService::open(&control_db, &index_base).unwrap();
-    let mut events = service.status_stream();
-    let _maintenance = service.maintain_profile("main");
-    wait_for_watch_started(&mut events, &root).await;
-
-    assert_file_query_count(&service, &root, "offline", 0).await;
-}
-
-async fn wait_for_watch_started(
-    events: &mut tokio::sync::broadcast::Receiver<IndexServiceEvent>,
-    root: &PathBuf,
-) {
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        if matches!(event, IndexServiceEvent::WatchStarted { root: event_root, .. } if event_root == *root)
-        {
-            return;
-        }
-    }
-}
-
-async fn wait_for_incremental_finish(
-    events: &mut tokio::sync::broadcast::Receiver<IndexServiceEvent>,
-    root: &PathBuf,
-) {
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(8), events.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        if matches!(
-            event,
-            IndexServiceEvent::IncrementalUpdateFinished {
-                outcome,
-                ..
-            } if outcome.root == *root
-        ) {
-            return;
-        }
-    }
-}
-
-async fn assert_no_watch_started(events: &mut tokio::sync::broadcast::Receiver<IndexServiceEvent>) {
-    loop {
-        match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
-            Ok(Ok(event)) => {
-                assert!(
-                    !matches!(event, IndexServiceEvent::WatchStarted { .. }),
-                    "unexpected watch start event: {event:?}"
-                );
-            }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => return,
-        }
-    }
-}
-
-async fn assert_file_query_count(
-    service: &IndexService,
-    root: &PathBuf,
-    query: &str,
-    count: usize,
-) {
-    let event = service
-        .query(SearchQuery {
-            profile_id: "main".to_owned(),
-            root: root.clone(),
-            text: query.to_owned(),
-            mode: SearchMode::Files,
-            limit: 10,
-        })
-        .await
-        .unwrap();
-    let IndexServiceEvent::QueryFinished(outcome) = event else {
-        panic!("expected query event");
-    };
-    assert_eq!(outcome.matches.len(), count);
 }
 
 #[cfg(unix)]
