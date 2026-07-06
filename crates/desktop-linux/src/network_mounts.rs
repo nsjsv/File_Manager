@@ -448,7 +448,7 @@ pub fn normalize_network_connection_uri(
             message: "passwords must not be stored in network connection URIs".to_owned(),
         });
     }
-    if protocol == NetworkProtocol::Smb && parts.path_segments.first().is_none() {
+    if protocol == NetworkProtocol::Smb && parts.path_segments.is_empty() {
         return Err(NetworkMountError::InvalidUri {
             uri: uri.to_owned(),
             message: "SMB URI must include a share name".to_owned(),

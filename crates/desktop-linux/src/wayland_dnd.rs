@@ -488,7 +488,7 @@ impl WaylandFileDnd {
             let file = unsafe { file.get_mut() };
             let mut reader = BufReader::new(file);
             match reader.fill_buf() {
-                Ok(buffer) if buffer.is_empty() => DropReadOutcome::Finished,
+                Ok([]) => DropReadOutcome::Finished,
                 Ok(buffer) => {
                     drop_read.data.extend_from_slice(buffer);
                     consumed = buffer.len();

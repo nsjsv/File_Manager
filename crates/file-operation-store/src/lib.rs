@@ -247,11 +247,6 @@ pub enum StoredOperation {
         destination: StoredPath,
         password_required: bool,
     },
-    SearchIndex {
-        root: StoredPath,
-        index_base_dir: StoredPath,
-        selected_paths: Vec<StoredPath>,
-    },
 }
 
 impl StoredOperation {
@@ -270,7 +265,6 @@ impl StoredOperation {
             Self::Move { .. } => "move",
             Self::CreateArchive { .. } => "create_archive",
             Self::ExtractArchive { .. } => "extract_archive",
-            Self::SearchIndex { .. } => "search_index",
         }
     }
 }

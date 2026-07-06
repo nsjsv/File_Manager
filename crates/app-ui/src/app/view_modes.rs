@@ -33,7 +33,6 @@ impl FileBrowser {
         self.view_mode = view_mode;
         self.hovered_entry = None;
         self.cursor_paste_directory = None;
-        self.cursor_search_directory = None;
         self.selection_marquee = None;
         self.file_drag = None;
         self.pending_keyboard_column_focus = None;

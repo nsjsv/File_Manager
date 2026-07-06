@@ -11,13 +11,9 @@ mod option_controls;
 mod preview_panel;
 mod properties_window;
 mod rendering_settings;
-mod search_index_settings;
-mod search_mode_prompt;
-mod search_panel;
 mod settings_window;
 mod shortcut_settings;
 mod sidebar_panel;
-mod startup_index_setup;
 mod tab_motion;
 mod text_preview_panel;
 mod toggle_switch;
@@ -26,10 +22,6 @@ mod transfer_conflict;
 
 pub(crate) use preview_panel::view_preview_window;
 pub(crate) use properties_window::view_properties_window;
-pub(crate) use search_panel::{
-    search_input_id, search_results_id, view_search_window, SEARCH_RESULTS_HEIGHT,
-    SEARCH_RESULTS_PADDING, SEARCH_RESULT_ROW_HEIGHT, SEARCH_RESULT_ROW_SPACING,
-};
 pub(crate) use settings_window::view_settings_window;
 pub(crate) use tab_motion::translated_with_width_overflow;
 
@@ -79,9 +71,7 @@ use floating_panels::{
     file_drop_operation_panel, open_with_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
-use search_mode_prompt::search_mode_prompt_panel;
 use sidebar_panel::sidebar_view;
-use startup_index_setup::startup_index_setup_panel;
 use toolbar_controls::{navigation_button_group, view_mode_button_group};
 use transfer_conflict::transfer_conflict_panel;
 
@@ -153,53 +143,28 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 }
 
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
-    let onboarding_active =
-        browser.search_mode_prompt.is_some() || browser.startup_index_setup.is_some();
-    let content: Element<'_, Message> = if onboarding_active {
-        container(Space::new().width(Length::Fill).height(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(app_content_style)
-            .into()
-    } else {
-        let pane_layer: Element<'_, Message> = container(
-            row![
-                Space::new().width(Length::Fixed(browser.sidebar_width)),
-                container(panes_view(browser))
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill),
-        )
+    let pane_layer: Element<'_, Message> = container(
+        row![
+            Space::new().width(Length::Fixed(browser.sidebar_width)),
+            container(panes_view(browser))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(app_content_style)
+    .into();
+    let content: Element<'_, Message> = stack([pane_layer, opaque(sidebar_view(browser))])
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(app_content_style)
         .into();
-        stack([pane_layer, opaque(sidebar_view(browser))])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    };
 
     let mut floating = Vec::new();
     let mut floating_input = BrowserFloatingInput::Plain;
-    if let Some(prompt) = &browser.search_mode_prompt {
-        floating_input = BrowserFloatingInput::Modal;
-        floating.push(FloatingContent {
-            element: search_mode_prompt_panel(prompt),
-            placement: FloatingPlacement::Center,
-        });
-    } else if let Some(startup_index_setup) = &browser.startup_index_setup {
-        floating_input = BrowserFloatingInput::Modal;
-        floating.push(FloatingContent {
-            element: startup_index_setup_panel(
-                startup_index_setup,
-                browser.scrollbar_visibility_for(&ScrollbarRegion::StartupIndexSetup),
-            ),
-            placement: FloatingPlacement::Center,
-        });
-    } else if let Some(confirmation) = &browser.destructive_action_confirmation {
+    if let Some(confirmation) = &browser.destructive_action_confirmation {
         floating_input = BrowserFloatingInput::Modal;
         floating.push(FloatingContent {
             element: destructive_action_confirmation_panel(confirmation),
@@ -326,7 +291,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if !onboarding_active && browser.operation_queue.is_panel_open() {
+    if browser.operation_queue.is_panel_open() {
         let queue_dismissal = match browser.operation_queue_panel_mode {
             OperationQueuePanelMode::PassivePreview => BrowserFloatingInput::DismissiblePassThrough,
             OperationQueuePanelMode::InteractiveList => BrowserFloatingInput::DismissibleBlocking,
@@ -344,17 +309,15 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if !onboarding_active {
-        if let Some(indicator) = operation_queue_indicator(&browser.operation_queue) {
-            floating.push(FloatingContent {
-                element: indicator,
-                placement: FloatingPlacement::BottomRightInArea {
-                    area_width: browser.sidebar_width,
-                    right: OPERATION_QUEUE_INDICATOR_RIGHT,
-                    bottom: OPERATION_QUEUE_INDICATOR_BOTTOM,
-                },
-            });
-        }
+    if let Some(indicator) = operation_queue_indicator(&browser.operation_queue) {
+        floating.push(FloatingContent {
+            element: indicator,
+            placement: FloatingPlacement::BottomRightInArea {
+                area_width: browser.sidebar_width,
+                right: OPERATION_QUEUE_INDICATOR_RIGHT,
+                bottom: OPERATION_QUEUE_INDICATOR_BOTTOM,
+            },
+        });
     }
 
     match floating_input {

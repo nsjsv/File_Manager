@@ -69,41 +69,13 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
             destination: StoredPath::from_path(&request.destination),
             password_required: request.password.is_some(),
         },
-        QueuedFileOperation::BuildSearchIndex {
-            root,
-            index_base_dir,
-            selected_paths,
-            ..
-        } => StoredOperation::SearchIndex {
-            root: StoredPath::from_path(root),
-            index_base_dir: StoredPath::from_path(index_base_dir),
-            selected_paths: selected_paths
-                .iter()
-                .map(|path| StoredPath::from_path(path))
-                .collect(),
-        },
     }
 }
 
 pub(super) fn queued_operation_from_stored(
-    operation: StoredOperation,
+    _operation: StoredOperation,
 ) -> Option<QueuedFileOperation> {
-    match operation {
-        StoredOperation::SearchIndex {
-            root,
-            index_base_dir,
-            selected_paths,
-        } => Some(QueuedFileOperation::BuildSearchIndex {
-            profile_id: crate::commands::default_search_profile_id().to_owned(),
-            root: root.to_path_buf(),
-            index_base_dir: index_base_dir.to_path_buf(),
-            selected_paths: selected_paths
-                .into_iter()
-                .map(|path| path.to_path_buf())
-                .collect(),
-        }),
-        _ => None,
-    }
+    None
 }
 
 fn stored_transfers(transfers: &[QueuedTransfer]) -> Vec<StoredTransfer> {
@@ -153,31 +125,5 @@ fn stored_archive_compression_level(
         ArchiveCompressionLevel::Fast => StoredArchiveCompressionLevel::Fast,
         ArchiveCompressionLevel::Balanced => StoredArchiveCompressionLevel::Balanced,
         ArchiveCompressionLevel::Maximum => StoredArchiveCompressionLevel::Maximum,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn search_index_task_persists_index_base_dir() {
-        let operation = QueuedFileOperation::BuildSearchIndex {
-            profile_id: "default".to_owned(),
-            root: PathBuf::from("/workspace"),
-            index_base_dir: PathBuf::from("/cache/file-manager/search-index"),
-            selected_paths: vec![PathBuf::from("/workspace")],
-        };
-
-        let stored = queued_operation_to_stored(&operation);
-
-        let StoredOperation::SearchIndex { index_base_dir, .. } = stored else {
-            panic!("expected search index operation");
-        };
-        assert_eq!(
-            index_base_dir.to_path_buf(),
-            PathBuf::from("/cache/file-manager/search-index")
-        );
     }
 }

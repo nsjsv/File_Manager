@@ -14,18 +14,13 @@ use file_core::{
     create_file_with_contents, scan_trash, ScanOptions, TransferConflictCheck,
     TransferConflictItem, TrashScan,
 };
-use file_index::{
-    search_file_tree_with_cancel, FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOptions,
-    FileSearchOutcome, IndexServiceCommand, IndexServiceEvent, SearchQuery,
-};
 use file_operation_store::{StoreError, TaskQueueStore};
 use iced::Task;
-use tokio_util::sync::CancellationToken;
 
 use crate::config;
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
-    SearchRequest, SidebarLocation, StartupEnvironment, TransferConflictMode,
+    SidebarLocation, StartupEnvironment, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::sidebar::{home_sidebar_location, sidebar_locations};
@@ -57,8 +52,7 @@ mod preview;
 pub(crate) use preview::{
     animated_image_preview_command, image_preview_dimensions_command,
     network_preview_cache_command, preview_command, preview_directory_children_command,
-    start_audio_preview_command, start_video_preview_audio_command,
-    startup_index_directory_children_command, text_preview_chunk_command,
+    start_audio_preview_command, start_video_preview_audio_command, text_preview_chunk_command,
     video_preview_frame_command, video_preview_metadata_command,
 };
 mod properties;
@@ -68,25 +62,12 @@ pub(crate) use properties::{
 };
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
-mod search_index_daemon;
-pub(crate) use search_index_daemon::{
-    search_index_daemon_restart_command, search_index_daemon_status_command,
-};
-mod search_index_profile;
-pub(crate) use search_index_profile::{
-    default_search_index_profile, default_search_profile_id, search_index_profile_delete_command,
-    search_index_profile_load_command, search_index_profile_save_command,
-};
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
 mod wayland_dnd;
 pub(crate) use wayland_dnd::wayland_dnd_window_handle_command;
 
-#[cfg(test)]
-mod tests;
-
 const PATH_SUGGESTION_LIMIT: usize = 6;
-const SEARCH_MATCH_LIMIT: usize = 50;
 const THUMBNAIL_REFRESH_DELAY: Duration = Duration::from_millis(400);
 
 pub(crate) fn startup_environment_command() -> Task<Message> {
@@ -155,103 +136,6 @@ pub(crate) fn path_suggestions_command(
         move |suggestions| {
             Message::PathSuggestionsLoaded(pane_id, issued_request.clone(), suggestions)
         },
-    )
-}
-
-pub(crate) fn search_index_path_rule_suggestions_command(
-    request: PathSuggestionRequest,
-) -> Task<Message> {
-    let issued_request = request.clone();
-    Task::perform(
-        load_path_suggestions(request.input, request.current_dir),
-        move |suggestions| {
-            Message::SearchIndexPathRuleSuggestionsLoaded(issued_request.clone(), suggestions)
-        },
-    )
-}
-
-pub(crate) fn search_command(
-    request: SearchRequest,
-    options: ScanOptions,
-    config: config::UserConfig,
-    profile_id: String,
-    cancellation: CancellationToken,
-) -> Task<Message> {
-    let issued_request = request.clone();
-    Task::perform(
-        load_search_matches(request, options, config, profile_id, cancellation),
-        move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
-    )
-}
-
-pub(crate) fn search_tree_command(
-    request: SearchRequest,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
-    directory_error_policy: file_index::DirectoryErrorPolicy,
-    cancellation: CancellationToken,
-) -> Task<Message> {
-    let issued_request = request.clone();
-    Task::perform(
-        load_search_tree_matches(
-            request,
-            options,
-            exclude_patterns,
-            directory_error_policy,
-            cancellation,
-        ),
-        move |search| Message::SearchMatchesLoaded(issued_request.clone(), search),
-    )
-}
-
-pub(crate) fn search_index_command(
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Task<Message> {
-    let issued_root = root.clone();
-    Task::perform(
-        build_search_index(root, config, profile_id),
-        move |outcome| Message::SearchIndexBuilt(issued_root.clone(), outcome),
-    )
-}
-
-pub(crate) fn search_index_status_command(
-    generation: u64,
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Task<Message> {
-    let issued_root = root.clone();
-    Task::perform(
-        load_search_index_status(root, config, profile_id),
-        move |status| Message::SearchIndexStatusLoaded(generation, issued_root.clone(), status),
-    )
-}
-
-pub(crate) fn clear_search_index_failures_command(
-    generation: u64,
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Task<Message> {
-    let issued_root = root.clone();
-    Task::perform(
-        clear_search_index_failures(root, config, profile_id),
-        move |status| Message::SearchIndexStatusLoaded(generation, issued_root.clone(), status),
-    )
-}
-
-pub(crate) fn remove_search_index_command(
-    generation: u64,
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Task<Message> {
-    let issued_root = root.clone();
-    Task::perform(
-        remove_search_index(root, config, profile_id),
-        move |status| Message::SearchIndexStatusLoaded(generation, issued_root.clone(), status),
     )
 }
 
@@ -547,135 +431,6 @@ async fn load_sidebar_locations(
     .unwrap_or_else(|_| vec![home_sidebar_location(&fallback_home)]);
     startup_trace::mark_once("sidebar_locations_loaded");
     locations
-}
-
-async fn load_search_matches(
-    request: SearchRequest,
-    _options: ScanOptions,
-    config: config::UserConfig,
-    profile_id: String,
-    cancellation: CancellationToken,
-) -> Result<FileSearchOutcome, String> {
-    match search_index_daemon::execute_index_command_with_cancel(
-        config.search_index_dir,
-        IndexServiceCommand::Query(SearchQuery {
-            profile_id,
-            root: request.root,
-            text: request.query,
-            mode: request.mode,
-            limit: SEARCH_MATCH_LIMIT,
-        }),
-        cancellation,
-    )
-    .await?
-    {
-        IndexServiceEvent::QueryFinished(outcome) => Ok(outcome),
-        event => Err(format!("unexpected search index event: {event:?}")),
-    }
-}
-
-async fn load_search_tree_matches(
-    request: SearchRequest,
-    options: ScanOptions,
-    exclude_patterns: Vec<String>,
-    directory_error_policy: file_index::DirectoryErrorPolicy,
-    cancellation: CancellationToken,
-) -> Result<FileSearchOutcome, String> {
-    search_file_tree_with_cancel(
-        request.root,
-        request.query,
-        FileSearchOptions {
-            include_hidden: options.include_hidden,
-            exclude_patterns,
-            directory_error_policy,
-            limit: SEARCH_MATCH_LIMIT,
-            mode: request.mode,
-            media_metadata_scope: file_index::MediaMetadataScope::Off,
-        },
-        cancellation,
-    )
-    .await
-    .map_err(|error| error.to_string())
-}
-
-async fn build_search_index(
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Result<FileSearchIndexOutcome, String> {
-    let index_base_dir = config.search_index_dir.clone();
-    let command = IndexServiceCommand::Rebuild { profile_id, root };
-    let event =
-        search_index_daemon::execute_index_command(config.search_index_dir, command).await?;
-    match event {
-        IndexServiceEvent::RebuildFinished(outcome) => {
-            ensure_search_index_outcome_matches_root(&index_base_dir, outcome)
-        }
-        event => Err(format!("unexpected search index event: {event:?}")),
-    }
-}
-
-pub(crate) fn ensure_search_index_outcome_matches_root(
-    index_base_dir: &Path,
-    outcome: FileSearchIndexOutcome,
-) -> Result<FileSearchIndexOutcome, String> {
-    let expected_index_dir = file_index::search_index_dir_for_root(index_base_dir, &outcome.root);
-    if outcome.index_dir == expected_index_dir {
-        Ok(outcome)
-    } else {
-        Err(format!(
-            "search index daemon wrote catalog to {:?}, expected {:?}",
-            outcome.index_dir, expected_index_dir
-        ))
-    }
-}
-
-async fn load_search_index_status(
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Result<FileSearchIndexStatus, String> {
-    match search_index_daemon::execute_index_command(
-        config.search_index_dir,
-        IndexServiceCommand::Status { profile_id, root },
-    )
-    .await?
-    {
-        IndexServiceEvent::StatusLoaded(status) => Ok(status),
-        event => Err(format!("unexpected search index event: {event:?}")),
-    }
-}
-
-async fn clear_search_index_failures(
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Result<FileSearchIndexStatus, String> {
-    match search_index_daemon::execute_index_command(
-        config.search_index_dir,
-        IndexServiceCommand::ClearFailures { profile_id, root },
-    )
-    .await?
-    {
-        IndexServiceEvent::FailuresCleared(status) => Ok(status),
-        event => Err(format!("unexpected search index event: {event:?}")),
-    }
-}
-
-async fn remove_search_index(
-    root: PathBuf,
-    config: config::UserConfig,
-    profile_id: String,
-) -> Result<FileSearchIndexStatus, String> {
-    match search_index_daemon::execute_index_command(
-        config.search_index_dir,
-        IndexServiceCommand::RemoveRoot { profile_id, root },
-    )
-    .await?
-    {
-        IndexServiceEvent::RootRemoved(status) => Ok(status),
-        event => Err(format!("unexpected search index event: {event:?}")),
-    }
 }
 
 async fn load_path_suggestions(input: String, current_dir: PathBuf) -> Vec<PathBuf> {

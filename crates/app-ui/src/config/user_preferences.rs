@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator};
 use file_core::FileOperationVerification;
-use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 use file_operation_store::{
     StoreResult, StoredListViewColumn, StoredNetworkConnection, StoredPath, StoredShortcutBinding,
     StoredSidebarFavorite, StoredUserPreferences, TaskQueueStore,
@@ -16,10 +15,9 @@ use super::{
     default_state_database_path, default_user_config, file_operation_verification_config_value,
     file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
     list_directory_size_display_mode_from_config_value, normalize_max_preview_file_bytes,
-    normalize_search_index_exclude_patterns, normalize_sidebar_width, sort_direction_config_value,
-    sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
-    SearchBackendMode, SearchModePromptStatus, SidebarFavoriteConfig, UiLanguageSetting,
-    UserConfig,
+    normalize_sidebar_width, sort_direction_config_value, sort_direction_from_config_value,
+    sort_field_config_value, sort_field_from_config_value, SidebarFavoriteConfig,
+    UiLanguageSetting, UserConfig,
 };
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
@@ -30,11 +28,6 @@ use crate::shortcuts::ShortcutConfig;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserPreferences {
-    pub(crate) search_index_exclude_patterns: Vec<String>,
-    pub(crate) search_index_media_scope: MediaMetadataScope,
-    pub(crate) search_index_directory_error_policy: DirectoryErrorPolicy,
-    pub(crate) search_mode: SearchBackendMode,
-    pub(crate) search_mode_prompt: SearchModePromptStatus,
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
     pub(crate) max_preview_file_bytes: u64,
     pub(crate) show_hidden_files: bool,
@@ -56,13 +49,6 @@ pub(crate) struct UserPreferences {
 impl UserPreferences {
     pub(crate) fn from_user_config(config: &UserConfig) -> Self {
         Self {
-            search_index_exclude_patterns: normalize_search_index_exclude_patterns(
-                config.search_index_exclude_patterns.clone(),
-            ),
-            search_index_media_scope: config.search_index_media_scope,
-            search_index_directory_error_policy: config.search_index_directory_error_policy,
-            search_mode: config.search_mode,
-            search_mode_prompt: config.search_mode_prompt,
             network_list_thumbnail_downloads_enabled: config
                 .network_list_thumbnail_downloads_enabled,
             max_preview_file_bytes: normalize_max_preview_file_bytes(config.max_preview_file_bytes),
@@ -84,11 +70,6 @@ impl UserPreferences {
     }
 
     pub(crate) fn apply_to_user_config(&self, config: &mut UserConfig) {
-        config.search_index_exclude_patterns = self.search_index_exclude_patterns.clone();
-        config.search_index_media_scope = self.search_index_media_scope;
-        config.search_index_directory_error_policy = self.search_index_directory_error_policy;
-        config.search_mode = self.search_mode;
-        config.search_mode_prompt = self.search_mode_prompt;
         config.network_list_thumbnail_downloads_enabled =
             self.network_list_thumbnail_downloads_enabled;
         config.max_preview_file_bytes = self.max_preview_file_bytes;
@@ -109,47 +90,37 @@ impl UserPreferences {
     }
 
     pub(crate) fn to_stored(&self) -> StoredUserPreferences {
-        StoredUserPreferences {
-            search_index_exclude_patterns: self.search_index_exclude_patterns.clone(),
-            search_index_media_scope: self.search_index_media_scope.config_value().to_owned(),
-            search_index_directory_error_policy: self
-                .search_index_directory_error_policy
-                .config_value()
-                .to_owned(),
-            search_mode: self.search_mode.config_value().to_owned(),
-            search_mode_prompt: self.search_mode_prompt.config_value().to_owned(),
-            network_list_thumbnail_downloads_enabled: self.network_list_thumbnail_downloads_enabled,
-            max_preview_file_bytes: normalize_max_preview_file_bytes(self.max_preview_file_bytes),
-            show_hidden_files: self.show_hidden_files,
-            language_setting: self.language_setting.config_value().to_owned(),
-            sidebar_width: f64::from(normalize_sidebar_width(self.sidebar_width)),
-            sidebar_favorites: self
-                .sidebar_favorites
-                .as_ref()
-                .map(|favorites| stored_sidebar_favorites(favorites)),
-            network_connections: stored_network_connections(&self.network_connections),
-            terminal_emulator: self.terminal_emulator.config_value().to_owned(),
-            file_operation_verification: file_operation_verification_config_value(
-                self.file_operation_verification,
-            )
-            .to_owned(),
-            browser_view_mode: browser_view_mode_config_value(self.browser_view_mode).to_owned(),
-            list_view_columns: stored_list_view_columns(&self.list_view_preferences),
-            list_sort_field: sort_field_config_value(self.list_view_preferences.sort().field)
-                .to_owned(),
-            list_sort_direction: sort_direction_config_value(
-                self.list_view_preferences.sort().direction,
-            )
-            .to_owned(),
-            list_directory_size_display_mode: list_directory_size_display_mode_config_value(
-                self.list_directory_size_display_mode,
-            )
-            .to_owned(),
-            startup_location: self.startup_location_policy.config_value().to_owned(),
-            startup_custom_directory: StoredPath::from_path(&self.startup_custom_directory),
-            save_view_state: self.startup_location_policy.saves_view_state(),
-            shortcuts: stored_shortcuts(&self.shortcuts),
-        }
+        let mut stored = StoredUserPreferences::default();
+        stored.network_list_thumbnail_downloads_enabled =
+            self.network_list_thumbnail_downloads_enabled;
+        stored.max_preview_file_bytes =
+            normalize_max_preview_file_bytes(self.max_preview_file_bytes);
+        stored.show_hidden_files = self.show_hidden_files;
+        stored.language_setting = self.language_setting.config_value().to_owned();
+        stored.sidebar_width = f64::from(normalize_sidebar_width(self.sidebar_width));
+        stored.sidebar_favorites = self
+            .sidebar_favorites
+            .as_ref()
+            .map(|favorites| stored_sidebar_favorites(favorites));
+        stored.network_connections = stored_network_connections(&self.network_connections);
+        stored.terminal_emulator = self.terminal_emulator.config_value().to_owned();
+        stored.file_operation_verification =
+            file_operation_verification_config_value(self.file_operation_verification).to_owned();
+        stored.browser_view_mode =
+            browser_view_mode_config_value(self.browser_view_mode).to_owned();
+        stored.list_view_columns = stored_list_view_columns(&self.list_view_preferences);
+        stored.list_sort_field =
+            sort_field_config_value(self.list_view_preferences.sort().field).to_owned();
+        stored.list_sort_direction =
+            sort_direction_config_value(self.list_view_preferences.sort().direction).to_owned();
+        stored.list_directory_size_display_mode =
+            list_directory_size_display_mode_config_value(self.list_directory_size_display_mode)
+                .to_owned();
+        stored.startup_location = self.startup_location_policy.config_value().to_owned();
+        stored.startup_custom_directory = StoredPath::from_path(&self.startup_custom_directory);
+        stored.save_view_state = self.startup_location_policy.saves_view_state();
+        stored.shortcuts = stored_shortcuts(&self.shortcuts);
+        stored
     }
 
     pub(crate) fn from_stored(stored: StoredUserPreferences, default: &UserConfig) -> Self {
@@ -160,23 +131,6 @@ impl UserPreferences {
         let list_view_preferences =
             list_view_preferences_from_stored(&stored, &default_preferences);
         Self {
-            search_index_exclude_patterns: normalize_search_index_exclude_patterns(
-                stored.search_index_exclude_patterns,
-            ),
-            search_index_media_scope: MediaMetadataScope::from_config_value(
-                &stored.search_index_media_scope,
-            )
-            .unwrap_or(default_preferences.search_index_media_scope),
-            search_index_directory_error_policy: DirectoryErrorPolicy::from_config_value(
-                &stored.search_index_directory_error_policy,
-            )
-            .unwrap_or(default_preferences.search_index_directory_error_policy),
-            search_mode: SearchBackendMode::from_config_value(&stored.search_mode)
-                .unwrap_or(default_preferences.search_mode),
-            search_mode_prompt: SearchModePromptStatus::from_config_value(
-                &stored.search_mode_prompt,
-            )
-            .unwrap_or(default_preferences.search_mode_prompt),
             network_list_thumbnail_downloads_enabled: stored
                 .network_list_thumbnail_downloads_enabled,
             max_preview_file_bytes: normalize_max_preview_file_bytes(stored.max_preview_file_bytes),

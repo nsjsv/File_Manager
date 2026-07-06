@@ -34,16 +34,11 @@ pub enum TransferConflictStrategy {
     Merge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FileOperationVerification {
+    #[default]
     BasicMetadata,
     Strong,
-}
-
-impl Default for FileOperationVerification {
-    fn default() -> Self {
-        Self::BasicMetadata
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -86,12 +86,6 @@ fn dynamic_translation(text: &str) -> Option<String> {
     if let Some(count) = parse_prefixed_count(text, "", " explicit path(s)") {
         return Some(format!("{count} 个显式路径"));
     }
-    if let Some(error) = text.strip_prefix("Profile error: ") {
-        return Some(format!("配置错误：{error}"));
-    }
-    if let Some(error) = text.strip_prefix("Index error: ") {
-        return Some(format!("索引错误：{error}"));
-    }
     if let Some(error) = text.strip_prefix("Unavailable: ") {
         return Some(format!("不可用：{error}"));
     }
@@ -159,7 +153,6 @@ fn parse_two_counts(
 fn exact_translation(text: &str) -> Option<&'static str> {
     match text {
         "File Manager" => Some("文件管理器"),
-        "Search - File Manager" => Some("搜索 - 文件管理器"),
         "Settings - File Manager" => Some("设置 - 文件管理器"),
         "Properties - File Manager" => Some("属性 - 文件管理器"),
         "Preview - File Manager" => Some("预览 - 文件管理器"),
@@ -202,30 +195,7 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Choose an existing directory." => Some("请选择一个已存在的目录。"),
         "Enter a whole number of MiB greater than 0." => Some("请输入大于 0 的 MiB 整数。"),
         "Enter a smaller preview size." => Some("请输入更小的预览大小。"),
-        "Search" => Some("搜索"),
-        "Search files" => Some("搜索文件"),
-        "No roots selected" => Some("未选择根路径"),
-        "No roots" => Some("没有根路径"),
         "Running" => Some("运行中"),
-        "Never" => Some("从未"),
-        "Search window is closed" => Some("搜索窗口已关闭"),
-        "Building the index in the background. You can search by file name now" => {
-            Some("正在后台构建索引。现在你仍可按文件名搜索。")
-        }
-        "Type to search. Press Tab to switch between current folder and Home" => {
-            Some("输入即可搜索。按 Tab 在当前文件夹和主目录之间切换。")
-        }
-        "Building index. Search will run automatically when ready..." => {
-            Some("正在构建索引，准备就绪后会自动开始搜索...")
-        }
-        "Searching..." => Some("搜索中..."),
-        "No matches" => Some("没有匹配项"),
-        "Files" => Some("文件"),
-        "Contents" => Some("内容"),
-        "Media" => Some("媒体"),
-        "All" => Some("全部"),
-        "Current Folder" => Some("当前文件夹"),
-        "Home" => Some("主目录"),
         "Image" => Some("图像"),
         "Audio" => Some("音频"),
         "Video" => Some("视频"),
@@ -252,7 +222,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Move" => Some("移动"),
         "Create Archive" => Some("创建归档"),
         "Extract Archive" => Some("解压归档"),
-        "Build Search Index" => Some("构建搜索索引"),
         "Trash" => Some("回收站"),
         "Path" => Some("路径"),
         "File name" => Some("文件名"),
@@ -299,78 +268,19 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Unmount" => Some("卸载"),
         "Safely Remove" => Some("安全移除"),
         "Eject" => Some("弹出"),
-        "Start indexing" => Some("开始建立索引"),
-        "Build a search index?" => Some("要建立搜索索引吗？"),
         "Common locations" => Some("常用位置"),
         "Desktop, documents, downloads, media, and user config." => {
             Some("桌面、文档、下载、媒体目录和用户配置目录。")
         }
         "Custom selection" => Some("自定义选择"),
         "Choose folders or files from Home." => Some("从主目录中选择文件夹或文件。"),
-        "Filenames" => Some("文件名"),
-        "Filename and path catalog." => Some("建立文件名和路径目录。"),
-        "Filenames + images" => Some("文件名 + 图像"),
-        "Filename/path catalog plus image metadata." => Some("建立文件名/路径目录，并附带图像元数据。"),
         "No common locations found" => Some("未找到常用位置"),
-        "No indexable locations found" => Some("未找到可索引的位置"),
         "Loading..." => Some("加载中..."),
         "Show hidden content" => Some("显示隐藏内容"),
-        "Search Index" => Some("搜索索引"),
         "Refresh" => Some("刷新"),
-        "Index directory" => Some("索引目录"),
-        "Search mode" => Some("搜索模式"),
-        "Simple search" => Some("简单搜索"),
-        "Live filename and path search. No index is built or maintained." => {
-            Some("实时搜索文件名和路径。不构建也不维护索引。")
-        }
-        "Indexed search" => Some("索引搜索"),
-        "Uses configured indexed paths and optional media metadata indexing." => {
-            Some("使用已配置的索引路径，并可选建立媒体元数据索引。")
-        }
-        "Profile" => Some("配置档"),
-        "Service" => Some("服务"),
-        "Profile id" => Some("配置档 ID"),
-        "Roots" => Some("根路径"),
-        "Restart service" => Some("重启服务"),
-        "Delete profile" => Some("删除配置档"),
-        "Filename and path catalog" => Some("文件名和路径目录"),
-        "Unreadable directories" => Some("不可读目录"),
         "Skip" => Some("跳过"),
-        "Abort" => Some("中止"),
-        "No media metadata" => Some("不索引媒体元数据"),
-        "Filename search only for images, audio, and video." => {
-            Some("仅按文件名搜索图像、音频和视频。")
-        }
-        "Image metadata" => Some("图像元数据"),
-        "Image dimensions and EXIF, without audio or video probing." => {
-            Some("索引图像尺寸和 EXIF，不探测音频或视频。")
-        }
-        "All media metadata" => Some("全部媒体元数据"),
-        "Image metadata plus audio and video metadata." => {
-            Some("包含图像元数据，以及音频和视频元数据。")
-        }
-        "Changing media indexing applies to future rebuilds." => {
-            Some("媒体元数据索引设置会在后续重建时生效。")
-        }
-        "Checking..." => Some("检查中..."),
-        "Connected" => Some("已连接"),
-        "Unknown" => Some("未知"),
-        "Skip and record" => Some("跳过并记录"),
-        "Abort scan" => Some("中止扫描"),
-        "Path rules" => Some("路径规则"),
-        "No path rules configured." => Some("尚未配置路径规则。"),
         "Add" => Some("添加"),
         "Modify" => Some("修改"),
-        "Index" => Some("索引"),
-        "Exclude" => Some("排除"),
-        "Indexed roots" => Some("已索引根路径"),
-        "No searchable roots are available yet." => Some("当前还没有可搜索的根路径。"),
-        "Index path" => Some("索引路径"),
-        "Indexing is queued or running." => Some("索引任务已排队或正在运行。"),
-        "Loading index status..." => Some("正在加载索引状态..."),
-        "Needs rebuild" => Some("需要重建"),
-        "Present" => Some("已存在"),
-        "Missing" => Some("缺失"),
         "State" => Some("状态"),
         "Records" => Some("记录数"),
         "Size" => Some("大小"),
@@ -378,9 +288,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Failures" => Some("失败记录"),
         "Reason" => Some("原因"),
         "Update" => Some("更新"),
-        "Rebuild" => Some("重建"),
-        "Delete index" => Some("删除索引"),
-        "Clear failures" => Some("清除失败记录"),
         "Out of range" => Some("超出范围"),
         "Preview" => Some("预览"),
         "Select a file and press Space to load preview" => Some("选择一个文件并按空格键加载预览"),
@@ -527,13 +434,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Connection error" => Some("连接错误"),
         "Mounted" => Some("已挂载"),
         "Not mounted" => Some("未挂载"),
-        "Choose search mode" => Some("选择搜索模式"),
-        "Simple Search" => Some("简单搜索"),
-        "Find file names live without building an index." => Some("无需建立索引，实时查找文件名。"),
-        "Indexed Search" => Some("索引搜索"),
-        "Build indexed paths for faster filename, path, and media search. File contents use live rg search." => {
-            Some("建立索引路径，以更快搜索文件名、路径和媒体；文件内容始终使用实时 rg 搜索。")
-        }
         "Next" => Some("下一步"),
         "Format" => Some("格式"),
         "Compression" => Some("压缩"),
@@ -565,7 +465,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Select Down" => Some("选择下一个"),
         "Select Parent Column" => Some("选择父列"),
         "Select Child Column" => Some("选择子列"),
-        "Search Alternate" => Some("备用搜索"),
         "Dismiss" => Some("关闭当前层"),
         "Select All" => Some("全选"),
         "Copy Named Key" => Some("复制命名键"),

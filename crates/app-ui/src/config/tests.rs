@@ -6,7 +6,6 @@ use desktop_linux::{
     NetworkProtocol, TerminalEmulator,
 };
 use file_core::{FileOperationVerification, SortDirection, SortField};
-use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 use file_operation_store::{StoredNetworkConnection, TaskQueueStore};
 
 use crate::model::{BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode};
@@ -19,11 +18,6 @@ use super::*;
 fn parses_legacy_toml_user_config_for_migration() {
     let parsed = legacy_toml::parse_toml_user_config(
         r#"
-search_index_dir = "/tmp/search-index"
-search_index_directory_error_policy = "abort"
-search_index_media_scope = "images"
-search_mode = "indexed"
-search_mode_prompt = "completed"
 thumbnail_cache_dir = "/tmp/thumbnails"
 network_list_thumbnail_downloads_enabled = true
 max_preview_file_bytes = 4194304
@@ -50,14 +44,6 @@ network_connections = [
         default_user_config(),
     );
 
-    assert_eq!(parsed.search_index_dir, PathBuf::from("/tmp/search-index"));
-    assert_eq!(
-        parsed.search_index_directory_error_policy,
-        DirectoryErrorPolicy::Abort
-    );
-    assert_eq!(parsed.search_index_media_scope, MediaMetadataScope::Images);
-    assert_eq!(parsed.search_mode, SearchBackendMode::Indexed);
-    assert_eq!(parsed.search_mode_prompt, SearchModePromptStatus::Completed);
     assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
     assert!(parsed.network_list_thumbnail_downloads_enabled);
     assert_eq!(parsed.max_preview_file_bytes, 4 * 1024 * 1024);
@@ -103,7 +89,6 @@ network_connections = [
 #[test]
 fn app_config_toml_contains_only_startup_level_keys() {
     let app_config = AppConfig {
-        search_index_dir: PathBuf::from("/tmp/search-index"),
         thumbnail_cache_dir: PathBuf::from("/tmp/thumbnails"),
         rendering_gpu_preference: RenderingGpuPreference::HighPerformanceGpu,
     };
@@ -111,13 +96,7 @@ fn app_config_toml_contains_only_startup_level_keys() {
     let content = app_config::toml_app_config_content(&app_config).unwrap();
     let document = content.parse::<toml::Table>().unwrap();
 
-    assert_eq!(document.len(), 3);
-    assert_eq!(
-        document
-            .get("search_index_dir")
-            .and_then(toml::Value::as_str),
-        Some("/tmp/search-index")
-    );
+    assert_eq!(document.len(), 2);
     assert_eq!(
         document
             .get("thumbnail_cache_dir")
@@ -137,7 +116,6 @@ fn app_config_toml_contains_only_startup_level_keys() {
         "network_connections",
         "shortcuts",
         "startup_location",
-        "search_mode",
         "max_preview_file_bytes",
         "list_directory_size_display_mode",
     ] {
@@ -156,7 +134,6 @@ fn writes_app_config_without_user_preferences() {
     let temp_dir = tempfile::tempdir().expect("create temp config dir");
     let path = temp_dir.path().join("config.toml");
     let app_config = AppConfig {
-        search_index_dir: temp_dir.path().join("search-index"),
         thumbnail_cache_dir: temp_dir.path().join("thumbnails"),
         rendering_gpu_preference: RenderingGpuPreference::DisplayGpu,
     };
@@ -176,7 +153,6 @@ fn user_preferences_round_trip_through_sqlite() {
     let state_database_path = temp_dir.path().join("state.sqlite");
     let store = TaskQueueStore::new(&state_database_path).expect("create state store");
     let app_config = AppConfig {
-        search_index_dir: PathBuf::from("/var/lib/file-manager/search"),
         thumbnail_cache_dir: PathBuf::from("/var/cache/file-manager/thumbs"),
         rendering_gpu_preference: RenderingGpuPreference::HighPerformanceGpu,
     };
@@ -226,10 +202,6 @@ fn user_preferences_round_trip_through_sqlite() {
     config.list_directory_size_display_mode = ListDirectorySizeDisplayMode::RecursiveTotalSize;
     config.terminal_emulator = TerminalEmulator::Ghostty;
     config.file_operation_verification = FileOperationVerification::Strong;
-    config.search_mode = SearchBackendMode::Indexed;
-    config.search_mode_prompt = SearchModePromptStatus::Completed;
-    config.search_index_media_scope = MediaMetadataScope::Images;
-    config.search_index_directory_error_policy = DirectoryErrorPolicy::Abort;
     config.network_list_thumbnail_downloads_enabled = true;
     config.max_preview_file_bytes = 8 * 1024 * 1024;
     let mut shortcut_table = toml::Table::new();
@@ -247,7 +219,6 @@ fn user_preferences_round_trip_through_sqlite() {
         None,
     );
 
-    assert_eq!(loaded.search_index_dir, app_config.search_index_dir);
     assert_eq!(loaded.thumbnail_cache_dir, app_config.thumbnail_cache_dir);
     assert_eq!(
         loaded.rendering_gpu_preference,
@@ -296,13 +267,6 @@ fn user_preferences_round_trip_through_sqlite() {
     assert_eq!(
         loaded.file_operation_verification,
         FileOperationVerification::Strong
-    );
-    assert_eq!(loaded.search_mode, SearchBackendMode::Indexed);
-    assert_eq!(loaded.search_mode_prompt, SearchModePromptStatus::Completed);
-    assert_eq!(loaded.search_index_media_scope, MediaMetadataScope::Images);
-    assert_eq!(
-        loaded.search_index_directory_error_policy,
-        DirectoryErrorPolicy::Abort
     );
     assert!(loaded.network_list_thumbnail_downloads_enabled);
     assert_eq!(loaded.max_preview_file_bytes, 8 * 1024 * 1024);
@@ -445,7 +409,6 @@ fn migrates_legacy_toml_preferences_to_sqlite_once() {
     fs::write(
         config_dir.join(CONFIG_FILE_NAME),
         r#"
-search_index_dir = "/tmp/search-index"
 thumbnail_cache_dir = "/tmp/thumbnails"
 rendering_backend = "gpu"
 show_hidden_files = true
@@ -509,8 +472,6 @@ fn invalid_legacy_values_fall_back_to_defaults() {
 show_hidden_files = "maybe"
 network_list_thumbnail_downloads_enabled = "maybe"
 max_preview_file_bytes = 0
-search_mode = "catalog"
-search_mode_prompt = "later"
 sidebar_width = "wide"
 terminal_emulator = "missing"
 rendering_backend = "metal"
@@ -532,8 +493,6 @@ save_view_state = "maybe"
         parsed.max_preview_file_bytes,
         default.max_preview_file_bytes
     );
-    assert_eq!(parsed.search_mode, default.search_mode);
-    assert_eq!(parsed.search_mode_prompt, default.search_mode_prompt);
     assert_eq!(parsed.sidebar_width, default.sidebar_width);
     assert_eq!(parsed.terminal_emulator, default.terminal_emulator);
     assert_eq!(
@@ -561,11 +520,9 @@ save_view_state = "maybe"
 }
 
 #[test]
-fn default_user_config_keeps_expected_search_and_preview_defaults() {
+fn default_user_config_keeps_expected_preview_defaults() {
     let config = default_user_config();
 
-    assert_eq!(config.search_mode, SearchBackendMode::Simple);
-    assert_eq!(config.search_mode_prompt, SearchModePromptStatus::Pending);
     assert!(!config.network_list_thumbnail_downloads_enabled);
     assert_eq!(
         config.max_preview_file_bytes,
@@ -576,13 +533,6 @@ fn default_user_config_keeps_expected_search_and_preview_defaults() {
     assert_eq!(
         config.list_directory_size_display_mode,
         ListDirectorySizeDisplayMode::ItemCount
-    );
-    assert_eq!(
-        config.search_index_exclude_patterns,
-        file_index::default_search_index_exclude_patterns()
-            .iter()
-            .map(|pattern| (*pattern).to_owned())
-            .collect::<Vec<_>>()
     );
 }
 

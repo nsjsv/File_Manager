@@ -10,7 +10,7 @@ pub enum FileKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EntryMetadata {
     pub len: u64,
     pub modified: Option<SystemTime>,
@@ -20,21 +20,6 @@ pub struct EntryMetadata {
     pub owner_name: Option<String>,
     pub group_name: Option<String>,
     pub permissions_mode: Option<u32>,
-}
-
-impl Default for EntryMetadata {
-    fn default() -> Self {
-        Self {
-            len: 0,
-            modified: None,
-            accessed: None,
-            created: None,
-            readonly: false,
-            owner_name: None,
-            group_name: None,
-            permissions_mode: None,
-        }
-    }
 }
 
 #[cfg(test)]

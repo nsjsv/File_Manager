@@ -27,10 +27,6 @@ mod properties;
 mod rendering_settings;
 mod runtime;
 mod scrollbar;
-mod search;
-mod search_backend_mode;
-pub(crate) mod search_index_settings;
-mod search_messages;
 mod selection;
 mod session_persistence;
 mod session_restore;
@@ -40,7 +36,6 @@ mod sidebar_devices;
 mod sidebar_resize;
 pub(crate) mod smooth_scroll;
 mod startup;
-mod startup_index_setup;
 mod startup_settings;
 mod tabs;
 mod text_input_shortcuts;
@@ -93,10 +88,9 @@ use crate::model::{
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
     PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SearchIndexRuntime, SearchModePromptState, SearchState,
-    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
-    SidebarLocation, StartupIndexSetupState, TabDragState, TextPreviewDocument,
-    TransferConflictState, VideoPreviewPlayback,
+    PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
+    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -108,8 +102,7 @@ use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
 use crate::view::{
-    view_browser, view_preview_window, view_properties_window, view_search_window,
-    view_settings_window,
+    view_browser, view_preview_window, view_properties_window, view_settings_window,
 };
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
@@ -119,6 +112,7 @@ const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) struct FileBrowser {
+    pub(crate) home_dir: PathBuf,
     pub(crate) current_dir: PathBuf,
     pub(crate) is_trash_view: bool,
     pub(crate) entries: Vec<DirectoryEntry>,
@@ -131,7 +125,6 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_sidebar_device: Option<StorageDeviceId>,
     pub(crate) hovered_network_connection: Option<NetworkConnectionId>,
     cursor_paste_directory: Option<PathBuf>,
-    cursor_search_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
     network_preview_download_cancel: Option<tokio_util::sync::CancellationToken>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
@@ -172,15 +165,10 @@ pub(crate) struct FileBrowser {
     pub(crate) pending_operation: Option<PendingOperation>,
     pub(crate) transfer_conflict: Option<TransferConflictState>,
     pub(crate) destructive_action_confirmation: Option<DestructiveActionConfirmation>,
-    pub(crate) search: Option<SearchState>,
-    pub(crate) search_mode_prompt: Option<SearchModePromptState>,
-    pub(crate) startup_index_setup: Option<StartupIndexSetupState>,
-    search_window: Option<window::Id>,
     settings_window: Option<window::Id>,
     properties_window: Option<window::Id>,
     pub(crate) properties: Option<FilePropertiesState>,
     properties_load_generation: u64,
-    pub(crate) search_index: SearchIndexRuntime,
     pub(crate) tabs: Vec<BrowserTab>,
     pub(crate) active_tab_id: usize,
     tab_bar_reveal: TabBarReveal,
@@ -243,7 +231,6 @@ pub(crate) struct FileBrowser {
     last_browser_session_save: Option<std::time::Instant>,
     scrollbar: ScrollbarState,
     smooth_scroll: MosScrollState,
-    pending_search_reveal: Option<PathBuf>,
     back_stack: Vec<PathBuf>,
     forward_stack: Vec<PathBuf>,
     next_tab_id: usize,
@@ -339,6 +326,7 @@ impl FileBrowser {
             is_loading: true,
         };
         let mut browser = Self {
+            home_dir: placeholder_dir.clone(),
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
             entries: Vec::new(),
@@ -351,7 +339,6 @@ impl FileBrowser {
             hovered_sidebar_device: None,
             hovered_network_connection: None,
             cursor_paste_directory: None,
-            cursor_search_directory: None,
             preview: None,
             network_preview_download_cancel: None,
             text_preview_document: None,
@@ -392,15 +379,10 @@ impl FileBrowser {
             pending_operation: None,
             transfer_conflict: None,
             destructive_action_confirmation: None,
-            search: None,
-            search_mode_prompt: None,
-            startup_index_setup: None,
-            search_window: None,
             settings_window: None,
             properties_window: None,
             properties: None,
             properties_load_generation: 0,
-            search_index: SearchIndexRuntime::new(PathBuf::new()),
             tabs: vec![initial_tab],
             active_tab_id: 0,
             tab_bar_reveal: TabBarReveal::default(),
@@ -470,7 +452,6 @@ impl FileBrowser {
             last_browser_session_save: None,
             scrollbar: ScrollbarState::default(),
             smooth_scroll: MosScrollState::default(),
-            pending_search_reveal: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
             next_tab_id: 1,
@@ -534,13 +515,6 @@ impl FileBrowser {
             );
         }
 
-        if self.startup_index_tree_animation_is_active() {
-            subscriptions.push(
-                time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
-                    .map(|_| Message::StartupIndexTreeAnimationTick),
-            );
-        }
-
         if self.scrollbar_animation_is_active()
             || self.smooth_scroll_animation_is_active()
             || self.tab_bar_reveal_animation_is_active()
@@ -582,12 +556,7 @@ impl FileBrowser {
     }
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
-        if self.search_window == Some(window) {
-            view_search_window(
-                self.search.as_ref(),
-                self.scrollbar_visibility_for(&ScrollbarRegion::SearchResults),
-            )
-        } else if self.settings_window == Some(window) {
+        if self.settings_window == Some(window) {
             view_settings_window(self)
         } else if self.properties_window == Some(window) {
             view_properties_window(

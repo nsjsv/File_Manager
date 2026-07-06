@@ -12,7 +12,6 @@ use file_core::{
     FileOperationControls, FileOperationVerification, FileTransferOptions,
     TransferConflictStrategy, TrashRestoreEntry,
 };
-use file_index::{BuildSelectedPathsRequest, FileSearchIndexProgress, IndexServiceEvent};
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::stream::BoxStream;
@@ -27,7 +26,6 @@ use crate::operation_queue::{
 };
 
 use super::batch_rename_operation::run_queued_batch_rename;
-use super::search_index_daemon;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
 const COPY_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
@@ -167,23 +165,6 @@ async fn run_queued_file_operation(
         QueuedFileOperation::ExtractArchive { request } => {
             run_queued_extract_archive(request, controls, task_id, output).await
         }
-        QueuedFileOperation::BuildSearchIndex {
-            profile_id,
-            root,
-            index_base_dir,
-            selected_paths,
-        } => {
-            run_queued_search_index(
-                profile_id,
-                root,
-                index_base_dir,
-                selected_paths,
-                controls,
-                task_id,
-                output,
-            )
-            .await
-        }
     }
 }
 
@@ -268,68 +249,6 @@ async fn run_queued_create_archive(
                 )
                 .await;
                 return Ok(FileOperationOutcome::NoHistory);
-            }
-        }
-    }
-}
-
-async fn run_queued_search_index(
-    profile_id: String,
-    root: PathBuf,
-    index_base_dir: PathBuf,
-    selected_paths: Vec<PathBuf>,
-    mut controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-) -> Result<FileOperationOutcome, String> {
-    send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
-    let cancel = controls.cancellation_token();
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let expected_index_base_dir = index_base_dir.clone();
-    let mut build = Box::pin(search_index_daemon::build_selected_paths_with_progress(
-        index_base_dir,
-        BuildSelectedPathsRequest {
-            profile_id,
-            root,
-            selected_paths,
-        },
-        cancel,
-        move |progress| {
-            let _ = progress_sender.send(progress);
-        },
-    ));
-    let mut progress_open = true;
-
-    loop {
-        tokio::select! {
-            progress = progress_receiver.recv(), if progress_open => {
-                match progress {
-                    Some(progress) => send_search_index_progress(output, task_id, progress).await,
-                    None => progress_open = false,
-                }
-            }
-            outcome = &mut build => {
-                let event = outcome.map_err(|error| error.to_string())?;
-                let IndexServiceEvent::RebuildFinished(outcome) = event else {
-                    return Err(format!("unexpected search index event: {event:?}"));
-                };
-                let outcome =
-                    super::ensure_search_index_outcome_matches_root(&expected_index_base_dir, outcome)?;
-                send_file_operation_progress(
-                    output,
-                    task_id,
-                    FileOperationProgressUpdate::Items {
-                        completed: 1,
-                        total: 1,
-                    },
-                )
-                .await;
-                return Ok(FileOperationOutcome::SearchIndex { outcome });
             }
         }
     }
@@ -725,30 +644,6 @@ async fn send_copy_progress(
         },
     )
     .await;
-}
-
-async fn send_search_index_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: FileSearchIndexProgress,
-) {
-    match progress {
-        FileSearchIndexProgress::IndexedPaths {
-            completed_paths,
-            total_paths,
-            indexed_count: _,
-        } => {
-            send_file_operation_progress(
-                output,
-                task_id,
-                FileOperationProgressUpdate::SearchIndexItems {
-                    completed: completed_paths,
-                    total: total_paths,
-                },
-            )
-            .await;
-        }
-    }
 }
 
 async fn send_archive_progress(

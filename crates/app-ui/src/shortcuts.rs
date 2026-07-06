@@ -17,7 +17,6 @@ pub(crate) enum ShortcutAction {
     NavigateForward,
     NavigateUp,
     MoveSelection(FileSelectionDirection),
-    Search,
     FileProperties,
     Refresh,
     Escape,
@@ -35,8 +34,7 @@ impl ShortcutAction {
     pub(crate) fn bypasses_captured_event(self) -> bool {
         matches!(
             self,
-            Self::Search
-                | Self::Refresh
+            Self::Refresh
                 | Self::Escape
                 | Self::FocusPathInput
                 | Self::NavigateBack
@@ -63,8 +61,6 @@ pub(crate) enum ShortcutBindingId {
     MoveSelectionDown,
     MoveSelectionLeft,
     MoveSelectionRight,
-    Search,
-    SearchAlternate,
     FileProperties,
     Refresh,
     Escape,
@@ -81,7 +77,7 @@ pub(crate) enum ShortcutBindingId {
     Redo,
 }
 
-const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 26] = [
+const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 24] = [
     ShortcutBindingId::OpenSelected,
     ShortcutBindingId::RenameSelected,
     ShortcutBindingId::FocusPathInput,
@@ -92,8 +88,6 @@ const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 26] = [
     ShortcutBindingId::MoveSelectionDown,
     ShortcutBindingId::MoveSelectionLeft,
     ShortcutBindingId::MoveSelectionRight,
-    ShortcutBindingId::Search,
-    ShortcutBindingId::SearchAlternate,
     ShortcutBindingId::FileProperties,
     ShortcutBindingId::Refresh,
     ShortcutBindingId::Escape,
@@ -129,7 +123,6 @@ impl ShortcutBindingId {
             Self::MoveSelectionRight => {
                 ShortcutAction::MoveSelection(FileSelectionDirection::Right)
             }
-            Self::Search | Self::SearchAlternate => ShortcutAction::Search,
             Self::FileProperties => ShortcutAction::FileProperties,
             Self::Refresh => ShortcutAction::Refresh,
             Self::Escape => ShortcutAction::Escape,
@@ -156,8 +149,6 @@ impl ShortcutBindingId {
             Self::MoveSelectionDown => "Select Down",
             Self::MoveSelectionLeft => "Select Parent Column",
             Self::MoveSelectionRight => "Select Child Column",
-            Self::Search => "Search",
-            Self::SearchAlternate => "Search Alternate",
             Self::FileProperties => "Properties",
             Self::Refresh => "Refresh",
             Self::Escape => "Dismiss",
@@ -187,8 +178,6 @@ impl ShortcutBindingId {
             Self::MoveSelectionDown => "move_selection_down",
             Self::MoveSelectionLeft => "move_selection_left",
             Self::MoveSelectionRight => "move_selection_right",
-            Self::Search => "search",
-            Self::SearchAlternate => "search_alternate",
             Self::FileProperties => "file_properties",
             Self::Refresh => "refresh",
             Self::Escape => "escape",
@@ -383,8 +372,6 @@ fn default_binding(id: ShortcutBindingId) -> KeyBinding {
         ShortcutBindingId::MoveSelectionDown => KeyBinding::named(ShortcutNamedKey::ArrowDown),
         ShortcutBindingId::MoveSelectionLeft => KeyBinding::named(ShortcutNamedKey::ArrowLeft),
         ShortcutBindingId::MoveSelectionRight => KeyBinding::named(ShortcutNamedKey::ArrowRight),
-        ShortcutBindingId::Search => KeyBinding::primary_character('F'),
-        ShortcutBindingId::SearchAlternate => KeyBinding::alt_named(ShortcutNamedKey::Space),
         ShortcutBindingId::FileProperties => KeyBinding::alt_named(ShortcutNamedKey::Enter),
         ShortcutBindingId::Refresh => KeyBinding::named(ShortcutNamedKey::Function(5)),
         ShortcutBindingId::Escape => KeyBinding::named(ShortcutNamedKey::Escape),

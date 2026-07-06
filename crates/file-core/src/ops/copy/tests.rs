@@ -63,7 +63,8 @@ async fn readonly_mismatch_is_skipped_only_when_permissions_were_not_preserved()
 
     fs::write(&source_path, b"same").await.unwrap();
     fs::write(&target, b"same").await.unwrap();
-    let mut source_permissions = fs::metadata(&source_path).await.unwrap().permissions();
+    let original_permissions = fs::metadata(&source_path).await.unwrap().permissions();
+    let mut source_permissions = original_permissions.clone();
     source_permissions.set_readonly(true);
     fs::set_permissions(&source_path, source_permissions.clone())
         .await
@@ -95,8 +96,7 @@ async fn readonly_mismatch_is_skipped_only_when_permissions_were_not_preserved()
     )
     .await
     .unwrap_err();
-    source_permissions.set_readonly(false);
-    fs::set_permissions(&source_path, source_permissions)
+    fs::set_permissions(&source_path, original_permissions)
         .await
         .unwrap();
 

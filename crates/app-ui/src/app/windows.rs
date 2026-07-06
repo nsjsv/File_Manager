@@ -26,10 +26,6 @@ const MIN_VIDEO_PREVIEW_WIDTH: f32 = 360.0;
 const MIN_VIDEO_PREVIEW_HEIGHT: f32 = 320.0;
 const VIDEO_PREVIEW_INITIAL_FIT_MAX_WIDTH: f32 = 1080.0;
 const VIDEO_PREVIEW_INITIAL_FIT_MAX_HEIGHT: f32 = 940.0;
-const DEFAULT_SEARCH_WIDTH: f32 = 680.0;
-const DEFAULT_SEARCH_HEIGHT: f32 = 460.0;
-const MIN_SEARCH_WIDTH: f32 = 520.0;
-const MIN_SEARCH_HEIGHT: f32 = 360.0;
 const DEFAULT_SETTINGS_WIDTH: f32 = 760.0;
 const DEFAULT_SETTINGS_HEIGHT: f32 = 560.0;
 const MIN_SETTINGS_WIDTH: f32 = 640.0;
@@ -41,7 +37,6 @@ const MIN_PROPERTIES_HEIGHT: f32 = 440.0;
 pub(super) const MAIN_WINDOW_INITIAL_WIDTH: f32 = 1180.0;
 pub(super) const MAIN_WINDOW_INITIAL_HEIGHT: f32 = 680.0;
 const MAIN_WINDOW_APP_ID: &str = "file-manager";
-const SEARCH_WINDOW_APP_ID: &str = "file-manager-search";
 const SETTINGS_WINDOW_APP_ID: &str = "file-manager-settings";
 const PROPERTIES_WINDOW_APP_ID: &str = "file-manager-properties";
 const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
@@ -55,17 +50,6 @@ pub(super) fn main_window_settings() -> window::Settings {
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
-    settings
-}
-
-fn search_window_settings() -> window::Settings {
-    let mut settings = window::Settings {
-        size: Size::new(DEFAULT_SEARCH_WIDTH, DEFAULT_SEARCH_HEIGHT),
-        min_size: Some(Size::new(MIN_SEARCH_WIDTH, MIN_SEARCH_HEIGHT)),
-        exit_on_close_request: false,
-        ..window::Settings::default()
-    };
-    settings.platform_specific.application_id = SEARCH_WINDOW_APP_ID.to_owned();
     settings
 }
 
@@ -231,9 +215,7 @@ fn preview_size_matches(actual: PreviewSize, expected: PreviewSize) -> bool {
 
 impl FileBrowser {
     pub(super) fn window_title(&self, window: window::Id) -> String {
-        if self.search_window == Some(window) {
-            crate::localization::translate_current("Search - File Manager")
-        } else if self.settings_window == Some(window) {
+        if self.settings_window == Some(window) {
             crate::localization::translate_current("Settings - File Manager")
         } else if self.properties_window == Some(window) {
             crate::localization::translate_current("Properties - File Manager")
@@ -242,29 +224,6 @@ impl FileBrowser {
         } else {
             crate::localization::translate_current("File Manager")
         }
-    }
-
-    pub(super) fn ensure_search_window(&mut self) -> Task<Message> {
-        if let Some(window) = self.search_window {
-            self.focused_window = window;
-            return window::gain_focus(window);
-        }
-
-        let (window, command) = window::open(search_window_settings());
-        self.search_window = Some(window);
-        self.focused_window = window;
-        command.discard()
-    }
-
-    pub(super) fn close_search_window(&mut self) -> Task<Message> {
-        self.clear_search_state();
-        let Some(window) = self.search_window.take() else {
-            return Task::none();
-        };
-        if self.focused_window == window {
-            self.focused_window = self.main_window;
-        }
-        window::close(window)
     }
 
     pub(super) fn open_settings(&mut self) -> Task<Message> {
@@ -282,9 +241,14 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         Task::batch([
             self.commit_rename_if_active(),
-            self.prepare_search_index_settings_if_selected(),
             self.ensure_settings_window(),
         ])
+    }
+
+    pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
+        self.shortcut_capture = None;
+        self.selected_settings_category = category;
+        Task::none()
     }
 
     pub(super) fn ensure_settings_window(&mut self) -> Task<Message> {
@@ -446,9 +410,6 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_focused_window_escape_pressed(&mut self) -> Task<Message> {
-        if self.search_window == Some(self.focused_window) {
-            return self.close_search_window();
-        }
         if self.settings_window == Some(self.focused_window) {
             return self.close_settings_window();
         }
@@ -468,12 +429,6 @@ impl FileBrowser {
         status: event::Status,
     ) -> Task<Message> {
         if self.settings_window == Some(window) {
-            if button == mouse::Button::Left
-                && status == event::Status::Ignored
-                && self.selected_settings_category == SettingsCategory::SearchIndex
-            {
-                return self.commit_search_index_path_rule_editor();
-            }
             return Task::none();
         }
 
@@ -579,9 +534,7 @@ impl FileBrowser {
             return self.close_all_windows();
         }
 
-        if self.search_window == Some(window_id) {
-            self.close_search_window()
-        } else if self.settings_window == Some(window_id) {
+        if self.settings_window == Some(window_id) {
             self.close_settings_window()
         } else if self.properties_window == Some(window_id) {
             self.close_properties_window()
@@ -595,17 +548,13 @@ impl FileBrowser {
     fn close_all_windows(&mut self) -> Task<Message> {
         self.is_shutting_down = true;
         let _ = self.operation_queue.cancel_all();
-        self.clear_search_state();
         self.clear_file_properties_state();
         self.archive_creation = None;
         self.archive_extraction = None;
         self.clear_preview();
         self.pending_preview_resize = None;
 
-        let mut auxiliary_close_commands = Vec::with_capacity(4);
-        if let Some(window) = self.search_window.take() {
-            auxiliary_close_commands.push(window::close(window));
-        }
+        let mut auxiliary_close_commands = Vec::with_capacity(3);
         if let Some(window) = self.settings_window.take() {
             auxiliary_close_commands.push(window::close(window));
         }
@@ -625,15 +574,6 @@ impl FileBrowser {
             self.flush_browser_session_save(),
             close_main_window_and_exit,
         ))
-    }
-
-    fn clear_search_state(&mut self) {
-        if let Some(search) = &mut self.search {
-            if let Some(cancel) = search.search_cancel.take() {
-                cancel.cancel();
-            }
-        }
-        self.search = None;
     }
 
     pub(super) fn handle_auxiliary_window_resized(

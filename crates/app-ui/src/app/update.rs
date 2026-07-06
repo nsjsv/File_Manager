@@ -335,11 +335,6 @@ impl FileBrowser {
             }
             Message::EntryHovered(pane_id, path) => {
                 if pane_id == self.active_pane_id() {
-                    self.cursor_search_directory = Some(
-                        path.parent()
-                            .map(|parent| parent.to_path_buf())
-                            .unwrap_or_else(|| self.current_dir.clone()),
-                    );
                     self.handle_entry_hovered(path)
                 } else if self.file_drag.is_some() {
                     self.handle_file_drag_entry_hovered_in_pane(pane_id, path)
@@ -358,7 +353,6 @@ impl FileBrowser {
             }
             Message::DropTargetHovered(pane_id, directory) => {
                 if pane_id == self.active_pane_id() {
-                    self.cursor_search_directory = Some(directory.clone());
                     self.handle_drop_target_hovered(directory)
                 } else if self.file_drag.is_some() {
                     self.handle_file_drag_drop_target_hovered_in_pane(pane_id, directory)
@@ -368,9 +362,6 @@ impl FileBrowser {
             }
             Message::DropTargetHoverCleared(pane_id, directory) => {
                 if pane_id == self.active_pane_id() {
-                    if self.cursor_search_directory.as_ref() == Some(&directory) {
-                        self.cursor_search_directory = None;
-                    }
                     self.handle_drop_target_hover_cleared(directory)
                 } else if self.file_drag.is_some() {
                     self.handle_file_drag_drop_target_hover_cleared_in_pane(pane_id, directory)
@@ -441,7 +432,6 @@ impl FileBrowser {
             Message::ColumnBrowserCursorExited(pane_id) => {
                 if pane_id == self.active_pane_id() {
                     self.is_cursor_over_column_browser = false;
-                    self.cursor_search_directory = None;
                     self.clear_cursor_paste_target()
                 } else {
                     Task::none()
@@ -527,76 +517,6 @@ impl FileBrowser {
             Message::BrowserSessionSaveDelayElapsed => {
                 self.maybe_flush_pending_browser_session_save()
             }
-            Message::SearchInputChanged(_)
-            | Message::SearchModeSelected(_)
-            | Message::SearchInputStabilized(_)
-            | Message::SearchFocusRequested
-            | Message::SearchMatchesLoaded(_, _)
-            | Message::SearchIndexBuilt(_, _)
-            | Message::SearchIndexStatusLoaded(_, _, _)
-            | Message::SearchIndexProfileLoaded(_)
-            | Message::SearchIndexProfileSaved(_, _)
-            | Message::SearchIndexProfileDeleted(_)
-            | Message::SearchIndexDaemonStatusLoaded(_)
-            | Message::SearchIndexSettingsSectionSelected(_)
-            | Message::SearchIndexErrorCopyRequested(_)
-            | Message::SearchIndexDaemonRestartRequested
-            | Message::SearchIndexDaemonRestarted(_)
-            | Message::SearchIndexStatusRefreshRequested
-            | Message::SearchIndexManualBuildRequested(_)
-            | Message::SearchIndexRemoveRequested(_)
-            | Message::SearchIndexProfileDeleteRequested
-            | Message::SearchIndexFailuresClearRequested(_)
-            | Message::SearchIndexPathRuleSelected(_)
-            | Message::SearchIndexIndexedPathAddRequested
-            | Message::SearchIndexExcludeRuleAddRequested
-            | Message::SearchIndexPathRuleEditRequested(_)
-            | Message::SearchIndexPathRuleRemoveRequested(_)
-            | Message::SearchIndexPathRuleInputChanged(_)
-            | Message::SearchIndexPathRuleInputStabilized(_)
-            | Message::SearchIndexPathRuleSuggestionsLoaded(_, _)
-            | Message::SearchIndexPathRuleSuggestionSelected(_)
-            | Message::SearchIndexPathRuleEditorCommitted
-            | Message::SearchIndexPathRuleEditCanceled
-            | Message::SearchIndexPathRuleAdded
-            | Message::SearchIndexPathRuleUpdated
-            | Message::SearchIndexDirectoryErrorPolicySelected(_)
-            | Message::SearchIndexMediaScopeSelected(_)
-            | Message::SearchBackendModeSelected(_)
-            | Message::SearchModePromptModeSelected(_)
-            | Message::SearchModePromptNextPressed
-            | Message::SearchMatchSelected(_)
-            | Message::SearchActivated => self.handle_search_message(message),
-            Message::StartupIndexTargetModeSelected(target_mode) => {
-                self.select_startup_index_target_mode(target_mode)
-            }
-            Message::StartupIndexHiddenContentVisibilityToggled => {
-                self.toggle_startup_index_hidden_content_visibility()
-            }
-            Message::StartupIndexCapabilitySelected(capability) => {
-                self.select_startup_index_capability(capability)
-            }
-            Message::StartupIndexEntryPressed(entry_id) => self.press_startup_index_entry(entry_id),
-            Message::StartupIndexEntryEntered(entry_id) => {
-                self.enter_startup_index_entry_during_selection_drag(entry_id)
-            }
-            Message::StartupIndexEntrySelectionDragFinished => {
-                self.finish_startup_index_entry_selection_drag()
-            }
-            Message::StartupIndexDirectoryToggled(entry_id) => {
-                self.toggle_startup_index_directory(entry_id)
-            }
-            Message::StartupIndexTreeAnimationTick => self.advance_startup_index_tree_animation(),
-            Message::StartupIndexDirectoryChildrenLoaded(
-                request_generation,
-                parent_path,
-                children_outcome,
-            ) => self.accept_startup_index_directory_children(
-                request_generation,
-                parent_path,
-                children_outcome,
-            ),
-            Message::StartupIndexAccepted => self.accept_startup_index_setup(),
             Message::ExpandedDirectoryLoadBatch(request, batch) => {
                 self.accept_expanded_directory_batch(request, batch)
             }
@@ -659,17 +579,11 @@ impl FileBrowser {
                 self.advance_sidebar_bookmark_motion(),
             ]),
             Message::SidebarScrolled => self.show_scrollbars_temporarily(Region::Sidebar),
-            Message::SearchResultsScrolled => {
-                self.show_scrollbars_temporarily(Region::SearchResults)
-            }
             Message::SettingsScrolled => self.show_scrollbars_temporarily(Region::Settings),
             Message::ShortcutSettingsScrolled => {
                 self.show_scrollbars_temporarily(Region::ShortcutSettings)
             }
             Message::PropertiesScrolled => self.show_scrollbars_temporarily(Region::Properties),
-            Message::StartupIndexSetupScrolled => {
-                self.show_scrollbars_temporarily(Region::StartupIndexSetup)
-            }
             Message::OpenWithApplicationsScrolled => {
                 self.show_scrollbars_temporarily(Region::OpenWithApplications)
             }

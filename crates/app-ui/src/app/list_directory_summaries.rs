@@ -248,9 +248,7 @@ impl FileBrowser {
                     &request.destination,
                 );
             }
-            QueuedFileOperation::DeleteTrashEntries { .. }
-            | QueuedFileOperation::EmptyTrash
-            | QueuedFileOperation::BuildSearchIndex { .. } => {}
+            QueuedFileOperation::DeleteTrashEntries { .. } | QueuedFileOperation::EmptyTrash => {}
         }
     }
 

@@ -245,11 +245,6 @@ fn user_preferences_roundtrip_replace() {
     let (store, root) = test_store();
     assert_eq!(store.read_user_preferences().unwrap(), None);
     let first = StoredUserPreferences {
-        search_index_exclude_patterns: vec!["target".to_owned(), ".git".to_owned()],
-        search_index_media_scope: "images".to_owned(),
-        search_index_directory_error_policy: "abort".to_owned(),
-        search_mode: "indexed".to_owned(),
-        search_mode_prompt: "completed".to_owned(),
         network_list_thumbnail_downloads_enabled: true,
         max_preview_file_bytes: 8 * 1024 * 1024,
         show_hidden_files: true,
@@ -366,6 +361,55 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.list_sort_direction, "ascending");
     assert_eq!(preferences.list_directory_size_display_mode, "item_count");
     assert_eq!(preferences.language_setting, "system");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn legacy_user_preferences_ignore_removed_search_fields() {
+    let (store, root) = test_store();
+    let payload_json = serde_json::json!({
+        "search_index_exclude_patterns": ["target/"],
+        "search_index_media_scope": "images",
+        "search_index_directory_error_policy": "abort",
+        "search_mode": "indexed",
+        "search_mode_prompt": "completed",
+        "network_list_thumbnail_downloads_enabled": true,
+        "max_preview_file_bytes": 4194304,
+        "show_hidden_files": true,
+        "language_setting": "chinese",
+        "sidebar_width": 240.0,
+        "sidebar_favorites": null,
+        "network_connections": [],
+        "terminal_emulator": "automatic",
+        "file_operation_verification": "basic_metadata",
+        "browser_view_mode": "columns",
+        "startup_location": "home",
+        "startup_custom_directory": {"encoding": "utf8", "value": ""},
+        "save_view_state": false,
+        "shortcuts": [],
+        "list_view_columns": StoredUserPreferences::default().list_view_columns,
+        "list_sort_field": "name",
+        "list_sort_direction": "ascending",
+        "list_directory_size_display_mode": "item_count"
+    })
+    .to_string();
+    let connection = Connection::open(store.db_path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO user_preferences (preference_key, payload_json, updated_at_ms)
+             VALUES (?1, ?2, ?3)",
+            params![user_preferences::USER_PREFERENCES_KEY, payload_json, 1_i64],
+        )
+        .unwrap();
+    drop(connection);
+
+    let preferences = store
+        .read_user_preferences()
+        .unwrap()
+        .expect("preferences load");
+
+    assert!(preferences.network_list_thumbnail_downloads_enabled);
+    assert_eq!(preferences.language_setting, "chinese");
     let _ = fs::remove_dir_all(root);
 }
 

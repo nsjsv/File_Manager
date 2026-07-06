@@ -7,11 +7,6 @@ use desktop_linux::{
     StorageDeviceId, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
-pub(crate) use file_index::SearchMode;
-use file_index::{
-    DirectoryErrorPolicy, FileSearchIndexOutcome, FileSearchIndexStatus, FileSearchOutcome,
-    IndexProfile, MediaMetadataScope,
-};
 use file_operation_store::{StoredTask, TaskQueueStore};
 use iced::keyboard;
 use iced::widget::text_editor;
@@ -21,9 +16,7 @@ use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
-use crate::config::{
-    RenderingGpuPreference, SearchBackendMode, UiLanguage, UiLanguageSetting, UserConfig,
-};
+use crate::config::{RenderingGpuPreference, UiLanguage, UiLanguageSetting, UserConfig};
 use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
@@ -35,10 +28,6 @@ use crate::startup_rendering::StartupRenderingEnvironmentStatus;
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
 use file_core::FileOperationVerification;
 
-pub(crate) use crate::startup_index_tree::{
-    StartupIndexCapability, StartupIndexDirectoryChildren, StartupIndexEntrySelection,
-    StartupIndexRootSeed, StartupIndexSetupState, StartupIndexTargetMode, StartupIndexTreeEntry,
-};
 pub(crate) use crate::text_preview::{
     MarkdownPreviewMode, TextPreviewChunk, TextPreviewDocument, TextPreviewFormat,
     TextPreviewLineLimitNotice,
@@ -84,12 +73,6 @@ pub(crate) use preview::{
     PreviewWindowProfile, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
     VideoPreviewSeekCompletion,
 };
-mod search;
-pub(crate) use search::{
-    SearchIndexDaemonStatus, SearchIndexErrorCopyTarget, SearchIndexPathRuleEditMode,
-    SearchIndexPathRuleKind, SearchIndexPathRuleSelection, SearchIndexProfileSaveReason,
-    SearchIndexRuntime, SearchIndexSettingsSection, SearchRequest, SearchScope, SearchState,
-};
 mod settings;
 pub(crate) use settings::SettingsCategory;
 mod session;
@@ -104,11 +87,6 @@ pub(crate) use drag::{
     SidebarBookmarkDropSlot, TabDragMode, TabDragState, TabSplitTarget,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SearchModePromptState {
-    pub(crate) selected_mode: Option<SearchBackendMode>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ScrollbarRegion {
     Sidebar,
@@ -118,11 +96,9 @@ pub(crate) enum ScrollbarRegion {
         pane_id: BrowserPaneId,
         directory: PathBuf,
     },
-    SearchResults,
     Settings,
     ShortcutSettings,
     Properties,
-    StartupIndexSetup,
     OpenWithApplications,
     OperationQueue,
     BatchRenamePreview,
@@ -323,56 +299,6 @@ pub(crate) enum Message {
     UserPreferencesSaved(Result<(), String>),
     AppConfigSaved(Result<(), String>),
     ColumnWidthOverrideSaved(Result<(), String>),
-    SearchInputChanged(String),
-    SearchModeSelected(SearchMode),
-    SearchInputStabilized(SearchRequest),
-    SearchFocusRequested,
-    SearchMatchesLoaded(SearchRequest, Result<FileSearchOutcome, String>),
-    SearchIndexBuilt(PathBuf, Result<FileSearchIndexOutcome, String>),
-    SearchIndexStatusLoaded(u64, PathBuf, Result<FileSearchIndexStatus, String>),
-    SearchIndexProfileLoaded(Result<Option<IndexProfile>, String>),
-    SearchIndexProfileSaved(SearchIndexProfileSaveReason, Result<IndexProfile, String>),
-    SearchIndexProfileDeleted(Result<String, String>),
-    SearchIndexDaemonStatusLoaded(Result<SearchIndexDaemonStatus, String>),
-    SearchIndexDaemonRestartRequested,
-    SearchIndexDaemonRestarted(Result<SearchIndexDaemonStatus, String>),
-    SearchIndexSettingsSectionSelected(SearchIndexSettingsSection),
-    SearchIndexErrorCopyRequested(SearchIndexErrorCopyTarget),
-    SearchIndexStatusRefreshRequested,
-    SearchIndexManualBuildRequested(PathBuf),
-    SearchIndexRemoveRequested(PathBuf),
-    SearchIndexProfileDeleteRequested,
-    SearchIndexFailuresClearRequested(PathBuf),
-    SearchIndexPathRuleSelected(SearchIndexPathRuleSelection),
-    SearchIndexIndexedPathAddRequested,
-    SearchIndexExcludeRuleAddRequested,
-    SearchIndexPathRuleEditRequested(SearchIndexPathRuleSelection),
-    SearchIndexPathRuleRemoveRequested(SearchIndexPathRuleSelection),
-    SearchIndexPathRuleInputChanged(String),
-    SearchIndexPathRuleInputStabilized(PathSuggestionRequest),
-    SearchIndexPathRuleSuggestionsLoaded(PathSuggestionRequest, Vec<PathBuf>),
-    SearchIndexPathRuleSuggestionSelected(PathBuf),
-    SearchIndexPathRuleEditorCommitted,
-    SearchIndexPathRuleEditCanceled,
-    SearchIndexPathRuleAdded,
-    SearchIndexPathRuleUpdated,
-    SearchIndexDirectoryErrorPolicySelected(DirectoryErrorPolicy),
-    SearchIndexMediaScopeSelected(MediaMetadataScope),
-    SearchBackendModeSelected(SearchBackendMode),
-    SearchModePromptModeSelected(SearchBackendMode),
-    SearchModePromptNextPressed,
-    SearchMatchSelected(PathBuf),
-    SearchActivated,
-    StartupIndexTargetModeSelected(StartupIndexTargetMode),
-    StartupIndexHiddenContentVisibilityToggled,
-    StartupIndexCapabilitySelected(StartupIndexCapability),
-    StartupIndexEntryPressed(usize),
-    StartupIndexEntryEntered(usize),
-    StartupIndexEntrySelectionDragFinished,
-    StartupIndexDirectoryToggled(usize),
-    StartupIndexTreeAnimationTick,
-    StartupIndexDirectoryChildrenLoaded(u64, PathBuf, Result<Vec<DirectoryEntry>, String>),
-    StartupIndexAccepted,
     ExpandedDirectoryLoadBatch(ExpandedDirectoryLoadRequest, DirectoryScanBatch),
     ExpandedDirectoryLoaded(ExpandedDirectoryLoadRequest, Result<DirectoryScan, String>),
     ObservedDirectoryChanged(PathBuf),
@@ -398,11 +324,9 @@ pub(crate) enum Message {
     ScrollbarAutoHideElapsed(u64),
     WindowChromeAnimationTick,
     SidebarScrolled,
-    SearchResultsScrolled,
     SettingsScrolled,
     ShortcutSettingsScrolled,
     PropertiesScrolled,
-    StartupIndexSetupScrolled,
     OpenWithApplicationsScrolled,
     OperationQueueScrolled,
     BatchRenamePreviewScrolled,

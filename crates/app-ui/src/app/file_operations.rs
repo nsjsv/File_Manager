@@ -15,21 +15,6 @@ impl FileBrowser {
     ) -> Task<Message> {
         let completed_operation = self.operation_queue.operation(task_id).cloned();
         let completed_successfully = result.is_ok();
-        let search_index_root = self
-            .operation_queue
-            .operation(task_id)
-            .and_then(|operation| {
-                if let QueuedFileOperation::BuildSearchIndex { root, .. } = operation {
-                    Some(root.clone())
-                } else {
-                    None
-                }
-            });
-        let search_index_result = match &result {
-            Ok(FileOperationOutcome::SearchIndex { outcome }) => Some(Ok(outcome.clone())),
-            Err(error) if search_index_root.is_some() => Some(Err(error.clone())),
-            _ => None,
-        };
         let is_history_replay = self.operation_history.is_replaying(task_id);
         let created_path = (completed_successfully && !is_history_replay)
             .then(|| {
@@ -55,10 +40,6 @@ impl FileBrowser {
         let (finished, storage_error) = self.operation_queue.finish(task_id, queue_result);
         if let Some(error) = storage_error {
             self.show_global_error(error);
-        }
-
-        if let (Some(root), Some(index_result)) = (search_index_root, search_index_result) {
-            return self.accept_search_index(root, index_result);
         }
 
         if finished {

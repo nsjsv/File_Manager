@@ -107,26 +107,19 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn move_search_or_path_suggestion_selection(
+    pub(super) fn move_path_suggestion_selection_from_keyboard(
         &mut self,
         direction: PathSuggestionDirection,
     ) -> Task<Message> {
-        if self.search.is_some() {
-            return self.move_search_selection(direction);
-        }
         self.move_path_suggestion_selection(direction);
         Task::none()
     }
 
-    pub(super) fn complete_search_scope_or_path_suggestion(
+    pub(super) fn complete_path_suggestion_from_keyboard(
         &mut self,
         direction: PathSuggestionDirection,
     ) -> Task<Message> {
-        if self.search.is_some() {
-            self.toggle_search_scope()
-        } else {
-            self.complete_path_suggestion(direction)
-        }
+        self.complete_path_suggestion(direction)
     }
 
     pub(super) fn submit_path_input(&mut self) -> Task<Message> {

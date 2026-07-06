@@ -196,7 +196,6 @@ impl FileBrowser {
         self.path_suggestion_selection = None;
         self.entries = scan.entries;
         self.directory_loading_placeholder_entries.clear();
-        self.reveal_pending_search_match();
         self.is_loading = false;
         self.directory_load_cancel = None;
         self.clear_global_error();
@@ -676,7 +675,6 @@ impl FileBrowser {
         self.hovered_entry = None;
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
-        self.cursor_search_directory = None;
         self.last_activation_click = None;
         self.column_return_targets.clear();
         self.pending_keyboard_column_focus = None;
@@ -695,7 +693,6 @@ impl FileBrowser {
         self.hovered_entry = None;
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
-        self.cursor_search_directory = None;
         self.last_activation_click = None;
         self.pending_keyboard_column_focus = None;
         self.clear_preview();

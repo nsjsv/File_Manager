@@ -74,24 +74,6 @@ pub(crate) fn preview_directory_children_command(
     )
 }
 
-pub(crate) fn startup_index_directory_children_command(
-    path: PathBuf,
-    request_generation: u64,
-    options: ScanOptions,
-) -> Task<Message> {
-    let parent_path = path.clone();
-    Task::perform(
-        load_directory_preview_children(path, options),
-        move |children_outcome| {
-            Message::StartupIndexDirectoryChildrenLoaded(
-                request_generation,
-                parent_path.clone(),
-                children_outcome,
-            )
-        },
-    )
-}
-
 pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     let image_path = path.clone();
     Task::perform(load_image_dimensions(path), move |dimensions| {

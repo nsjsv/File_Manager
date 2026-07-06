@@ -345,7 +345,6 @@ impl FileBrowser {
         };
         self.hovered_entry = None;
         self.cursor_paste_directory = None;
-        self.cursor_search_directory = None;
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.column_resize_drag = None;

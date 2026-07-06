@@ -48,22 +48,28 @@ impl FileBrowser {
         key: &keyboard::Key,
         modifiers: keyboard::Modifiers,
     ) -> Option<Task<Message>> {
-        if self.search.is_none() && self.path_suggestions.is_empty() {
+        if self.path_suggestions.is_empty() {
             return None;
         }
 
         match key.as_ref() {
             keyboard::Key::Named(key::Named::ArrowDown) if no_shortcut_modifiers(modifiers) => {
-                Some(self.move_search_or_path_suggestion_selection(PathSuggestionDirection::Next))
+                Some(
+                    self.move_path_suggestion_selection_from_keyboard(
+                        PathSuggestionDirection::Next,
+                    ),
+                )
             }
-            keyboard::Key::Named(key::Named::ArrowUp) if no_shortcut_modifiers(modifiers) => Some(
-                self.move_search_or_path_suggestion_selection(PathSuggestionDirection::Previous),
-            ),
-            keyboard::Key::Named(key::Named::Tab) if only_shift_modifier(modifiers) => Some(
-                self.complete_search_scope_or_path_suggestion(PathSuggestionDirection::Previous),
-            ),
+            keyboard::Key::Named(key::Named::ArrowUp) if no_shortcut_modifiers(modifiers) => {
+                Some(self.move_path_suggestion_selection_from_keyboard(
+                    PathSuggestionDirection::Previous,
+                ))
+            }
+            keyboard::Key::Named(key::Named::Tab) if only_shift_modifier(modifiers) => {
+                Some(self.complete_path_suggestion_from_keyboard(PathSuggestionDirection::Previous))
+            }
             keyboard::Key::Named(key::Named::Tab) if no_shortcut_modifiers(modifiers) => {
-                Some(self.complete_search_scope_or_path_suggestion(PathSuggestionDirection::Next))
+                Some(self.complete_path_suggestion_from_keyboard(PathSuggestionDirection::Next))
             }
             _ => None,
         }
@@ -81,7 +87,6 @@ impl FileBrowser {
             && self.properties_window != Some(self.focused_window)
             && self.preview_window != Some(self.focused_window)
             && self.renaming.is_none()
-            && self.search.is_none()
             && self.shortcut_capture.is_none()
             && !(self.operation_queue.is_panel_open()
                 && matches!(
@@ -105,8 +110,6 @@ impl FileBrowser {
                 Task::batch([self.commit_rename_if_active(), self.navigate_up()])
             }
             ShortcutAction::MoveSelection(direction) => self.move_file_selection(direction),
-            ShortcutAction::Search if self.is_trash_view => Task::none(),
-            ShortcutAction::Search => self.open_search(),
             ShortcutAction::FileProperties => self.open_selected_file_properties(),
             ShortcutAction::Refresh => {
                 Task::batch([self.commit_rename_if_active(), self.reload_visible_panes()])

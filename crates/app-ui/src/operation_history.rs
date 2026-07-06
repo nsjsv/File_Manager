@@ -5,7 +5,6 @@ use file_core::{
     BatchRenameItem, CompletedBatchRename, FileOperationVerification, TransferConflictStrategy,
     TrashRestoreEntry,
 };
-use file_index::FileSearchIndexOutcome;
 
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
@@ -44,9 +43,6 @@ pub(crate) enum FileOperationOutcome {
     },
     Move {
         transfers: Vec<CompletedTransfer>,
-    },
-    SearchIndex {
-        outcome: FileSearchIndexOutcome,
     },
 }
 
@@ -233,7 +229,6 @@ impl FileOperationHistoryItem {
                 transfers: transfers.clone(),
             }),
             FileOperationOutcome::Move { .. } => None,
-            FileOperationOutcome::SearchIndex { .. } => None,
         }
     }
 

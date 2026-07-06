@@ -3,24 +3,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator};
-use file_index::{DirectoryErrorPolicy, MediaMetadataScope};
 
 use super::startup;
 use super::{
     browser_view_mode_from_config_value, file_operation_verification_from_config_value,
-    normalize_max_preview_file_bytes, normalize_search_index_exclude_patterns,
-    normalize_sidebar_width, toml_string, SearchBackendMode, SearchModePromptStatus,
-    SidebarFavoriteConfig, UserConfig, CONFIG_FILE_NAME,
+    normalize_max_preview_file_bytes, normalize_sidebar_width, toml_string, SidebarFavoriteConfig,
+    UserConfig, CONFIG_FILE_NAME,
 };
 use crate::network_connections::SavedNetworkConnection;
 
-const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
-const SEARCH_INDEX_EXCLUDE_PATTERNS_KEY: &str = "search_index_exclude_patterns";
-const SEARCH_INDEX_MEDIA_SCOPE_KEY: &str = "search_index_media_scope";
-const SEARCH_INDEX_MEDIA_ENABLED_KEY: &str = "search_index_media_enabled";
-const SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY: &str = "search_index_directory_error_policy";
-const SEARCH_MODE_KEY: &str = "search_mode";
-const SEARCH_MODE_PROMPT_KEY: &str = "search_mode_prompt";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY: &str =
     "network_list_thumbnail_downloads_enabled";
@@ -60,41 +51,6 @@ pub(super) fn parse_toml_user_config(content: &str, default: UserConfig) -> User
     };
 
     let mut config = default;
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_DIR_KEY) {
-        config.search_index_dir = PathBuf::from(value);
-    }
-    if let Some(patterns) = toml_string_array(&document, SEARCH_INDEX_EXCLUDE_PATTERNS_KEY) {
-        config.search_index_exclude_patterns = normalize_search_index_exclude_patterns(patterns);
-    }
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_MEDIA_SCOPE_KEY) {
-        if let Some(scope) = MediaMetadataScope::from_config_value(value) {
-            config.search_index_media_scope = scope;
-        }
-    } else if let Some(value) = document
-        .get(SEARCH_INDEX_MEDIA_ENABLED_KEY)
-        .and_then(toml::Value::as_bool)
-    {
-        config.search_index_media_scope = if value {
-            MediaMetadataScope::All
-        } else {
-            MediaMetadataScope::Off
-        };
-    }
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_DIRECTORY_ERROR_POLICY_KEY) {
-        if let Some(policy) = DirectoryErrorPolicy::from_config_value(value) {
-            config.search_index_directory_error_policy = policy;
-        }
-    }
-    if let Some(value) = toml_string(&document, SEARCH_MODE_KEY) {
-        if let Some(search_mode) = SearchBackendMode::from_config_value(value) {
-            config.search_mode = search_mode;
-        }
-    }
-    if let Some(value) = toml_string(&document, SEARCH_MODE_PROMPT_KEY) {
-        if let Some(status) = SearchModePromptStatus::from_config_value(value) {
-            config.search_mode_prompt = status;
-        }
-    }
     if let Some(value) = toml_string(&document, THUMBNAIL_CACHE_DIR_KEY) {
         config.thumbnail_cache_dir = PathBuf::from(value);
     }
@@ -148,17 +104,6 @@ pub(super) fn parse_toml_user_config(content: &str, default: UserConfig) -> User
         config.shortcuts.apply_toml_table(table);
     }
     config
-}
-
-fn toml_string_array(document: &toml::Table, key: &str) -> Option<Vec<String>> {
-    let values = document.get(key)?.as_array()?;
-    Some(
-        values
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect(),
-    )
 }
 
 fn parse_toml_sidebar_favorites(document: &toml::Table) -> Option<Vec<SidebarFavoriteConfig>> {

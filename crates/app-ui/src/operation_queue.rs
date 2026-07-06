@@ -19,7 +19,6 @@ pub(crate) const NEW_FILE_NAME: &str = "New File";
 
 const LOCAL_TASK_ID_START: u64 = 1 << 63;
 const ACTIVE_TRANSFER_PROGRESS_LIMIT: f32 = 0.999;
-const ACTIVE_SEARCH_INDEX_PROGRESS_LIMIT: f32 = 0.99;
 
 #[derive(Debug, Clone)]
 pub(crate) enum QueuedFileOperation {
@@ -67,12 +66,6 @@ pub(crate) enum QueuedFileOperation {
     ExtractArchive {
         request: ArchiveExtractionRequest,
     },
-    BuildSearchIndex {
-        profile_id: String,
-        root: PathBuf,
-        index_base_dir: PathBuf,
-        selected_paths: Vec<PathBuf>,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +101,6 @@ impl QueuedFileOperation {
             Self::Move { .. } => "Move",
             Self::CreateArchive { .. } => "Create Archive",
             Self::ExtractArchive { .. } => "Extract Archive",
-            Self::BuildSearchIndex { .. } => "Build Search Index",
         }
     }
 
@@ -123,9 +115,7 @@ impl QueuedFileOperation {
     pub(crate) fn supports_pause(&self) -> bool {
         !matches!(
             self,
-            Self::BuildSearchIndex { .. }
-                | Self::CreateArchive { .. }
-                | Self::ExtractArchive { .. }
+            Self::CreateArchive { .. } | Self::ExtractArchive { .. }
         )
     }
 
@@ -221,12 +211,6 @@ impl FileOperationProgress {
             FileOperationProgressUpdate::Items { completed, total } if total > 0 => {
                 Some(completed as f32 / total as f32)
             }
-            FileOperationProgressUpdate::SearchIndexItems { completed, total } if total > 0 => {
-                Some(
-                    (completed as f32 / total as f32)
-                        .clamp(0.0, ACTIVE_SEARCH_INDEX_PROGRESS_LIMIT),
-                )
-            }
             FileOperationProgressUpdate::Indeterminate => None,
             _ => None,
         };
@@ -248,10 +232,6 @@ pub(crate) enum FileOperationProgressUpdate {
         total_transfers: usize,
     },
     Items {
-        completed: usize,
-        total: usize,
-    },
-    SearchIndexItems {
         completed: usize,
         total: usize,
     },

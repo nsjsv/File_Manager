@@ -72,26 +72,6 @@ fn transfer_byte_progress_is_aggregated_by_transfer() {
 }
 
 #[test]
-fn search_index_progress_waits_for_completion_before_full_fraction() {
-    let mut progress = FileOperationProgress::pending();
-
-    progress.update(FileOperationProgressUpdate::SearchIndexItems {
-        completed: 1,
-        total: 1,
-    });
-    assert_eq!(
-        progress.fraction(),
-        Some(ACTIVE_SEARCH_INDEX_PROGRESS_LIMIT)
-    );
-
-    progress.update(FileOperationProgressUpdate::Items {
-        completed: 1,
-        total: 1,
-    });
-    assert_eq!(progress.fraction(), Some(1.0));
-}
-
-#[test]
 fn indeterminate_failed_task_does_not_display_as_complete() {
     let progress = FileOperationProgress::pending();
 

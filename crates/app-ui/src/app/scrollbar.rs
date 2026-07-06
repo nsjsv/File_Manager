@@ -194,7 +194,7 @@ mod tests {
     fn scrollbar_visibility_only_applies_to_active_region() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let active_region = ScrollbarRegion::Sidebar;
-        let inactive_region = ScrollbarRegion::SearchResults;
+        let inactive_region = ScrollbarRegion::Settings;
 
         drop(browser.show_scrollbars_temporarily(active_region.clone()));
 
@@ -209,7 +209,7 @@ mod tests {
     fn changing_scrollbar_region_moves_active_visibility() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let first_region = ScrollbarRegion::Sidebar;
-        let second_region = ScrollbarRegion::SearchResults;
+        let second_region = ScrollbarRegion::Settings;
 
         drop(browser.show_scrollbars_temporarily(first_region.clone()));
         drop(browser.show_scrollbars_temporarily(second_region.clone()));

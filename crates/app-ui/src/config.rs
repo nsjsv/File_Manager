@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::{FileOperationVerification, SortDirection, SortField};
-use file_index::{default_search_index_exclude_patterns, DirectoryErrorPolicy, MediaMetadataScope};
 
 use crate::model::{BrowserViewMode, ListDirectorySizeDisplayMode};
 use crate::network_connections::SavedNetworkConnection;
@@ -34,35 +33,6 @@ pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
 pub(crate) const PREVIEW_FILE_SIZE_UNIT_BYTES: u64 = 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PREVIEW_FILE_BYTES: u64 = 3 * 1024 * 1024;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchBackendMode {
-    Simple,
-    Indexed,
-}
-
-impl SearchBackendMode {
-    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
-        match value {
-            "simple" => Some(Self::Simple),
-            "indexed" => Some(Self::Indexed),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn config_value(self) -> &'static str {
-        match self {
-            Self::Simple => "simple",
-            Self::Indexed => "indexed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchModePromptStatus {
-    Pending,
-    Completed,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
@@ -116,23 +86,6 @@ impl UiLanguageSetting {
             Self::System => system_language,
             Self::English => UiLanguage::English,
             Self::Chinese => UiLanguage::Chinese,
-        }
-    }
-}
-
-impl SearchModePromptStatus {
-    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
-        match value {
-            "pending" => Some(Self::Pending),
-            "completed" => Some(Self::Completed),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn config_value(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Completed => "completed",
         }
     }
 }
@@ -274,12 +227,6 @@ pub(crate) fn list_directory_size_display_mode_config_value(
 
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
-    pub(crate) search_index_dir: PathBuf,
-    pub(crate) search_index_exclude_patterns: Vec<String>,
-    pub(crate) search_index_media_scope: MediaMetadataScope,
-    pub(crate) search_index_directory_error_policy: DirectoryErrorPolicy,
-    pub(crate) search_mode: SearchBackendMode,
-    pub(crate) search_mode_prompt: SearchModePromptStatus,
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
     pub(crate) max_preview_file_bytes: u64,
@@ -319,14 +266,7 @@ pub(crate) fn default_state_database_path() -> PathBuf {
 pub(crate) fn default_user_config() -> UserConfig {
     let fallback_base = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let cache_base = dirs::cache_dir().unwrap_or_else(|| fallback_base.clone());
-    let app_cache_base = cache_base.join(APP_DIR_NAME);
     UserConfig {
-        search_index_dir: app_cache_base.join("search-index"),
-        search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
-        search_index_media_scope: MediaMetadataScope::Off,
-        search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-        search_mode: SearchBackendMode::Simple,
-        search_mode_prompt: SearchModePromptStatus::Pending,
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         network_list_thumbnail_downloads_enabled: false,
         max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
@@ -350,12 +290,6 @@ pub(crate) fn default_user_config() -> UserConfig {
 
 pub(crate) fn ui_thread_startup_config() -> UserConfig {
     UserConfig {
-        search_index_dir: PathBuf::new(),
-        search_index_exclude_patterns: default_search_index_exclude_patterns_config(),
-        search_index_media_scope: MediaMetadataScope::Off,
-        search_index_directory_error_policy: DirectoryErrorPolicy::SkipUnreadable,
-        search_mode: SearchBackendMode::Simple,
-        search_mode_prompt: SearchModePromptStatus::Pending,
         thumbnail_cache_dir: PathBuf::new(),
         network_list_thumbnail_downloads_enabled: false,
         max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
@@ -375,26 +309,6 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         save_view_state: false,
         shortcuts: ShortcutConfig::defaults(),
     }
-}
-
-fn default_search_index_exclude_patterns_config() -> Vec<String> {
-    default_search_index_exclude_patterns()
-        .iter()
-        .map(|pattern| (*pattern).to_owned())
-        .collect()
-}
-
-pub(crate) fn normalize_search_index_exclude_patterns(patterns: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for pattern in patterns
-        .into_iter()
-        .map(|pattern| pattern.trim().to_owned())
-    {
-        if !pattern.is_empty() && !normalized.contains(&pattern) {
-            normalized.push(pattern);
-        }
-    }
-    normalized
 }
 
 pub(crate) fn normalize_column_width(width: f32) -> f32 {

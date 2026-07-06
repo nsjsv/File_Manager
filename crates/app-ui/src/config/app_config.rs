@@ -7,13 +7,11 @@ use super::{
     CONFIG_FILE_NAME,
 };
 
-const SEARCH_INDEX_DIR_KEY: &str = "search_index_dir";
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppConfig {
-    pub(crate) search_index_dir: PathBuf,
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
 }
@@ -21,14 +19,12 @@ pub(crate) struct AppConfig {
 impl AppConfig {
     pub(crate) fn from_user_config(config: &UserConfig) -> Self {
         Self {
-            search_index_dir: config.search_index_dir.clone(),
             thumbnail_cache_dir: config.thumbnail_cache_dir.clone(),
             rendering_gpu_preference: config.rendering_gpu_preference,
         }
     }
 
     pub(crate) fn apply_to_user_config(&self, config: &mut UserConfig) {
-        config.search_index_dir = self.search_index_dir.clone();
         config.thumbnail_cache_dir = self.thumbnail_cache_dir.clone();
         config.rendering_gpu_preference = self.rendering_gpu_preference;
     }
@@ -72,9 +68,6 @@ pub(super) fn parse_toml_app_config(content: &str, default: AppConfig) -> AppCon
     };
 
     let mut config = default;
-    if let Some(value) = toml_string(&document, SEARCH_INDEX_DIR_KEY) {
-        config.search_index_dir = PathBuf::from(value);
-    }
     if let Some(value) = toml_string(&document, THUMBNAIL_CACHE_DIR_KEY) {
         config.thumbnail_cache_dir = PathBuf::from(value);
     }
@@ -90,9 +83,6 @@ pub(super) fn write_app_config(path: &Path, config: &AppConfig) -> io::Result<()
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    if let Some(parent) = config.search_index_dir.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     if let Some(parent) = config.thumbnail_cache_dir.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -102,10 +92,6 @@ pub(super) fn write_app_config(path: &Path, config: &AppConfig) -> io::Result<()
 
 pub(super) fn toml_app_config_content(config: &AppConfig) -> Result<String, toml::ser::Error> {
     let mut document = toml::Table::new();
-    document.insert(
-        SEARCH_INDEX_DIR_KEY.to_owned(),
-        toml::Value::String(config.search_index_dir.to_string_lossy().into_owned()),
-    );
     document.insert(
         THUMBNAIL_CACHE_DIR_KEY.to_owned(),
         toml::Value::String(config.thumbnail_cache_dir.to_string_lossy().into_owned()),

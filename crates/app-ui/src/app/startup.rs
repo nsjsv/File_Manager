@@ -7,11 +7,9 @@ use crate::commands::{
     operation_store_command, sidebar_devices_command, sidebar_locations_command,
 };
 use crate::config::UserConfig;
-use crate::config::{SearchBackendMode, SearchModePromptStatus};
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
 };
-use crate::operation_queue::QueuedFileOperation;
 use crate::sidebar::{home_sidebar_location, sidebar_favorite_configs};
 use crate::startup_trace;
 
@@ -27,22 +25,13 @@ impl FileBrowser {
         let rendering_environment_status = startup_environment.rendering_environment_status;
 
         self.apply_loaded_user_config(startup_environment.user_config);
+        self.home_dir = home.clone();
         self.pending_renderer_restart_environment = rendering_environment_status
             .restart_required
             .then_some(rendering_environment_status.environment);
         self.renderer_restart_notice_visible = self.pending_renderer_restart_environment.is_some();
         let configured_favorites = self.user_config.sidebar_favorites.clone();
-        self.search_index.home_dir = home.clone();
         self.sidebar_locations = vec![home_sidebar_location(&home)];
-        let search_mode_prompt_command = self.refresh_search_mode_prompt();
-        let should_bootstrap_indexed_search = self.user_config.search_mode
-            == SearchBackendMode::Indexed
-            && self.user_config.search_mode_prompt == SearchModePromptStatus::Completed;
-        let search_index_bootstrap_command = if should_bootstrap_indexed_search {
-            self.start_indexed_search_bootstrap()
-        } else {
-            Task::none()
-        };
         let startup_command = if self.user_config.startup_location_policy
             == crate::config::StartupLocationPolicy::PreviousSession
         {
@@ -53,8 +42,6 @@ impl FileBrowser {
         };
 
         Task::batch([
-            search_mode_prompt_command,
-            search_index_bootstrap_command,
             startup_command,
             sidebar_locations_command(home, configured_favorites),
             sidebar_devices_command(),
@@ -74,19 +61,11 @@ impl FileBrowser {
             None
         };
         self.sidebar_locations = sidebar_locations;
-        let persist_imported_favorites = if let Some(favorites) = imported_favorites {
+        if let Some(favorites) = imported_favorites {
             self.user_config.sidebar_favorites = Some(favorites);
             self.persist_user_preferences_command()
         } else {
             Task::none()
-        };
-        if self.startup_index_setup.is_some() {
-            Task::batch([
-                persist_imported_favorites,
-                self.refresh_startup_index_setup_choices(),
-            ])
-        } else {
-            persist_imported_favorites
         }
     }
 
@@ -105,12 +84,6 @@ impl FileBrowser {
                 ) {
                     self.show_global_error(error);
                 }
-                for task in self.operation_queue.tasks() {
-                    if let QueuedFileOperation::BuildSearchIndex { root, .. } = &task.operation {
-                        self.search_index.indexing_roots.insert(root.clone());
-                        self.search_index.root_errors.remove(root);
-                    }
-                }
                 let restored_queue_command =
                     if self.operation_queue.task_count() > previous_task_count {
                         self.show_operation_queue_temporarily()
@@ -123,9 +96,10 @@ impl FileBrowser {
                 let session_command = if self.user_config.startup_location_policy
                     == crate::config::StartupLocationPolicy::PreviousSession
                 {
-                    let home = self.search_index.home_dir.clone();
-                    let startup_plan = self.startup_session_plan(&home, persisted_browser_session);
-                    self.apply_startup_session_plan(startup_plan, &home)
+                    let home_dir = self.home_dir.clone();
+                    let startup_plan =
+                        self.startup_session_plan(&home_dir, persisted_browser_session);
+                    self.apply_startup_session_plan(startup_plan, &home_dir)
                 } else {
                     Task::none()
                 };
@@ -142,8 +116,9 @@ impl FileBrowser {
                 if self.user_config.startup_location_policy
                     == crate::config::StartupLocationPolicy::PreviousSession
                 {
-                    let home = self.search_index.home_dir.clone();
-                    return self.fallback_startup_directory_after_session_store_error(&home, error);
+                    let home_dir = self.home_dir.clone();
+                    return self
+                        .fallback_startup_directory_after_session_store_error(&home_dir, error);
                 }
             }
         }
@@ -172,9 +147,6 @@ impl FileBrowser {
 
     fn apply_loaded_user_config(&mut self, mut user_config: UserConfig) {
         user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
-        self.search_index.base_dir = user_config.search_index_dir.clone();
-        self.search_index.directory_error_policy = user_config.search_index_directory_error_policy;
-        self.search_index.media_metadata_scope = user_config.search_index_media_scope;
         self.thumbnail_cache
             .set_cache_dir(user_config.thumbnail_cache_dir.clone());
         self.sidebar_width = self.sidebar_width_for_window(user_config.sidebar_width);
@@ -198,7 +170,6 @@ impl FileBrowser {
             );
         self.user_config = user_config;
         self.refresh_current_language();
-        self.sync_search_index_exclude_inputs_from_config();
     }
 }
 
@@ -209,12 +180,11 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::app::FileBrowser;
-    use crate::config::{self, SearchBackendMode, SearchModePromptStatus, StartupLocationPolicy};
+    use crate::config::{self, StartupLocationPolicy};
     use crate::model::{
         BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
         BrowserTabSession, BrowserViewMode, ColumnBrowserViewport, ExpandedDirectoryStatus,
-        LoadedOperationStore, SearchIndexDaemonStatus, SidebarLocation, SidebarLocationKind,
-        SplitAxis, StartupEnvironment,
+        LoadedOperationStore, SidebarLocation, SidebarLocationKind, SplitAxis, StartupEnvironment,
     };
     use crate::network_connections::SavedNetworkConnection;
     use crate::startup_rendering::{
@@ -318,46 +288,6 @@ mod tests {
                 path: projects,
             }])
         );
-    }
-
-    #[test]
-    fn pending_search_mode_prompt_opens_without_startup_index_setup() {
-        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
-        let mut user_config = config::default_user_config();
-        user_config.search_mode = SearchBackendMode::Indexed;
-        user_config.search_mode_prompt = SearchModePromptStatus::Pending;
-
-        drop(browser.accept_startup_environment(startup_environment(
-            PathBuf::from("/home/user"),
-            user_config,
-            PathBuf::from("/tmp/state.sqlite"),
-        )));
-
-        assert!(browser.search_mode_prompt.is_some());
-        assert!(browser.startup_index_setup.is_none());
-    }
-
-    #[test]
-    fn completed_indexed_startup_waits_for_profile_before_index_setup() {
-        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
-        let mut user_config = config::default_user_config();
-        user_config.search_mode = SearchBackendMode::Indexed;
-        user_config.search_mode_prompt = SearchModePromptStatus::Completed;
-
-        drop(browser.accept_startup_environment(startup_environment(
-            PathBuf::from("/home/user"),
-            user_config,
-            PathBuf::from("/tmp/state.sqlite"),
-        )));
-
-        assert!(browser.search_index.daemon_status_loading);
-        assert!(!browser.search_index.profile_loading);
-        assert!(browser.startup_index_setup.is_none());
-
-        drop(browser.accept_search_index_daemon_status(Ok(SearchIndexDaemonStatus::Reachable)));
-
-        assert!(!browser.search_index.daemon_status_loading);
-        assert!(browser.search_index.profile_loading);
     }
 
     #[test]
@@ -576,10 +506,8 @@ mod tests {
                 .map(|viewport| (viewport.offset_y, viewport.height)),
             Some((12.0, 240.0))
         );
-        assert!(browser.search.is_none());
         assert!(browser.preview.is_none());
         assert!(browser.properties.is_none());
-        assert!(browser.search_window.is_none());
         assert!(browser.preview_window.is_none());
         assert!(browser.properties_window.is_none());
         assert!(browser.settings_window.is_none());

@@ -122,5 +122,5 @@ fn round_svg_dimension(value: f32) -> u32 {
 }
 
 fn svg_png_error_to_io_error(error: impl std::error::Error) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
+    std::io::Error::other(error.to_string())
 }

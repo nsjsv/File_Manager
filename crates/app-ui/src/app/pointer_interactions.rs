@@ -24,7 +24,6 @@ impl FileBrowser {
         self.finish_pane_drag();
         self.finish_batch_rename_preview_drag();
         Task::batch([
-            self.finish_startup_index_entry_selection_drag(),
             self.finish_sidebar_bookmark_drag(),
             self.finish_sidebar_resize_drag_command(),
             self.finish_column_resize_drag_command(),

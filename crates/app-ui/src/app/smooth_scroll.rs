@@ -368,11 +368,9 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
             pane_id.key(),
             path_hash(directory)
         )),
-        ScrollbarRegion::SearchResults => iced::widget::Id::new("search-results"),
         ScrollbarRegion::Settings => iced::widget::Id::new("settings"),
         ScrollbarRegion::ShortcutSettings => iced::widget::Id::new("shortcut-settings"),
         ScrollbarRegion::Properties => iced::widget::Id::new("properties"),
-        ScrollbarRegion::StartupIndexSetup => iced::widget::Id::new("startup-index-setup"),
         ScrollbarRegion::OpenWithApplications => iced::widget::Id::new("open-with-applications"),
         ScrollbarRegion::OperationQueue => iced::widget::Id::new("operation-queue"),
         ScrollbarRegion::BatchRenamePreview => iced::widget::Id::new("batch-rename-preview"),
