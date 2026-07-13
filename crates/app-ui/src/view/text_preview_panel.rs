@@ -78,7 +78,7 @@ fn plain_text_preview_body<'a>(
 }
 
 fn text_preview_line_limit_notice(notice: TextPreviewLineLimitNotice) -> Element<'static, Message> {
-    readable_text(notice.label()).size(12).into()
+    localized_text(notice.label()).size(12).into()
 }
 
 fn text_preview_chunk_error(error: &str) -> Element<'static, Message> {

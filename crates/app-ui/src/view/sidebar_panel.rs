@@ -230,10 +230,16 @@ fn sidebar_location_item_content<'a>(
     } else {
         IconTone::Normal
     };
+    let is_favorite = favorite_index.is_some();
+    let label = if is_favorite {
+        location.label.clone()
+    } else {
+        crate::localization::translate_current(&location.label)
+    };
 
     let item_container = container(sidebar_label(
         sidebar_icon_symbol(location),
-        &location.label,
+        &label,
         tone,
         sidebar_label_max_chars(browser.sidebar_width),
     ))
@@ -245,7 +251,6 @@ fn sidebar_location_item_content<'a>(
         SidebarPresentation::Normal => item_container,
     };
 
-    let is_favorite = favorite_index.is_some();
     let item_container = if let Some(favorite_index) = favorite_index {
         sidebar_bookmark_drop_overlay(browser, item_container, favorite_index)
     } else {
@@ -433,9 +438,10 @@ fn sidebar_trash_item(browser: &FileBrowser) -> Element<'_, Message> {
     } else {
         IconTone::Normal
     };
+    let trash_label = crate::localization::translate_current(TRASH_LOCATION_LABEL);
     let trash_container = container(sidebar_label(
         IconSymbol::Trash,
-        TRASH_LOCATION_LABEL,
+        &trash_label,
         trash_tone,
         sidebar_label_max_chars(browser.sidebar_width),
     ))

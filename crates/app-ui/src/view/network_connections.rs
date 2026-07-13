@@ -96,9 +96,10 @@ pub(super) fn network_connection_editor_panel(
     }
 
     if let Some(error) = &editor.error {
+        let error = crate::localization::translate_current(error);
         content = content.push(
             readable_text(format_middle_ellipsized_text(
-                error,
+                &error,
                 NETWORK_EDITOR_ERROR_MAX_CHARS,
             ))
             .size(12),

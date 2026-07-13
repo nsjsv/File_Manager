@@ -18,7 +18,7 @@ use crate::model::{
     FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesSnapshot,
     FilePropertiesState, Message, ScrollbarRegion, ScrollbarVisibility,
 };
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::auxiliary_window_layout::{
     auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
@@ -67,7 +67,7 @@ fn properties_error_view<'a>(path: &'a Path, error: &'a str) -> Element<'a, Mess
     let content = column![
         readable_text("Could not load properties").size(16),
         readable_text(display_path(path)).size(13),
-        readable_text(error.to_owned()).size(13)
+        localized_text(error).size(13)
     ]
     .spacing(8)
     .padding(24)
@@ -131,7 +131,7 @@ fn properties_information_detail(
         themed_icon(icon, IconTone::Normal, PROPERTIES_ICON_SIZE),
         column![
             readable_text(display_name(&snapshot.name)).size(18),
-            readable_text(snapshot.type_label.clone()).size(13)
+            localized_text(snapshot.type_label.clone()).size(13)
         ]
         .spacing(4)
         .width(Length::Fill)
@@ -142,7 +142,10 @@ fn properties_information_detail(
     let mut details = Column::new()
         .spacing(10)
         .push(property_row("Name", display_name(&snapshot.name)))
-        .push(property_row("Type", snapshot.type_label.clone()))
+        .push(property_row(
+            "Type",
+            crate::localization::translate_current(&snapshot.type_label),
+        ))
         .push(property_row("Location", display_path(&snapshot.location)))
         .push(property_row(
             "Created",
@@ -168,14 +171,20 @@ fn properties_information_detail(
             let label = contents
                 .as_ref()
                 .map(display_contents)
-                .unwrap_or_else(|| "Calculating...".to_owned());
+                .unwrap_or_else(|| crate::localization::translate_current("Calculating..."));
             details = details.push(property_row("Contents", label));
         }
         FilePropertiesDirectoryContentsState::Loaded(contents) => {
             details = details.push(property_row("Contents", display_contents(contents)));
         }
         FilePropertiesDirectoryContentsState::Failed(error) => {
-            details = details.push(property_row("Contents", format!("Unavailable ({error})")));
+            details = details.push(property_row(
+                "Contents",
+                format!(
+                    "{} ({error})",
+                    crate::localization::translate_current("Unavailable")
+                ),
+            ));
         }
     }
 
@@ -436,7 +445,7 @@ fn permissions_status_panel(
     };
 
     Some(
-        container(readable_text(message).size(12))
+        container(localized_text(message).size(12))
             .padding([8, 12])
             .width(Length::Fill)
             .style(preview_panel_style)

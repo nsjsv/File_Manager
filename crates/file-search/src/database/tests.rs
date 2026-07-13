@@ -1,0 +1,796 @@
+use std::path::Path;
+
+use rusqlite::{params, Connection};
+use tempfile::tempdir;
+
+use crate::extractor::ExtractionStatus;
+use crate::model::{SearchFileKind, SearchQuery, SearchScope, TimeRange};
+
+use super::{
+    DirectorySignature, DirectorySnapshot, EntryObservationState, EntryStageProgress,
+    FileSignature, IndexedEntryStageState, IndexedFile, ObservedFile, SearchDatabase,
+    MAX_SEARCH_SNIPPET_BYTES, MAX_SNIPPET_HITS_PER_BATCH, READER_PAGE_CACHE_KIB,
+    WAL_AUTOCHECKPOINT_PAGES, WRITER_PAGE_CACHE_KIB,
+};
+
+#[test]
+fn searches_file_name_and_content() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/notes.txt", "notes.txt", "alpha body"))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/report.txt",
+            "report.txt",
+            "quarterly alpha",
+        ))
+        .unwrap();
+
+    let batch = database.search(&SearchQuery::global(1, "alpha")).unwrap();
+
+    assert_eq!(batch.hits.len(), 2);
+    assert!(batch.finished);
+}
+
+#[test]
+fn sqlite_connections_apply_the_fixed_memory_budget() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let writer = SearchDatabase::open(&database_path).unwrap();
+    assert_eq!(
+        writer
+            .connection
+            .query_row("PRAGMA cache_size", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        -WRITER_PAGE_CACHE_KIB
+    );
+    assert_eq!(
+        writer
+            .connection
+            .query_row("PRAGMA mmap_size", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        writer
+            .connection
+            .query_row("PRAGMA temp_store", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        writer
+            .connection
+            .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        WAL_AUTOCHECKPOINT_PAGES
+    );
+
+    let reader = SearchDatabase::open_read_only(&database_path).unwrap();
+    assert_eq!(
+        reader
+            .connection
+            .query_row("PRAGMA cache_size", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        -READER_PAGE_CACHE_KIB
+    );
+    assert_eq!(
+        reader
+            .connection
+            .query_row("PRAGMA mmap_size", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        reader
+            .connection
+            .query_row("PRAGMA temp_store", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn search_snippets_have_a_byte_ceiling() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let oversized_token = "x".repeat(MAX_SEARCH_SNIPPET_BYTES * 4);
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/large-snippet.txt",
+            "large-snippet.txt",
+            &format!("needle {oversized_token}"),
+        ))
+        .unwrap();
+
+    let batch = database.search(&SearchQuery::global(1, "needle")).unwrap();
+    assert_eq!(batch.hits.len(), 1);
+    assert!(batch.hits[0]
+        .snippet
+        .as_ref()
+        .is_some_and(|snippet| snippet.len() <= MAX_SEARCH_SNIPPET_BYTES));
+}
+
+#[test]
+fn common_query_generates_snippets_for_only_a_fixed_page_prefix() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for index in 0..25 {
+        database
+            .upsert_file(&indexed_file(
+                &format!("/tmp/common-{index}.txt"),
+                &format!("common-{index}.txt"),
+                "common needle content",
+            ))
+            .unwrap();
+    }
+    let mut query = SearchQuery::global(1, "needle");
+    query.limit = 25;
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 25);
+    assert_eq!(
+        batch
+            .hits
+            .iter()
+            .filter(|hit| hit.snippet.is_some())
+            .count(),
+        MAX_SNIPPET_HITS_PER_BATCH
+    );
+}
+
+#[test]
+fn filters_by_directory_and_kind() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/a/notes.txt", "notes.txt", "alpha"))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/b/notes.txt", "notes.txt", "alpha"))
+        .unwrap();
+    let mut query = SearchQuery::global(1, "alpha");
+    query.scope = SearchScope::Directory(Path::new("/tmp/a").to_path_buf());
+    query.filters.kind = Some(SearchFileKind::File);
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/a/notes.txt"));
+}
+
+#[test]
+fn recursive_scope_treats_wildcards_and_case_as_literal_path_components() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for path in [
+        "/tmp/a%/inside-percent.txt",
+        "/tmp/ax/outside-percent.txt",
+        "/tmp/a_/inside-underscore.txt",
+        "/tmp/ab/outside-underscore.txt",
+        "/tmp/Case/inside-case.txt",
+        "/tmp/case/outside-case.txt",
+    ] {
+        database
+            .upsert_file(&indexed_file(
+                path,
+                Path::new(path).file_name().unwrap().to_str().unwrap(),
+                "alpha",
+            ))
+            .unwrap();
+    }
+
+    for (scope, expected_path) in [
+        ("/tmp/a%", "/tmp/a%/inside-percent.txt"),
+        ("/tmp/a_", "/tmp/a_/inside-underscore.txt"),
+        ("/tmp/Case", "/tmp/Case/inside-case.txt"),
+    ] {
+        let mut query = SearchQuery::global(1, "alpha");
+        query.scope = SearchScope::Directory(Path::new(scope).to_path_buf());
+        let batch = database.search(&query).unwrap();
+        assert_eq!(batch.hits.len(), 1, "scope {scope}");
+        assert_eq!(batch.hits[0].path, Path::new(expected_path));
+    }
+}
+
+#[test]
+fn filters_by_time_range() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut old = indexed_file("/tmp/old.txt", "old.txt", "alpha");
+    old.modified_ms = Some(10);
+    let mut new = indexed_file("/tmp/new.txt", "new.txt", "alpha");
+    new.modified_ms = Some(30);
+    database.upsert_file(&old).unwrap();
+    database.upsert_file(&new).unwrap();
+    let mut query = SearchQuery::global(1, "alpha");
+    query.filters.modified = Some(TimeRange {
+        start_ms: 20,
+        end_ms: 40,
+    });
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/new.txt"));
+}
+
+fn indexed_file(path: &str, display_name: &str, content: &str) -> IndexedFile {
+    let path = Path::new(path).to_path_buf();
+    IndexedFile {
+        parent_path: path.parent().unwrap().to_path_buf(),
+        path,
+        display_name: display_name.to_owned(),
+        kind: SearchFileKind::File,
+        size: content.len() as u64,
+        modified_ms: Some(1),
+        accessed_ms: None,
+        created_ms: None,
+        mime_type: Some("text/plain".to_owned()),
+        stage_state: IndexedEntryStageState {
+            metadata: EntryStageProgress::Complete,
+            content: EntryStageProgress::Complete,
+        },
+        content: Some(content.to_owned()),
+        extraction_status: ExtractionStatus::Indexed,
+        device: Some(1),
+        inode: Some(1),
+        mtime_ns: Some(1),
+        ctime_ns: Some(1),
+    }
+}
+
+#[test]
+fn stage_state_round_trips_separately_from_content_status() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut file = indexed_file("/tmp/too-large.txt", "too-large.txt", "");
+    file.stage_state = IndexedEntryStageState {
+        metadata: EntryStageProgress::Complete,
+        content: EntryStageProgress::Skipped,
+    };
+    file.content = None;
+    file.extraction_status = ExtractionStatus::TooLarge;
+
+    database.upsert_file(&file).unwrap();
+
+    assert_eq!(
+        database
+            .content_status(Path::new("/tmp/too-large.txt"))
+            .unwrap(),
+        Some(ExtractionStatus::TooLarge)
+    );
+    assert_eq!(
+        database
+            .entry_stage_state(Path::new("/tmp/too-large.txt"))
+            .unwrap(),
+        Some(file.stage_state)
+    );
+}
+
+#[test]
+fn inaccessible_content_stays_retained_hidden_and_retryable_until_recovery() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut file = indexed_file("/tmp/private.txt", "private.txt", "old needle");
+    file.inode = Some(42);
+    file.mtime_ns = Some(99);
+    database.upsert_file(&file).unwrap();
+
+    let mut inaccessible_file = file.clone();
+    inaccessible_file.stage_state = IndexedEntryStageState {
+        metadata: EntryStageProgress::Complete,
+        content: EntryStageProgress::Pending,
+    };
+    inaccessible_file.content = None;
+    inaccessible_file.extraction_status = ExtractionStatus::ReadFailed {
+        message: "permission denied".to_owned(),
+    };
+    database
+        .upsert_inaccessible_file(&inaccessible_file)
+        .unwrap();
+
+    assert!(database
+        .search(&SearchQuery::global(1, "needle"))
+        .unwrap()
+        .hits
+        .is_empty());
+    assert_eq!(database.indexed_file_count().unwrap(), 0);
+    let retained_fts_rows: i64 = database
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM file_search_fts WHERE path = ?1",
+            ["/tmp/private.txt"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_fts_rows, 1);
+
+    let inaccessible_entry = database
+        .classify_observed_files(&[ObservedFile {
+            path: file.path.clone(),
+            signature: FileSignature {
+                device: Some(1),
+                inode: Some(42),
+                mtime_ns: Some(99),
+                ctime_ns: Some(99),
+                size: file.size,
+            },
+        }])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .known_entry
+        .unwrap();
+    assert_eq!(
+        inaccessible_entry.observation_state,
+        EntryObservationState::Inaccessible
+    );
+    assert!(!inaccessible_entry.allows_signature_skip(FileSignature {
+        device: Some(1),
+        inode: Some(42),
+        mtime_ns: Some(99),
+        ctime_ns: Some(99),
+        size: file.size,
+    }));
+    database.upsert_file(&file).unwrap();
+    assert_eq!(
+        database
+            .search(&SearchQuery::global(2, "needle"))
+            .unwrap()
+            .hits
+            .len(),
+        1
+    );
+    assert_eq!(database.indexed_file_count().unwrap(), 1);
+    let recovered_entry = database
+        .classify_observed_files(&[ObservedFile {
+            path: file.path,
+            signature: FileSignature {
+                device: Some(1),
+                inode: Some(42),
+                mtime_ns: Some(99),
+                ctime_ns: Some(99),
+                size: file.size,
+            },
+        }])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .known_entry
+        .unwrap();
+    assert_eq!(
+        recovered_entry.observation_state,
+        EntryObservationState::Observable
+    );
+}
+
+#[test]
+fn inaccessible_subtree_is_hidden_without_removing_known_rows() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/private/note.txt",
+            "note.txt",
+            "private needle",
+        ))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/public/note.txt",
+            "note.txt",
+            "public needle",
+        ))
+        .unwrap();
+
+    database
+        .mark_scope_inaccessible(Path::new("/tmp/private"))
+        .unwrap();
+
+    let batch = database.search(&SearchQuery::global(1, "needle")).unwrap();
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/public/note.txt"));
+    let retained_rows: i64 = database
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE tombstoned = 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_rows, 2);
+    let private_state: String = database
+        .connection
+        .query_row(
+            "SELECT observation_state FROM files WHERE path = '/tmp/private/note.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(private_state, "inaccessible");
+}
+
+#[test]
+fn repeated_inaccessible_observation_does_not_rewrite_the_same_scope() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/private/note.txt",
+            "note.txt",
+            "private needle",
+        ))
+        .unwrap();
+
+    database
+        .mark_scope_inaccessible(Path::new("/tmp/private"))
+        .unwrap();
+    let changes_after_first_observation = database.connection.total_changes();
+
+    database
+        .mark_scope_inaccessible(Path::new("/tmp/private"))
+        .unwrap();
+
+    assert_eq!(
+        database.connection.total_changes(),
+        changes_after_first_observation
+    );
+}
+
+#[test]
+fn migration_backfills_stage_state_for_legacy_rows() {
+    let dir = tempdir().unwrap();
+    let database_path = dir.path().join("search.sqlite");
+    let legacy_status = serde_json::to_string(&ExtractionStatus::TooLarge).unwrap();
+
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE files (
+                path TEXT PRIMARY KEY,
+                parent_path TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                modified_ms INTEGER,
+                accessed_ms INTEGER,
+                created_ms INTEGER,
+                mime_type TEXT,
+                content_status TEXT NOT NULL,
+                tombstoned INTEGER NOT NULL DEFAULT 0,
+                inode INTEGER,
+                mtime_ns INTEGER
+            );
+            CREATE VIRTUAL TABLE file_search_fts
+                USING fts5(path UNINDEXED, name, content);
+            PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO files (
+                path, parent_path, display_name, kind, size, modified_ms, accessed_ms,
+                created_ms, mime_type, content_status, tombstoned, inode, mtime_ns
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
+            params![
+                "/tmp/legacy.txt",
+                "/tmp",
+                "legacy.txt",
+                SearchFileKind::File.as_storage_value(),
+                12_i64,
+                Some(1_i64),
+                Option::<i64>::None,
+                Option::<i64>::None,
+                Some("text/plain".to_owned()),
+                legacy_status,
+                Some(7_i64),
+                Some(99_i64),
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let database = SearchDatabase::open(&database_path).unwrap();
+
+    assert_eq!(
+        database
+            .entry_stage_state(Path::new("/tmp/legacy.txt"))
+            .unwrap(),
+        Some(IndexedEntryStageState {
+            metadata: EntryStageProgress::Complete,
+            content: EntryStageProgress::Skipped,
+        })
+    );
+    let schema_version: i64 = database
+        .connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(schema_version, super::SCHEMA_VERSION);
+    assert!(database.column_exists("files", "scan_generation").unwrap());
+    assert!(database.column_exists("files", "device").unwrap());
+    let legacy_scan_tables: i64 = database
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name IN ('index_scans', 'scan_scopes')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_scan_tables, 0);
+}
+
+#[test]
+fn fts_rowid_migration_preserves_content_and_uses_files_row_identity() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/rowid.txt",
+            "rowid.txt",
+            "preserved needle",
+        ))
+        .unwrap();
+    drop(database);
+
+    let connection = Connection::open(&database_path).unwrap();
+    let (path, name, content): (String, String, String) = connection
+        .query_row(
+            "SELECT path, name, content FROM file_search_fts LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    connection
+        .execute("DELETE FROM file_search_fts", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO file_search_fts(rowid, path, name, content) VALUES (1001, ?1, ?2, ?3)",
+            params![path, name, content],
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
+    drop(connection);
+
+    let database = SearchDatabase::open(&database_path).unwrap();
+    let (file_rowid, fts_rowid): (i64, i64) = database
+        .connection
+        .query_row(
+            "SELECT f.rowid, x.rowid
+             FROM files AS f JOIN file_search_fts AS x ON x.path = f.path",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(file_rowid, fts_rowid);
+    assert_eq!(
+        database
+            .search(&SearchQuery::global(1, "needle"))
+            .unwrap()
+            .hits
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn signatures_round_trip_and_detect_changes() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut file = indexed_file("/tmp/a.txt", "a.txt", "body");
+    file.device = Some(7);
+    file.inode = Some(42);
+    file.mtime_ns = Some(1_000);
+    file.ctime_ns = Some(1_000);
+    database.upsert_file(&file).unwrap();
+
+    let changes_before = database.connection.total_changes();
+    let stored = database
+        .classify_observed_files(&[ObservedFile {
+            path: file.path.clone(),
+            signature: FileSignature {
+                device: Some(7),
+                inode: Some(42),
+                mtime_ns: Some(1_000),
+                ctime_ns: Some(1_000),
+                size: file.size,
+            },
+        }])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .known_entry
+        .expect("signature stored");
+    assert_eq!(database.connection.total_changes(), changes_before);
+    assert_eq!(
+        stored.stage_state,
+        IndexedEntryStageState {
+            metadata: EntryStageProgress::Complete,
+            content: EntryStageProgress::Complete,
+        }
+    );
+    let signature = stored.signature;
+
+    assert!(stored.allows_signature_skip(FileSignature {
+        device: Some(7),
+        inode: Some(42),
+        mtime_ns: Some(1_000),
+        ctime_ns: Some(1_000),
+        size: file.size,
+    }));
+    assert!(!stored.allows_signature_skip(FileSignature {
+        device: Some(7),
+        inode: Some(42),
+        mtime_ns: Some(2_000),
+        ctime_ns: Some(1_000),
+        size: file.size,
+    }));
+    assert!(!stored.allows_signature_skip(FileSignature {
+        device: Some(7),
+        inode: Some(42),
+        mtime_ns: Some(1_000),
+        ctime_ns: Some(2_000),
+        size: file.size,
+    }));
+    assert!(!stored.allows_signature_skip(FileSignature {
+        device: Some(8),
+        inode: Some(42),
+        mtime_ns: Some(1_000),
+        ctime_ns: Some(1_000),
+        size: file.size,
+    }));
+    assert_eq!(signature.device, Some(7));
+    assert_eq!(signature.inode, Some(42));
+}
+
+#[test]
+fn directory_snapshots_page_stably_and_local_delete_cleans_all_rows() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/root/removed/note.txt",
+            "note.txt",
+            "needle",
+        ))
+        .unwrap();
+    database
+        .upsert_directory_snapshot(&DirectorySnapshot {
+            path: Path::new("/tmp/root").to_path_buf(),
+            parent_path: Path::new("/tmp").to_path_buf(),
+            root_path: Path::new("/tmp/root").to_path_buf(),
+            signature: DirectorySignature {
+                device: 1,
+                inode: 10,
+                mtime_ns: 20,
+                ctime_ns: 30,
+            },
+            observation_state: EntryObservationState::Observable,
+        })
+        .unwrap();
+    database
+        .upsert_directory_snapshot(&DirectorySnapshot {
+            path: Path::new("/tmp/root/removed").to_path_buf(),
+            parent_path: Path::new("/tmp/root").to_path_buf(),
+            root_path: Path::new("/tmp/root").to_path_buf(),
+            signature: DirectorySignature {
+                device: 1,
+                inode: 11,
+                mtime_ns: 21,
+                ctime_ns: 31,
+            },
+            observation_state: EntryObservationState::Observable,
+        })
+        .unwrap();
+
+    let first_page = database
+        .directory_snapshots_page(Path::new("/tmp/root"), None, 1)
+        .unwrap();
+    assert_eq!(first_page.len(), 1);
+    let second_page = database
+        .directory_snapshots_page(Path::new("/tmp/root"), Some(&first_page[0].path), 1)
+        .unwrap();
+    assert_eq!(second_page.len(), 1);
+
+    database
+        .delete_scope(Path::new("/tmp/root/removed"))
+        .unwrap();
+
+    assert!(database
+        .search(&SearchQuery::global(1, "needle"))
+        .unwrap()
+        .hits
+        .is_empty());
+    assert_eq!(database.directory_snapshot_count().unwrap(), 1);
+}
+
+#[test]
+fn known_file_pages_skip_inaccessible_directories_without_hiding_retryable_files() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for path in ["/tmp/root/private/blocked.txt", "/tmp/root/retryable.txt"] {
+        database
+            .upsert_file(&indexed_file(
+                path,
+                Path::new(path).file_name().unwrap().to_str().unwrap(),
+                "needle",
+            ))
+            .unwrap();
+    }
+    for (path, parent_path, inode) in [
+        ("/tmp/root", "/tmp", 10),
+        ("/tmp/root/private", "/tmp/root", 11),
+    ] {
+        database
+            .upsert_directory_snapshot(&DirectorySnapshot {
+                path: Path::new(path).to_path_buf(),
+                parent_path: Path::new(parent_path).to_path_buf(),
+                root_path: Path::new("/tmp/root").to_path_buf(),
+                signature: DirectorySignature {
+                    device: 1,
+                    inode,
+                    mtime_ns: 20,
+                    ctime_ns: 30,
+                },
+                observation_state: EntryObservationState::Observable,
+            })
+            .unwrap();
+    }
+    database
+        .mark_scope_inaccessible(Path::new("/tmp/root/private"))
+        .unwrap();
+    database
+        .mark_scope_inaccessible(Path::new("/tmp/root/retryable.txt"))
+        .unwrap();
+
+    let known_files = database
+        .known_files_page(Path::new("/tmp/root"), None, 128)
+        .unwrap();
+
+    assert_eq!(known_files.len(), 1);
+    assert_eq!(known_files[0].path, Path::new("/tmp/root/retryable.txt"));
+    assert_eq!(
+        known_files[0].state.observation_state,
+        EntryObservationState::Inaccessible
+    );
+}
+
+#[test]
+fn policy_exclusion_deletes_a_previously_inaccessible_scope() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/private/blocked.txt",
+            "blocked.txt",
+            "needle",
+        ))
+        .unwrap();
+
+    database
+        .mark_scope_inaccessible(Path::new("/tmp/private"))
+        .unwrap();
+    database.delete_scope(Path::new("/tmp/private")).unwrap();
+
+    let retained_file_rows: i64 = database
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = '/tmp/private/blocked.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_file_rows, 0);
+}
+
+#[test]
+fn classification_rejects_batches_above_the_fixed_capacity() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let observations = (0..=super::MAX_CLASSIFICATION_BATCH_ENTRIES)
+        .map(|index| ObservedFile {
+            path: Path::new("/tmp").join(format!("file-{index}.txt")),
+            signature: FileSignature {
+                device: Some(1),
+                inode: Some(index as u64),
+                mtime_ns: Some(index as i64),
+                ctime_ns: Some(index as i64),
+                size: 0,
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let error = database.classify_observed_files(&observations).unwrap_err();
+    assert!(matches!(error, crate::error::SearchError::InvalidQuery(_)));
+}

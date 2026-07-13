@@ -55,6 +55,16 @@ yay -S file-manager-bin
 paru -S file-manager-bin
 ```
 
+索引搜索依赖可用的 systemd user manager、统一 cgroup v2 和 memory controller。安装包会提供 `file-manager-search.service`；可以使用以下命令显式启用、查看状态和日志：
+
+```bash
+systemctl --user enable --now file-manager-search.service
+systemctl --user status file-manager-search.service
+journalctl --user -u file-manager-search.service -f
+```
+
+环境不满足这些条件时，应用不会绕过 systemd 直接启动 daemon；索引和全局搜索会显示不可用原因，当前目录搜索 fallback 仍可使用。
+
 ## 编译运行
 
 需要先安装 Rust 工具链。
@@ -68,34 +78,42 @@ cargo run -p app-ui
 构建 release 版本：
 
 ```bash
-cargo build --release -p app-ui
+cargo build --release -p app-ui -p file-search
 ./target/release/app-ui
 ```
 
+直接运行 app 之前仍需安装对应的 systemd user unit，否则索引搜索会按上述规则 fail closed。
+
 ## 本地安装
 
-可以把 release 二进制安装到用户目录：
+开发环境应成套安装 app、daemon 和 managed systemd user unit：
 
 ```bash
-cargo build --release -p app-ui
-install -Dm755 target/release/app-ui ~/.local/bin/file-manager
+cargo build --release -p app-ui -p file-search
+
+# 先查看计划，再执行安装
+scripts/install-file-manager-dev.sh
+scripts/install-file-manager-dev.sh --yes
 ```
 
 然后运行：
 
 ```bash
-file-manager
+file-manager-dev
 ```
 
-如果需要桌面启动项，可以创建 `~/.local/share/applications/file-manager.desktop`：
+清理隔离的配置、数据库、缓存和 socket：
 
-```desktop
-[Desktop Entry]
-Type=Application
-Name=File Manager
-Exec=file-manager
-Categories=System;FileManager;
-Terminal=false
+```bash
+scripts/clean-file-manager-environment.sh
+scripts/clean-file-manager-environment.sh --yes
+```
+
+卸载开发 bundle：
+
+```bash
+scripts/install-file-manager-dev.sh remove
+scripts/install-file-manager-dev.sh remove --yes
 ```
 
 ## 平台说明

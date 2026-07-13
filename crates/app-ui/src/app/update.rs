@@ -1,6 +1,7 @@
 use iced::Task;
 
 use super::FileBrowser;
+use crate::commands::search_service_status_command;
 use crate::model::{Message, NavigationMode, OperationQueuePanelMode, ScrollbarRegion as Region};
 
 impl FileBrowser {
@@ -506,6 +507,37 @@ impl FileBrowser {
             Message::PathSuggestionsLoaded(pane_id, request, suggestions) => {
                 self.accept_path_suggestions(pane_id, request, suggestions)
             }
+            Message::SearchInputChanged(value) => self.update_search_input(value),
+            Message::SearchSubmitted => self.submit_search(),
+            Message::SearchResultsLoaded(generation, outcome) => {
+                self.accept_search_results(generation, outcome)
+            }
+            Message::SearchDirectoryBatchLoaded(generation, hits) => {
+                self.accept_directory_search_batch(generation, hits)
+            }
+            Message::SearchDirectoryFinished(generation, completion) => {
+                self.accept_directory_search_finished(generation, completion)
+            }
+            Message::SearchResultPressed(hit) => self.activate_search_hit(hit),
+            Message::SearchCleared => self.clear_search(),
+            Message::SearchResultsScrolled => {
+                self.show_scrollbars_temporarily(Region::SearchResults)
+            }
+            Message::SearchServiceEnsured(outcome) => {
+                match outcome {
+                    Ok(status) => self.search.accept_endpoint_status(status),
+                    Err(error) => self.search.accept_endpoint_failure(error),
+                }
+                Task::none()
+            }
+            Message::SearchServiceStatusRefreshRequested => search_service_status_command(),
+            Message::SearchServiceStatusLoaded(outcome) => {
+                match outcome {
+                    Ok(status) => self.search.accept_endpoint_status(status),
+                    Err(error) => self.search.accept_endpoint_failure(error),
+                }
+                Task::none()
+            }
             Message::SystemThemeDetected(theme) => {
                 self.theme = theme;
                 Task::none()
@@ -533,6 +565,7 @@ impl FileBrowser {
             Message::NetworkListThumbnailDownloadsToggled => {
                 self.toggle_network_list_thumbnail_downloads()
             }
+            Message::SearchContentIndexingToggled => self.toggle_search_content_indexing(),
             Message::MaxPreviewFileMibInputChanged(value) => {
                 self.update_max_preview_file_mib_input(value)
             }

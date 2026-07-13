@@ -9,11 +9,15 @@ use super::{
 
 const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
+const SEARCH_CONTENT_INDEXING_ENABLED_KEY: &str = "search_content_indexing_enabled";
+const SEARCH_MAX_EXTRACT_BYTES_KEY: &str = "search_max_extract_bytes";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppConfig {
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
+    pub(crate) search_content_indexing_enabled: bool,
+    pub(crate) search_max_extract_bytes: u64,
 }
 
 impl AppConfig {
@@ -21,12 +25,16 @@ impl AppConfig {
         Self {
             thumbnail_cache_dir: config.thumbnail_cache_dir.clone(),
             rendering_gpu_preference: config.rendering_gpu_preference,
+            search_content_indexing_enabled: config.search_content_indexing_enabled,
+            search_max_extract_bytes: config.search_max_extract_bytes,
         }
     }
 
     pub(crate) fn apply_to_user_config(&self, config: &mut UserConfig) {
         config.thumbnail_cache_dir = self.thumbnail_cache_dir.clone();
         config.rendering_gpu_preference = self.rendering_gpu_preference;
+        config.search_content_indexing_enabled = self.search_content_indexing_enabled;
+        config.search_max_extract_bytes = self.search_max_extract_bytes;
     }
 }
 
@@ -76,6 +84,19 @@ pub(super) fn parse_toml_app_config(content: &str, default: AppConfig) -> AppCon
             config.rendering_gpu_preference = preference;
         }
     }
+    if let Some(value) = document
+        .get(SEARCH_CONTENT_INDEXING_ENABLED_KEY)
+        .and_then(toml::Value::as_bool)
+    {
+        config.search_content_indexing_enabled = value;
+    }
+    if let Some(value) = document
+        .get(SEARCH_MAX_EXTRACT_BYTES_KEY)
+        .and_then(toml::Value::as_integer)
+        .and_then(|value| u64::try_from(value).ok())
+    {
+        config.search_max_extract_bytes = value.max(1);
+    }
     config
 }
 
@@ -99,6 +120,14 @@ pub(super) fn toml_app_config_content(config: &AppConfig) -> Result<String, toml
     document.insert(
         RENDERING_BACKEND_KEY.to_owned(),
         toml::Value::String(config.rendering_gpu_preference.config_value().to_owned()),
+    );
+    document.insert(
+        SEARCH_CONTENT_INDEXING_ENABLED_KEY.to_owned(),
+        toml::Value::Boolean(config.search_content_indexing_enabled),
+    );
+    document.insert(
+        SEARCH_MAX_EXTRACT_BYTES_KEY.to_owned(),
+        toml::Value::Integer(config.search_max_extract_bytes as i64),
     );
 
     let content = toml::to_string_pretty(&document)?;

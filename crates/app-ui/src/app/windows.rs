@@ -221,6 +221,8 @@ impl FileBrowser {
             crate::localization::translate_current("Properties - File Manager")
         } else if self.preview_window == Some(window) {
             crate::localization::translate_current("Preview - File Manager")
+        } else if self.search.is_active() {
+            crate::localization::translate_current("Search - File Manager")
         } else {
             crate::localization::translate_current("File Manager")
         }
@@ -547,6 +549,7 @@ impl FileBrowser {
 
     fn close_all_windows(&mut self) -> Task<Message> {
         self.is_shutting_down = true;
+        self.search.abandon_and_clear_input();
         let _ = self.operation_queue.cancel_all();
         self.clear_file_properties_state();
         self.archive_creation = None;

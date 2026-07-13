@@ -4,7 +4,7 @@ use iced::{Alignment, Element, Length};
 use crate::app::FileBrowser;
 use crate::appearance::{context_menu_button_style, selected_sidebar_item_style};
 use crate::model::Message;
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::toggle_switch::switch_control;
 
@@ -73,7 +73,7 @@ fn max_preview_file_size_input(browser: &FileBrowser) -> Element<'_, Message> {
     .spacing(3);
 
     if let Some(error) = &browser.max_preview_file_mib_error {
-        content = content.push(readable_text(error).size(11).width(Length::Fill));
+        content = content.push(localized_text(error).size(11).width(Length::Fill));
     }
 
     container(content)

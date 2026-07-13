@@ -681,7 +681,7 @@ fn kind_text(entry: &DirectoryEntry) -> String {
         FileKind::Symlink => "Link",
         FileKind::Other => "Other",
     };
-    kind.to_owned()
+    crate::localization::translate_current(kind)
 }
 
 fn owner_text(entry: &DirectoryEntry) -> String {

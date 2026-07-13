@@ -86,6 +86,85 @@ fn dynamic_translation(text: &str) -> Option<String> {
     if let Some(count) = parse_prefixed_count(text, "", " explicit path(s)") {
         return Some(format!("{count} 个显式路径"));
     }
+    if let Some(item_count) = text
+        .strip_suffix(" will be added to:")
+        .and_then(translated_item_count)
+    {
+        return Some(format!("将向以下位置添加 {item_count}："));
+    }
+    if let Some(item_count) = text
+        .strip_prefix("Delete ")
+        .and_then(|body| body.strip_suffix(" from Trash permanently? This cannot be undone."))
+        .and_then(translated_item_count)
+    {
+        return Some(format!(
+            "要从回收站永久删除 {item_count} 吗？此操作无法撤销。"
+        ));
+    }
+    if let Some(item_count) = text
+        .strip_prefix("Delete ")
+        .and_then(|body| body.strip_suffix(" permanently? This cannot be undone."))
+        .and_then(translated_item_count)
+    {
+        return Some(format!("要永久删除 {item_count} 吗？此操作无法撤销。"));
+    }
+    if let Some(size) = text.strip_prefix("Maximum content extraction: ") {
+        return Some(format!("最大内容提取大小：{size}"));
+    }
+    if let Some(error) = text.strip_prefix("Search endpoint unavailable: ") {
+        return Some(format!("搜索端点不可用：{error}"));
+    }
+    if let Some(error) = text.strip_prefix("Service degraded: ") {
+        return Some(format!("服务已降级：{error}"));
+    }
+    if let Some(error) = text.strip_prefix("Service failed: ") {
+        return Some(format!("服务失败：{error}"));
+    }
+    if let Some(error) = text.strip_prefix("Indexed queries unavailable: ") {
+        return Some(format!("索引查询不可用：{error}"));
+    }
+    if let Some(count) = text
+        .strip_prefix("Progress: ")
+        .and_then(|body| body.strip_suffix(" items scanned"))
+    {
+        return Some(format!("进度：已扫描 {count} 个项目"));
+    }
+    if let Some(count) = text
+        .strip_prefix("Indexed: ")
+        .and_then(|body| body.strip_suffix(" items"))
+    {
+        return Some(format!("已索引：{count} 个项目"));
+    }
+    if let Some(error) = text.strip_prefix("Index error: ") {
+        return Some(format!("索引错误：{error}"));
+    }
+    if let Some(error) = text
+        .strip_prefix("Index maintenance: Degraded (")
+        .and_then(|body| body.strip_suffix(')'))
+    {
+        return Some(format!("索引维护：已降级（{error}）"));
+    }
+    if let Some(error) = text
+        .strip_prefix("Index maintenance: Error (")
+        .and_then(|body| body.strip_suffix(')'))
+    {
+        return Some(format!("索引维护：错误（{error}）"));
+    }
+    if let Some(size) = text.strip_prefix("Duration unknown · ") {
+        return Some(format!("时长未知 · {size}"));
+    }
+    if let Some(position) = text.strip_prefix("Playing · ") {
+        return Some(format!("播放中 · {position}"));
+    }
+    if let Some(position) = text.strip_prefix("Paused · ") {
+        return Some(format!("已暂停 · {position}"));
+    }
+    if let Some(percent) = text
+        .strip_prefix("Volume ")
+        .and_then(|body| body.strip_suffix('%'))
+    {
+        return Some(format!("音量 {percent}%"));
+    }
     if let Some(error) = text.strip_prefix("Unavailable: ") {
         return Some(format!("不可用：{error}"));
     }
@@ -122,6 +201,40 @@ fn dynamic_translation(text: &str) -> Option<String> {
     if let Some(error) = text.strip_prefix("Failed to initialize file operation queue storage: ") {
         return Some(format!("初始化文件操作队列存储失败：{error}"));
     }
+    for (prefix, translated_prefix) in [
+        ("Failed to save user preferences: ", "保存用户偏好失败："),
+        (
+            "Failed to save application configuration: ",
+            "保存应用配置失败：",
+        ),
+        ("Failed to save column width: ", "保存列宽失败："),
+        ("Failed to save browser session: ", "保存浏览会话失败："),
+    ] {
+        if let Some(error) = text.strip_prefix(prefix) {
+            return Some(format!("{translated_prefix}{error}"));
+        }
+    }
+    if let Some(path) = text
+        .strip_prefix("Could not open startup directory ")
+        .and_then(|body| body.strip_suffix("; opening the home directory."))
+    {
+        return Some(format!("无法打开启动目录 {path}；将打开主目录。"));
+    }
+    if let Some(error) = text
+        .strip_prefix("Failed to restore saved view state: ")
+        .and_then(|body| body.strip_suffix("; opening the home directory."))
+    {
+        return Some(format!("恢复已保存的视图状态失败：{error}；将打开主目录。"));
+    }
+    if let Some(content) = text
+        .strip_prefix("File is too large to preview (")
+        .and_then(|body| body.strip_suffix('.'))
+    {
+        let (size, maximum) = content.split_once("). Maximum preview size is ")?;
+        return Some(format!(
+            "文件过大，无法预览（{size}）。最大预览大小为 {maximum}。"
+        ));
+    }
     if let Some(path) = text.strip_prefix("Original: ") {
         return Some(format!("原始位置：{path}"));
     }
@@ -150,21 +263,56 @@ fn parse_two_counts(
     Some((left.parse().ok()?, right.parse().ok()?))
 }
 
+fn translated_item_count(label: &str) -> Option<String> {
+    if label == "1 item" {
+        return Some("1 个项目".to_owned());
+    }
+    let count = label.strip_suffix(" items")?.parse::<usize>().ok()?;
+    Some(format!("{count} 个项目"))
+}
+
 fn exact_translation(text: &str) -> Option<&'static str> {
     match text {
         "File Manager" => Some("文件管理器"),
         "Settings - File Manager" => Some("设置 - 文件管理器"),
         "Properties - File Manager" => Some("属性 - 文件管理器"),
         "Preview - File Manager" => Some("预览 - 文件管理器"),
+        "Search - File Manager" => Some("搜索 - 文件管理器"),
         "Closing window..." => Some("正在关闭窗口..."),
         "Settings" => Some("设置"),
+        "Search" => Some("搜索"),
+        "Searching..." => Some("正在搜索..."),
+        "No search results" => Some("没有搜索结果"),
         "General" => Some("通用"),
+        "Error Messages" => Some("错误消息"),
+        "No error messages yet." => Some("暂无错误消息。"),
         "File display" => Some("文件显示"),
         "Startup" => Some("启动"),
         "Terminal" => Some("终端"),
+        "Service and Index" => Some("服务与索引"),
+        "Search endpoint connected" => Some("搜索端点已连接"),
+        "Search endpoint is starting…" => Some("搜索端点正在启动…"),
+        "Service: starting" => Some("服务：正在启动"),
+        "Service: ready" => Some("服务：就绪"),
+        "Service: shutting down" => Some("服务：正在关闭"),
+        "Indexed queries: available" => Some("索引查询：可用"),
+        "Index status: Not initialized" => Some("索引状态：未初始化"),
+        "Index status: Starting" => Some("索引状态：正在启动"),
+        "Index status: Indexing" => Some("索引状态：正在索引"),
+        "Index status: Complete" => Some("索引状态：已完成"),
+        "Index status: Failed" => Some("索引状态：失败"),
+        "Index maintenance: Healthy" => Some("索引维护：正常"),
+        "Index File Contents" => Some("索引文件内容"),
         "File Operations" => Some("文件操作"),
         "Verification" => Some("校验"),
         "Rendering" => Some("渲染"),
+        "Discrete GPU" => Some("独立显卡"),
+        "Restart Required" => Some("需要重启"),
+        "Rendering GPU preference changes require restarting File Manager." => {
+            Some("更改渲染显卡偏好后需要重启文件管理器。")
+        }
+        "Restart" => Some("重启"),
+        "OK" => Some("确定"),
         "Shortcuts" => Some("快捷键"),
         "Show Hidden Files" => Some("显示隐藏文件"),
         "Show Recursive Folder Size In List View" => Some("在列表视图中显示文件夹递归大小"),
@@ -195,10 +343,23 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Choose an existing directory." => Some("请选择一个已存在的目录。"),
         "Enter a whole number of MiB greater than 0." => Some("请输入大于 0 的 MiB 整数。"),
         "Enter a smaller preview size." => Some("请输入更小的预览大小。"),
+        "Enter an archive name." => Some("请输入归档名称。"),
+        "Archive name cannot contain path separators." => Some("归档名称不能包含路径分隔符。"),
+        "That archive already exists. Choose another name." => {
+            Some("该归档已存在，请使用其他名称。")
+        }
+        "Enter the archive password." => Some("请输入归档密码。"),
+        "Incorrect password. Try again." => Some("密码不正确，请重试。"),
         "Running" => Some("运行中"),
         "Image" => Some("图像"),
         "Audio" => Some("音频"),
         "Video" => Some("视频"),
+        "Audio preview" => Some("音频预览"),
+        "Ready to play" => Some("可以播放"),
+        "Opening audio output..." => Some("正在打开音频输出..."),
+        "Stopped" => Some("已停止"),
+        "Finished" => Some("播放完毕"),
+        "Could not start audio preview" => Some("无法启动音频预览"),
         "Tasks" => Some("任务"),
         "No tasks" => Some("没有任务"),
         "Pending" => Some("等待中"),
@@ -244,6 +405,15 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Create Archive..." => Some("创建归档..."),
         "Batch Rename..." => Some("批量重命名..."),
         "Delete" => Some("删除"),
+        "Delete all items in Trash permanently? This cannot be undone." => {
+            Some("要永久删除回收站中的所有项目吗？此操作无法撤销。")
+        }
+        "1 item" => Some("1 个项目"),
+        "New..." => Some("新建..."),
+        "Open Terminal Here" => Some("在此处打开终端"),
+        "Remove from Favorites" => Some("从收藏夹移除"),
+        "No device actions available" => Some("没有可用的设备操作"),
+        "No pending conflicts" => Some("没有待处理的冲突"),
         "Add Network Connection" => Some("添加网络连接"),
         "Edit Network Connection" => Some("编辑网络连接"),
         "Connect Network Location" => Some("连接网络位置"),
@@ -269,6 +439,13 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Safely Remove" => Some("安全移除"),
         "Eject" => Some("弹出"),
         "Common locations" => Some("常用位置"),
+        "Home" => Some("主目录"),
+        "Desktop" => Some("桌面"),
+        "Documents" => Some("文档"),
+        "Downloads" => Some("下载"),
+        "Pictures" => Some("图片"),
+        "Music" => Some("音乐"),
+        "Videos" => Some("视频"),
         "Desktop, documents, downloads, media, and user config." => {
             Some("桌面、文档、下载、媒体目录和用户配置目录。")
         }
@@ -290,11 +467,17 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Update" => Some("更新"),
         "Out of range" => Some("超出范围"),
         "Preview" => Some("预览"),
+        "No items" => Some("没有项目"),
+        "Trash is empty" => Some("回收站为空"),
         "Select a file and press Space to load preview" => Some("选择一个文件并按空格键加载预览"),
         "Loading preview..." => Some("正在加载预览..."),
         "Preparing download..." => Some("准备下载中..."),
         "Empty directory" => Some("空目录"),
         "Empty archive" => Some("空归档"),
+        "(empty file)" => Some("（空文件）"),
+        "Text preview is not ready" => Some("文本预览尚未就绪"),
+        "Rendered" => Some("渲染"),
+        "Raw" => Some("原文"),
         "Select an item to preview" => Some("请选择一个项目进行预览"),
         "Properties" => Some("属性"),
         "No properties are available." => Some("没有可用属性。"),
@@ -303,6 +486,7 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "File Information" => Some("文件信息"),
         "Permissions" => Some("权限"),
         "Type" => Some("类型"),
+        "Contents" => Some("内容"),
         "Location" => Some("位置"),
         "Created" => Some("创建时间"),
         "Modified" => Some("修改时间"),
@@ -339,10 +523,17 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Applying permissions to enclosed items..." => Some("正在将权限应用到包含的项目..."),
         "Unavailable" => Some("不可用"),
         "Folder" => Some("文件夹"),
+        "File" => Some("文件"),
+        "Symbolic Link" => Some("符号链接"),
+        "Broken Link" => Some("损坏的链接"),
+        "Link" => Some("链接"),
+        "Other" => Some("其他"),
         "Sort" => Some("排序"),
         "Extension" => Some("扩展名"),
+        "Ext" => Some("扩展名"),
         "Case" => Some("大小写"),
         "Sequence" => Some("序号"),
+        "Seq" => Some("序号"),
         "Replace" => Some("替换"),
         "Insert" => Some("插入"),
         "Slice" => Some("切片"),
@@ -352,6 +543,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Regex" => Some("正则"),
         "Batch" => Some("批处理"),
         "Selection order" => Some("选择顺序"),
+        "All" => Some("全部"),
+        "New extension" => Some("新扩展名"),
         "Natural" => Some("自然排序"),
         "Name A-Z" => Some("名称 A-Z"),
         "Name Z-A" => Some("名称 Z-A"),
@@ -393,6 +586,7 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Already exists" => Some("已存在"),
         "Rule error" => Some("规则错误"),
         "Original stem" => Some("原始名称主体"),
+        "Original" => Some("原始位置"),
         "Ignore case" => Some("忽略大小写"),
         "Ignore extension" => Some("忽略扩展名"),
         "Start" => Some("起始"),
@@ -437,10 +631,15 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Next" => Some("下一步"),
         "Format" => Some("格式"),
         "Compression" => Some("压缩"),
+        "No compression" => Some("不压缩"),
+        "Fast" => Some("快速"),
+        "Balanced" => Some("均衡"),
+        "Maximum" => Some("最高"),
         "tar.gz archives do not support passwords." => Some("tar.gz 归档不支持密码。"),
         "Create" => Some("创建"),
         "No selected items" => Some("没有已选择的项目"),
         "Checking" => Some("检查"),
+        "Checking..." => Some("正在检查..."),
         "Extract" => Some("解压"),
         "Checking password..." => Some("正在检查密码..."),
         "Enter the archive password to continue." => Some("请输入归档密码以继续。"),
@@ -453,6 +652,32 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         }
         "Max File Preview" => Some("最大文件预览"),
         "MiB" => Some("MiB"),
+        "(default)" => Some("（默认）"),
+        "File is too large to preview" => Some("文件过大，无法预览"),
+        "Preview is only available for UTF-8 text files" => {
+            Some("仅支持预览 UTF-8 文本文件")
+        }
+        "Preview is only available for directories, archives, audio files, images, and UTF-8 text files" => {
+            Some("仅支持预览目录、归档、音频、图像和 UTF-8 文本文件")
+        }
+        "Archive preview supports .zip, .tar, .tar.gz, .tgz, .7z, and .rar files" => {
+            Some("归档预览支持 .zip、.tar、.tar.gz、.tgz、.7z 和 .rar 文件")
+        }
+        "Image preview has invalid dimensions" => Some("图像预览尺寸无效"),
+        "Animated image preview has invalid dimensions" => Some("动态图像预览尺寸无效"),
+        "Animated image preview has no frames" => Some("动态图像预览没有可用帧"),
+        "This GIF has too many frames to inspect safely" => Some("此 GIF 帧数过多，无法安全解析"),
+        "Selected item is no longer available" => Some("所选项目已不可用"),
+        "Task was interrupted and cannot safely resume" => Some("任务已中断，无法安全恢复"),
+        "Finish the current file operation prompt before dropping files" => {
+            Some("请先完成当前文件操作提示，再拖放文件")
+        }
+        "Delete local and network items separately so local files can use Trash" => {
+            Some("请分别删除本地和网络项目，以便本地文件可以移入回收站")
+        }
+        "Saved view state could not be restored; opening the home directory." => {
+            Some("无法恢复已保存的视图状态；将打开主目录。")
+        }
         "Strong Verification" => Some("强校验"),
         "Compare copied file content hashes after standard metadata checks." => {
             Some("在标准元数据检查后，对复制文件的内容哈希再做比较。")
@@ -524,17 +749,47 @@ mod tests {
 
     #[test]
     fn translates_known_static_text() {
-        assert_eq!(translate(UiLanguage::Chinese, "Settings"), "设置");
+        for text in [
+            "Search",
+            "Error Messages",
+            "Service and Index",
+            "Index File Contents",
+            "Discrete GPU",
+            "Audio preview",
+            "Text preview is not ready",
+            "No pending conflicts",
+            "File",
+            "Symbolic Link",
+            "No compression",
+            "Open Terminal Here",
+        ] {
+            assert_ne!(translate(UiLanguage::Chinese, text), text);
+        }
     }
 
     #[test]
     fn translates_known_dynamic_text() {
-        assert_eq!(
-            translate(
-                UiLanguage::Chinese,
-                "Only showing 50 lines. Full line count: 200."
+        for (text, expected) in [
+            (
+                "Progress: 12,345 items scanned",
+                "进度：已扫描 12,345 个项目",
             ),
-            "当前仅显示 50 行，完整行数为 200。"
-        );
+            ("Indexed: 98,765 items", "已索引：98,765 个项目"),
+            (
+                "Index maintenance: Degraded (watch gap)",
+                "索引维护：已降级（watch gap）",
+            ),
+            (
+                "Search endpoint unavailable: socket closed",
+                "搜索端点不可用：socket closed",
+            ),
+            (
+                "Maximum content extraction: 8 MiB",
+                "最大内容提取大小：8 MiB",
+            ),
+            ("Volume 75%", "音量 75%"),
+        ] {
+            assert_eq!(translate(UiLanguage::Chinese, text), expected);
+        }
     }
 }

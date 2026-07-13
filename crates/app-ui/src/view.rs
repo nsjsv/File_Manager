@@ -11,6 +11,7 @@ mod option_controls;
 mod preview_panel;
 mod properties_window;
 mod rendering_settings;
+mod search_panel;
 mod settings_window;
 mod shortcut_settings;
 mod sidebar_panel;
@@ -71,6 +72,7 @@ use floating_panels::{
     file_drop_operation_panel, open_with_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
+use search_panel::{search_input_panel, search_results_view};
 use sidebar_panel::sidebar_view;
 use toolbar_controls::{navigation_button_group, view_mode_button_group};
 use transfer_conflict::transfer_conflict_panel;
@@ -367,6 +369,7 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
     let navigation_bar = row![
         navigation_button_group(pane_id),
         path_input_panel(pane),
+        search_input_panel(browser),
         view_mode_button_group(pane),
     ]
     .spacing(8)
@@ -393,6 +396,10 @@ fn browser_content_view<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
 ) -> Element<'a, Message> {
+    if browser.search.is_active() {
+        return search_results_view(browser);
+    }
+
     match pane.view_mode {
         BrowserViewMode::Columns => column_browser_view(browser, pane),
         BrowserViewMode::List => list_browser_view(browser, pane),
@@ -603,7 +610,7 @@ fn tab_width_portion(intro_fraction: f32) -> u16 {
 
 fn tab_title_text(directory: &Path, is_trash_view: bool) -> String {
     if is_trash_view {
-        return TRASH_LOCATION_LABEL.to_owned();
+        return crate::localization::translate_current(TRASH_LOCATION_LABEL);
     }
 
     let title = directory

@@ -7,7 +7,7 @@ use iced::{Alignment, Element, Length};
 use crate::app::FileBrowser;
 use crate::appearance::context_menu_button_style;
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::auxiliary_window_layout::{
     auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
@@ -70,6 +70,7 @@ fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
         SettingsCategory::FileOperations => {
             file_operation_settings_detail(browser, scrollbar_visibility)
         }
+        SettingsCategory::Search => search_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::Rendering => rendering_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::Shortcuts => shortcut_settings_detail(browser, scrollbar_visibility),
     }
@@ -133,10 +134,10 @@ fn error_messages_settings_detail(
                 error_content = error_content.push(readable_text(title).size(13));
             }
             for detail in message.details {
-                error_content = error_content.push(readable_text(detail).size(12));
+                error_content = error_content.push(localized_text(detail).size(12));
             }
             error_content =
-                error_content.push(readable_text(message.message).size(12).width(Length::Fill));
+                error_content.push(localized_text(message.message).size(12).width(Length::Fill));
             content = content.push(container(error_content).padding([6, 0]).width(Length::Fill));
         }
     }
@@ -180,6 +181,288 @@ fn rendering_settings_detail(
         .width(Length::Fill),
         scrollbar_visibility,
     )
+}
+
+fn search_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
+    settings_detail_scroller(
+        column![
+            readable_text("Search").size(20),
+            search_content_indexing_button(browser),
+            localized_text(format!(
+                "Maximum content extraction: {}",
+                crate::formatting::format_file_size(browser.user_config().search_max_extract_bytes)
+            ))
+            .size(12),
+            readable_text("Service and Index").size(13),
+            search_service_status_rows(browser),
+        ]
+        .spacing(10)
+        .width(Length::Fill),
+        scrollbar_visibility,
+    )
+}
+
+fn search_service_status_rows(browser: &FileBrowser) -> Element<'_, Message> {
+    use file_search::{IndexedQueryAvailability, SearchServicePhase};
+
+    use crate::model::search::SearchEndpointState;
+
+    let SearchEndpointState::Connected(status) = &browser.search.endpoint else {
+        let endpoint_message = match &browser.search.endpoint {
+            SearchEndpointState::Starting => "Search endpoint is starting…".to_owned(),
+            SearchEndpointState::Unavailable { message } => {
+                format!("Search endpoint unavailable: {message}")
+            }
+            SearchEndpointState::Connected(_) => unreachable!(),
+        };
+        return container(localized_text(endpoint_message).size(12))
+            .padding([5, 8])
+            .width(Length::Fill)
+            .into();
+    };
+
+    let phase_message = match &status.phase {
+        SearchServicePhase::Starting => "Service: starting".to_owned(),
+        SearchServicePhase::Ready => "Service: ready".to_owned(),
+        SearchServicePhase::Degraded { message } => format!("Service degraded: {message}"),
+        SearchServicePhase::Failed { message } => format!("Service failed: {message}"),
+        SearchServicePhase::ShuttingDown => "Service: shutting down".to_owned(),
+    };
+    let query_message = match &status.query_availability {
+        IndexedQueryAvailability::Available => "Indexed queries: available".to_owned(),
+        IndexedQueryAvailability::Unavailable { message } => {
+            format!("Indexed queries unavailable: {message}")
+        }
+    };
+    let mut status_content = column![
+        readable_text("Search endpoint connected").size(12),
+        localized_text(phase_message).size(12),
+        localized_text(query_message).size(12),
+    ]
+    .spacing(3);
+    let index_status_lines = status
+        .index_status
+        .as_ref()
+        .map(index_status_lines)
+        .unwrap_or_else(|| vec!["Index status: Not initialized".to_owned()]);
+    for (line_index, line) in index_status_lines.into_iter().enumerate() {
+        status_content =
+            status_content.push(localized_text(line).size(if line_index == 0 { 13 } else { 12 }));
+    }
+
+    container(status_content)
+        .padding([5, 8])
+        .width(Length::Fill)
+        .into()
+}
+
+fn index_status_lines(status: &file_search::IndexStatus) -> Vec<String> {
+    use file_search::{IndexHealth, IndexPhase};
+
+    let mut lines = match &status.phase {
+        IndexPhase::Starting => vec!["Index status: Starting".to_owned()],
+        IndexPhase::Checking {
+            checked_entries,
+            changed_entries,
+        } => vec![
+            "Index status: Checking".to_owned(),
+            format!("Checked: {} items", format_count(*checked_entries)),
+            format!("Changed: {} items", format_count(*changed_entries)),
+        ],
+        IndexPhase::Crawling {
+            scanned_entries,
+            current_scope,
+        } => vec![
+            "Index status: Crawling".to_owned(),
+            format!("Scanned: {} items", format_count(*scanned_entries)),
+            format!("Scope: {}", current_scope.to_string_lossy()),
+        ],
+        IndexPhase::Applying { pending_mutations } => vec![
+            "Index status: Applying".to_owned(),
+            format!("Pending changes: {}", format_count(*pending_mutations)),
+        ],
+        IndexPhase::Complete { indexed_files } => vec![
+            "Index status: Complete".to_owned(),
+            format!("Indexed: {} items", format_count(*indexed_files)),
+        ],
+        IndexPhase::Failed { message } => vec![
+            "Index status: Failed".to_owned(),
+            format!("Index error: {message}"),
+        ],
+    };
+    lines.push(match &status.health {
+        IndexHealth::Healthy => "Index maintenance: Healthy".to_owned(),
+        IndexHealth::Degraded { message } => {
+            format!("Index maintenance: Degraded ({message})")
+        }
+        IndexHealth::Error { message } => format!("Index maintenance: Error ({message})"),
+    });
+    lines
+}
+
+#[cfg(test)]
+mod index_status_presentation_tests {
+    use file_search::{IndexHealth, IndexPhase, IndexStatus};
+
+    use super::index_status_lines;
+
+    fn status(phase: IndexPhase, health: IndexHealth) -> IndexStatus {
+        IndexStatus {
+            phase,
+            health,
+            capabilities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn index_phase_lines_distinguish_starting_checking_crawling_applying_complete_and_failed() {
+        assert_eq!(
+            index_status_lines(&status(IndexPhase::Starting, IndexHealth::Healthy)),
+            vec![
+                "Index status: Starting".to_owned(),
+                "Index maintenance: Healthy".to_owned(),
+            ]
+        );
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Checking {
+                    checked_entries: 12_345,
+                    changed_entries: 6,
+                },
+                IndexHealth::Healthy,
+            )),
+            vec![
+                "Index status: Checking".to_owned(),
+                "Checked: 12,345 items".to_owned(),
+                "Changed: 6 items".to_owned(),
+                "Index maintenance: Healthy".to_owned(),
+            ]
+        );
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Crawling {
+                    scanned_entries: 321,
+                    current_scope: "/home/me/new".into(),
+                },
+                IndexHealth::Healthy,
+            )),
+            vec![
+                "Index status: Crawling".to_owned(),
+                "Scanned: 321 items".to_owned(),
+                "Scope: /home/me/new".to_owned(),
+                "Index maintenance: Healthy".to_owned(),
+            ]
+        );
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Applying {
+                    pending_mutations: 17,
+                },
+                IndexHealth::Healthy,
+            )),
+            vec![
+                "Index status: Applying".to_owned(),
+                "Pending changes: 17".to_owned(),
+                "Index maintenance: Healthy".to_owned(),
+            ]
+        );
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Complete {
+                    indexed_files: 98_765,
+                },
+                IndexHealth::Healthy,
+            )),
+            vec![
+                "Index status: Complete".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
+                "Index maintenance: Healthy".to_owned(),
+            ]
+        );
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Failed {
+                    message: "database unavailable".to_owned(),
+                },
+                IndexHealth::Healthy,
+            )),
+            vec![
+                "Index status: Failed".to_owned(),
+                "Index error: database unavailable".to_owned(),
+                "Index maintenance: Healthy".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn completed_count_remains_visible_when_maintenance_is_degraded() {
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Complete { indexed_files: 41 },
+                IndexHealth::Degraded {
+                    message: "one directory is not watched".to_owned(),
+                },
+            )),
+            vec![
+                "Index status: Complete".to_owned(),
+                "Indexed: 41 items".to_owned(),
+                "Index maintenance: Degraded (one directory is not watched)".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn active_progress_remains_visible_when_maintenance_has_failed() {
+        assert_eq!(
+            index_status_lines(&status(
+                IndexPhase::Checking {
+                    checked_entries: 128,
+                    changed_entries: 2,
+                },
+                IndexHealth::Error {
+                    message: "watcher stopped".to_owned(),
+                },
+            )),
+            vec![
+                "Index status: Checking".to_owned(),
+                "Checked: 128 items".to_owned(),
+                "Changed: 2 items".to_owned(),
+                "Index maintenance: Error (watcher stopped)".to_owned(),
+            ]
+        );
+    }
+}
+
+fn format_count(value: u64) -> String {
+    let digits = value.to_string();
+    let bytes = digits.as_bytes();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, byte) in bytes.iter().enumerate() {
+        if index > 0 && (bytes.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(*byte as char);
+    }
+    grouped
+}
+
+fn search_content_indexing_button(browser: &FileBrowser) -> Button<'static, Message> {
+    let label = row![
+        readable_text("Index File Contents")
+            .size(12)
+            .width(Length::Fill),
+        switch_control(browser.user_config().search_content_indexing_enabled),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    button(container(label).padding([5, 8]).width(Length::Fill))
+        .on_press(Message::SearchContentIndexingToggled)
+        .width(Length::Fill)
+        .style(context_menu_button_style())
 }
 
 fn shortcut_settings_detail(
@@ -343,7 +626,7 @@ fn startup_custom_directory_input(browser: &FileBrowser) -> Element<'_, Message>
     .align_y(Alignment::Center)]
     .spacing(3);
     if let Some(error) = &browser.startup_custom_directory_error {
-        content = content.push(readable_text(error).size(11).width(Length::Fill));
+        content = content.push(localized_text(error).size(11).width(Length::Fill));
     }
     container(content)
         .padding([5, 8])

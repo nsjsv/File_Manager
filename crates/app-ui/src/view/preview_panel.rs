@@ -146,7 +146,7 @@ fn preview_panel<'a>(
                 size,
             )
         }
-        PreviewState::Error(error) => column![readable_text(error).size(14)],
+        PreviewState::Error(error) => column![localized_text(error).size(14)],
     }
     .spacing(6);
 
@@ -346,7 +346,7 @@ fn preview_tree_status_row(entry: &PreviewTreeEntry, message: String) -> Element
         indent,
         Space::new().width(Length::Fixed(PREVIEW_TREE_TOGGLE_WIDTH)),
         Space::new().width(Length::Fixed(PREVIEW_ICON_SIZE)),
-        readable_text(message).size(13).width(Length::Fill),
+        localized_text(message).size(13).width(Length::Fill),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -489,8 +489,8 @@ fn audio_preview_panel(
     let playback = playback.filter(|playback| playback.path.as_path() == path);
     let title = column![
         readable_text("Audio preview").size(17),
-        readable_text(audio_preview_summary(duration, len)).size(12),
-        readable_text(audio_preview_status(playback, duration)).size(12),
+        localized_text(audio_preview_summary(duration, len)).size(12),
+        localized_text(audio_preview_status(playback, duration)).size(12),
     ]
     .spacing(4)
     .width(Length::Fixed(150.0));
@@ -614,7 +614,8 @@ fn audio_preview_status(
         AudioPreviewPlaybackStatus::Finished => "Finished".to_owned(),
         AudioPreviewPlaybackStatus::Error => playback
             .error
-            .clone()
+            .as_ref()
+            .map(|error| format!("Audio unavailable: {error}"))
             .unwrap_or_else(|| "Could not start audio preview".to_owned()),
     }
 }

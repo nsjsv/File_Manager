@@ -91,12 +91,14 @@ fn app_config_toml_contains_only_startup_level_keys() {
     let app_config = AppConfig {
         thumbnail_cache_dir: PathBuf::from("/tmp/thumbnails"),
         rendering_gpu_preference: RenderingGpuPreference::HighPerformanceGpu,
+        search_content_indexing_enabled: false,
+        search_max_extract_bytes: 4096,
     };
 
     let content = app_config::toml_app_config_content(&app_config).unwrap();
     let document = content.parse::<toml::Table>().unwrap();
 
-    assert_eq!(document.len(), 2);
+    assert_eq!(document.len(), 4);
     assert_eq!(
         document
             .get("thumbnail_cache_dir")
@@ -108,6 +110,18 @@ fn app_config_toml_contains_only_startup_level_keys() {
             .get("rendering_backend")
             .and_then(toml::Value::as_str),
         Some("gpu")
+    );
+    assert_eq!(
+        document
+            .get("search_content_indexing_enabled")
+            .and_then(toml::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        document
+            .get("search_max_extract_bytes")
+            .and_then(toml::Value::as_integer),
+        Some(4096)
     );
     for key in [
         "show_hidden_files",
@@ -136,6 +150,8 @@ fn writes_app_config_without_user_preferences() {
     let app_config = AppConfig {
         thumbnail_cache_dir: temp_dir.path().join("thumbnails"),
         rendering_gpu_preference: RenderingGpuPreference::DisplayGpu,
+        search_content_indexing_enabled: true,
+        search_max_extract_bytes: 8192,
     };
 
     app_config::write_app_config(&path, &app_config).expect("write app config");
@@ -143,6 +159,8 @@ fn writes_app_config_without_user_preferences() {
     let content = fs::read_to_string(path).expect("read app config");
     assert!(content.starts_with("# File Manager application configuration\n"));
     assert!(content.contains("rendering_backend = \"display\""));
+    assert!(content.contains("search_content_indexing_enabled = true"));
+    assert!(content.contains("search_max_extract_bytes = 8192"));
     assert!(!content.contains("show_hidden_files"));
     assert!(!content.contains("shortcuts"));
 }
@@ -155,6 +173,8 @@ fn user_preferences_round_trip_through_sqlite() {
     let app_config = AppConfig {
         thumbnail_cache_dir: PathBuf::from("/var/cache/file-manager/thumbs"),
         rendering_gpu_preference: RenderingGpuPreference::HighPerformanceGpu,
+        search_content_indexing_enabled: false,
+        search_max_extract_bytes: 1234,
     };
     let mut config = default_user_config();
     config.show_hidden_files = true;

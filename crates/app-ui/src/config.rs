@@ -33,6 +33,7 @@ pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
 pub(crate) const PREVIEW_FILE_SIZE_UNIT_BYTES: u64 = 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PREVIEW_FILE_BYTES: u64 = 3 * 1024 * 1024;
+pub(crate) const DEFAULT_SEARCH_MAX_EXTRACT_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
@@ -237,6 +238,8 @@ pub(crate) struct UserConfig {
     pub(crate) network_connections: Vec<SavedNetworkConnection>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) rendering_gpu_preference: RenderingGpuPreference,
+    pub(crate) search_content_indexing_enabled: bool,
+    pub(crate) search_max_extract_bytes: u64,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) list_view_preferences: crate::model::ListViewPreferences,
@@ -277,6 +280,8 @@ pub(crate) fn default_user_config() -> UserConfig {
         network_connections: Vec::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
+        search_content_indexing_enabled: true,
+        search_max_extract_bytes: DEFAULT_SEARCH_MAX_EXTRACT_BYTES,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         list_view_preferences: crate::model::ListViewPreferences::default(),
@@ -300,6 +305,8 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         network_connections: Vec::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
         rendering_gpu_preference: DEFAULT_RENDERING_GPU_PREFERENCE,
+        search_content_indexing_enabled: true,
+        search_max_extract_bytes: DEFAULT_SEARCH_MAX_EXTRACT_BYTES,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         list_view_preferences: crate::model::ListViewPreferences::default(),

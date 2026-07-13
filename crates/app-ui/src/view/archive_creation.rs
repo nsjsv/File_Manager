@@ -10,7 +10,7 @@ use crate::appearance::context_menu_style;
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::Message;
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 use super::option_controls::{
     inactive_primary_action_button, primary_action_button, secondary_action_button,
@@ -60,7 +60,7 @@ pub(super) fn archive_creation_panel(state: &ArchiveCreationState) -> Element<'_
         .spacing(4),
         archive_password_input(state),
         readable_text(target_summary(state)).size(12),
-        readable_text(validation_error).size(12),
+        localized_text(validation_error).size(12),
         archive_creation_actions(state),
     ]
     .spacing(10)

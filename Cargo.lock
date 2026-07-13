@@ -147,6 +147,7 @@ dependencies = [
  "dirs",
  "file-core",
  "file-operation-store",
+ "file-search",
  "gif 0.14.2",
  "iced",
  "iced_runtime",
@@ -1469,6 +1470,22 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "file-search"
+version = "0.1.1"
+dependencies = [
+ "dirs",
+ "libc",
+ "notify",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

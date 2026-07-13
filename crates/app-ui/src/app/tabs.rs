@@ -156,6 +156,7 @@ impl FileBrowser {
             return Task::none();
         };
 
+        self.search.abandon_and_clear_input();
         self.sync_active_tab_state();
         self.active_tab_id = tab.id;
         self.is_trash_view = tab.is_trash_view;

@@ -5,7 +5,7 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction};
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, TextPreviewLineLimitNotice};
-use crate::typography::readable_text;
+use crate::typography::{localized_text, readable_text};
 
 const MARKDOWN_BODY_TEXT_SIZE: u32 = 14;
 const MARKDOWN_CODE_TEXT_SIZE: u32 = 13;
@@ -33,7 +33,7 @@ pub(super) fn markdown_preview_body(
         }
     }
     if let Some(notice) = line_limit_notice {
-        content = content.push(readable_text(notice.label()).size(12));
+        content = content.push(localized_text(notice.label()).size(12));
     }
 
     let scroll_region = ScrollbarRegion::MarkdownPreview;

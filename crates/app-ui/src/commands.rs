@@ -62,6 +62,10 @@ pub(crate) use properties::{
 };
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
+mod search;
+pub(crate) use search::{directory_fallback_search_command, search_command};
+mod search_service;
+pub(crate) use search_service::{ensure_search_service_command, search_service_status_command};
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
 mod wayland_dnd;

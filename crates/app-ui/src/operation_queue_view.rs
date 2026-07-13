@@ -122,8 +122,9 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
         .width(Length::Fill);
 
     if let Some(error) = task.error.as_deref() {
+        let error = crate::localization::translate_current(error);
         body = body.push(
-            readable_text(format_middle_ellipsized_text(error, TASK_ERROR_MAX_CHARS))
+            readable_text(format_middle_ellipsized_text(&error, TASK_ERROR_MAX_CHARS))
                 .size(11)
                 .width(Length::Fill),
         );

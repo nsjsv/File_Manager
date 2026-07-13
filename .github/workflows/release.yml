@@ -16,6 +16,9 @@ env:
   APP_NAME: file-manager
   CARGO_PACKAGE: app-ui
   CARGO_BINARY: app-ui
+  DAEMON_CARGO_PACKAGE: file-search
+  DAEMON_BINARY: file-searchd
+  SEARCH_SERVICE_UNIT: file-manager-search.service
   ARCH: x86_64
 
 jobs:
@@ -75,8 +78,8 @@ jobs:
             exit 1
           fi
 
-      - name: Build release binary
-        run: cargo build --release --locked -p "${CARGO_PACKAGE}"
+      - name: Build release binaries
+        run: cargo build --release --locked -p "${CARGO_PACKAGE}" -p "${DAEMON_CARGO_PACKAGE}"
 
       - name: Package release archive
         id: package
@@ -86,8 +89,14 @@ jobs:
           payload="dist/${package_dir}"
 
           install -Dm755 "target/release/${CARGO_BINARY}" "${payload}/usr/bin/${APP_NAME}"
+          install -Dm755 "target/release/${DAEMON_BINARY}" "${payload}/usr/lib/${APP_NAME}/${DAEMON_BINARY}"
+          install -Dm644 "packaging/linux/${SEARCH_SERVICE_UNIT}" "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
           install -Dm644 LICENSE "${payload}/usr/share/licenses/${APP_NAME}/LICENSE"
           install -Dm644 packaging/linux/file-manager.desktop "${payload}/usr/share/applications/${APP_NAME}.desktop"
+
+          test -x "${payload}/usr/bin/${APP_NAME}"
+          test -x "${payload}/usr/lib/${APP_NAME}/${DAEMON_BINARY}"
+          test -f "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
 
           tar -C dist -czf "${asset_name}" "${package_dir}"
           sha256sum "${asset_name}" > SHA256SUMS

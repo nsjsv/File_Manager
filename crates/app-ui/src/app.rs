@@ -27,6 +27,7 @@ mod properties;
 mod rendering_settings;
 mod runtime;
 mod scrollbar;
+mod search;
 mod selection;
 mod session_persistence;
 mod session_restore;
@@ -77,11 +78,13 @@ use crate::app::windows::{
     MAIN_WINDOW_INITIAL_WIDTH,
 };
 use crate::commands::{
-    file_operation_subscription, startup_environment_command, wayland_dnd_window_handle_command,
+    ensure_search_service_command, file_operation_subscription, startup_environment_command,
+    wayland_dnd_window_handle_command,
 };
 use crate::config;
 use crate::config::UiLanguage;
 use crate::localization;
+use crate::model::search::SearchState;
 use crate::model::{
     AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
@@ -110,6 +113,7 @@ const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const SEARCH_SERVICE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct FileBrowser {
     pub(crate) home_dir: PathBuf,
@@ -199,6 +203,7 @@ pub(crate) struct FileBrowser {
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) selected_settings_category: SettingsCategory,
+    pub(crate) search: SearchState,
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) view_mode: BrowserViewMode,
@@ -420,6 +425,7 @@ impl FileBrowser {
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             selected_settings_category: SettingsCategory::General,
+            search: SearchState::new(),
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             view_mode: initial_view_mode,
@@ -464,7 +470,11 @@ impl FileBrowser {
         startup_trace::mark_once("file_browser_new_ready");
         (
             browser,
-            Task::batch([startup_environment_command(), system_theme_command()]),
+            Task::batch([
+                startup_environment_command(),
+                system_theme_command(),
+                ensure_search_service_command(),
+            ]),
         )
     }
 
@@ -493,6 +503,15 @@ impl FileBrowser {
                     .keys()
                     .cloned()
                     .map(directory_watch_subscription),
+            );
+        }
+
+        if self.settings_window.is_some()
+            && self.selected_settings_category == crate::model::SettingsCategory::Search
+        {
+            subscriptions.push(
+                time::every(SEARCH_SERVICE_STATUS_REFRESH_INTERVAL)
+                    .map(|_| Message::SearchServiceStatusRefreshRequested),
             );
         }
 

@@ -8,6 +8,7 @@ use desktop_linux::{
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 use file_operation_store::{StoredTask, TaskQueueStore};
+use file_search::{SearchHit, SearchServiceStatus};
 use iced::keyboard;
 use iced::widget::text_editor;
 use iced::{event, mouse, window, Point, Rectangle, Theme};
@@ -75,6 +76,8 @@ pub(crate) use preview::{
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
+pub(crate) mod search;
+pub(crate) use search::{DirectoryFallbackCompletion, IndexedSearchOutcome};
 mod session;
 pub(crate) use session::{
     pane_session_from_live, snapshot_from_stored, snapshot_to_stored, BrowserPaneSession,
@@ -102,6 +105,7 @@ pub(crate) enum ScrollbarRegion {
     OpenWithApplications,
     OperationQueue,
     BatchRenamePreview,
+    SearchResults,
     PreviewDirectory,
     PreviewArchive,
     MarkdownPreview,
@@ -295,6 +299,17 @@ pub(crate) enum Message {
     PathSuggestionSelected(BrowserPaneId, PathBuf),
     PathInputStabilized(BrowserPaneId, PathSuggestionRequest),
     PathSuggestionsLoaded(BrowserPaneId, PathSuggestionRequest, Vec<PathBuf>),
+    SearchInputChanged(String),
+    SearchSubmitted,
+    SearchResultsLoaded(u64, IndexedSearchOutcome),
+    SearchDirectoryBatchLoaded(u64, Vec<SearchHit>),
+    SearchDirectoryFinished(u64, DirectoryFallbackCompletion),
+    SearchResultPressed(SearchHit),
+    SearchCleared,
+    SearchResultsScrolled,
+    SearchServiceEnsured(Result<SearchServiceStatus, String>),
+    SearchServiceStatusRefreshRequested,
+    SearchServiceStatusLoaded(Result<SearchServiceStatus, String>),
     SystemThemeDetected(Theme),
     UserPreferencesSaved(Result<(), String>),
     AppConfigSaved(Result<(), String>),
@@ -307,6 +322,7 @@ pub(crate) enum Message {
     ShowHiddenFilesToggled,
     ListDirectorySizeDisplayModeToggled,
     NetworkListThumbnailDownloadsToggled,
+    SearchContentIndexingToggled,
     MaxPreviewFileMibInputChanged(String),
     MaxPreviewFileMibInputCommitted,
     LanguageSettingSelected(UiLanguageSetting),

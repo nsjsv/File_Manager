@@ -4,16 +4,18 @@ pub(crate) enum SettingsCategory {
     ErrorMessages,
     Network,
     FileOperations,
+    Search,
     Rendering,
     Shortcuts,
 }
 
 impl SettingsCategory {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::General,
         Self::ErrorMessages,
         Self::Network,
         Self::FileOperations,
+        Self::Search,
         Self::Rendering,
         Self::Shortcuts,
     ];
@@ -24,6 +26,7 @@ impl SettingsCategory {
             Self::ErrorMessages => "Error Messages",
             Self::Network => "Network",
             Self::FileOperations => "File Operations",
+            Self::Search => "Search",
             Self::Rendering => "Rendering",
             Self::Shortcuts => "Shortcuts",
         }

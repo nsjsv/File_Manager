@@ -44,7 +44,8 @@ const CONTEXT_MENU_ITEM_SPACING: f32 = 4.0;
 const CONTEXT_MENU_ITEM_HEIGHT: f32 = 28.0;
 const LIST_COLUMN_VISIBILITY_BUTTON_HEIGHT: f32 = 28.0;
 pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
-    let message = format_middle_ellipsized_text(error, ERROR_NOTIFICATION_MAX_CHARS);
+    let message = crate::localization::translate_current(error);
+    let message = format_middle_ellipsized_text(&message, ERROR_NOTIFICATION_MAX_CHARS);
     let content = row![
         themed_icon(IconSymbol::TriangleAlert, IconTone::Warning, MENU_ICON_SIZE),
         readable_text(message).size(13).width(Length::Fill),
@@ -111,7 +112,7 @@ pub(super) fn destructive_action_confirmation_panel(
     .spacing(6)
     .align_y(Alignment::Center);
 
-    let content = column![title_row, readable_text(body).size(13), actions]
+    let content = column![title_row, localized_text(body).size(13), actions]
         .spacing(12)
         .width(Length::Fill);
 
@@ -250,7 +251,11 @@ fn open_with_application_list(
     let mut applications = Column::new().spacing(4);
     for application in state.applications() {
         let label = if application.is_default {
-            format!("{} (default)", application.name)
+            format!(
+                "{} {}",
+                application.name,
+                crate::localization::translate_current("(default)")
+            )
         } else {
             application.name.clone()
         };

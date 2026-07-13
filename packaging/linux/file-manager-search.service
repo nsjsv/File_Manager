@@ -1,0 +1,33 @@
+[Unit]
+Description=File Manager indexed search service
+Documentation=https://github.com/nsjsv/File_Manager
+ConditionControlGroupController=v2
+ConditionControlGroupController=memory
+ConditionControlGroupController=cpu
+
+[Service]
+Type=exec
+ExecStartPre=/usr/lib/file-manager/file-searchd --shutdown-existing
+ExecStart=/usr/lib/file-manager/file-searchd
+ExecStop=/usr/lib/file-manager/file-searchd --shutdown-existing
+
+MemoryAccounting=yes
+MemoryHigh=80000000
+MemoryMax=96000000
+MemorySwapMax=0
+CPUAccounting=yes
+CPUQuota=5%
+
+OOMPolicy=kill
+Restart=on-failure
+RestartSec=2s
+RestartPreventExitStatus=SIGKILL
+KillMode=control-group
+KillSignal=SIGTERM
+SendSIGKILL=yes
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+UMask=0077
+
+[Install]
+WantedBy=default.target

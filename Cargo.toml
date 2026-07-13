@@ -3,6 +3,7 @@ members = [
     "crates/app-ui",
     "crates/desktop-linux",
     "crates/file-core",
+    "crates/file-search",
     "crates/file-operation-store",
     "crates/thumbnails",
 ]

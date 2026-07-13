@@ -269,6 +269,7 @@ impl FileBrowser {
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
+        self.search.abandon_and_clear_input();
         let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
         {
@@ -301,6 +302,7 @@ impl FileBrowser {
     }
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
+        self.search.abandon_and_clear_input();
         let pane_id = self.active_pane_id();
         let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view {

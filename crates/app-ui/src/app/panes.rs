@@ -313,6 +313,7 @@ impl FileBrowser {
     }
 
     pub(super) fn restore_pane_snapshot(&mut self, pane: BrowserPane) {
+        self.search.abandon_and_clear_input();
         self.current_dir = pane.current_dir;
         self.is_trash_view = pane.is_trash_view;
         self.entries = pane.entries;
