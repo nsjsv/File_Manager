@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use file_search::{
     daemon_build_id, read_service_request, write_service_event, IndexedQueryAvailability,
@@ -16,6 +17,24 @@ use super::{
 
 fn valid_snapshot_text() -> &'static str {
     "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\n"
+}
+
+async fn create_valid_search_cgroup(cgroup_root: &Path) -> PathBuf {
+    let cgroup_directory = cgroup_root.join("user.slice/search.service");
+    tokio::fs::create_dir_all(&cgroup_directory).await.unwrap();
+    tokio::fs::write(cgroup_directory.join("memory.high"), "80000000\n")
+        .await
+        .unwrap();
+    tokio::fs::write(cgroup_directory.join("memory.max"), "96000000\n")
+        .await
+        .unwrap();
+    tokio::fs::write(cgroup_directory.join("memory.swap.max"), "0\n")
+        .await
+        .unwrap();
+    tokio::fs::write(cgroup_directory.join("cpu.max"), "5000 100000\n")
+        .await
+        .unwrap();
+    cgroup_directory
 }
 
 #[test]
@@ -165,20 +184,7 @@ fn unit_actions_use_user_systemd_without_a_shell() {
 #[tokio::test]
 async fn effective_cgroup_accepts_only_safe_kernel_rounding() {
     let temporary_directory = tempdir().unwrap();
-    let cgroup_directory = temporary_directory.path().join("user.slice/search.service");
-    tokio::fs::create_dir_all(&cgroup_directory).await.unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.high"), "80000000\n")
-        .await
-        .unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.max"), "96000000\n")
-        .await
-        .unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.swap.max"), "0\n")
-        .await
-        .unwrap();
-    tokio::fs::write(cgroup_directory.join("cpu.max"), "5000 100000\n")
-        .await
-        .unwrap();
+    let cgroup_directory = create_valid_search_cgroup(temporary_directory.path()).await;
     let unit_controller = SearchUnitController {
         systemctl_executable: PathBuf::from("unused-systemctl"),
         cgroup_root: temporary_directory.path().to_path_buf(),
@@ -299,4 +305,135 @@ async fn endpoint_probe_uses_one_connection_for_owner_version_and_status() {
 
     assert_eq!(inspected_status, expected_status);
     endpoint_server.await.unwrap();
+}
+
+#[tokio::test]
+async fn endpoint_probe_reports_expected_and_actual_identity() {
+    let temporary_directory = tempdir().unwrap();
+    let socket_path = temporary_directory.path().join("search.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let actual_protocol = PROTOCOL_VERSION - 1;
+    let actual_build = "installed-old-build".to_owned();
+    let served_build = actual_build.clone();
+    let endpoint_server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert_eq!(
+            read_service_request(&mut stream).await.unwrap(),
+            SearchServiceRequest::Version
+        );
+        write_service_event(
+            &mut stream,
+            &SearchServiceEvent::Version {
+                protocol: actual_protocol,
+                build: served_build,
+            },
+        )
+        .await
+        .unwrap();
+    });
+
+    let message =
+        inspect_search_endpoint(&socket_path, NonZeroU32::new(std::process::id()).unwrap())
+            .await
+            .unwrap_err()
+            .into_message();
+
+    assert_eq!(
+        message,
+        format!(
+            "search service endpoint is incompatible: expected_protocol={}, actual_protocol={actual_protocol}, expected_build={}, actual_build={actual_build}",
+            PROTOCOL_VERSION,
+            daemon_build_id()
+        )
+    );
+    endpoint_server.await.unwrap();
+}
+
+#[tokio::test]
+async fn incompatible_endpoint_is_restarted_only_once_before_compatibility() {
+    let temporary_directory = tempdir().unwrap();
+    let cgroup_root = temporary_directory.path().join("cgroup");
+    create_valid_search_cgroup(&cgroup_root).await;
+    let systemctl_log_path = temporary_directory.path().join("systemctl.log");
+    let systemctl_path = temporary_directory.path().join("systemctl");
+    let snapshot_text =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={}", std::process::id()));
+    let systemctl_script = format!(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"{}\"\nif [[ \"$*\" == *\" show file-manager-search.service\" ]]; then\n    printf '%s' '{}'\nfi\n",
+        systemctl_log_path.display(),
+        snapshot_text
+    );
+    tokio::fs::write(&systemctl_path, systemctl_script)
+        .await
+        .unwrap();
+    let mut systemctl_permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
+    systemctl_permissions.set_mode(0o755);
+    std::fs::set_permissions(&systemctl_path, systemctl_permissions).unwrap();
+
+    let socket_path = temporary_directory.path().join("search.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let expected_status = SearchServiceStatus {
+        phase: SearchServicePhase::Ready,
+        query_availability: IndexedQueryAvailability::Available,
+        index_status: None,
+    };
+    let served_status = expected_status.clone();
+    let endpoint_server = tokio::spawn(async move {
+        for connection_index in 0..3 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert_eq!(
+                read_service_request(&mut stream).await.unwrap(),
+                SearchServiceRequest::Version
+            );
+            let compatible = connection_index == 2;
+            write_service_event(
+                &mut stream,
+                &SearchServiceEvent::Version {
+                    protocol: if compatible {
+                        PROTOCOL_VERSION
+                    } else {
+                        PROTOCOL_VERSION - 1
+                    },
+                    build: if compatible {
+                        daemon_build_id()
+                    } else {
+                        "installed-old-build".to_owned()
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            if compatible {
+                assert_eq!(
+                    read_service_request(&mut stream).await.unwrap(),
+                    SearchServiceRequest::Status
+                );
+                write_service_event(
+                    &mut stream,
+                    &SearchServiceEvent::Status(served_status.clone()),
+                )
+                .await
+                .unwrap();
+            }
+        }
+    });
+    let unit_controller = SearchUnitController {
+        systemctl_executable: systemctl_path,
+        cgroup_root,
+    };
+
+    let service_status = super::ensure_search_service_with(&unit_controller, &socket_path)
+        .await
+        .unwrap();
+
+    assert_eq!(service_status, expected_status);
+    endpoint_server.await.unwrap();
+    let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
+    assert_eq!(
+        systemctl_log
+            .lines()
+            .filter(|line| line.ends_with("restart file-manager-search.service"))
+            .count(),
+        1
+    );
 }

@@ -110,10 +110,11 @@ pub enum MatchSource {
     Metadata,
 }
 
-/// 索引阶段与持续维护健康度必须正交，避免 watcher 异常覆盖扫描进度或完成计数。
+/// 索引阶段、查询可见计数与维护健康度必须正交，避免瞬时状态互相覆盖。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexStatus {
     pub phase: IndexPhase,
+    pub visible_indexed_files: u64,
     pub health: IndexHealth,
     pub capabilities: Vec<ExtractorCapability>,
 }
@@ -132,9 +133,7 @@ pub enum IndexPhase {
     Applying {
         pending_mutations: u64,
     },
-    Complete {
-        indexed_files: u64,
-    },
+    Complete,
     Failed {
         message: String,
     },
@@ -189,7 +188,7 @@ pub enum SearchProviderFailure {
 }
 
 /// 协议 payload 含义变化时提升版本，让新客户端能退休仍在运行的旧 daemon。
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// app 更新后用构建标识识别遗留 daemon；本任务保留现有包版本策略。
 pub fn daemon_build_id() -> String {
@@ -246,6 +245,7 @@ mod tests {
                     checked_entries: 128,
                     changed_entries: 3,
                 },
+                visible_indexed_files: 64,
                 health: IndexHealth::Degraded {
                     message: "watcher unavailable".to_owned(),
                 },

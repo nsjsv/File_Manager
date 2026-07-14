@@ -1,3 +1,4 @@
+mod application_logs;
 pub(crate) mod archive_creation;
 pub(crate) mod archive_extraction;
 pub(crate) mod archive_password;
@@ -5,9 +6,9 @@ mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
-mod error_history;
 mod events;
 mod file_operations;
+mod global_error;
 mod list_directory_summaries;
 #[cfg(test)]
 mod list_size_sorting_tests;
@@ -86,12 +87,12 @@ use crate::config::UiLanguage;
 use crate::localization;
 use crate::model::search::SearchState;
 use crate::model::{
-    AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId, BrowserPaneLayout,
-    BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
-    DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
-    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
+    ApplicationLogViewState, AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId,
+    BrowserPaneLayout, BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds,
+    ContextMenuState, DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry,
+    ExpandedDirectory, FileDragState, FileDropPrompt, FilePropertiesState, Message,
+    OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
+    PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
     TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
@@ -114,6 +115,7 @@ const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const SEARCH_SERVICE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const APPLICATION_LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) struct FileBrowser {
     pub(crate) home_dir: PathBuf,
@@ -210,7 +212,7 @@ pub(crate) struct FileBrowser {
     pub(crate) rename_input: String,
     pub(crate) is_loading: bool,
     error: Option<String>,
-    error_history: Vec<String>,
+    pub(crate) application_logs: ApplicationLogViewState,
     system_language: UiLanguage,
     pub(crate) cursor_position: Point,
     pub(crate) main_window_width: f32,
@@ -432,7 +434,9 @@ impl FileBrowser {
             rename_input: String::new(),
             is_loading: true,
             error: None,
-            error_history: Vec::new(),
+            application_logs: ApplicationLogViewState::new(
+                crate::runtime_logging::journald_initialization_warning(),
+            ),
             system_language: UiLanguage::English,
             cursor_position: Point::new(0.0, 0.0),
             main_window_width: MAIN_WINDOW_INITIAL_WIDTH,
@@ -512,6 +516,15 @@ impl FileBrowser {
             subscriptions.push(
                 time::every(SEARCH_SERVICE_STATUS_REFRESH_INTERVAL)
                     .map(|_| Message::SearchServiceStatusRefreshRequested),
+            );
+        }
+
+        if self.settings_window.is_some()
+            && self.selected_settings_category == crate::model::SettingsCategory::Logs
+        {
+            subscriptions.push(
+                time::every(APPLICATION_LOG_REFRESH_INTERVAL)
+                    .map(|_| Message::ApplicationLogsRefreshRequested),
             );
         }
 

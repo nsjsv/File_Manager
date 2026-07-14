@@ -6,6 +6,7 @@ mod error;
 mod extractor;
 mod fallback;
 mod filesystem;
+mod logging;
 mod model;
 mod protocol;
 mod service_runtime;

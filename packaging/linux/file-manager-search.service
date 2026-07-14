@@ -7,6 +7,7 @@ ConditionControlGroupController=cpu
 
 [Service]
 Type=exec
+SyslogIdentifier=file-manager-search
 ExecStartPre=/usr/lib/file-manager/file-searchd --shutdown-existing
 ExecStart=/usr/lib/file-manager/file-searchd
 ExecStop=/usr/lib/file-manager/file-searchd --shutdown-existing

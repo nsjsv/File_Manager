@@ -9,6 +9,7 @@ use crate::appearance::context_menu_button_style;
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
 use crate::typography::{localized_text, readable_text};
 
+use super::application_logs::application_logs_settings_detail;
 use super::auxiliary_window_layout::{
     auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
 };
@@ -63,9 +64,7 @@ fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
     let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::Settings);
     match browser.selected_settings_category {
         SettingsCategory::General => general_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::ErrorMessages => {
-            error_messages_settings_detail(browser, scrollbar_visibility)
-        }
+        SettingsCategory::Logs => application_logs_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::Network => network_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::FileOperations => {
             file_operation_settings_detail(browser, scrollbar_visibility)
@@ -112,35 +111,6 @@ fn general_settings_detail(
     }
     .spacing(10)
     .width(Length::Fill);
-
-    settings_detail_scroller(content, scrollbar_visibility)
-}
-
-fn error_messages_settings_detail(
-    browser: &FileBrowser,
-    scrollbar_visibility: ScrollbarVisibility,
-) -> Element<'_, Message> {
-    let mut content = column![readable_text("Error Messages").size(20)]
-        .spacing(10)
-        .width(Length::Fill);
-
-    let messages = browser.displayed_error_messages();
-    if messages.is_empty() {
-        content = content.push(readable_text("No error messages yet.").size(13));
-    } else {
-        for message in messages {
-            let mut error_content = column![].spacing(2).width(Length::Fill);
-            if let Some(title) = message.title {
-                error_content = error_content.push(readable_text(title).size(13));
-            }
-            for detail in message.details {
-                error_content = error_content.push(localized_text(detail).size(12));
-            }
-            error_content =
-                error_content.push(localized_text(message.message).size(12).width(Length::Fill));
-            content = content.push(container(error_content).padding([6, 0]).width(Length::Fill));
-        }
-    }
 
     settings_detail_scroller(content, scrollbar_visibility)
 }
@@ -284,15 +254,19 @@ fn index_status_lines(status: &file_search::IndexStatus) -> Vec<String> {
             "Index status: Applying".to_owned(),
             format!("Pending changes: {}", format_count(*pending_mutations)),
         ],
-        IndexPhase::Complete { indexed_files } => vec![
-            "Index status: Complete".to_owned(),
-            format!("Indexed: {} items", format_count(*indexed_files)),
-        ],
+        IndexPhase::Complete => vec!["Index status: Complete".to_owned()],
         IndexPhase::Failed { message } => vec![
             "Index status: Failed".to_owned(),
             format!("Index error: {message}"),
         ],
     };
+    lines.insert(
+        1,
+        format!(
+            "Indexed: {} items",
+            format_count(status.visible_indexed_files)
+        ),
+    );
     lines.push(match &status.health {
         IndexHealth::Healthy => "Index maintenance: Healthy".to_owned(),
         IndexHealth::Degraded { message } => {
@@ -312,6 +286,7 @@ mod index_status_presentation_tests {
     fn status(phase: IndexPhase, health: IndexHealth) -> IndexStatus {
         IndexStatus {
             phase,
+            visible_indexed_files: 98_765,
             health,
             capabilities: Vec::new(),
         }
@@ -323,6 +298,7 @@ mod index_status_presentation_tests {
             index_status_lines(&status(IndexPhase::Starting, IndexHealth::Healthy)),
             vec![
                 "Index status: Starting".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Index maintenance: Healthy".to_owned(),
             ]
         );
@@ -336,6 +312,7 @@ mod index_status_presentation_tests {
             )),
             vec![
                 "Index status: Checking".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Checked: 12,345 items".to_owned(),
                 "Changed: 6 items".to_owned(),
                 "Index maintenance: Healthy".to_owned(),
@@ -351,6 +328,7 @@ mod index_status_presentation_tests {
             )),
             vec![
                 "Index status: Crawling".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Scanned: 321 items".to_owned(),
                 "Scope: /home/me/new".to_owned(),
                 "Index maintenance: Healthy".to_owned(),
@@ -365,17 +343,13 @@ mod index_status_presentation_tests {
             )),
             vec![
                 "Index status: Applying".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Pending changes: 17".to_owned(),
                 "Index maintenance: Healthy".to_owned(),
             ]
         );
         assert_eq!(
-            index_status_lines(&status(
-                IndexPhase::Complete {
-                    indexed_files: 98_765,
-                },
-                IndexHealth::Healthy,
-            )),
+            index_status_lines(&status(IndexPhase::Complete, IndexHealth::Healthy)),
             vec![
                 "Index status: Complete".to_owned(),
                 "Indexed: 98,765 items".to_owned(),
@@ -391,6 +365,7 @@ mod index_status_presentation_tests {
             )),
             vec![
                 "Index status: Failed".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Index error: database unavailable".to_owned(),
                 "Index maintenance: Healthy".to_owned(),
             ]
@@ -398,17 +373,17 @@ mod index_status_presentation_tests {
     }
 
     #[test]
-    fn completed_count_remains_visible_when_maintenance_is_degraded() {
+    fn stable_count_remains_visible_when_maintenance_is_degraded() {
         assert_eq!(
             index_status_lines(&status(
-                IndexPhase::Complete { indexed_files: 41 },
+                IndexPhase::Complete,
                 IndexHealth::Degraded {
                     message: "one directory is not watched".to_owned(),
                 },
             )),
             vec![
                 "Index status: Complete".to_owned(),
-                "Indexed: 41 items".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Index maintenance: Degraded (one directory is not watched)".to_owned(),
             ]
         );
@@ -428,6 +403,7 @@ mod index_status_presentation_tests {
             )),
             vec![
                 "Index status: Checking".to_owned(),
+                "Indexed: 98,765 items".to_owned(),
                 "Checked: 128 items".to_owned(),
                 "Changed: 2 items".to_owned(),
                 "Index maintenance: Error (watcher stopped)".to_owned(),

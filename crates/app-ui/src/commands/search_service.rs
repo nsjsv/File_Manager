@@ -3,14 +3,11 @@ use std::num::NonZeroU32;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use file_search::{
-    daemon_build_id, default_socket_path, read_service_event, write_service_request,
-    SearchServiceEvent, SearchServiceRequest, SearchServiceStatus, PROTOCOL_VERSION,
-};
+use file_search::{default_socket_path, SearchServiceStatus};
 use iced::Task;
-use tokio::net::UnixStream;
 use tokio::process::Command;
 
+use super::search_service_endpoint::{inspect_search_endpoint, SearchEndpointProbeFailure};
 use crate::model::Message;
 
 const SEARCH_SERVICE_UNIT: &str = "file-manager-search.service";
@@ -627,9 +624,11 @@ async fn ensure_search_service_with(
                             confirmed_snapshot.description()
                         )
                     }
-                    Err(SearchEndpointProbeFailure::RestartRequired(message))
-                        if !restart_issued =>
-                    {
+                    Err(
+                        probe_failure @ (SearchEndpointProbeFailure::RestartRequired(_)
+                        | SearchEndpointProbeFailure::Incompatible { .. }),
+                    ) if !restart_issued => {
+                        let message = probe_failure.into_message();
                         let confirmed_snapshot = unit_controller.show().await?;
                         if unit_controller
                             .validated_main_pid(&confirmed_snapshot)
@@ -683,112 +682,6 @@ async fn ensure_search_service_with(
             ));
         }
         tokio::time::sleep(SEARCH_SERVICE_POLL_INTERVAL).await;
-    }
-}
-
-enum SearchEndpointProbeFailure {
-    TemporarilyUnavailable(String),
-    RestartRequired(String),
-}
-
-impl SearchEndpointProbeFailure {
-    fn into_message(self) -> String {
-        match self {
-            Self::TemporarilyUnavailable(message) | Self::RestartRequired(message) => message,
-        }
-    }
-}
-
-async fn inspect_search_endpoint(
-    socket_path: &Path,
-    expected_main_pid: NonZeroU32,
-) -> Result<SearchServiceStatus, SearchEndpointProbeFailure> {
-    tokio::time::timeout(
-        SEARCH_CONTROL_ATTEMPT_TIMEOUT,
-        inspect_search_endpoint_without_timeout(socket_path, expected_main_pid),
-    )
-    .await
-    .map_err(|_| {
-        SearchEndpointProbeFailure::TemporarilyUnavailable(
-            "search service endpoint inspection timed out".to_owned(),
-        )
-    })?
-}
-
-async fn inspect_search_endpoint_without_timeout(
-    socket_path: &Path,
-    expected_main_pid: NonZeroU32,
-) -> Result<SearchServiceStatus, SearchEndpointProbeFailure> {
-    let mut stream = UnixStream::connect(socket_path).await.map_err(|error| {
-        SearchEndpointProbeFailure::TemporarilyUnavailable(format!(
-            "could not connect to search service endpoint: {error}"
-        ))
-    })?;
-    let peer_pid = stream
-        .peer_cred()
-        .map_err(|error| {
-            SearchEndpointProbeFailure::TemporarilyUnavailable(format!(
-                "could not inspect search service endpoint owner: {error}"
-            ))
-        })?
-        .pid()
-        .and_then(|pid| u32::try_from(pid).ok())
-        .and_then(NonZeroU32::new)
-        .ok_or_else(|| {
-            SearchEndpointProbeFailure::RestartRequired(
-                "search service endpoint did not report a valid peer pid".to_owned(),
-            )
-        })?;
-    if peer_pid != expected_main_pid {
-        return Err(SearchEndpointProbeFailure::RestartRequired(format!(
-            "search service endpoint owner pid {} does not match systemd MainPID {}",
-            peer_pid, expected_main_pid
-        )));
-    }
-
-    // PID、版本和状态必须来自同一连接，避免在 daemon 重启期间接受混合快照。
-    write_service_request(&mut stream, &SearchServiceRequest::Version)
-        .await
-        .map_err(|error| {
-            SearchEndpointProbeFailure::TemporarilyUnavailable(format!(
-                "could not request search service version: {error}"
-            ))
-        })?;
-    match read_service_event(&mut stream).await.map_err(|error| {
-        SearchEndpointProbeFailure::TemporarilyUnavailable(format!(
-            "could not read search service version: {error}"
-        ))
-    })? {
-        SearchServiceEvent::Version { protocol, build }
-            if protocol == PROTOCOL_VERSION && build == daemon_build_id() => {}
-        SearchServiceEvent::Version { protocol, build } => {
-            return Err(SearchEndpointProbeFailure::RestartRequired(format!(
-                "search service endpoint is incompatible: protocol={protocol}, build={build}"
-            )));
-        }
-        event => {
-            return Err(SearchEndpointProbeFailure::RestartRequired(format!(
-                "search service returned an unexpected version event: {event:?}"
-            )));
-        }
-    }
-
-    write_service_request(&mut stream, &SearchServiceRequest::Status)
-        .await
-        .map_err(|error| {
-            SearchEndpointProbeFailure::TemporarilyUnavailable(format!(
-                "could not request search service status: {error}"
-            ))
-        })?;
-    match read_service_event(&mut stream).await.map_err(|error| {
-        SearchEndpointProbeFailure::TemporarilyUnavailable(format!(
-            "could not read search service status: {error}"
-        ))
-    })? {
-        SearchServiceEvent::Status(service_status) => Ok(service_status),
-        event => Err(SearchEndpointProbeFailure::RestartRequired(format!(
-            "search service returned an unexpected status event: {event:?}"
-        ))),
     }
 }
 

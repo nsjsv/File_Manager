@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::crawler::IndexMaintenanceProgress;
 use crate::database::SearchDatabase;
 use crate::error::{SearchError, SearchResult};
+use crate::logging::bounded_search_log_detail;
 use crate::model::{
     ExtractorCapability, IndexHealth, IndexPhase, IndexStatus, SearchQuery, SearchResultBatch,
 };
@@ -142,15 +143,14 @@ impl DaemonLifecycleSnapshot {
             DaemonLifecyclePhase::Applying { pending_mutations } => IndexPhase::Applying {
                 pending_mutations: *pending_mutations,
             },
-            DaemonLifecyclePhase::Complete => IndexPhase::Complete {
-                indexed_files: self.visible_indexed_files,
-            },
+            DaemonLifecyclePhase::Complete => IndexPhase::Complete,
             DaemonLifecyclePhase::Failed { message } => IndexPhase::Failed {
                 message: message.clone(),
             },
         };
         IndexStatus {
             phase,
+            visible_indexed_files: self.visible_indexed_files,
             health: self.index_health(),
             capabilities: self.capabilities.clone(),
         }
@@ -692,6 +692,8 @@ fn run_index_maintenance(
     crawl_cancellation: &CancellationToken,
 ) -> bool {
     let work_label = work_request_label(&work_request);
+    let high_frequency_maintenance =
+        matches!(&work_request, DaemonWorkRequest::ChangedPaths { .. });
     lifecycle_snapshot
         .lock()
         .expect("search daemon lifecycle mutex poisoned")
@@ -750,22 +752,50 @@ fn run_index_maintenance(
             if stats.directory_snapshots_changed > 0 {
                 directory_snapshot_epoch.fetch_add(1, Ordering::AcqRel);
             }
-            eprintln!(
-                "{work_label} complete: {} checked, {} changed, {} reindexed, {} directories enumerated, {} database mutations, {} content reads ({} total)",
-                stats.checked,
-                stats.changed,
-                stats.reindexed,
-                stats.directories_enumerated,
-                stats.database_mutations,
-                stats.content_reads,
-                total
-            );
+            if high_frequency_maintenance {
+                tracing::debug!(
+                    target: "file_search::daemon",
+                    event = "index_maintenance_completed",
+                    maintenance = %work_label,
+                    checked = stats.checked,
+                    changed = stats.changed,
+                    reindexed = stats.reindexed,
+                    directories_enumerated = stats.directories_enumerated,
+                    database_mutations = stats.database_mutations,
+                    content_reads = stats.content_reads,
+                    indexed_files = total,
+                    "index maintenance completed"
+                );
+            } else {
+                tracing::info!(
+                    target: "file_search::daemon",
+                    event = "index_maintenance_completed",
+                    maintenance = %work_label,
+                    checked = stats.checked,
+                    changed = stats.changed,
+                    reindexed = stats.reindexed,
+                    directories_enumerated = stats.directories_enumerated,
+                    database_mutations = stats.database_mutations,
+                    content_reads = stats.content_reads,
+                    indexed_files = total,
+                    "index maintenance completed"
+                );
+            }
             snapshot.finish_watch_cycle(total);
             true
         }
         Err(SearchError::Cancelled) => false,
         Err(error) => {
-            snapshot.record_error(error.to_string());
+            let error = error.to_string();
+            let log_error = bounded_search_log_detail(&error);
+            tracing::error!(
+                target: "file_search::daemon",
+                event = "index_maintenance_failed",
+                maintenance = %work_label,
+                error = %log_error,
+                "index maintenance failed"
+            );
+            snapshot.record_error(error);
             false
         }
     }

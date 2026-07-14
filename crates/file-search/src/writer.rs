@@ -9,6 +9,7 @@ use crate::database::{
 };
 use crate::error::{SearchError, SearchResult};
 use crate::extractor::ExtractionStatus;
+use crate::logging::bounded_search_log_detail;
 
 pub(crate) const MAX_WRITER_FILE_PAYLOAD_BYTES: usize = 2_500_000;
 const MAX_WRITER_SCOPE_PATH_BYTES: usize = 8_192;
@@ -396,11 +397,18 @@ fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
 }
 
 fn record_error(slot: &mut Option<SearchError>, result: SearchResult<()>) {
-    if let Err(error) = result {
-        eprintln!("search index write failed: {error}");
-        if slot.is_none() {
-            *slot = Some(error);
-        }
+    if slot.is_none() {
+        let Err(error) = result else {
+            return;
+        };
+        let log_error = bounded_search_log_detail(&error.to_string());
+        tracing::error!(
+            target: "file_search::writer",
+            event = "index_write_failed",
+            error = %log_error,
+            "search index write failed"
+        );
+        *slot = Some(error);
     }
 }
 
@@ -472,15 +480,59 @@ fn extraction_status_bytes(status: &ExtractionStatus) -> usize {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use tempfile::tempdir;
+    use tracing_subscriber::prelude::*;
 
     use crate::database::{EntryStageProgress, IndexedEntryStageState, SearchDatabase};
     use crate::extractor::ExtractionStatus;
     use crate::model::{SearchFileKind, SearchQuery};
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct ErrorEventCounter(Arc<AtomicUsize>);
+
+    impl<S> tracing_subscriber::Layer<S> for ErrorEventCounter
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::ERROR {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_write_failures_record_only_the_owned_first_error() {
+        let error_events = ErrorEventCounter::default();
+        let subscriber = tracing_subscriber::registry().with(error_events.clone());
+        let mut pending_error = None;
+
+        tracing::subscriber::with_default(subscriber, || {
+            record_error(
+                &mut pending_error,
+                Err(SearchError::WorkerFailed("first".to_owned())),
+            );
+            record_error(
+                &mut pending_error,
+                Err(SearchError::WorkerFailed("second".to_owned())),
+            );
+        });
+
+        assert_eq!(error_events.0.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            pending_error.unwrap().to_string(),
+            "search worker failed: first"
+        );
+    }
 
     fn sample_file(path: &Path, inode: u64, mtime_ns: i64) -> IndexedFile {
         IndexedFile {

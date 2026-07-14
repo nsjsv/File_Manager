@@ -241,16 +241,27 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.path_suggestions.clear();
         self.path_suggestion_selection = None;
+        let refresh_application_logs = if self.selected_settings_category == SettingsCategory::Logs
+        {
+            self.refresh_application_logs()
+        } else {
+            Task::none()
+        };
         Task::batch([
             self.commit_rename_if_active(),
             self.ensure_settings_window(),
+            refresh_application_logs,
         ])
     }
 
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
         self.shortcut_capture = None;
         self.selected_settings_category = category;
-        Task::none()
+        if category == SettingsCategory::Logs {
+            self.refresh_application_logs()
+        } else {
+            Task::none()
+        }
     }
 
     pub(super) fn ensure_settings_window(&mut self) -> Task<Message> {

@@ -6,6 +6,7 @@ use std::thread;
 
 use crate::daemon::SearchDaemonCore;
 use crate::error::{SearchError, SearchResult};
+use crate::logging::bounded_search_log_detail;
 use crate::model::{
     IndexedQueryAvailability, SearchProviderFailure, SearchQuery, SearchResultBatch,
     SearchServicePhase, SearchServiceStatus,
@@ -158,6 +159,13 @@ impl SearchServiceRuntime {
         if !matches!(state.phase, SearchServicePhase::Starting) {
             return;
         }
+        let log_error = bounded_search_log_detail(&message);
+        tracing::error!(
+            target: "file_search::runtime",
+            event = "service_initialization_failed",
+            error = %log_error,
+            "search service initialization failed"
+        );
         state.phase = if state.query_core.is_some() {
             SearchServicePhase::Degraded { message }
         } else {

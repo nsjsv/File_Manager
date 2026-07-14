@@ -52,7 +52,13 @@ fn env_value_enables_trace(raw_value: OsString) -> bool {
 impl StartupTrace {
     fn emit(&self, label: &'static str) {
         let elapsed_ms = self.started_at.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("startup.{label}={elapsed_ms:.1}ms");
+        tracing::info!(
+            target: "app_ui::startup",
+            event = "startup_milestone",
+            label,
+            elapsed_ms,
+            "startup milestone reached"
+        );
     }
 
     fn emit_once(&self, label: &'static str) {

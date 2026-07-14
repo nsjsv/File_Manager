@@ -11,6 +11,8 @@ use file_operation_store::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::model::sanitized_application_log_detail;
+
 mod persistence;
 use persistence::{queued_operation_from_stored, queued_operation_to_stored};
 
@@ -19,6 +21,24 @@ pub(crate) const NEW_FILE_NAME: &str = "New File";
 
 const LOCAL_TASK_ID_START: u64 = 1 << 63;
 const ACTIVE_TRANSFER_PROGRESS_LIMIT: f32 = 0.999;
+
+#[cfg(test)]
+std::thread_local! {
+    static RECORDED_FILE_OPERATION_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn record_file_operation_failure(task_id: u64, operation: &str, log_error: &str) {
+    tracing::error!(
+        target: "app_ui::file_operations",
+        event = "file_operation_failed",
+        task_id,
+        operation,
+        error = %log_error,
+        "file operation failed"
+    );
+    #[cfg(test)]
+    RECORDED_FILE_OPERATION_FAILURES.with(|count| count.set(count.get() + 1));
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum QueuedFileOperation {
@@ -413,6 +433,8 @@ impl FileOperationQueue {
             }
             Err(error) => {
                 let task = &mut self.tasks[position];
+                let log_error = sanitized_application_log_detail(&error);
+                record_file_operation_failure(id, task.operation.title(), &log_error);
                 task.status = FileOperationStatus::Failed;
                 task.error = Some(error);
                 task.is_read = self.is_panel_open;

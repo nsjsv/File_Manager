@@ -7,7 +7,8 @@ use thumbnails::ThumbnailRequest;
 use super::FileBrowser;
 use crate::commands::thumbnail_batch_command;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserViewMode, Message, PreviewContent, PreviewState,
+    sanitized_application_log_detail, BrowserPane, BrowserPaneId, BrowserViewMode, Message,
+    PreviewContent, PreviewState,
 };
 use crate::thumbnail_cache::{
     request_for_entry, request_for_transfer_conflict_path, ColumnViewport, ThumbnailHandleEntry,
@@ -189,7 +190,7 @@ impl FileBrowser {
                 return self.open_image_preview_error_window();
             }
         };
-        tracing::info!(
+        tracing::debug!(
             target: "app_ui::preview",
             path = ?path,
             width,
@@ -256,11 +257,12 @@ impl FileBrowser {
                     );
                 }
                 ThumbnailLoadResult::Failed(error) => {
-                    tracing::warn!(
+                    let log_error = sanitized_application_log_detail(&error);
+                    tracing::debug!(
                         target: "app_ui::thumbnail",
                         source = ?outcome.work.request.source,
                         purpose = ?outcome.work.purpose,
-                        error = %error,
+                        error = %log_error,
                         "thumbnail batch item failed"
                     );
                     self.thumbnail_cache.mark_failure(key);

@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::UiLanguage;
 
+mod index_status;
+
 static CURRENT_LANGUAGE: AtomicU8 = AtomicU8::new(UiLanguage::English.as_u8());
 
 pub(crate) fn set_current_language(language: UiLanguage) {
@@ -24,6 +26,10 @@ pub(crate) fn translate_current(text: &str) -> String {
 pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str> {
     if language == UiLanguage::English {
         return Cow::Borrowed(text);
+    }
+
+    if let Some(translated) = index_status::translate(text) {
+        return Cow::Owned(translated);
     }
 
     if let Some(translated) = exact_translation(text) {
@@ -122,33 +128,6 @@ fn dynamic_translation(text: &str) -> Option<String> {
     }
     if let Some(error) = text.strip_prefix("Indexed queries unavailable: ") {
         return Some(format!("索引查询不可用：{error}"));
-    }
-    if let Some(count) = text
-        .strip_prefix("Progress: ")
-        .and_then(|body| body.strip_suffix(" items scanned"))
-    {
-        return Some(format!("进度：已扫描 {count} 个项目"));
-    }
-    if let Some(count) = text
-        .strip_prefix("Indexed: ")
-        .and_then(|body| body.strip_suffix(" items"))
-    {
-        return Some(format!("已索引：{count} 个项目"));
-    }
-    if let Some(error) = text.strip_prefix("Index error: ") {
-        return Some(format!("索引错误：{error}"));
-    }
-    if let Some(error) = text
-        .strip_prefix("Index maintenance: Degraded (")
-        .and_then(|body| body.strip_suffix(')'))
-    {
-        return Some(format!("索引维护：已降级（{error}）"));
-    }
-    if let Some(error) = text
-        .strip_prefix("Index maintenance: Error (")
-        .and_then(|body| body.strip_suffix(')'))
-    {
-        return Some(format!("索引维护：错误（{error}）"));
     }
     if let Some(size) = text.strip_prefix("Duration unknown · ") {
         return Some(format!("时长未知 · {size}"));
@@ -284,8 +263,16 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Searching..." => Some("正在搜索..."),
         "No search results" => Some("没有搜索结果"),
         "General" => Some("通用"),
-        "Error Messages" => Some("错误消息"),
-        "No error messages yet." => Some("暂无错误消息。"),
+        "Logs" => Some("日志"),
+        "Display level" => Some("显示级别"),
+        "Loading logs..." => Some("正在加载日志..."),
+        "No logs for this level." => Some("当前级别没有日志。"),
+        "Error" => Some("错误"),
+        "Warning" => Some("警告"),
+        "Info" => Some("信息"),
+        "Debug" => Some("调试"),
+        "App" => Some("应用"),
+        "Search Service" => Some("搜索服务"),
         "File display" => Some("文件显示"),
         "Startup" => Some("启动"),
         "Terminal" => Some("终端"),
@@ -296,12 +283,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Service: ready" => Some("服务：就绪"),
         "Service: shutting down" => Some("服务：正在关闭"),
         "Indexed queries: available" => Some("索引查询：可用"),
-        "Index status: Not initialized" => Some("索引状态：未初始化"),
-        "Index status: Starting" => Some("索引状态：正在启动"),
-        "Index status: Indexing" => Some("索引状态：正在索引"),
-        "Index status: Complete" => Some("索引状态：已完成"),
-        "Index status: Failed" => Some("索引状态：失败"),
-        "Index maintenance: Healthy" => Some("索引维护：正常"),
         "Index File Contents" => Some("索引文件内容"),
         "File Operations" => Some("文件操作"),
         "Verification" => Some("校验"),
@@ -723,7 +704,6 @@ mod tests {
             "LANG" => Some("zh_CN.UTF-8".to_owned()),
             _ => None,
         });
-
         assert_eq!(language, UiLanguage::Chinese);
     }
 
@@ -733,7 +713,6 @@ mod tests {
             "LANGUAGE" => Some("en_US:zh_CN".to_owned()),
             _ => None,
         });
-
         assert_eq!(language, UiLanguage::Chinese);
     }
 
@@ -743,7 +722,6 @@ mod tests {
             "LANG" => Some("en_US.UTF-8".to_owned()),
             _ => None,
         });
-
         assert_eq!(language, UiLanguage::English);
     }
 
@@ -751,7 +729,7 @@ mod tests {
     fn translates_known_static_text() {
         for text in [
             "Search",
-            "Error Messages",
+            "Logs",
             "Service and Index",
             "Index File Contents",
             "Discrete GPU",

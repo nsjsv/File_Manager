@@ -112,3 +112,30 @@ fn finished_tasks_stay_until_queue_is_cleared() {
     assert!(store.read_tasks().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn failed_operation_records_once_but_cancel_completion_does_not() {
+    RECORDED_FILE_OPERATION_FAILURES.with(|count| count.set(0));
+    let mut failed_queue = FileOperationQueue::new();
+    failed_queue.enqueue(sample_operation());
+    let failed_task_id = failed_queue.tasks()[0].id;
+    let mut canceled_queue = FileOperationQueue::new();
+    canceled_queue.enqueue(sample_operation());
+    let canceled_task_id = canceled_queue.tasks()[0].id;
+    canceled_queue.cancel(canceled_task_id);
+
+    failed_queue.finish(failed_task_id, Err("create failed".to_owned()));
+    canceled_queue.finish(canceled_task_id, Err("cancelled".to_owned()));
+
+    RECORDED_FILE_OPERATION_FAILURES.with(|count| assert_eq!(count.get(), 1));
+    assert_eq!(failed_queue.tasks()[0].status, FileOperationStatus::Failed);
+    assert_eq!(
+        failed_queue.tasks()[0].error.as_deref(),
+        Some("create failed")
+    );
+    assert_eq!(
+        canceled_queue.tasks()[0].status,
+        FileOperationStatus::Canceled
+    );
+    assert_eq!(canceled_queue.tasks()[0].error, None);
+}

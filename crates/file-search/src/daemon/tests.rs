@@ -21,8 +21,9 @@ fn snapshot_for(phase: DaemonLifecyclePhase) -> DaemonLifecycleSnapshot {
 }
 
 #[test]
-fn public_status_distinguishes_checking_crawling_applying_and_complete() {
+fn public_status_keeps_visible_count_independent_of_phase() {
     let cases = [
+        (DaemonLifecyclePhase::Starting, IndexPhase::Starting),
         (
             DaemonLifecyclePhase::Checking {
                 checked_entries: 128,
@@ -51,14 +52,21 @@ fn public_status_distinguishes_checking_crawling_applying_and_complete() {
                 pending_mutations: 4,
             },
         ),
+        (DaemonLifecyclePhase::Complete, IndexPhase::Complete),
         (
-            DaemonLifecyclePhase::Complete,
-            IndexPhase::Complete { indexed_files: 41 },
+            DaemonLifecyclePhase::Failed {
+                message: "database unavailable".to_owned(),
+            },
+            IndexPhase::Failed {
+                message: "database unavailable".to_owned(),
+            },
         ),
     ];
 
     for (phase, expected) in cases {
-        assert_eq!(snapshot_for(phase).to_index_status().phase, expected);
+        let status = snapshot_for(phase).to_index_status();
+        assert_eq!(status.phase, expected);
+        assert_eq!(status.visible_indexed_files, 41);
     }
 }
 
@@ -80,6 +88,7 @@ fn watch_degradation_does_not_replace_active_phase() {
                 checked_entries: 7,
                 changed_entries: 1,
             },
+            visible_indexed_files: 41,
             health: IndexHealth::Degraded {
                 message: "one watch unavailable".to_owned(),
             },

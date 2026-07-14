@@ -48,9 +48,10 @@ struct BlockingSearchService {
     release: Arc<Barrier>,
 }
 
-fn complete_index_status(indexed_files: u64) -> IndexStatus {
+fn complete_index_status(visible_indexed_files: u64) -> IndexStatus {
     IndexStatus {
-        phase: IndexPhase::Complete { indexed_files },
+        phase: IndexPhase::Complete,
+        visible_indexed_files,
         health: IndexHealth::Healthy,
         capabilities: Vec::new(),
     }

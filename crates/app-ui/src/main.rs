@@ -68,7 +68,12 @@ mod virtual_range;
 mod visible_entries;
 
 fn main() -> iced::Result {
-    runtime_logging::init_from_env();
+    runtime_logging::init();
+    tracing::info!(
+        target: "app_ui::runtime",
+        event = "application_started",
+        "File Manager application started"
+    );
     startup_trace::init_from_env();
     startup_trace::mark("main_entered");
     startup_rendering::apply_fast_startup_environment();

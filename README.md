@@ -63,30 +63,35 @@ systemctl --user status file-manager-search.service
 journalctl --user -u file-manager-search.service -f
 ```
 
+应用内可在“设置 → 日志”查看当前启动周期内 App 与搜索服务最近 200 条日志，并按 Error、Warning、Info、Debug 调整本次会话的显示级别。日志由 journald 持久化和轮转；应用不会另建日志文件。
+
 环境不满足这些条件时，应用不会绕过 systemd 直接启动 daemon；索引和全局搜索会显示不可用原因，当前目录搜索 fallback 仍可使用。
 
 ## 编译运行
 
 需要先安装 Rust 工具链。
 
+完整的索引搜索开发环境请使用统一入口；它会构建 app 和 daemon、同步 managed systemd bundle、验证 endpoint 后再启动应用：
+
 ```bash
 git clone https://github.com/nsjsv/File_Manager
 cd File_Manager
-cargo run -p app-ui
+scripts/run-file-manager-dev.sh
 ```
 
-构建 release 版本：
+只调试 UI 时可以直接运行 Cargo/target 二进制：
 
 ```bash
+cargo run -p app-ui
 cargo build --release -p app-ui -p file-search
 ./target/release/app-ui
 ```
 
-直接运行 app 之前仍需安装对应的 systemd user unit，否则索引搜索会按上述规则 fail closed。
+这些 raw 入口不会同步 dev-prefix daemon；其索引搜索按 fail-closed 处理，不承诺连接到当前构建。
 
 ## 本地安装
 
-开发环境应成套安装 app、daemon 和 managed systemd user unit：
+如需只安装而不立即启动应用，开发环境仍应成套安装 app、daemon 和 managed systemd user unit：
 
 ```bash
 cargo build --release -p app-ui -p file-search

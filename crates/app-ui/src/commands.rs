@@ -32,6 +32,8 @@ use crate::thumbnail_cache::{
 
 mod archive_creation;
 pub(crate) use archive_creation::check_archive_target_command;
+mod application_logs;
+pub(crate) use application_logs::application_logs_command;
 mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
 mod batch_rename_operation;
@@ -65,6 +67,7 @@ pub(crate) use queued_file_operations::file_operation_subscription;
 mod search;
 pub(crate) use search::{directory_fallback_search_command, search_command};
 mod search_service;
+mod search_service_endpoint;
 pub(crate) use search_service::{ensure_search_service_command, search_service_status_command};
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};

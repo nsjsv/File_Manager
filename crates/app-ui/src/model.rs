@@ -76,6 +76,13 @@ pub(crate) use preview::{
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
+mod application_logs;
+pub(crate) use application_logs::{
+    bounded_application_log_message, sanitized_application_log_detail, ApplicationLogEntry,
+    ApplicationLogLevel, ApplicationLogRequest, ApplicationLogSource, ApplicationLogViewState,
+    APPLICATION_LOG_ENTRY_LIMIT, APP_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_IDENTIFIER,
+    SEARCH_JOURNAL_UNIT,
+};
 pub(crate) mod search;
 pub(crate) use search::{DirectoryFallbackCompletion, IndexedSearchOutcome};
 mod session;
@@ -319,6 +326,12 @@ pub(crate) enum Message {
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
+    ApplicationLogsRefreshRequested,
+    ApplicationLogsLoaded(
+        ApplicationLogRequest,
+        Result<Vec<ApplicationLogEntry>, String>,
+    ),
+    ApplicationLogThresholdSelected(ApplicationLogLevel),
     ShowHiddenFilesToggled,
     ListDirectorySizeDisplayModeToggled,
     NetworkListThumbnailDownloadsToggled,

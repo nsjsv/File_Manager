@@ -297,7 +297,13 @@ fn run_watch_ingress_loop(
                 {
                     break;
                 }
-                eprintln!("watch ingress error: {error}");
+                tracing::warn!(
+                    target: "file_search::watch",
+                    event = "watch_ingress_error",
+                    error = ?error.kind,
+                    path_count = error.paths.len(),
+                    "filesystem watch ingress degraded"
+                );
                 continue;
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -347,7 +353,13 @@ fn run_watch_ingress_loop(
                     {
                         return;
                     }
-                    eprintln!("watch ingress error: {error}");
+                    tracing::warn!(
+                        target: "file_search::watch",
+                        event = "watch_ingress_error",
+                        error = ?error.kind,
+                        path_count = error.paths.len(),
+                        "filesystem watch ingress degraded"
+                    );
                 }
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => {

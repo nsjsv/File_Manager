@@ -1,3 +1,4 @@
+mod application_logs;
 mod archive_creation;
 mod archive_extraction;
 mod auxiliary_window_layout;

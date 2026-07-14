@@ -12,6 +12,7 @@ mod svg;
 const CACHE_FORMAT_EXTENSION: &str = "png";
 const THUMBNAILER_VERSION: u8 = 3;
 const VIDEO_THUMBNAIL_SEEK_TIME: &str = "00:00:01";
+const VIDEO_THUMBNAILER_DETAIL_CHAR_LIMIT: usize = 1_000;
 const THUMBNAIL_NORMAL_DIR: &str = "normal";
 const THUMBNAIL_LARGE_DIR: &str = "large";
 const THUMBNAIL_X_LARGE_DIR: &str = "x-large";
@@ -300,26 +301,7 @@ async fn load_or_generate_thumbnail_with_kind(
         }
     }
 
-    let generated = generate_cached_thumbnail(request, output, key, media_kind).await;
-    match &generated {
-        Ok(thumbnail) => tracing::info!(
-            target: "thumbnails",
-            source = ?thumbnail.source,
-            output = ?thumbnail.output,
-            key = thumbnail.key.as_str(),
-            width = thumbnail.width,
-            height = thumbnail.height,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "thumbnail generated"
-        ),
-        Err(error) => tracing::warn!(
-            target: "thumbnails",
-            error = %error,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "thumbnail generation failed"
-        ),
-    }
-    generated
+    generate_cached_thumbnail(request, output, key, media_kind).await
 }
 
 fn cached_thumbnail_output_path(cache_dir: &Path, key: &ThumbnailKey, max_edge: u32) -> PathBuf {
@@ -390,7 +372,7 @@ pub async fn load_image_dimensions(source: impl AsRef<Path>) -> Result<(u32, u32
             elapsed_ms = started_at.elapsed().as_millis(),
             "image dimensions loaded"
         ),
-        Err(error) => tracing::warn!(
+        Err(error) => tracing::debug!(
             target: "thumbnails",
             source = ?log_source,
             error = %error,
@@ -694,13 +676,26 @@ fn handle_video_thumbnailer_output(
 fn video_thumbnailer_failure_message(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     if !stderr.is_empty() {
-        return stderr;
+        return bounded_video_thumbnailer_detail(&stderr);
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if !stdout.is_empty() {
-        return stdout;
+        return bounded_video_thumbnailer_detail(&stdout);
     }
     format!("exit status {}", output.status)
+}
+
+fn bounded_video_thumbnailer_detail(detail: &str) -> String {
+    let mut detail = detail.chars();
+    let mut bounded = detail
+        .by_ref()
+        .take(VIDEO_THUMBNAILER_DETAIL_CHAR_LIMIT)
+        .collect::<String>();
+    if detail.next().is_some() {
+        bounded.pop();
+        bounded.push('…');
+    }
+    bounded
 }
 
 fn thumbnail_media_kind_for_path(path: &Path) -> Option<ThumbnailMediaKind> {

@@ -558,6 +558,13 @@ impl FileBrowser {
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::SettingsOpened => self.open_settings(),
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
+            Message::ApplicationLogsRefreshRequested => self.refresh_application_logs(),
+            Message::ApplicationLogsLoaded(request, outcome) => {
+                self.accept_application_logs(request, outcome)
+            }
+            Message::ApplicationLogThresholdSelected(threshold) => {
+                self.select_application_log_threshold(threshold)
+            }
             Message::ShowHiddenFilesToggled => self.toggle_show_hidden_files(),
             Message::ListDirectorySizeDisplayModeToggled => {
                 self.toggle_list_directory_size_display_mode()
