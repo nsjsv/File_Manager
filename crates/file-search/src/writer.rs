@@ -52,7 +52,7 @@ enum WriteCommand {
         reply: Sender<SearchResult<bool>>,
     },
     DeleteScope(PathBuf),
-    ReleaseIdleCache(Sender<SearchResult<()>>),
+    CompactSearchDatabase(Sender<SearchResult<()>>),
     /// 统计当前可查询条目，并继续复用 writer 持有的数据库连接。
     Count(Sender<SearchResult<u64>>),
     /// Drain everything queued before this point, then report the first error
@@ -220,10 +220,10 @@ impl IndexWriter {
             .map_err(|_| writer_gone())
     }
 
-    pub(crate) fn release_idle_cache(&self) -> SearchResult<()> {
+    pub(crate) fn compact_search_database(&self) -> SearchResult<()> {
         let (reply, outcome) = mpsc::channel();
         self.sender
-            .send(WriteCommand::ReleaseIdleCache(reply))
+            .send(WriteCommand::CompactSearchDatabase(reply))
             .map_err(|_| writer_gone())?;
         outcome.recv().map_err(|_| writer_gone())?
     }
@@ -367,10 +367,10 @@ fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
             WriteCommand::DeleteScope(scope) => {
                 record_error(&mut pending_error, database.delete_scope(&scope));
             }
-            WriteCommand::ReleaseIdleCache(reply) => {
+            WriteCommand::CompactSearchDatabase(reply) => {
                 let outcome = match pending_error.take() {
                     Some(error) => Err(error),
-                    None => database.checkpoint_and_release_idle_cache(),
+                    None => database.compact_search_database(),
                 };
                 let _ = reply.send(outcome);
             }
@@ -791,3 +791,7 @@ mod tests {
         assert_eq!(writer.count().unwrap(), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "writer/compact_search_database_tests.rs"]
+mod compact_search_database_tests;

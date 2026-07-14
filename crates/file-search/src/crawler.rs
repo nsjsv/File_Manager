@@ -216,9 +216,7 @@ impl SearchIndexer {
         self.startup_check_scopes(scopes, &mut stats, cancellation, &mut on_progress)
             .await?;
         self.writer.flush()?;
-        if stats.database_mutations > 0 {
-            self.writer.release_idle_cache()?;
-        }
+        self.writer.compact_search_database()?;
         Ok(stats)
     }
 

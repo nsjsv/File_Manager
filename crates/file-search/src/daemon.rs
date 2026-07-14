@@ -11,9 +11,7 @@ use crate::crawler::IndexMaintenanceProgress;
 use crate::database::SearchDatabase;
 use crate::error::{SearchError, SearchResult};
 use crate::logging::bounded_search_log_detail;
-use crate::model::{
-    ExtractorCapability, IndexHealth, IndexPhase, IndexStatus, SearchQuery, SearchResultBatch,
-};
+use crate::model::{ExtractorCapability, IndexHealth, IndexPhase, IndexStatus};
 use crate::writer::IndexWriter;
 use crate::{SearchIndexConfig, SearchIndexer};
 
@@ -460,7 +458,6 @@ struct DaemonRuntimeState {
 }
 
 pub struct SearchDaemonCore {
-    query_database: Mutex<SearchDatabase>,
     database_path: PathBuf,
     config: SearchIndexConfig,
     writer: Arc<IndexWriter>,
@@ -486,8 +483,8 @@ impl SearchDaemonCore {
         }
 
         let writable_database = SearchDatabase::open(&database_path)?;
-        let query_database = SearchDatabase::open_read_only(&database_path)?;
         let writer = Arc::new(IndexWriter::spawn(writable_database));
+        writer.compact_search_database()?;
         let known_count = writer.count()?;
         let lifecycle_snapshot =
             Arc::new(Mutex::new(DaemonLifecycleSnapshot::starting(known_count)));
@@ -505,7 +502,6 @@ impl SearchDaemonCore {
         )?;
 
         Ok(Self {
-            query_database: Mutex::new(query_database),
             database_path,
             config,
             writer,
@@ -572,11 +568,8 @@ impl SearchDaemonCore {
             .to_index_status()
     }
 
-    pub fn search(&self, query: &SearchQuery) -> SearchResult<SearchResultBatch> {
-        self.query_database
-            .lock()
-            .expect("search query database mutex poisoned")
-            .search(query)
+    pub fn open_query_reader(&self) -> SearchResult<SearchDatabase> {
+        SearchDatabase::open_read_only(&self.database_path)
     }
 
     pub(crate) fn record_maintenance_failure(&self, message: String) {

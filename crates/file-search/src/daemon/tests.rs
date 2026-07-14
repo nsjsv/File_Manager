@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind};
+use rusqlite::Connection;
 use tempfile::tempdir;
 
 use crate::model::{IndexHealth, IndexPhase, IndexStatus};
@@ -275,4 +276,49 @@ fn daemon_rejects_configuration_outside_the_service_budget_before_opening_databa
 
     assert!(SearchDaemonCore::new(database_path.clone(), invalid).is_err());
     assert!(!database_path.exists());
+}
+
+#[test]
+fn daemon_compacts_fragmented_full_text_storage_before_startup_returns() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    drop(SearchDatabase::open(&database_path).unwrap());
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO file_search_fts(file_search_fts, rank) VALUES('automerge', 0)",
+            [],
+        )
+        .unwrap();
+    for index in 0..4 {
+        connection
+            .execute(
+                "INSERT INTO file_search_fts(rowid, path, name, content)
+                 VALUES(?1, ?2, ?3, 'needle')",
+                rusqlite::params![index + 1, format!("/tmp/{index}"), format!("file-{index}")],
+            )
+            .unwrap();
+    }
+    let segment_count = || {
+        connection
+            .query_row(
+                "SELECT COUNT(DISTINCT segid) FROM file_search_fts_idx",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap()
+    };
+    assert!(segment_count() > 1);
+
+    let core = SearchDaemonCore::new(
+        database_path,
+        SearchIndexConfig {
+            roots: Vec::new(),
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(segment_count(), 1);
+    core.shutdown().unwrap();
 }

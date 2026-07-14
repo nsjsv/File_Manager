@@ -12,16 +12,16 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use crate::daemon::SearchDaemonCore;
 use crate::database::SearchDatabase;
 use crate::error::{SearchError, SearchResult};
 use crate::model::{
-    daemon_build_id, IndexStatus, IndexedQueryAvailability, SearchProviderFailure, SearchQuery,
-    SearchResultBatch, SearchServiceEvent, SearchServicePhase, SearchServiceRequest,
-    SearchServiceStatus, PROTOCOL_VERSION,
+    IndexStatus, IndexedQueryAvailability, SearchProviderFailure, SearchQuery, SearchResultBatch,
+    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus,
 };
 
 const MAX_REQUEST_FRAME_BYTES: u32 = 64 * 1024;
@@ -32,6 +32,11 @@ const MAX_QUERY_TERMS_BYTES: usize = 4_096;
 const MAX_QUERY_PATH_BYTES: usize = 4_096;
 const MAX_QUERY_MIME_BYTES: usize = 255;
 const MAX_QUERY_OFFSET: usize = 1_000_000;
+
+#[path = "protocol_client_session.rs"]
+mod client_session;
+
+use client_session::handle_client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SocketIdentity {
@@ -247,7 +252,7 @@ fn reclaim_stale_socket(socket_path: &Path) -> SearchResult<()> {
 pub trait SearchSocketService: Send + Sync + 'static {
     fn status(&self) -> SearchServiceStatus;
 
-    fn search(&self, query: &SearchQuery) -> Result<SearchResultBatch, SearchProviderFailure>;
+    fn open_query_reader(&self) -> Result<SearchDatabase, SearchProviderFailure>;
 }
 
 #[derive(Clone)]
@@ -271,10 +276,55 @@ pub async fn search_via_socket(
     socket_path: &Path,
     query: SearchQuery,
 ) -> SearchResult<SearchResultBatch> {
-    let mut stream = UnixStream::connect(socket_path).await?;
-    write_service_request(&mut stream, &SearchServiceRequest::Search(query.clone())).await?;
+    search_via_socket_with_cancellation(socket_path, query, CancellationToken::new()).await
+}
+
+pub async fn search_via_socket_with_cancellation(
+    socket_path: &Path,
+    query: SearchQuery,
+    cancellation: CancellationToken,
+) -> SearchResult<SearchResultBatch> {
+    let mut stream = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(SearchError::Cancelled),
+        stream = UnixStream::connect(socket_path) => stream?,
+    };
+    let search_request = SearchServiceRequest::Search(query.clone());
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(SearchError::Cancelled),
+        outcome = write_service_request(&mut stream, &search_request) => outcome?,
+    }
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => break,
+            event = read_service_event(&mut stream) => match event? {
+                SearchServiceEvent::Results(batch) if batch.query_id == query.query_id => {
+                    return Ok(batch);
+                }
+                SearchServiceEvent::SearchFailed { query_id, failure }
+                    if query_id == query.query_id =>
+                {
+                    return Err(SearchError::SearchFailed { query_id, failure });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    write_service_request(
+        &mut stream,
+        &SearchServiceRequest::Cancel {
+            query_id: query.query_id,
+        },
+    )
+    .await?;
     loop {
         match read_service_event(&mut stream).await? {
+            SearchServiceEvent::Cancelled { query_id } if query_id == query.query_id => {
+                return Err(SearchError::Cancelled);
+            }
             SearchServiceEvent::Results(batch) if batch.query_id == query.query_id => {
                 return Ok(batch);
             }
@@ -419,6 +469,7 @@ where
     let listener = bound_socket.take_tokio_listener()?;
     let (shutdown_requested_sender, mut shutdown_requested_receiver) = watch::channel(false);
     let (shutdown_finished_sender, _) = watch::channel(false);
+    let (client_ready_sender, mut client_ready_receiver) = mpsc::unbounded_channel();
     let mut client_tasks = JoinSet::new();
 
     let accept_outcome = loop {
@@ -445,98 +496,29 @@ where
                     shutdown_requested_sender.clone(),
                     shutdown_requested_sender.subscribe(),
                     shutdown_finished_sender.subscribe(),
+                    client_ready_sender.clone(),
                 ));
             }
             joined = client_tasks.join_next(), if !client_tasks.is_empty() => {
                 let _ = joined;
+                let _ = client_ready_receiver.recv().await;
             }
         };
     };
 
     shutdown_requested_sender.send_replace(true);
     drop(listener);
+    for _ in 0..client_tasks.len() {
+        let _ = client_ready_receiver.recv().await;
+    }
     let shutdown_outcome = on_shutdown().await;
     let socket_cleanup_outcome = bound_socket.remove_owned_socket();
     shutdown_finished_sender.send_replace(true);
-    client_tasks.abort_all();
     while client_tasks.join_next().await.is_some() {}
 
     accept_outcome?;
     shutdown_outcome?;
     socket_cleanup_outcome
-}
-
-async fn handle_client(
-    mut stream: UnixStream,
-    backend: SearchServiceBackend,
-    shutdown_requested_sender: watch::Sender<bool>,
-    shutdown_requested_receiver: watch::Receiver<bool>,
-    mut shutdown_finished_receiver: watch::Receiver<bool>,
-) -> SearchResult<()> {
-    let mut client_database: Option<Result<SearchDatabase, String>> = None;
-    loop {
-        let request_outcome = tokio::select! {
-            request = read_service_request_before(&mut stream, CLIENT_IDLE_TIMEOUT) => request,
-            _ = wait_for_signal(&mut shutdown_finished_receiver) => return Ok(()),
-        };
-        let request = match request_outcome {
-            Ok(Some(request)) => request,
-            Ok(None) => return Ok(()),
-            Err(SearchError::ProtocolIo(error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
-        match request {
-            SearchServiceRequest::Status => {
-                let status = service_status(&backend);
-                write_service_event(&mut stream, &SearchServiceEvent::Status(status)).await?;
-            }
-            SearchServiceRequest::Search(query) => {
-                let query_id = query.query_id;
-                let search_outcome = if let Err(message) = validate_wire_query(&query) {
-                    Err(SearchProviderFailure::InvalidQuery { message })
-                } else if *shutdown_requested_receiver.borrow() {
-                    Err(SearchProviderFailure::Unavailable {
-                        message: "search service is shutting down".to_owned(),
-                    })
-                } else {
-                    let (returned_database, search_outcome) = search_indexed_backend_off_reactor(
-                        backend.clone(),
-                        client_database.take(),
-                        query,
-                    )
-                    .await?;
-                    client_database = returned_database;
-                    search_outcome
-                };
-                let event = match search_outcome {
-                    Ok(batch) => SearchServiceEvent::Results(batch),
-                    Err(failure) => SearchServiceEvent::SearchFailed { query_id, failure },
-                };
-                write_service_event(&mut stream, &event).await?;
-            }
-            SearchServiceRequest::Cancel { query_id } => {
-                write_service_event(&mut stream, &SearchServiceEvent::Cancelled { query_id })
-                    .await?;
-            }
-            SearchServiceRequest::Version => {
-                write_service_event(
-                    &mut stream,
-                    &SearchServiceEvent::Version {
-                        protocol: PROTOCOL_VERSION,
-                        build: daemon_build_id(),
-                    },
-                )
-                .await?;
-            }
-            SearchServiceRequest::Shutdown => {
-                shutdown_requested_sender.send_replace(true);
-                wait_for_signal(&mut shutdown_finished_receiver).await;
-                return Ok(());
-            }
-        }
-    }
 }
 
 fn validate_wire_query(query: &SearchQuery) -> Result<(), String> {
@@ -616,51 +598,6 @@ fn available_service_status(index_status: IndexStatus) -> SearchServiceStatus {
         query_availability: IndexedQueryAvailability::Available,
         index_status: Some(index_status),
     }
-}
-
-fn search_indexed_backend(
-    backend: &SearchServiceBackend,
-    client_database: &mut Option<Result<SearchDatabase, String>>,
-    query: &SearchQuery,
-) -> Result<SearchResultBatch, SearchProviderFailure> {
-    match backend {
-        SearchServiceBackend::DirectDatabase { database_path, .. } => {
-            if client_database.is_none() {
-                *client_database = Some(
-                    SearchDatabase::open_read_only(database_path)
-                        .map_err(|error| error.to_string()),
-                );
-            }
-            match client_database.as_ref().expect("reader state initialized") {
-                Ok(database) => database
-                    .search(query)
-                    .map_err(search_provider_failure_from_error),
-                Err(message) => Err(SearchProviderFailure::Fatal {
-                    message: message.clone(),
-                }),
-            }
-        }
-        SearchServiceBackend::DaemonCore(daemon_core) => daemon_core
-            .search(query)
-            .map_err(search_provider_failure_from_error),
-        SearchServiceBackend::Runtime(service) => service.search(query),
-    }
-}
-
-async fn search_indexed_backend_off_reactor(
-    backend: SearchServiceBackend,
-    mut client_database: Option<Result<SearchDatabase, String>>,
-    query: SearchQuery,
-) -> SearchResult<(
-    Option<Result<SearchDatabase, String>>,
-    Result<SearchResultBatch, SearchProviderFailure>,
-)> {
-    tokio::task::spawn_blocking(move || {
-        let search_outcome = search_indexed_backend(&backend, &mut client_database, &query);
-        (client_database, search_outcome)
-    })
-    .await
-    .map_err(|error| SearchError::WorkerFailed(format!("search worker failed: {error}")))
 }
 
 fn search_provider_failure_from_error(error: SearchError) -> SearchProviderFailure {

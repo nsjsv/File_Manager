@@ -1,6 +1,6 @@
 use file_search::{
-    default_socket_path, search_directory_fallback, search_via_socket, SearchError,
-    SearchExcludeRules, SearchProviderFailure, SearchQuery,
+    default_socket_path, search_directory_fallback, search_via_socket_with_cancellation,
+    SearchError, SearchExcludeRules, SearchProviderFailure, SearchQuery,
 };
 use iced::futures::SinkExt;
 use iced::Task;
@@ -11,8 +11,12 @@ use crate::model::{DirectoryFallbackCompletion, IndexedSearchOutcome, Message};
 const DIRECTORY_FALLBACK_STREAM_CAPACITY: usize = 8;
 const DIRECTORY_FALLBACK_WORKER_CAPACITY: usize = 4;
 
-pub(crate) fn search_command(generation: u64, query: SearchQuery) -> Task<Message> {
-    Task::perform(search_once(query), move |outcome| {
+pub(crate) fn search_command(
+    generation: u64,
+    query: SearchQuery,
+    cancellation: CancellationToken,
+) -> Task<Message> {
+    Task::perform(search_once(query, cancellation), move |outcome| {
         Message::SearchResultsLoaded(generation, outcome)
     })
 }
@@ -65,8 +69,8 @@ pub(crate) fn directory_fallback_search_command(
     ))
 }
 
-async fn search_once(query: SearchQuery) -> IndexedSearchOutcome {
-    match search_via_socket(&default_socket_path(), query).await {
+async fn search_once(query: SearchQuery, cancellation: CancellationToken) -> IndexedSearchOutcome {
+    match search_via_socket_with_cancellation(&default_socket_path(), query, cancellation).await {
         Ok(batch) => IndexedSearchOutcome::Batch(batch),
         Err(error) => indexed_outcome_from_error(error),
     }
@@ -74,6 +78,7 @@ async fn search_once(query: SearchQuery) -> IndexedSearchOutcome {
 
 fn indexed_outcome_from_error(error: SearchError) -> IndexedSearchOutcome {
     match error {
+        SearchError::Cancelled => IndexedSearchOutcome::Cancelled,
         error @ (SearchError::ProtocolIo(_)
         | SearchError::Json(_)
         | SearchError::ProtocolFrameTooLarge(_)) => {
@@ -122,5 +127,13 @@ mod tests {
             outcome,
             IndexedSearchOutcome::TransportUnavailable(_)
         ));
+    }
+
+    #[test]
+    fn socket_cancellation_stays_distinct_from_provider_failure() {
+        assert_eq!(
+            indexed_outcome_from_error(SearchError::Cancelled),
+            IndexedSearchOutcome::Cancelled
+        );
     }
 }

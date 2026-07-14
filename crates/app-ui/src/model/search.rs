@@ -6,6 +6,7 @@ pub(crate) const SEARCH_RESULT_WINDOW: usize = 100;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum IndexedSearchOutcome {
     Batch(SearchResultBatch),
+    Cancelled,
     TransportUnavailable(String),
     ProviderUnavailable(String),
     InvalidQuery(String),
@@ -43,7 +44,7 @@ pub(crate) struct SearchState {
     pub(crate) indexed_batch_seen: bool,
     pub(crate) endpoint: SearchEndpointState,
     pub(crate) error: Option<String>,
-    directory_fallback_cancel: Option<CancellationToken>,
+    current_query_cancel: Option<CancellationToken>,
 }
 
 impl SearchState {
@@ -58,7 +59,7 @@ impl SearchState {
             indexed_batch_seen: false,
             endpoint: SearchEndpointState::Starting,
             error: None,
-            directory_fallback_cancel: None,
+            current_query_cancel: None,
         }
     }
 
@@ -70,8 +71,14 @@ impl SearchState {
             || self.error.is_some()
     }
 
-    pub(crate) fn begin_indexed_query(&mut self, generation: u64, query: SearchQuery) {
-        self.cancel_directory_fallback();
+    pub(crate) fn begin_indexed_query(
+        &mut self,
+        generation: u64,
+        query: SearchQuery,
+    ) -> CancellationToken {
+        self.cancel_current_query();
+        let cancellation = CancellationToken::new();
+        self.current_query_cancel = Some(cancellation.clone());
         self.generation = generation;
         self.active_query = Some(query);
         self.provider = Some(SearchProvider::Indexed);
@@ -79,6 +86,7 @@ impl SearchState {
         self.is_loading = true;
         self.indexed_batch_seen = false;
         self.error = None;
+        cancellation
     }
 
     pub(crate) fn accepts_indexed_outcome(&self, generation: u64) -> bool {
@@ -86,6 +94,7 @@ impl SearchState {
     }
 
     pub(crate) fn apply_indexed_batch(&mut self, mut batch: SearchResultBatch) {
+        self.current_query_cancel = None;
         batch.hits.truncate(SEARCH_RESULT_WINDOW);
         self.results = batch.hits;
         self.indexed_batch_seen = true;
@@ -94,6 +103,7 @@ impl SearchState {
     }
 
     pub(crate) fn apply_indexed_failure(&mut self, message: String) {
+        self.current_query_cancel = None;
         if !self.indexed_batch_seen {
             self.results.clear();
         }
@@ -101,10 +111,16 @@ impl SearchState {
         self.error = Some(message);
     }
 
+    pub(crate) fn apply_indexed_cancellation(&mut self) {
+        self.current_query_cancel = None;
+        self.is_loading = false;
+        self.error = None;
+    }
+
     pub(crate) fn begin_directory_fallback(&mut self) -> CancellationToken {
-        self.cancel_directory_fallback();
+        self.cancel_current_query();
         let cancellation = CancellationToken::new();
-        self.directory_fallback_cancel = Some(cancellation.clone());
+        self.current_query_cancel = Some(cancellation.clone());
         self.provider = Some(SearchProvider::DirectoryFallback);
         self.results.clear();
         self.is_loading = true;
@@ -121,7 +137,7 @@ impl SearchState {
         hits.truncate(remaining);
         self.results.extend(hits);
         if self.results.len() == SEARCH_RESULT_WINDOW {
-            if let Some(cancellation) = &self.directory_fallback_cancel {
+            if let Some(cancellation) = &self.current_query_cancel {
                 cancellation.cancel();
             }
         }
@@ -130,7 +146,7 @@ impl SearchState {
     }
 
     pub(crate) fn finish_directory_fallback(&mut self, completion: DirectoryFallbackCompletion) {
-        self.directory_fallback_cancel = None;
+        self.current_query_cancel = None;
         self.is_loading = false;
         match completion {
             DirectoryFallbackCompletion::Completed | DirectoryFallbackCompletion::Cancelled => {
@@ -151,7 +167,7 @@ impl SearchState {
     }
 
     pub(crate) fn abandon_query(&mut self) {
-        self.cancel_directory_fallback();
+        self.cancel_current_query();
         self.generation = self.generation.saturating_add(1);
         self.clear_results();
     }
@@ -170,8 +186,8 @@ impl SearchState {
         self.error = None;
     }
 
-    fn cancel_directory_fallback(&mut self) {
-        if let Some(cancellation) = self.directory_fallback_cancel.take() {
+    fn cancel_current_query(&mut self) {
+        if let Some(cancellation) = self.current_query_cancel.take() {
             cancellation.cancel();
         }
     }
@@ -179,7 +195,7 @@ impl SearchState {
 
 impl Drop for SearchState {
     fn drop(&mut self) {
-        self.cancel_directory_fallback();
+        self.cancel_current_query();
     }
 }
 
@@ -223,5 +239,39 @@ mod tests {
 
         assert!(cancellation.is_cancelled());
         assert!(!state.is_active());
+    }
+
+    #[test]
+    fn replacing_an_indexed_query_cancels_its_socket_work() {
+        let mut state = SearchState::new();
+
+        let first_cancellation = state.begin_indexed_query(1, directory_query(1));
+        let second_cancellation = state.begin_indexed_query(2, directory_query(2));
+
+        assert!(first_cancellation.is_cancelled());
+        assert!(!second_cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn switching_provider_replaces_the_indexed_cancellation_token() {
+        let mut state = SearchState::new();
+        let indexed_cancellation = state.begin_indexed_query(1, directory_query(1));
+
+        let fallback_cancellation = state.begin_directory_fallback();
+
+        assert!(indexed_cancellation.is_cancelled());
+        assert!(!fallback_cancellation.is_cancelled());
+        state.abandon_query();
+        assert!(fallback_cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn dropping_search_state_cancels_the_indexed_query() {
+        let mut state = SearchState::new();
+        let cancellation = state.begin_indexed_query(1, directory_query(1));
+
+        drop(state);
+
+        assert!(cancellation.is_cancelled());
     }
 }

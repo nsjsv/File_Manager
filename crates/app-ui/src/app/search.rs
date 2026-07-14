@@ -34,8 +34,8 @@ impl FileBrowser {
             limit: SEARCH_RESULT_WINDOW,
             cursor: None,
         };
-        self.search.begin_indexed_query(generation, query.clone());
-        search_command(generation, query)
+        let cancellation = self.search.begin_indexed_query(generation, query.clone());
+        search_command(generation, query, cancellation)
     }
 
     pub(super) fn accept_search_results(
@@ -47,6 +47,9 @@ impl FileBrowser {
             return Task::none();
         }
         match outcome {
+            IndexedSearchOutcome::Cancelled => {
+                self.search.apply_indexed_cancellation();
+            }
             IndexedSearchOutcome::Batch(batch) => {
                 self.search.apply_indexed_batch(batch);
             }

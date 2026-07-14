@@ -8,10 +8,10 @@ use crate::daemon::SearchDaemonCore;
 use crate::error::{SearchError, SearchResult};
 use crate::logging::bounded_search_log_detail;
 use crate::model::{
-    IndexedQueryAvailability, SearchProviderFailure, SearchQuery, SearchResultBatch,
-    SearchServicePhase, SearchServiceStatus,
+    IndexedQueryAvailability, SearchProviderFailure, SearchServicePhase, SearchServiceStatus,
 };
 use crate::protocol::SearchSocketService;
+use crate::SearchDatabase;
 use crate::SearchIndexConfig;
 
 struct SearchServiceRuntimeState {
@@ -226,7 +226,7 @@ impl SearchSocketService for SearchServiceRuntime {
         self.status_snapshot()
     }
 
-    fn search(&self, query: &SearchQuery) -> Result<SearchResultBatch, SearchProviderFailure> {
+    fn open_query_reader(&self) -> Result<SearchDatabase, SearchProviderFailure> {
         let query_core = {
             let state = self
                 .state
@@ -245,7 +245,7 @@ impl SearchSocketService for SearchServiceRuntime {
                 })?
         };
 
-        query_core.search(query).map_err(provider_failure)
+        query_core.open_query_reader().map_err(provider_failure)
     }
 }
 
@@ -454,7 +454,11 @@ mod tests {
             status.query_availability,
             IndexedQueryAvailability::Available
         );
-        let batch = runtime.search(&SearchQuery::global(7, "needle")).unwrap();
+        let batch = runtime
+            .open_query_reader()
+            .unwrap()
+            .search(&SearchQuery::global(7, "needle"))
+            .unwrap();
         assert_eq!(batch.hits.len(), 1);
         assert_eq!(batch.hits[0].display_name, "note.txt");
 
@@ -482,7 +486,11 @@ mod tests {
         let index_status = status.index_status.unwrap();
         assert_eq!(index_status.phase, IndexPhase::Starting);
         assert!(matches!(index_status.health, IndexHealth::Error { .. }));
-        assert!(runtime.search(&SearchQuery::global(9, "")).is_ok());
+        assert!(runtime
+            .open_query_reader()
+            .unwrap()
+            .search(&SearchQuery::global(9, ""))
+            .is_ok());
 
         runtime.shutdown().unwrap();
     }

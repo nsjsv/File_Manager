@@ -1,16 +1,19 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, ErrorCode};
 use tempfile::tempdir;
 
 use crate::extractor::ExtractionStatus;
-use crate::model::{SearchFileKind, SearchQuery, SearchScope, TimeRange};
+use crate::model::{MatchSource, SearchFileKind, SearchQuery, SearchScope, TimeRange};
 
 use super::{
     DirectorySignature, DirectorySnapshot, EntryObservationState, EntryStageProgress,
     FileSignature, IndexedEntryStageState, IndexedFile, ObservedFile, SearchDatabase,
-    MAX_SEARCH_SNIPPET_BYTES, MAX_SNIPPET_HITS_PER_BATCH, READER_PAGE_CACHE_KIB,
-    WAL_AUTOCHECKPOINT_PAGES, WRITER_PAGE_CACHE_KIB,
+    READER_PAGE_CACHE_KIB, WAL_AUTOCHECKPOINT_PAGES, WRITER_PAGE_CACHE_KIB,
 };
 
 #[test]
@@ -31,6 +34,172 @@ fn searches_file_name_and_content() {
 
     assert_eq!(batch.hits.len(), 2);
     assert!(batch.finished);
+}
+
+#[test]
+fn explicit_bm25_preserves_default_rank_results_across_pages() {
+    fn default_ranked_hits(database: &SearchDatabase) -> Vec<(PathBuf, u64)> {
+        let mut statement = database
+            .connection
+            .prepare(
+                "SELECT f.path, file_search_fts.rank
+                 FROM file_search_fts
+                 JOIN files f ON f.rowid = file_search_fts.rowid
+                 WHERE file_search_fts MATCH ?1
+                   AND f.tombstoned = 0
+                   AND f.observation_state = 'observable'
+                 ORDER BY file_search_fts.rank",
+            )
+            .unwrap();
+        statement
+            .query_map(["\"needle\""], |row| {
+                let path: String = row.get(0)?;
+                let score: f64 = row.get(1)?;
+                Ok((Path::new(&path).to_path_buf(), (-score).to_bits()))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn searched_hits(database: &SearchDatabase) -> Vec<(PathBuf, u64)> {
+        let mut query = SearchQuery::global(1, "needle");
+        query.limit = 2;
+        let mut hits = Vec::new();
+        loop {
+            let batch = database.search(&query).unwrap();
+            hits.extend(
+                batch
+                    .hits
+                    .into_iter()
+                    .map(|hit| (hit.path, hit.rank.to_bits())),
+            );
+            let Some(cursor) = batch.next_cursor else {
+                break;
+            };
+            query.cursor = Some(cursor);
+        }
+        hits
+    }
+
+    let database = SearchDatabase::in_memory().unwrap();
+    for (path, name, content) in [
+        ("/tmp/name.txt", "needle-name.txt", "brief body"),
+        ("/tmp/dense.txt", "dense.txt", "needle needle needle"),
+        (
+            "/tmp/long.txt",
+            "long.txt",
+            "needle with a substantially longer document body for ranking",
+        ),
+        ("/tmp/tie-a.txt", "tie-a.txt", "same needle body"),
+        ("/tmp/tie-b.txt", "tie-b.txt", "same needle body"),
+    ] {
+        database
+            .upsert_file(&indexed_file(path, name, content))
+            .unwrap();
+    }
+    let query = SearchQuery::global(1, "needle");
+    assert!(database
+        .search_plan(&query)
+        .unwrap()
+        .iter()
+        .any(|step| step.contains("MATERIALIZE ranked")));
+    assert_eq!(searched_hits(&database), default_ranked_hits(&database));
+
+    let mut inaccessible = indexed_file(
+        "/tmp/inaccessible.txt",
+        "needle-inaccessible.txt",
+        "needle needle needle needle",
+    );
+    database.upsert_file(&inaccessible).unwrap();
+    inaccessible.content = None;
+    inaccessible.extraction_status = ExtractionStatus::ReadFailed {
+        message: "permission denied".to_owned(),
+    };
+    database.upsert_inaccessible_file(&inaccessible).unwrap();
+    assert!(!database
+        .search_plan(&query)
+        .unwrap()
+        .iter()
+        .any(|step| step.contains("MATERIALIZE ranked")));
+    assert_eq!(searched_hits(&database), default_ranked_hits(&database));
+}
+
+#[test]
+fn full_text_optimization_preserves_ranked_pages() {
+    fn ranked_pages(database: &SearchDatabase) -> Vec<Vec<(PathBuf, u64)>> {
+        let mut query = SearchQuery::global(1, "needle");
+        query.limit = 3;
+        let mut pages = Vec::new();
+        loop {
+            let batch = database.search(&query).unwrap();
+            pages.push(
+                batch
+                    .hits
+                    .into_iter()
+                    .map(|hit| (hit.path, hit.rank.to_bits()))
+                    .collect(),
+            );
+            let Some(cursor) = batch.next_cursor else {
+                break;
+            };
+            query.cursor = Some(cursor);
+        }
+        pages
+    }
+
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .connection
+        .execute(
+            "INSERT INTO file_search_fts(file_search_fts, rank) VALUES('automerge', 0)",
+            [],
+        )
+        .unwrap();
+    for index in 1..=9 {
+        let content = format!("{}document-{index}", "needle ".repeat(index));
+        database
+            .upsert_file(&indexed_file(
+                &format!("/tmp/ranked-{index}.txt"),
+                &format!("ranked-{index}.txt"),
+                &content,
+            ))
+            .unwrap();
+    }
+
+    let segments_before = database
+        .connection
+        .query_row(
+            "SELECT COUNT(DISTINCT segid) FROM file_search_fts_idx",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap();
+    let pages_before = ranked_pages(&database);
+
+    database.compact_search_database().unwrap();
+
+    let segments_after = database
+        .connection
+        .query_row(
+            "SELECT COUNT(DISTINCT segid) FROM file_search_fts_idx",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap();
+    let changes_after_optimization = database
+        .connection
+        .query_row("SELECT total_changes()", [], |row| row.get::<_, u64>(0))
+        .unwrap();
+    database.compact_search_database().unwrap();
+    let changes_after_noop = database
+        .connection
+        .query_row("SELECT total_changes()", [], |row| row.get::<_, u64>(0))
+        .unwrap();
+    assert!(segments_before > 1);
+    assert_eq!(segments_after, 1);
+    assert_eq!(changes_after_noop, changes_after_optimization);
+    assert_eq!(ranked_pages(&database), pages_before);
 }
 
 #[test]
@@ -92,50 +261,106 @@ fn sqlite_connections_apply_the_fixed_memory_budget() {
 }
 
 #[test]
-fn search_snippets_have_a_byte_ceiling() {
+fn hidden_query_rows_use_the_partial_visibility_index() {
     let database = SearchDatabase::in_memory().unwrap();
-    let oversized_token = "x".repeat(MAX_SEARCH_SNIPPET_BYTES * 4);
+    let mut statement = database
+        .connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT EXISTS(
+                SELECT 1 FROM files
+                WHERE tombstoned <> 0 OR observation_state <> 'observable'
+             )",
+        )
+        .unwrap();
+    let plan = statement
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert!(plan
+        .iter()
+        .any(|step| step.contains("files_hidden_query_rows")));
+}
+
+#[test]
+fn search_hits_leave_snippets_unpopulated_by_default() {
+    let database = SearchDatabase::in_memory().unwrap();
     database
         .upsert_file(&indexed_file(
-            "/tmp/large-snippet.txt",
-            "large-snippet.txt",
-            &format!("needle {oversized_token}"),
+            "/tmp/content-match.txt",
+            "content-match.txt",
+            "needle in the indexed body",
+        ))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/needle-name.txt",
+            "Needle-name.txt",
+            "other content",
         ))
         .unwrap();
 
     let batch = database.search(&SearchQuery::global(1, "needle")).unwrap();
-    assert_eq!(batch.hits.len(), 1);
-    assert!(batch.hits[0]
-        .snippet
-        .as_ref()
-        .is_some_and(|snippet| snippet.len() <= MAX_SEARCH_SNIPPET_BYTES));
-}
-
-#[test]
-fn common_query_generates_snippets_for_only_a_fixed_page_prefix() {
-    let database = SearchDatabase::in_memory().unwrap();
-    for index in 0..25 {
-        database
-            .upsert_file(&indexed_file(
-                &format!("/tmp/common-{index}.txt"),
-                &format!("common-{index}.txt"),
-                "common needle content",
-            ))
-            .unwrap();
-    }
-    let mut query = SearchQuery::global(1, "needle");
-    query.limit = 25;
-
-    let batch = database.search(&query).unwrap();
-
-    assert_eq!(batch.hits.len(), 25);
+    assert_eq!(batch.hits.len(), 2);
+    assert!(batch.hits.iter().all(|hit| hit.snippet.is_none()));
     assert_eq!(
         batch
             .hits
             .iter()
-            .filter(|hit| hit.snippet.is_some())
-            .count(),
-        MAX_SNIPPET_HITS_PER_BATCH
+            .find(|hit| hit.path == Path::new("/tmp/needle-name.txt"))
+            .unwrap()
+            .match_source,
+        MatchSource::Name
+    );
+    assert_eq!(
+        batch
+            .hits
+            .iter()
+            .find(|hit| hit.path == Path::new("/tmp/content-match.txt"))
+            .unwrap()
+            .match_source,
+        MatchSource::Content
+    );
+}
+
+#[test]
+fn sqlite_interrupt_stops_a_long_statement_and_leaves_the_reader_reusable() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let interrupt = database.interrupt_handle();
+    let (statement_started_sender, statement_started_receiver) = mpsc::channel();
+    let query_thread = thread::spawn(move || {
+        statement_started_sender.send(()).unwrap();
+        let query_outcome = database.connection.query_row(
+            "WITH RECURSIVE counter(value) AS (
+                VALUES(0)
+                UNION ALL
+                SELECT value + 1 FROM counter WHERE value < 1000000000
+             )
+             SELECT sum(value) FROM counter",
+            [],
+            |row| row.get::<_, i64>(0),
+        );
+        (database, query_outcome)
+    });
+
+    statement_started_receiver.recv().unwrap();
+    thread::sleep(Duration::from_millis(10));
+    interrupt.interrupt();
+    let (database, query_outcome) = query_thread.join().unwrap();
+
+    assert!(matches!(
+        query_outcome,
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.code == ErrorCode::OperationInterrupted
+    ));
+    assert_eq!(
+        database
+            .connection
+            .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
     );
 }
 
@@ -189,6 +414,68 @@ fn recursive_scope_treats_wildcards_and_case_as_literal_path_components() {
         assert_eq!(batch.hits.len(), 1, "scope {scope}");
         assert_eq!(batch.hits[0].path, Path::new(expected_path));
     }
+}
+
+#[test]
+fn recursive_scope_includes_only_the_directory_and_its_descendants() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for path in [
+        "/tmp/范围",
+        "/tmp/范围/inside.txt",
+        "/tmp/范围/deeper/nested.txt",
+        "/tmp/范围-other/sibling.txt",
+        "/tmp/范围0/other-prefix.txt",
+    ] {
+        database
+            .upsert_file(&indexed_file(
+                path,
+                Path::new(path).file_name().unwrap().to_str().unwrap(),
+                "alpha",
+            ))
+            .unwrap();
+    }
+
+    let mut directory_query = SearchQuery::global(1, "");
+    directory_query.scope = SearchScope::Directory(Path::new("/tmp/范围").to_path_buf());
+    let directory_paths = database
+        .search(&directory_query)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        directory_paths,
+        [
+            Path::new("/tmp/范围").to_path_buf(),
+            Path::new("/tmp/范围/inside.txt").to_path_buf(),
+            Path::new("/tmp/范围/deeper/nested.txt").to_path_buf(),
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    let mut root_query = SearchQuery::global(2, "");
+    root_query.scope = SearchScope::Directory(Path::new("/").to_path_buf());
+    assert_eq!(database.search(&root_query).unwrap().hits.len(), 5);
+}
+
+#[test]
+fn empty_recursive_scope_materializes_path_candidates_before_ordering() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut query = SearchQuery::global(1, "");
+    query.scope = SearchScope::Directory(Path::new("/workspace").to_path_buf());
+
+    let plan = database.search_plan(&query).unwrap();
+
+    assert!(plan.iter().any(|step| step.contains("LIST SUBQUERY")));
+    assert!(plan
+        .iter()
+        .any(|step| step.contains("SEARCH files") && step.contains("path>? AND path<?")));
+    assert!(plan
+        .iter()
+        .any(|step| step.contains("files_visible_modified_name")));
+    assert!(!plan.iter().any(|step| step.starts_with("SCAN f")));
 }
 
 #[test]

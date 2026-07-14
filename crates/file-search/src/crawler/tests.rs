@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rusqlite::Connection;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -317,6 +318,49 @@ async fn rebuild_paths_only_scans_the_requested_file_and_keeps_skip_semantics() 
     let batch = reader.search(&SearchQuery::global(1, "beta")).unwrap();
     assert_eq!(batch.hits.len(), 1);
     assert_eq!(batch.hits[0].display_name, "second.txt");
+}
+
+#[tokio::test]
+async fn bulk_recovery_compacts_pending_full_text_segments() {
+    let content = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let database_path = db_dir.path().join("search.sqlite");
+    let paths = (0..3)
+        .map(|index| content.path().join(format!("file-{index}.txt")))
+        .collect::<Vec<_>>();
+    for path in &paths {
+        fs::write(path, "needle").unwrap();
+    }
+
+    let writer = writer_in(&db_dir);
+    let indexer = SearchIndexer::new(Arc::clone(&writer), config_for(content.path()));
+    indexer.rebuild().await.unwrap();
+    let segment_reader = Connection::open(&database_path).unwrap();
+    let segment_count = || {
+        segment_reader
+            .query_row(
+                "SELECT COUNT(DISTINCT segid) FROM file_search_fts_idx",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap()
+    };
+
+    for (index, path) in paths.iter().take(2).enumerate() {
+        fs::write(path, format!("needle local update {index}")).unwrap();
+        indexer.rebuild_paths(vec![path.clone()]).await.unwrap();
+    }
+    let fragmented_segments = segment_count();
+    assert!(fragmented_segments > 1);
+
+    let unchanged = indexer.rebuild().await.unwrap();
+    assert_eq!(unchanged.database_mutations, 0);
+    assert_eq!(segment_count(), 1);
+
+    fs::write(&paths[2], "needle bulk update with changed length").unwrap();
+    let changed = indexer.rebuild().await.unwrap();
+    assert_eq!(changed.database_mutations, 1);
+    assert_eq!(segment_count(), 1);
 }
 
 #[tokio::test]

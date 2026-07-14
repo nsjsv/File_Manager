@@ -32,10 +32,10 @@ pub use model::{
 };
 pub use protocol::{
     default_socket_path, read_service_event, read_service_request, search_via_socket,
-    serve_bound_search_socket, serve_search_socket, serve_search_socket_with_core,
-    serve_search_socket_with_status, shutdown_connected_service, shutdown_via_socket,
-    status_via_socket, version_via_socket, write_service_event, write_service_request,
-    BoundSearchSocket, SearchSocketService,
+    search_via_socket_with_cancellation, serve_bound_search_socket, serve_search_socket,
+    serve_search_socket_with_core, serve_search_socket_with_status, shutdown_connected_service,
+    shutdown_via_socket, status_via_socket, version_via_socket, write_service_event,
+    write_service_request, BoundSearchSocket, SearchSocketService,
 };
 pub use service_runtime::SearchServiceRuntime;
 pub use writer::IndexWriter;

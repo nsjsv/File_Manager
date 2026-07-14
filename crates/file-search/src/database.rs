@@ -15,9 +15,6 @@ mod scan;
 #[path = "database/search.rs"]
 mod search;
 
-#[cfg(test)]
-use search::{MAX_SEARCH_SNIPPET_BYTES, MAX_SNIPPET_HITS_PER_BATCH};
-
 pub(crate) use known_entry::{
     DirectorySignature, DirectorySnapshot, EntryObservationState, KnownDirectChild, KnownFileEntry,
 };
@@ -217,6 +214,10 @@ impl SearchDatabase {
         Ok(database)
     }
 
+    pub(crate) fn interrupt_handle(&self) -> rusqlite::InterruptHandle {
+        self.connection.get_interrupt_handle()
+    }
+
     pub fn upsert_file(&self, file: &IndexedFile) -> SearchResult<()> {
         let transaction = self.connection.unchecked_transaction()?;
         let metadata_row = file.query_visible_metadata_row();
@@ -279,7 +280,21 @@ impl SearchDatabase {
         Ok(())
     }
 
-    pub(crate) fn checkpoint_and_release_idle_cache(&self) -> SearchResult<()> {
+    pub(crate) fn compact_search_database(&self) -> SearchResult<()> {
+        let segment_count = self.connection.query_row(
+            "SELECT COUNT(*)
+             FROM (
+                SELECT segid FROM file_search_fts_idx GROUP BY segid LIMIT 2
+             )",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
+        if segment_count > 1 {
+            self.connection.execute(
+                "INSERT INTO file_search_fts(file_search_fts) VALUES('optimize')",
+                [],
+            )?;
+        }
         self.connection
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA shrink_memory;")?;
         let Some(database_path) = self.backing_path.as_ref() else {
@@ -377,6 +392,9 @@ impl SearchDatabase {
                 ON files(tombstoned, observation_state, modified_ms DESC, display_name);
              CREATE INDEX IF NOT EXISTS files_parent_visible_modified_name
                 ON files(parent_path, tombstoned, observation_state, modified_ms DESC, display_name);
+             CREATE INDEX IF NOT EXISTS files_hidden_query_rows
+                ON files(tombstoned, observation_state)
+                WHERE tombstoned <> 0 OR observation_state <> 'observable';
              CREATE INDEX IF NOT EXISTS directory_snapshots_root_path
                 ON directory_snapshots(root_path, path);
              CREATE INDEX IF NOT EXISTS directory_snapshots_parent_path

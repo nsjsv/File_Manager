@@ -5,22 +5,23 @@ use std::time::Duration;
 use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::database::{IndexedFile, SearchDatabase};
 use crate::error::SearchError;
 use crate::extractor::ExtractionStatus;
 use crate::model::{
     IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, SearchFileKind,
-    SearchProviderFailure, SearchQuery, SearchResultBatch, SearchServiceEvent, SearchServicePhase,
+    SearchProviderFailure, SearchQuery, SearchServiceEvent, SearchServicePhase,
     SearchServiceRequest, SearchServiceStatus, PROTOCOL_VERSION,
 };
 
 use super::{
     read_service_event, read_service_request, read_service_request_before, search_via_socket,
-    serve_bound_search_socket, serve_search_socket, shutdown_via_socket, status_via_socket,
-    validate_wire_query, version_via_socket, write_service_event, write_service_request,
-    BoundSearchSocket, SearchSocketService, MAX_ACTIVE_CLIENTS, MAX_QUERY_TERMS_BYTES,
-    MAX_REQUEST_FRAME_BYTES,
+    search_via_socket_with_cancellation, serve_bound_search_socket, serve_search_socket,
+    shutdown_via_socket, status_via_socket, validate_wire_query, version_via_socket,
+    write_service_event, write_service_request, BoundSearchSocket, SearchSocketService,
+    MAX_ACTIVE_CLIENTS, MAX_QUERY_TERMS_BYTES, MAX_REQUEST_FRAME_BYTES,
 };
 
 struct UnavailableSearchService;
@@ -36,7 +37,7 @@ impl SearchSocketService for UnavailableSearchService {
         }
     }
 
-    fn search(&self, _query: &SearchQuery) -> Result<SearchResultBatch, SearchProviderFailure> {
+    fn open_query_reader(&self) -> Result<SearchDatabase, SearchProviderFailure> {
         Err(SearchProviderFailure::Unavailable {
             message: "index is opening".to_owned(),
         })
@@ -66,16 +67,13 @@ impl SearchSocketService for BlockingSearchService {
         }
     }
 
-    fn search(&self, query: &SearchQuery) -> Result<SearchResultBatch, SearchProviderFailure> {
+    fn open_query_reader(&self) -> Result<SearchDatabase, SearchProviderFailure> {
         if let Some(entered) = self.entered.lock().unwrap().take() {
             let _ = entered.send(());
         }
         self.release.wait();
-        Ok(SearchResultBatch {
-            query_id: query.query_id,
-            hits: Vec::new(),
-            next_cursor: None,
-            finished: true,
+        SearchDatabase::in_memory().map_err(|error| SearchProviderFailure::Fatal {
+            message: error.to_string(),
         })
     }
 }
@@ -222,7 +220,7 @@ async fn socket_server_never_owns_more_than_the_fixed_client_limit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn blocking_search_does_not_block_status_on_the_current_thread_runtime() {
+async fn blocking_reader_open_does_not_block_status_on_the_current_thread_runtime() {
     let temporary_directory = tempfile::tempdir().unwrap();
     let socket_path = temporary_directory.path().join("search.sock");
     let bound_socket = BoundSearchSocket::bind(socket_path.clone()).unwrap();
@@ -252,6 +250,169 @@ async fn blocking_search_does_not_block_status_on_the_current_thread_runtime() {
     release.wait();
     search.await.unwrap().unwrap();
     shutdown_via_socket(&socket_path).await.unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn matching_cancel_is_the_only_terminal_event_and_does_not_interrupt_another_client() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    let socket_path = temporary_directory.path().join("search.sock");
+    let database_path = temporary_directory.path().join("search.sqlite");
+    let writer_database = SearchDatabase::open(&database_path).unwrap();
+    insert_note(&writer_database, temporary_directory.path());
+    let server = tokio::spawn(serve_search_socket(
+        socket_path.clone(),
+        database_path,
+        complete_index_status(1),
+    ));
+    wait_for_socket_path(&socket_path).await;
+
+    let mut cancelled_client = UnixStream::connect(&socket_path).await.unwrap();
+    let mut independent_client = UnixStream::connect(&socket_path).await.unwrap();
+    write_service_request(
+        &mut cancelled_client,
+        &SearchServiceRequest::Search(SearchQuery::global(11, "needle")),
+    )
+    .await
+    .unwrap();
+    write_service_request(
+        &mut cancelled_client,
+        &SearchServiceRequest::Cancel { query_id: 11 },
+    )
+    .await
+    .unwrap();
+    write_service_request(
+        &mut cancelled_client,
+        &SearchServiceRequest::Cancel { query_id: 11 },
+    )
+    .await
+    .unwrap();
+    write_service_request(
+        &mut independent_client,
+        &SearchServiceRequest::Search(SearchQuery::global(12, "needle")),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        read_service_event(&mut cancelled_client).await.unwrap(),
+        SearchServiceEvent::Cancelled { query_id: 11 }
+    );
+    assert!(matches!(
+        read_service_event(&mut independent_client).await.unwrap(),
+        SearchServiceEvent::Results(batch) if batch.query_id == 12 && batch.hits.len() == 1
+    ));
+    assert!(tokio::time::timeout(
+        Duration::from_millis(30),
+        read_service_event(&mut cancelled_client)
+    )
+    .await
+    .is_err());
+
+    shutdown_via_socket(&socket_path).await.unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn client_write_eof_stops_the_active_query_without_a_terminal_event() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    let socket_path = temporary_directory.path().join("search.sock");
+    let database_path = temporary_directory.path().join("search.sqlite");
+    let writer_database = SearchDatabase::open(&database_path).unwrap();
+    insert_note(&writer_database, temporary_directory.path());
+    let server = tokio::spawn(serve_search_socket(
+        socket_path.clone(),
+        database_path,
+        complete_index_status(1),
+    ));
+    wait_for_socket_path(&socket_path).await;
+
+    let mut client = UnixStream::connect(&socket_path).await.unwrap();
+    write_service_request(
+        &mut client,
+        &SearchServiceRequest::Search(SearchQuery::global(15, "needle")),
+    )
+    .await
+    .unwrap();
+    client.shutdown().await.unwrap();
+    let mut bytes = Vec::new();
+    client.read_to_end(&mut bytes).await.unwrap();
+
+    assert!(bytes.is_empty());
+    shutdown_via_socket(&socket_path).await.unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellable_client_waits_for_the_server_to_finish_cancelling() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    let socket_path = temporary_directory.path().join("search.sock");
+    let bound_socket = BoundSearchSocket::bind(socket_path.clone()).unwrap();
+    let (entered_sender, entered_receiver) = oneshot::channel();
+    let release = Arc::new(Barrier::new(2));
+    let server = tokio::spawn(serve_bound_search_socket(
+        bound_socket,
+        Arc::new(BlockingSearchService {
+            entered: Mutex::new(Some(entered_sender)),
+            release: Arc::clone(&release),
+        }),
+        || async { Ok(()) },
+    ));
+    let cancellation = CancellationToken::new();
+    let search_socket_path = socket_path.clone();
+    let search_cancellation = cancellation.clone();
+    let search = tokio::spawn(async move {
+        search_via_socket_with_cancellation(
+            &search_socket_path,
+            SearchQuery::global(13, "blocked"),
+            search_cancellation,
+        )
+        .await
+    });
+    entered_receiver.await.unwrap();
+
+    cancellation.cancel();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!search.is_finished());
+    release.wait();
+
+    assert!(matches!(search.await.unwrap(), Err(SearchError::Cancelled)));
+    shutdown_via_socket(&socket_path).await.unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_waits_for_the_active_query_worker_to_exit() {
+    let temporary_directory = tempfile::tempdir().unwrap();
+    let socket_path = temporary_directory.path().join("search.sock");
+    let bound_socket = BoundSearchSocket::bind(socket_path.clone()).unwrap();
+    let (entered_sender, entered_receiver) = oneshot::channel();
+    let release = Arc::new(Barrier::new(2));
+    let server = tokio::spawn(serve_bound_search_socket(
+        bound_socket,
+        Arc::new(BlockingSearchService {
+            entered: Mutex::new(Some(entered_sender)),
+            release: Arc::clone(&release),
+        }),
+        || async { Ok(()) },
+    ));
+    let mut search_client = UnixStream::connect(&socket_path).await.unwrap();
+    write_service_request(
+        &mut search_client,
+        &SearchServiceRequest::Search(SearchQuery::global(14, "blocked")),
+    )
+    .await
+    .unwrap();
+    entered_receiver.await.unwrap();
+
+    let shutdown_socket_path = socket_path.clone();
+    let mut shutdown =
+        tokio::spawn(async move { shutdown_via_socket(&shutdown_socket_path).await });
+    let premature_shutdown = tokio::time::timeout(Duration::from_millis(30), &mut shutdown).await;
+    release.wait();
+    assert!(premature_shutdown.is_err());
+
+    shutdown.await.unwrap().unwrap();
     server.await.unwrap().unwrap();
 }
 
@@ -498,6 +659,15 @@ async fn shutdown_is_sticky_for_concurrent_requests_and_idle_client() {
     let mut idle_client = UnixStream::connect(&socket_path).await.unwrap();
     let mut first_shutdown = UnixStream::connect(&socket_path).await.unwrap();
     let mut second_shutdown = UnixStream::connect(&socket_path).await.unwrap();
+    for client in [&mut idle_client, &mut first_shutdown, &mut second_shutdown] {
+        write_service_request(client, &SearchServiceRequest::Version)
+            .await
+            .unwrap();
+        assert!(matches!(
+            read_service_event(client).await.unwrap(),
+            SearchServiceEvent::Version { .. }
+        ));
+    }
     write_service_request(&mut first_shutdown, &SearchServiceRequest::Shutdown)
         .await
         .unwrap();
