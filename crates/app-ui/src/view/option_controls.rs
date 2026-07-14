@@ -55,18 +55,30 @@ pub(super) fn action_choice_row(
     description: &'static str,
     message: Message,
 ) -> Element<'static, Message> {
+    action_choice_button(title, description)
+        .on_press(message)
+        .into()
+}
+
+pub(super) fn action_choice_button(
+    title: &'static str,
+    description: &'static str,
+) -> Button<'static, Message> {
     let labels = Column::new()
         .spacing(2)
         .push(readable_text(title).size(12).width(Length::Fill))
         .push(readable_text(description).size(11).width(Length::Fill));
 
     button(labels)
-        .on_press(message)
         .padding([7, 10])
         .width(Length::Fill)
         .height(Length::Fixed(ACTION_CHOICE_HEIGHT))
         .style(selectable_choice_button_style(false))
-        .into()
+}
+
+pub(super) fn destructive_confirmation_button_style() -> fn(&Theme, button::Status) -> button::Style
+{
+    destructive_confirmation_button_appearance
 }
 
 pub(super) fn primary_action_button(
@@ -216,6 +228,38 @@ fn primary_action_button_appearance(theme: &Theme, status: button::Status) -> bu
             color: Color::TRANSPARENT,
             width: 0.0,
             radius: 7.0.into(),
+        },
+        shadow: action_button_shadow(theme, status),
+        ..button::Style::default()
+    }
+}
+
+fn destructive_confirmation_button_appearance(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let background = match (is_dark_theme(theme), status) {
+        (true, button::Status::Hovered) => Color::from_rgb8(153, 45, 45),
+        (true, button::Status::Pressed) => Color::from_rgb8(105, 28, 28),
+        (true, button::Status::Disabled) => Color::from_rgb8(75, 48, 52),
+        (true, button::Status::Active) => Color::from_rgb8(127, 35, 40),
+        (false, button::Status::Hovered) => Color::from_rgb8(185, 28, 28),
+        (false, button::Status::Pressed) => Color::from_rgb8(153, 27, 27),
+        (false, button::Status::Disabled) => Color::from_rgb8(229, 183, 183),
+        (false, button::Status::Active) => Color::from_rgb8(169, 34, 40),
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: if matches!(status, button::Status::Disabled) {
+            muted_text_color(theme)
+        } else {
+            Color::WHITE
+        },
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 8.0.into(),
         },
         shadow: action_button_shadow(theme, status),
         ..button::Style::default()

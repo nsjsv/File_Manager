@@ -4,9 +4,15 @@ use file_search::{SearchExcludeRules, SearchHit, SearchQuery, SearchScope};
 use iced::Task;
 
 use super::FileBrowser;
-use crate::commands::{directory_fallback_search_command, open_file_command, search_command};
+use crate::commands::{
+    directory_fallback_search_command, open_file_command, search_command,
+    search_service_recovery_command, search_service_status_command,
+};
 use crate::model::search::SEARCH_RESULT_WINDOW;
-use crate::model::{DirectoryFallbackCompletion, IndexedSearchOutcome, Message, NavigationMode};
+use crate::model::{
+    DirectoryFallbackCompletion, IndexedSearchOutcome, Message, NavigationMode,
+    SearchServiceRecoveryAction,
+};
 
 impl FileBrowser {
     pub(super) fn update_search_input(&mut self, value: String) -> Task<Message> {
@@ -102,6 +108,36 @@ impl FileBrowser {
         Task::none()
     }
 
+    pub(super) fn restart_search_service(&mut self) -> Task<Message> {
+        self.search
+            .begin_service_restart()
+            .map(search_service_recovery_command)
+            .unwrap_or_else(Task::none)
+    }
+
+    pub(super) fn press_force_restart_search_service(&mut self) -> Task<Message> {
+        self.search
+            .press_force_restart()
+            .map(search_service_recovery_command)
+            .unwrap_or_else(Task::none)
+    }
+
+    pub(super) fn accept_search_service_recovery(
+        &mut self,
+        action: SearchServiceRecoveryAction,
+        outcome: Result<file_search::SearchServiceStatus, String>,
+    ) -> Task<Message> {
+        let completion = outcome.map(|_| ());
+        if self
+            .search
+            .accept_service_recovery_completion(action, completion)
+        {
+            search_service_status_command()
+        } else {
+            Task::none()
+        }
+    }
+
     pub(super) fn toggle_search_content_indexing(&mut self) -> Task<Message> {
         self.user_config.search_content_indexing_enabled =
             !self.user_config.search_content_indexing_enabled;
@@ -161,8 +197,11 @@ mod tests {
 
     use super::FileBrowser;
     use crate::config;
-    use crate::model::search::{SearchProvider, SEARCH_RESULT_WINDOW};
-    use crate::model::{DirectoryFallbackCompletion, IndexedSearchOutcome};
+    use crate::model::search::{
+        SearchProvider, SearchServiceRecoveryAction, SearchServiceRecoveryState,
+        SEARCH_RESULT_WINDOW,
+    };
+    use crate::model::{DirectoryFallbackCompletion, IndexedSearchOutcome, SettingsCategory};
 
     fn browser_for_search_tests() -> FileBrowser {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
@@ -491,5 +530,63 @@ mod tests {
         assert!(cancellation.is_cancelled());
         assert!(browser.search.input.is_empty());
         assert!(!browser.search.is_active());
+    }
+
+    #[test]
+    fn settings_escape_cancels_force_confirmation_before_closing_the_window() {
+        let mut browser = browser_for_search_tests();
+        browser.selected_settings_category = SettingsCategory::Search;
+        drop(browser.ensure_settings_window());
+        drop(browser.press_force_restart_search_service());
+
+        drop(browser.handle_focused_window_escape_pressed());
+
+        assert_eq!(browser.search.recovery, SearchServiceRecoveryState::Idle);
+        assert!(browser.settings_window.is_some());
+    }
+
+    #[test]
+    fn leaving_search_settings_cancels_only_a_pending_confirmation() {
+        let mut browser = browser_for_search_tests();
+        browser.selected_settings_category = SettingsCategory::Search;
+        drop(browser.press_force_restart_search_service());
+
+        drop(browser.select_settings_category(SettingsCategory::General));
+
+        assert_eq!(browser.search.recovery, SearchServiceRecoveryState::Idle);
+        assert_eq!(
+            browser.selected_settings_category,
+            SettingsCategory::General
+        );
+    }
+
+    #[test]
+    fn closing_settings_cancels_a_pending_force_confirmation() {
+        let mut browser = browser_for_search_tests();
+        drop(browser.ensure_settings_window());
+        drop(browser.press_force_restart_search_service());
+
+        drop(browser.close_settings_window());
+
+        assert_eq!(browser.search.recovery, SearchServiceRecoveryState::Idle);
+        assert!(browser.settings_window.is_none());
+    }
+
+    #[test]
+    fn closing_settings_does_not_cancel_running_recovery() {
+        let mut browser = browser_for_search_tests();
+        drop(browser.ensure_settings_window());
+        assert_eq!(
+            browser.search.begin_service_restart(),
+            Some(SearchServiceRecoveryAction::Restart)
+        );
+
+        drop(browser.close_settings_window());
+
+        assert_eq!(
+            browser.search.recovery,
+            SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::Restart)
+        );
+        assert!(browser.settings_window.is_none());
     }
 }

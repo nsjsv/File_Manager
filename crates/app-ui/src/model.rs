@@ -84,7 +84,9 @@ pub(crate) use application_logs::{
     SEARCH_JOURNAL_UNIT,
 };
 pub(crate) mod search;
-pub(crate) use search::{DirectoryFallbackCompletion, IndexedSearchOutcome};
+pub(crate) use search::{
+    DirectoryFallbackCompletion, IndexedSearchOutcome, SearchServiceRecoveryAction,
+};
 mod session;
 pub(crate) use session::{
     pane_session_from_live, snapshot_from_stored, snapshot_to_stored, BrowserPaneSession,
@@ -317,6 +319,12 @@ pub(crate) enum Message {
     SearchServiceEnsured(Result<SearchServiceStatus, String>),
     SearchServiceStatusRefreshRequested,
     SearchServiceStatusLoaded(Result<SearchServiceStatus, String>),
+    SearchServiceRestartRequested,
+    SearchServiceForceRestartPressed,
+    SearchServiceRecoveryFinished(
+        SearchServiceRecoveryAction,
+        Result<SearchServiceStatus, String>,
+    ),
     SystemThemeDetected(Theme),
     UserPreferencesSaved(Result<(), String>),
     AppConfigSaved(Result<(), String>),

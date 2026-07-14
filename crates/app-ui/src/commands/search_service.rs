@@ -42,11 +42,13 @@ async fn read_search_service_status() -> Result<SearchServiceStatus, String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchUnitAction {
+pub(super) enum SearchUnitAction {
     Show,
     DaemonReload,
     Start,
     Restart,
+    KillControlGroup,
+    ResetFailed,
 }
 
 impl SearchUnitAction {
@@ -83,6 +85,15 @@ impl SearchUnitAction {
                 "restart",
                 SEARCH_SERVICE_UNIT,
             ],
+            Self::KillControlGroup => &[
+                "--user",
+                "--no-pager",
+                "--signal=SIGKILL",
+                "--kill-whom=all",
+                "kill",
+                SEARCH_SERVICE_UNIT,
+            ],
+            Self::ResetFailed => &["--user", "--no-pager", "reset-failed", SEARCH_SERVICE_UNIT],
         }
     }
 
@@ -92,24 +103,26 @@ impl SearchUnitAction {
             Self::DaemonReload => "daemon-reload",
             Self::Start => "start",
             Self::Restart => "restart",
+            Self::KillControlGroup => "kill",
+            Self::ResetFailed => "reset-failed",
         }
     }
 }
 
-struct SearchUnitController {
+pub(super) struct SearchUnitController {
     systemctl_executable: PathBuf,
     cgroup_root: PathBuf,
 }
 
 impl SearchUnitController {
-    fn system() -> Self {
+    pub(super) fn system() -> Self {
         Self {
             systemctl_executable: PathBuf::from("systemctl"),
             cgroup_root: PathBuf::from("/sys/fs/cgroup"),
         }
     }
 
-    async fn execute(&self, action: SearchUnitAction) -> Result<String, String> {
+    pub(super) async fn execute(&self, action: SearchUnitAction) -> Result<String, String> {
         let mut command = Command::new(&self.systemctl_executable);
         command.args(action.arguments()).kill_on_drop(true);
         let command_output = tokio::time::timeout(SEARCH_CONTROL_ATTEMPT_TIMEOUT, command.output())
@@ -148,11 +161,11 @@ impl SearchUnitController {
         Ok(String::from_utf8_lossy(&command_output.stdout).into_owned())
     }
 
-    async fn show(&self) -> Result<SearchUnitSnapshot, String> {
+    pub(super) async fn show(&self) -> Result<SearchUnitSnapshot, String> {
         SearchUnitSnapshot::parse(&self.execute(SearchUnitAction::Show).await?)
     }
 
-    async fn reload_then_execute(&self, action: SearchUnitAction) -> Result<(), String> {
+    pub(super) async fn reload_then_execute(&self, action: SearchUnitAction) -> Result<(), String> {
         self.execute(SearchUnitAction::DaemonReload).await?;
         self.execute(action).await?;
         Ok(())
@@ -161,6 +174,8 @@ impl SearchUnitController {
     async fn validate_effective_cgroup(&self, snapshot: &SearchUnitSnapshot) -> Result<(), String> {
         let relative_control_group = snapshot
             .control_group
+            .as_ref()
+            .expect("ready service snapshot has a ControlGroup")
             .strip_prefix("/")
             .expect("validated ControlGroup is absolute");
         let cgroup_directory = self.cgroup_root.join(relative_control_group);
@@ -319,11 +334,11 @@ impl fmt::Display for UnitActiveState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SearchUnitSnapshot {
+pub(super) struct SearchUnitSnapshot {
     active_state: UnitActiveState,
     sub_state: String,
     main_pid: Option<NonZeroU32>,
-    control_group: PathBuf,
+    control_group: Option<PathBuf>,
     memory_high: u64,
     memory_max: u64,
     memory_swap_max: u64,
@@ -472,7 +487,10 @@ impl SearchUnitSnapshot {
         })
     }
 
-    fn parse_control_group(property_value: &str) -> Result<PathBuf, String> {
+    fn parse_control_group(property_value: &str) -> Result<Option<PathBuf>, String> {
+        if property_value.is_empty() {
+            return Ok(None);
+        }
         let control_group = PathBuf::from(property_value);
         let mut components = control_group.components();
         let has_absolute_root = components.next() == Some(Component::RootDir);
@@ -484,13 +502,19 @@ impl SearchUnitSnapshot {
                 "systemd reported unsafe ControlGroup={property_value}"
             ));
         }
-        Ok(control_group)
+        Ok(Some(control_group))
     }
 
     fn ready_main_pid(&self) -> Result<NonZeroU32, String> {
         if self.active_state != UnitActiveState::Active || self.sub_state != "running" {
             return Err(format!(
                 "search service unit is not active/running: {}",
+                self.description()
+            ));
+        }
+        if self.control_group.is_none() {
+            return Err(format!(
+                "active/running search service unit reported an empty ControlGroup: {}",
                 self.description()
             ));
         }
@@ -518,13 +542,30 @@ impl SearchUnitSnapshot {
         })
     }
 
-    fn description(&self) -> String {
+    pub(super) fn main_pid(&self) -> Option<NonZeroU32> {
+        self.main_pid
+    }
+
+    pub(super) fn may_have_processes(&self) -> bool {
+        self.main_pid.is_some()
+            || !matches!(
+                &self.active_state,
+                UnitActiveState::Inactive | UnitActiveState::Failed
+            )
+    }
+
+    pub(super) fn description(&self) -> String {
+        let control_group = self
+            .control_group
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<none>".to_owned());
         format!(
             "ActiveState={}, SubState={}, MainPID={}, ControlGroup={}, MemoryHigh={}, MemoryMax={}, MemorySwapMax={}, Result={}, ExecMainStatus={}, NRestarts={}",
             self.active_state,
             self.sub_state,
             self.main_pid.map_or(0, NonZeroU32::get),
-            self.control_group.display(),
+            control_group,
             self.memory_high,
             self.memory_max,
             self.memory_swap_max,
@@ -539,33 +580,90 @@ async fn read_search_service_status_with(
     unit_controller: &SearchUnitController,
     socket_path: &Path,
 ) -> Result<SearchServiceStatus, String> {
+    Ok(
+        read_validated_search_service_with(unit_controller, socket_path)
+            .await
+            .map_err(ValidatedSearchServiceFailure::into_message)?
+            .status,
+    )
+}
+
+pub(super) struct ValidatedSearchService {
+    pub(super) main_pid: NonZeroU32,
+    pub(super) status: SearchServiceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ValidatedSearchServiceFailure {
+    OwnerUnverified(String),
+    StableOwnerEndpoint {
+        main_pid: NonZeroU32,
+        endpoint_failure: SearchEndpointProbeFailure,
+        unit_description: String,
+    },
+}
+
+impl ValidatedSearchServiceFailure {
+    pub(super) fn into_message(self) -> String {
+        match self {
+            Self::OwnerUnverified(message) => message,
+            Self::StableOwnerEndpoint {
+                endpoint_failure,
+                unit_description,
+                ..
+            } => format!("{}; {unit_description}", endpoint_failure.into_message()),
+        }
+    }
+}
+
+impl From<String> for ValidatedSearchServiceFailure {
+    fn from(message: String) -> Self {
+        Self::OwnerUnverified(message)
+    }
+}
+
+pub(super) async fn read_validated_search_service_with(
+    unit_controller: &SearchUnitController,
+    socket_path: &Path,
+) -> Result<ValidatedSearchService, ValidatedSearchServiceFailure> {
     let initial_snapshot = unit_controller.show().await?;
     let expected_main_pid = unit_controller
         .validated_main_pid(&initial_snapshot)
         .await?;
-    let service_status = inspect_search_endpoint(socket_path, expected_main_pid)
-        .await
-        .map_err(|failure| {
-            format!(
-                "{}; {}",
-                failure.into_message(),
-                initial_snapshot.description()
-            )
-        })?;
-    let confirmed_snapshot = unit_controller.show().await?;
+    let endpoint_observation = inspect_search_endpoint(socket_path, expected_main_pid).await;
+    let confirmed_snapshot = unit_controller.show().await.map_err(|error| {
+        ValidatedSearchServiceFailure::OwnerUnverified(format!(
+            "search service changed while its endpoint was inspected: {error}"
+        ))
+    })?;
     let confirmed_main_pid = unit_controller
         .validated_main_pid(&confirmed_snapshot)
         .await
         .map_err(|error| {
-            format!("search service changed while its endpoint was inspected: {error}")
+            ValidatedSearchServiceFailure::OwnerUnverified(format!(
+                "search service changed while its endpoint was inspected: {error}"
+            ))
         })?;
     if confirmed_main_pid != expected_main_pid {
-        return Err(format!(
+        return Err(ValidatedSearchServiceFailure::OwnerUnverified(format!(
             "search service changed while its endpoint was inspected: {}",
             confirmed_snapshot.description()
-        ));
+        )));
     }
-    Ok(service_status)
+    let service_status = match endpoint_observation {
+        Ok(service_status) => service_status,
+        Err(endpoint_failure) => {
+            return Err(ValidatedSearchServiceFailure::StableOwnerEndpoint {
+                main_pid: expected_main_pid,
+                endpoint_failure,
+                unit_description: confirmed_snapshot.description(),
+            });
+        }
+    };
+    Ok(ValidatedSearchService {
+        main_pid: expected_main_pid,
+        status: service_status,
+    })
 }
 
 async fn ensure_search_service_with(

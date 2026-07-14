@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use file_search::{
     daemon_build_id, read_service_request, write_service_event, IndexedQueryAvailability,
@@ -14,6 +15,7 @@ use super::{
     inspect_search_endpoint, SearchUnitAction, SearchUnitController, SearchUnitSnapshot,
     UnitActiveState,
 };
+use crate::model::SearchServiceRecoveryAction;
 
 fn valid_snapshot_text() -> &'static str {
     "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\n"
@@ -37,6 +39,61 @@ async fn create_valid_search_cgroup(cgroup_root: &Path) -> PathBuf {
     cgroup_directory
 }
 
+async fn create_sequenced_recovery_systemctl(
+    temporary_directory: &Path,
+    initial_snapshot: &str,
+    replacement_snapshot: &str,
+) -> (PathBuf, PathBuf) {
+    let systemctl_log_path = temporary_directory.join("recovery-systemctl.log");
+    let show_count_path = temporary_directory.join("recovery-show-count");
+    let systemctl_path = temporary_directory.join("recovery-systemctl");
+    let systemctl_script = format!(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"{}\"\nif [[ \"$*\" == *\" show file-manager-search.service\" ]]; then\n    if [[ -f \"{}\" ]]; then\n        read -r show_count <\"{}\"\n    else\n        show_count=0\n    fi\n    if (( show_count == 0 )); then\n        printf '%s' '{}'\n    else\n        printf '%s' '{}'\n    fi\n    printf '%s' \"$((show_count + 1))\" >\"{}\"\nfi\n",
+        systemctl_log_path.display(),
+        show_count_path.display(),
+        show_count_path.display(),
+        initial_snapshot,
+        replacement_snapshot,
+        show_count_path.display(),
+    );
+    tokio::fs::write(&systemctl_path, systemctl_script)
+        .await
+        .unwrap();
+    let mut permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&systemctl_path, permissions).unwrap();
+    (systemctl_path, systemctl_log_path)
+}
+
+fn spawn_compatible_endpoint(
+    listener: UnixListener,
+    status: SearchServiceStatus,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert_eq!(
+            read_service_request(&mut stream).await.unwrap(),
+            SearchServiceRequest::Version
+        );
+        write_service_event(
+            &mut stream,
+            &SearchServiceEvent::Version {
+                protocol: PROTOCOL_VERSION,
+                build: daemon_build_id(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_service_request(&mut stream).await.unwrap(),
+            SearchServiceRequest::Status
+        );
+        write_service_event(&mut stream, &SearchServiceEvent::Status(status))
+            .await
+            .unwrap();
+    })
+}
+
 #[test]
 fn unit_snapshot_parses_properties_without_order_dependency() {
     let snapshot = SearchUnitSnapshot::parse(valid_snapshot_text()).unwrap();
@@ -46,7 +103,7 @@ fn unit_snapshot_parses_properties_without_order_dependency() {
     assert_eq!(snapshot.main_pid, NonZeroU32::new(42));
     assert_eq!(
         snapshot.control_group,
-        PathBuf::from("/user.slice/search.service")
+        Some(PathBuf::from("/user.slice/search.service"))
     );
     assert_eq!(snapshot.memory_high, 80_000_000);
     assert_eq!(snapshot.memory_max, 96_000_000);
@@ -135,6 +192,21 @@ fn unit_snapshot_rejects_missing_and_invalid_properties() {
 }
 
 #[test]
+fn inactive_snapshot_allows_an_empty_control_group_for_recovery() {
+    let snapshot_text = valid_snapshot_text()
+        .replace("ActiveState=active", "ActiveState=inactive")
+        .replace("SubState=running", "SubState=dead")
+        .replace("MainPID=42", "MainPID=0")
+        .replace("ControlGroup=/user.slice/search.service", "ControlGroup=");
+
+    let snapshot = SearchUnitSnapshot::parse(&snapshot_text).unwrap();
+
+    assert_eq!(snapshot.control_group, None);
+    assert!(!snapshot.may_have_processes());
+    assert!(snapshot.ready_main_pid().is_err());
+}
+
+#[test]
 fn unit_actions_use_user_systemd_without_a_shell() {
     assert_eq!(
         SearchUnitAction::Show.arguments(),
@@ -176,6 +248,26 @@ fn unit_actions_use_user_systemd_without_a_shell() {
             "--no-pager",
             "--no-block",
             "restart",
+            "file-manager-search.service"
+        ]
+    );
+    assert_eq!(
+        SearchUnitAction::KillControlGroup.arguments(),
+        &[
+            "--user",
+            "--no-pager",
+            "--signal=SIGKILL",
+            "--kill-whom=all",
+            "kill",
+            "file-manager-search.service"
+        ]
+    );
+    assert_eq!(
+        SearchUnitAction::ResetFailed.arguments(),
+        &[
+            "--user",
+            "--no-pager",
+            "reset-failed",
             "file-manager-search.service"
         ]
     );
@@ -436,4 +528,225 @@ async fn incompatible_endpoint_is_restarted_only_once_before_compatibility() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn graceful_recovery_retries_a_transient_disconnect_without_sending_sigkill() {
+    let temporary_directory = tempdir().unwrap();
+    let cgroup_root = temporary_directory.path().join("cgroup");
+    create_valid_search_cgroup(&cgroup_root).await;
+    let replacement_pid = std::process::id();
+    let initial_pid = if replacement_pid == 42 { 43 } else { 42 };
+    let initial_snapshot =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={initial_pid}"));
+    let replacement_snapshot =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={replacement_pid}"));
+    let (systemctl_executable, systemctl_log_path) = create_sequenced_recovery_systemctl(
+        temporary_directory.path(),
+        &initial_snapshot,
+        &replacement_snapshot,
+    )
+    .await;
+    let socket_path = temporary_directory.path().join("recovery.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let expected_status = SearchServiceStatus {
+        phase: SearchServicePhase::Ready,
+        query_availability: IndexedQueryAvailability::Available,
+        index_status: None,
+    };
+    let served_status = expected_status.clone();
+    let endpoint_server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        drop(first_stream);
+        spawn_compatible_endpoint(listener, served_status)
+            .await
+            .unwrap();
+    });
+    let unit_controller = SearchUnitController {
+        systemctl_executable,
+        cgroup_root,
+    };
+
+    let status = super::super::search_service_recovery::recover_search_service_with(
+        &unit_controller,
+        &socket_path,
+        SearchServiceRecoveryAction::Restart,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(status, expected_status);
+    endpoint_server.await.unwrap();
+    let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
+    let mutation_actions = systemctl_log
+        .lines()
+        .filter(|line| !line.ends_with("show file-manager-search.service"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mutation_actions,
+        [
+            "--user --no-pager daemon-reload",
+            "--user --no-pager --no-block restart file-manager-search.service",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn force_recovery_kills_the_whole_control_group_before_restart() {
+    let temporary_directory = tempdir().unwrap();
+    let cgroup_root = temporary_directory.path().join("cgroup");
+    create_valid_search_cgroup(&cgroup_root).await;
+    let replacement_pid = std::process::id();
+    let initial_pid = if replacement_pid == 42 { 43 } else { 42 };
+    let initial_snapshot =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={initial_pid}"));
+    let replacement_snapshot =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={replacement_pid}"));
+    let (systemctl_executable, systemctl_log_path) = create_sequenced_recovery_systemctl(
+        temporary_directory.path(),
+        &initial_snapshot,
+        &replacement_snapshot,
+    )
+    .await;
+    let socket_path = temporary_directory.path().join("force-recovery.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let expected_status = SearchServiceStatus {
+        phase: SearchServicePhase::Ready,
+        query_availability: IndexedQueryAvailability::Available,
+        index_status: None,
+    };
+    let endpoint_server = spawn_compatible_endpoint(listener, expected_status.clone());
+    let unit_controller = SearchUnitController {
+        systemctl_executable,
+        cgroup_root,
+    };
+
+    let status = super::super::search_service_recovery::recover_search_service_with(
+        &unit_controller,
+        &socket_path,
+        SearchServiceRecoveryAction::ForceRestart,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(status, expected_status);
+    endpoint_server.await.unwrap();
+    let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
+    let mutation_actions = systemctl_log
+        .lines()
+        .filter(|line| !line.ends_with("show file-manager-search.service"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mutation_actions,
+        [
+            "--user --no-pager --signal=SIGKILL --kill-whom=all kill file-manager-search.service",
+            "--user --no-pager reset-failed file-manager-search.service",
+            "--user --no-pager daemon-reload",
+            "--user --no-pager --no-block restart file-manager-search.service",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn force_recovery_stops_after_a_systemctl_kill_failure() {
+    let temporary_directory = tempdir().unwrap();
+    let systemctl_log_path = temporary_directory.path().join("failed-systemctl.log");
+    let systemctl_path = temporary_directory.path().join("failed-systemctl");
+    let systemctl_script = format!(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"{}\"\nif [[ \"$*\" == *\" show file-manager-search.service\" ]]; then\n    printf '%s' '{}'\nelif [[ \"$*\" == *\" kill file-manager-search.service\" ]]; then\n    printf '%s\\n' 'permission denied' >&2\n    exit 17\nfi\n",
+        systemctl_log_path.display(),
+        valid_snapshot_text(),
+    );
+    tokio::fs::write(&systemctl_path, systemctl_script)
+        .await
+        .unwrap();
+    let mut permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&systemctl_path, permissions).unwrap();
+    let unit_controller = SearchUnitController {
+        systemctl_executable: systemctl_path,
+        cgroup_root: temporary_directory.path().join("unused-cgroup"),
+    };
+
+    let error = super::super::search_service_recovery::recover_search_service_with(
+        &unit_controller,
+        &temporary_directory.path().join("unused.sock"),
+        SearchServiceRecoveryAction::ForceRestart,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("systemctl --user kill file-manager-search.service failed"));
+    assert!(error.contains("permission denied"));
+    assert!(error.contains("before recovery:"));
+    let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
+    assert_eq!(
+        systemctl_log.lines().collect::<Vec<_>>(),
+        [
+            "--user --no-pager --property=ActiveState --property=SubState --property=MainPID --property=ControlGroup --property=MemoryHigh --property=MemoryMax --property=MemorySwapMax --property=Result --property=ExecMainStatus --property=NRestarts show file-manager-search.service",
+            "--user --no-pager --signal=SIGKILL --kill-whom=all kill file-manager-search.service",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn recovery_immediately_reports_an_incompatible_replacement_endpoint() {
+    let temporary_directory = tempdir().unwrap();
+    let cgroup_root = temporary_directory.path().join("cgroup");
+    create_valid_search_cgroup(&cgroup_root).await;
+    let replacement_pid = std::process::id();
+    let initial_pid = if replacement_pid == 42 { 43 } else { 42 };
+    let initial_snapshot =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={initial_pid}"));
+    let replacement_snapshot =
+        valid_snapshot_text().replace("MainPID=42", &format!("MainPID={replacement_pid}"));
+    let (systemctl_executable, _) = create_sequenced_recovery_systemctl(
+        temporary_directory.path(),
+        &initial_snapshot,
+        &replacement_snapshot,
+    )
+    .await;
+    let socket_path = temporary_directory
+        .path()
+        .join("incompatible-recovery.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let endpoint_server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert_eq!(
+            read_service_request(&mut stream).await.unwrap(),
+            SearchServiceRequest::Version
+        );
+        write_service_event(
+            &mut stream,
+            &SearchServiceEvent::Version {
+                protocol: PROTOCOL_VERSION - 1,
+                build: daemon_build_id(),
+            },
+        )
+        .await
+        .unwrap();
+    });
+    let unit_controller = SearchUnitController {
+        systemctl_executable,
+        cgroup_root,
+    };
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        super::super::search_service_recovery::recover_search_service_with(
+            &unit_controller,
+            &socket_path,
+            SearchServiceRecoveryAction::Restart,
+        ),
+    )
+    .await
+    .expect("a stable incompatible replacement is not a transient readiness failure")
+    .unwrap_err();
+
+    endpoint_server.await.unwrap();
+    assert!(error.contains(&format!("expected_protocol={PROTOCOL_VERSION}")));
+    assert!(error.contains(&format!("actual_protocol={}", PROTOCOL_VERSION - 1)));
+    assert!(error.contains(&format!("expected_build={}", daemon_build_id())));
+    assert!(error.contains(&format!("actual_build={}", daemon_build_id())));
+    assert!(error.contains("reinstall the search service components"));
 }

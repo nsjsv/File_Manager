@@ -538,6 +538,11 @@ impl FileBrowser {
                 }
                 Task::none()
             }
+            Message::SearchServiceRestartRequested => self.restart_search_service(),
+            Message::SearchServiceForceRestartPressed => self.press_force_restart_search_service(),
+            Message::SearchServiceRecoveryFinished(action, outcome) => {
+                self.accept_search_service_recovery(action, outcome)
+            }
             Message::SystemThemeDetected(theme) => {
                 self.theme = theme;
                 Task::none()

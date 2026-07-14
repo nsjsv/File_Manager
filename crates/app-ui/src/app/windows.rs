@@ -256,6 +256,7 @@ impl FileBrowser {
 
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
         self.shortcut_capture = None;
+        self.search.cancel_force_restart_confirmation();
         self.selected_settings_category = category;
         if category == SettingsCategory::Logs {
             self.refresh_application_logs()
@@ -278,6 +279,7 @@ impl FileBrowser {
 
     pub(super) fn close_settings_window(&mut self) -> Task<Message> {
         self.shortcut_capture = None;
+        self.search.cancel_force_restart_confirmation();
         let Some(window) = self.settings_window.take() else {
             return Task::none();
         };
@@ -424,6 +426,9 @@ impl FileBrowser {
 
     pub(super) fn handle_focused_window_escape_pressed(&mut self) -> Task<Message> {
         if self.settings_window == Some(self.focused_window) {
+            if self.search.cancel_force_restart_confirmation() {
+                return Task::none();
+            }
             return self.close_settings_window();
         }
         if self.properties_window == Some(self.focused_window) {

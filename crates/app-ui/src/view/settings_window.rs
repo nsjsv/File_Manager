@@ -15,7 +15,9 @@ use super::auxiliary_window_layout::{
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
 use super::network_settings::network_settings_content;
-use super::option_controls::selectable_choice_row;
+use super::option_controls::{
+    action_choice_button, destructive_confirmation_button_style, selectable_choice_row,
+};
 use super::rendering_settings::rendering_gpu_preference_button;
 use super::shortcut_settings::shortcut_settings_section;
 use super::toggle_switch::switch_control;
@@ -168,11 +170,123 @@ fn search_settings_detail(
             .size(12),
             readable_text("Service and Index").size(13),
             search_service_status_rows(browser),
+            search_service_recovery_controls(browser),
         ]
         .spacing(10)
         .width(Length::Fill),
         scrollbar_visibility,
     )
+}
+
+fn search_service_recovery_controls(browser: &FileBrowser) -> Element<'static, Message> {
+    use crate::model::search::SearchServiceRecoveryState;
+
+    let recovery_is_running = browser.search.recovery.is_running();
+    let restart_button = action_choice_button(
+        "Restart Index Service",
+        "Gracefully stop and restart the managed service.",
+    );
+    let restart_button = if recovery_is_running {
+        restart_button
+    } else {
+        restart_button.on_press(Message::SearchServiceRestartRequested)
+    };
+
+    let force_restart_button =
+        if browser.search.recovery == SearchServiceRecoveryState::ConfirmingForceRestart {
+            action_choice_button(
+                "Click Again to Force Restart",
+                "Current indexing work will stop. Index data and settings will be kept.",
+            )
+            .style(destructive_confirmation_button_style())
+        } else {
+            action_choice_button(
+                "Force Restart",
+                "Use only when the managed service is unresponsive.",
+            )
+        };
+    let force_restart_button = if recovery_is_running {
+        force_restart_button
+    } else {
+        force_restart_button.on_press(Message::SearchServiceForceRestartPressed)
+    };
+
+    let mut controls = column![restart_button, force_restart_button]
+        .spacing(6)
+        .width(Length::Fill);
+    if let Some(status_text) = search_service_recovery_status_text(&browser.search.recovery) {
+        controls = controls.push(localized_text(status_text).size(12).width(Length::Fill));
+    }
+    controls.into()
+}
+
+fn search_service_recovery_status_text(
+    state: &crate::model::search::SearchServiceRecoveryState,
+) -> Option<String> {
+    use crate::model::search::{SearchServiceRecoveryAction, SearchServiceRecoveryState};
+
+    match state {
+        SearchServiceRecoveryState::Idle | SearchServiceRecoveryState::ConfirmingForceRestart => {
+            None
+        }
+        SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::Restart) => {
+            Some("Restarting index service...".to_owned())
+        }
+        SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::ForceRestart) => {
+            Some("Force restarting index service...".to_owned())
+        }
+        SearchServiceRecoveryState::Succeeded(SearchServiceRecoveryAction::Restart) => {
+            Some("Index service restarted successfully.".to_owned())
+        }
+        SearchServiceRecoveryState::Succeeded(SearchServiceRecoveryAction::ForceRestart) => {
+            Some("Index service force restarted successfully.".to_owned())
+        }
+        SearchServiceRecoveryState::Failed {
+            action: SearchServiceRecoveryAction::Restart,
+            message,
+        } => Some(format!("Could not restart index service: {message}")),
+        SearchServiceRecoveryState::Failed {
+            action: SearchServiceRecoveryAction::ForceRestart,
+            message,
+        } => Some(format!("Could not force restart index service: {message}")),
+    }
+}
+
+#[cfg(test)]
+mod search_service_recovery_presentation_tests {
+    use crate::model::search::{SearchServiceRecoveryAction, SearchServiceRecoveryState};
+
+    use super::search_service_recovery_status_text;
+
+    #[test]
+    fn recovery_status_distinguishes_action_phase_and_failure() {
+        assert_eq!(
+            search_service_recovery_status_text(&SearchServiceRecoveryState::Running(
+                SearchServiceRecoveryAction::Restart
+            ))
+            .as_deref(),
+            Some("Restarting index service...")
+        );
+        assert_eq!(
+            search_service_recovery_status_text(&SearchServiceRecoveryState::Succeeded(
+                SearchServiceRecoveryAction::ForceRestart
+            ))
+            .as_deref(),
+            Some("Index service force restarted successfully.")
+        );
+        assert_eq!(
+            search_service_recovery_status_text(&SearchServiceRecoveryState::Failed {
+                action: SearchServiceRecoveryAction::Restart,
+                message: "permission denied".to_owned(),
+            })
+            .as_deref(),
+            Some("Could not restart index service: permission denied")
+        );
+        assert!(search_service_recovery_status_text(
+            &SearchServiceRecoveryState::ConfirmingForceRestart
+        )
+        .is_none());
+    }
 }
 
 fn search_service_status_rows(browser: &FileBrowser) -> Element<'_, Message> {
