@@ -85,7 +85,7 @@ fn toolbar_segment_button(
 ) -> Button<'static, Message> {
     button(themed_icon(icon, tone, icon_size))
         .on_press(message)
-        .padding([6, 8])
+        .padding([8, 10])
         .style(toolbar_segment_button_style())
 }
 

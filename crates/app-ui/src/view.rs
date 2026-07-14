@@ -374,7 +374,7 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         view_mode_button_group(pane),
     ]
     .spacing(8)
-    .align_y(Alignment::Start);
+    .align_y(Alignment::Center);
 
     let header_content = container(navigation_bar).padding(18).width(Length::Fill);
     let mut main_content = Column::new().spacing(0).push(header_content);
