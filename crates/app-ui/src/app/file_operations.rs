@@ -7,6 +7,48 @@ use crate::operation_history::{FileOperationOutcome, PendingHistoryOperation};
 use crate::operation_queue::QueuedFileOperation;
 use crate::view::rename_input_id;
 
+// ponytail: 重命名会话短且输入有限，完整字符串快照的内存上限随编辑次数和名称长度增长；若支持长文本或长期会话，再升级为合并编辑事务。
+#[derive(Debug, Default)]
+pub(super) struct RenameInputHistory {
+    undo_values: Vec<String>,
+    redo_values: Vec<String>,
+}
+
+impl RenameInputHistory {
+    fn apply_input_change(&mut self, current_value: &mut String, next_value: String) {
+        if current_value == &next_value {
+            return;
+        }
+
+        self.undo_values
+            .push(std::mem::replace(current_value, next_value));
+        self.redo_values.clear();
+    }
+
+    fn undo(&mut self, current_value: &mut String) {
+        let Some(previous_value) = self.undo_values.pop() else {
+            return;
+        };
+
+        self.redo_values
+            .push(std::mem::replace(current_value, previous_value));
+    }
+
+    fn redo(&mut self, current_value: &mut String) {
+        let Some(next_value) = self.redo_values.pop() else {
+            return;
+        };
+
+        self.undo_values
+            .push(std::mem::replace(current_value, next_value));
+    }
+
+    fn reset(&mut self) {
+        self.undo_values.clear();
+        self.redo_values.clear();
+    }
+}
+
 impl FileBrowser {
     pub(super) fn accept_file_operation_finished(
         &mut self,
@@ -25,7 +67,6 @@ impl FileBrowser {
             .flatten();
 
         if completed_successfully {
-            self.rename_input.clear();
             if let Some(path) = created_path {
                 self.pending_created_entry_rename = Some(path);
             }
@@ -97,6 +138,7 @@ impl FileBrowser {
 
         self.context_menu = None;
         self.select_path(path.clone());
+        self.rename_input_history.reset();
         self.renaming = Some(path);
         focus_rename_input_command()
     }
@@ -120,9 +162,23 @@ impl FileBrowser {
         }
 
         self.pending_created_entry_rename = None;
-        self.select_path(path.clone());
-        self.renaming = Some(path);
-        focus_rename_input_command()
+        self.begin_rename(path)
+    }
+
+    pub(super) fn apply_rename_input_change(&mut self, value: String) -> Task<Message> {
+        self.rename_input_history
+            .apply_input_change(&mut self.rename_input, value);
+        Task::none()
+    }
+
+    pub(super) fn undo_rename_input_change(&mut self) -> Task<Message> {
+        self.rename_input_history.undo(&mut self.rename_input);
+        Task::none()
+    }
+
+    pub(super) fn redo_rename_input_change(&mut self) -> Task<Message> {
+        self.rename_input_history.redo(&mut self.rename_input);
+        Task::none()
     }
 
     pub(super) fn enqueue_file_operation(
@@ -213,6 +269,82 @@ mod tests {
                 recursive_total_size_bytes: Some(size),
             }
         ));
+    }
+
+    #[test]
+    fn rename_input_history_undoes_and_redoes_complete_snapshots() {
+        let mut history = RenameInputHistory::default();
+        let mut current_value = String::from("report.txt");
+
+        history.apply_input_change(&mut current_value, String::from("report-1.txt"));
+        history.apply_input_change(&mut current_value, String::from("report-2.txt"));
+        history.undo(&mut current_value);
+        assert_eq!(current_value, "report-1.txt");
+        history.undo(&mut current_value);
+        assert_eq!(current_value, "report.txt");
+        history.redo(&mut current_value);
+        assert_eq!(current_value, "report-1.txt");
+        history.redo(&mut current_value);
+        assert_eq!(current_value, "report-2.txt");
+    }
+
+    #[test]
+    fn rename_input_history_clears_redo_branch_after_new_input() {
+        let mut history = RenameInputHistory::default();
+        let mut current_value = String::from("report.txt");
+
+        history.apply_input_change(&mut current_value, String::from("report-1.txt"));
+        history.undo(&mut current_value);
+        history.apply_input_change(&mut current_value, String::from("report-final.txt"));
+        history.redo(&mut current_value);
+
+        assert_eq!(current_value, "report-final.txt");
+    }
+
+    #[test]
+    fn beginning_new_rename_session_resets_input_history() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+        drop(browser.begin_rename(PathBuf::from("/workspace/first.txt")));
+        drop(browser.apply_rename_input_change(String::from("first-draft.txt")));
+        drop(browser.begin_rename(PathBuf::from("/workspace/second.txt")));
+        drop(browser.undo_rename_input_change());
+
+        assert_eq!(browser.rename_input, "second.txt");
+
+        drop(browser.apply_rename_input_change(String::from("second-draft.txt")));
+        drop(browser.undo_rename_input_change());
+        drop(browser.begin_rename(PathBuf::from("/workspace/third.txt")));
+        drop(browser.redo_rename_input_change());
+
+        assert_eq!(browser.rename_input, "third.txt");
+    }
+
+    #[test]
+    fn completed_background_operation_preserves_active_rename_history() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let edited_path = PathBuf::from("/workspace/report.txt");
+
+        drop(browser.begin_rename(edited_path.clone()));
+        drop(browser.apply_rename_input_change(String::from("report-draft.txt")));
+        assert!(browser
+            .operation_queue
+            .enqueue(QueuedFileOperation::DeletePermanently {
+                paths: vec![PathBuf::from("/workspace/obsolete.txt")],
+            })
+            .is_none());
+        let task_id = browser
+            .operation_queue
+            .tasks()
+            .last()
+            .expect("queued task")
+            .id;
+
+        drop(browser.accept_file_operation_finished(task_id, Ok(FileOperationOutcome::NoHistory)));
+
+        assert_eq!(browser.rename_input, "report-draft.txt");
+        drop(browser.undo_rename_input_change());
+        assert_eq!(browser.rename_input, "report.txt");
     }
 
     #[test]

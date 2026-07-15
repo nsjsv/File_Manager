@@ -30,18 +30,34 @@ pub(crate) enum ShortcutAction {
     Redo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShortcutRoutingContext {
+    Application,
+    FileBrowserContent,
+}
+
 impl ShortcutAction {
-    pub(crate) fn bypasses_captured_event(self) -> bool {
-        matches!(
-            self,
+    pub(crate) fn routing_context(self) -> ShortcutRoutingContext {
+        match self {
             Self::Refresh
-                | Self::Escape
-                | Self::FocusPathInput
-                | Self::NavigateBack
-                | Self::NavigateForward
-                | Self::NavigateUp
-                | Self::SelectAll
-        )
+            | Self::Escape
+            | Self::FocusPathInput
+            | Self::NavigateBack
+            | Self::NavigateForward
+            | Self::NavigateUp => ShortcutRoutingContext::Application,
+            Self::OpenSelected
+            | Self::RenameSelected
+            | Self::MoveSelection(_)
+            | Self::FileProperties
+            | Self::Preview
+            | Self::SelectAll
+            | Self::Copy
+            | Self::Paste
+            | Self::Cut
+            | Self::Delete
+            | Self::Undo
+            | Self::Redo => ShortcutRoutingContext::FileBrowserContent,
+        }
     }
 
     pub(crate) fn is_preview_toggle(self) -> bool {
@@ -690,6 +706,10 @@ impl ShortcutCaptureState {
 }
 
 #[cfg(test)]
+#[path = "shortcuts_routing_context_tests.rs"]
+mod routing_context_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -755,15 +775,5 @@ mod tests {
             shortcuts.matching_action(&key, keyboard::Modifiers::ALT),
             Some(ShortcutAction::FileProperties)
         );
-    }
-
-    #[test]
-    fn properties_shortcut_respects_captured_events() {
-        assert!(!ShortcutAction::FileProperties.bypasses_captured_event());
-    }
-
-    #[test]
-    fn select_all_shortcut_uses_focus_aware_captured_routing() {
-        assert!(ShortcutAction::SelectAll.bypasses_captured_event());
     }
 }

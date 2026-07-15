@@ -468,6 +468,7 @@ impl FileBrowser {
                 modifiers,
                 status,
             } => self.handle_keyboard_key_pressed(key, modifiers, status),
+            Message::FileContentShortcutRouted(action) => self.invoke_shortcut(action),
             Message::ShortcutCaptureStarted(binding_id) => self.start_shortcut_capture(binding_id),
             Message::ShortcutCaptureCanceled => self.cancel_shortcut_capture(),
             Message::ShortcutBindingReset(binding_id) => self.reset_shortcut_binding(binding_id),
@@ -743,10 +744,9 @@ impl FileBrowser {
                     self.commit_rename_if_active()
                 }
             }
-            Message::RenameInputChanged(value) => {
-                self.rename_input = value;
-                Task::none()
-            }
+            Message::RenameInputChanged(value) => self.apply_rename_input_change(value),
+            Message::RenameInputUndoRequested => self.undo_rename_input_change(),
+            Message::RenameInputRedoRequested => self.redo_rename_input_change(),
             Message::BeginRename(path) => self.begin_rename(path),
             Message::FilePropertiesRequested(path) => self.open_file_properties(path),
             Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
@@ -782,7 +782,6 @@ impl FileBrowser {
             | Message::TransferConflictCancelRequested => {
                 self.apply_transfer_conflict_message(message)
             }
-            Message::SelectAll => self.select_all_in_file_selection_scope(),
         }
     }
 }

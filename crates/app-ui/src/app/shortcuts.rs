@@ -6,6 +6,7 @@ use super::FileBrowser;
 use crate::model::{Message, OperationQueuePanelMode, PathSuggestionDirection};
 use crate::shortcuts::{
     KeyBinding, ShortcutAction, ShortcutBindingId, ShortcutCaptureState, ShortcutConfig,
+    ShortcutRoutingContext,
 };
 
 impl FileBrowser {
@@ -33,14 +34,14 @@ impl FileBrowser {
         let Some(action) = self.user_config.shortcuts.matching_action(&key, modifiers) else {
             return Task::none();
         };
-        if action.is_preview_toggle() && matches!(status, event::Status::Captured) {
-            return self.handle_captured_preview_shortcut();
+        match keyboard_shortcut_route(action, status) {
+            KeyboardShortcutRoute::Invoke => self.invoke_shortcut(action),
+            KeyboardShortcutRoute::QueryTextInputFocus => {
+                text_input_shortcuts::route_ignored_file_content_shortcut(action)
+            }
+            KeyboardShortcutRoute::CapturedPreview => self.handle_captured_preview_shortcut(),
+            KeyboardShortcutRoute::Stop => Task::none(),
         }
-        if matches!(status, event::Status::Captured) && !action.bypasses_captured_event() {
-            return Task::none();
-        }
-
-        self.invoke_shortcut(action)
     }
 
     fn handle_path_suggestion_keyboard_key(
@@ -116,9 +117,7 @@ impl FileBrowser {
             }
             ShortcutAction::Escape => self.handle_focused_window_escape_pressed(),
             ShortcutAction::Preview => self.request_preview(),
-            ShortcutAction::SelectAll => {
-                text_input_shortcuts::select_focused_text_or_visible_files_command()
-            }
+            ShortcutAction::SelectAll => self.select_all_in_file_selection_scope(),
             ShortcutAction::Copy => self.copy_selected(),
             ShortcutAction::Paste => self.paste_pending(),
             ShortcutAction::Cut => self.move_selected(),
@@ -193,6 +192,30 @@ impl FileBrowser {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardShortcutRoute {
+    Invoke,
+    QueryTextInputFocus,
+    CapturedPreview,
+    Stop,
+}
+
+fn keyboard_shortcut_route(action: ShortcutAction, status: event::Status) -> KeyboardShortcutRoute {
+    if action.is_preview_toggle() && matches!(status, event::Status::Captured) {
+        return KeyboardShortcutRoute::CapturedPreview;
+    }
+
+    match (action.routing_context(), status) {
+        (ShortcutRoutingContext::Application, _) => KeyboardShortcutRoute::Invoke,
+        (ShortcutRoutingContext::FileBrowserContent, event::Status::Captured) => {
+            KeyboardShortcutRoute::Stop
+        }
+        (ShortcutRoutingContext::FileBrowserContent, event::Status::Ignored) => {
+            KeyboardShortcutRoute::QueryTextInputFocus
+        }
+    }
+}
+
 fn no_shortcut_modifiers(modifiers: keyboard::Modifiers) -> bool {
     !modifiers.alt() && !modifiers.control() && !modifiers.command() && !modifiers.shift()
 }
@@ -263,5 +286,25 @@ mod tests {
             &browser.operation_queue.tasks()[0].operation,
             QueuedFileOperation::Restore { entries } if entries == &vec![expected_restore_entry]
         ));
+    }
+
+    #[test]
+    fn keyboard_shortcut_route_enforces_context_ownership_matrix() {
+        assert_eq!(
+            keyboard_shortcut_route(ShortcutAction::SelectAll, event::Status::Captured),
+            KeyboardShortcutRoute::Stop
+        );
+        assert_eq!(
+            keyboard_shortcut_route(ShortcutAction::Undo, event::Status::Ignored),
+            KeyboardShortcutRoute::QueryTextInputFocus
+        );
+        assert_eq!(
+            keyboard_shortcut_route(ShortcutAction::Escape, event::Status::Captured),
+            KeyboardShortcutRoute::Invoke
+        );
+        assert_eq!(
+            keyboard_shortcut_route(ShortcutAction::Preview, event::Status::Captured),
+            KeyboardShortcutRoute::CapturedPreview
+        );
     }
 }

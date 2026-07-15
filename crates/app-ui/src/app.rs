@@ -213,6 +213,7 @@ pub(crate) struct FileBrowser {
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) rename_input: String,
+    rename_input_history: file_operations::RenameInputHistory,
     pub(crate) is_loading: bool,
     error: Option<String>,
     pub(crate) application_logs: ApplicationLogViewState,
@@ -438,6 +439,7 @@ impl FileBrowser {
             expanded_directories: HashMap::new(),
             view_mode: initial_view_mode,
             rename_input: String::new(),
+            rename_input_history: file_operations::RenameInputHistory::default(),
             is_loading: true,
             error: None,
             application_logs: ApplicationLogViewState::new(

@@ -23,7 +23,7 @@ use crate::network_connections::{
 };
 use crate::operation_history::FileOperationOutcome;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
-use crate::shortcuts::ShortcutBindingId;
+use crate::shortcuts::{ShortcutAction, ShortcutBindingId};
 use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
 use crate::startup_rendering::StartupRenderingEnvironmentStatus;
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
@@ -291,6 +291,7 @@ pub(crate) enum Message {
         modifiers: keyboard::Modifiers,
         status: event::Status,
     },
+    FileContentShortcutRouted(ShortcutAction),
     ShortcutCaptureStarted(ShortcutBindingId),
     ShortcutCaptureCanceled,
     ShortcutBindingReset(ShortcutBindingId),
@@ -401,6 +402,8 @@ pub(crate) enum Message {
     AddressInputFocusChecked(BrowserPaneId, bool),
     RenameInputFocusChecked(bool),
     RenameInputChanged(String),
+    RenameInputUndoRequested,
+    RenameInputRedoRequested,
     BeginRename(PathBuf),
     FilePropertiesRequested(PathBuf),
     OpenTerminalHere(PathBuf),
@@ -432,7 +435,6 @@ pub(crate) enum Message {
     TransferConflictChoiceSelected(TransferConflictChoice),
     TransferConflictApplyToAllToggled,
     TransferConflictCancelRequested,
-    SelectAll,
 }
 
 #[derive(Debug, Clone)]
