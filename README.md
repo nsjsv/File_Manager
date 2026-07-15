@@ -12,26 +12,25 @@ File Manager 是一个面向 Linux 桌面的文件管理器，主要面向 Wayla
   多栏视图适合沿着目录层级快速移动，列表视图适合扫描和排序。标签页和分屏面板则服务于多个位置之间的复制、移动和对照。
 
 - **更重视可靠性的文件操作**
-  复制和移动进入后台队列，支持进度显示、暂停、恢复和取消。遇到同名目标时可以选择替换、跳过、保留两者或合并目录；复制/移动还可以选择关闭校验、基础元数据校验或更强的内容校验。常见文件操作会进入撤销/重做历史。
+  复制和移动进入后台队列，支持进度显示、暂停、恢复和取消。遇到同名目标时可以选择替换、跳过、保留两者或合并目录；复制/移动还可以选择关闭校验、基础元数据校验或更强的内容校验。常见文件操作会进入撤销/重做历史，也支持批量重命名以及常见压缩包的创建和解压。
 
 - **围绕索引设计的文件搜索**
-  搜索不是临时扫一遍目录就结束。首次启动可以选择要建立索引的位置，索引任务进入同一套后台队列；搜索窗口可以在当前目录和 Home 范围之间快速切换。
+  后台搜索服务为 Home 建立并持续维护索引，应用从当前目录发起递归搜索。搜索服务不可用时，本地当前目录搜索仍可回退到目录扫描。
 
 - **预览是工作流的一部分**
   预览窗口覆盖文本、Markdown、目录树、压缩包、图片、音频和视频等常见内容，目标是减少“为了确认一下内容就打开外部应用”的次数。
 
 - **贴近 Linux 桌面环境**
-  侧边栏会读取常见用户目录和 GTK 书签，也会通过 UDisks2 显示存储设备，并提供挂载、卸载和安全移除等动作。打开终端、默认应用和桌面主题等行为尽量贴近 Linux 桌面习惯。
+  侧边栏会读取常见用户目录和 GTK 书签，并允许管理收藏；存储设备通过 UDisks2 显示，并提供挂载、卸载和安全移除等动作。还可以连接 SMB、WebDAV 和 SFTP 网络位置。打开终端、默认应用和桌面主题等行为尽量贴近 Linux 桌面习惯。
 
 - **可配置的工作台**
-  设置窗口集中管理隐藏文件显示、终端选择、渲染 GPU 偏好、文件操作校验和快捷键。属性窗口则用于查看文件信息、目录内容统计和权限，并直接修改常见权限位。
+  设置窗口集中管理隐藏文件显示、启动位置与会话恢复、界面语言、终端选择、渲染 GPU 偏好、文件操作校验和快捷键。属性窗口则用于查看文件信息、目录内容统计和权限，并直接修改常见权限位。
 
 ## 技术栈
 
 - Rust
 - Iced
 - Tokio
-- nucleo
 - notify
 - SQLite / rusqlite
 - UDisks2
@@ -43,7 +42,9 @@ File Manager 是一个面向 Linux 桌面的文件管理器，主要面向 Wayla
 部分预览功能会调用系统工具：
 
 - 视频预览和视频缩略图建议安装 `ffmpeg` 和 `ffprobe`，视频缩略图也可以使用 `ffmpegthumbnailer`
-- `.7z` 和 `.rar` 压缩包预览需要安装 `7z`、`7zz` 或 `7za`
+- 创建 `.7z` 压缩包以及预览、解压 `.7z` 和 `.rar` 文件，需要安装 `7z`、`7zz` 或 `7za`
+- SMB、WebDAV 和 SFTP 连接需要系统提供 `gio` 及对应的 GVfs backend，保存密码需要 `secret-tool`
+- 存储设备管理需要系统运行 UDisks2 服务
 
 ## 安装
 
@@ -55,7 +56,7 @@ yay -S file-manager-bin
 paru -S file-manager-bin
 ```
 
-索引搜索依赖可用的 systemd user manager、统一 cgroup v2 和 memory controller。安装包会提供 `file-manager-search.service`；可以使用以下命令显式启用、查看状态和日志：
+索引搜索依赖可用的 systemd user manager、统一 cgroup v2，以及 memory 和 cpu controller。安装包会提供 `file-manager-search.service`；可以使用以下命令显式启用、查看状态和日志：
 
 ```bash
 systemctl --user enable --now file-manager-search.service
@@ -63,63 +64,35 @@ systemctl --user status file-manager-search.service
 journalctl --user -u file-manager-search.service -f
 ```
 
-应用内可在“设置 → 日志”查看当前启动周期内 App 与搜索服务最近 200 条日志，并按 Error、Warning、Info、Debug 调整本次会话的显示级别。日志由 journald 持久化和轮转；应用不会另建日志文件。
+应用内可在“设置 → 日志”查看本次系统启动以来 App 与搜索服务最近 200 条日志，并按 Error、Warning、Info、Debug 调整本次会话的显示级别。日志由 journald 持久化和轮转；应用不会另建日志文件。
 
 环境不满足这些条件时，应用不会绕过 systemd 直接启动 daemon；索引和全局搜索会显示不可用原因，当前目录搜索 fallback 仍可使用。
 
 ## 编译运行
 
-需要先安装 Rust 工具链。
+需要先安装 Rust 工具链和系统构建依赖。Arch Linux 可以使用：
 
-完整的索引搜索开发环境请使用统一入口；它会构建 app 和 daemon、同步 managed systemd bundle、验证 endpoint 后再启动应用：
+```bash
+sudo pacman -S --needed base-devel git rust cargo pkgconf \
+  alsa-lib fontconfig libxkbcommon wayland
+```
+
+克隆仓库并直接运行 App：
 
 ```bash
 git clone https://github.com/nsjsv/File_Manager
 cd File_Manager
-scripts/run-file-manager-dev.sh
+cargo run --locked -p app-ui
 ```
 
-只调试 UI 时可以直接运行 Cargo/target 二进制：
+如需同时构建 release App 和搜索 daemon：
 
 ```bash
-cargo run -p app-ui
-cargo build --release -p app-ui -p file-search
+cargo build --release --locked -p app-ui -p file-search
 ./target/release/app-ui
 ```
 
-这些 raw 入口不会同步 dev-prefix daemon；其索引搜索按 fail-closed 处理，不承诺连接到当前构建。
-
-## 本地安装
-
-如需只安装而不立即启动应用，开发环境仍应成套安装 app、daemon 和 managed systemd user unit：
-
-```bash
-cargo build --release -p app-ui -p file-search
-
-# 先查看计划，再执行安装
-scripts/install-file-manager-dev.sh
-scripts/install-file-manager-dev.sh --yes
-```
-
-然后运行：
-
-```bash
-file-manager-dev
-```
-
-清理隔离的配置、数据库、缓存和 socket：
-
-```bash
-scripts/clean-file-manager-environment.sh
-scripts/clean-file-manager-environment.sh --yes
-```
-
-卸载开发 bundle：
-
-```bash
-scripts/install-file-manager-dev.sh remove
-scripts/install-file-manager-dev.sh remove --yes
-```
+源码构建的 App 二进制名为 `app-ui`，搜索 daemon 二进制名为 `file-searchd`。以上命令不会安装 systemd user unit；没有兼容的已安装搜索服务时，索引搜索不可用，本地当前目录搜索仍可回退到目录扫描。
 
 ## 平台说明
 
@@ -156,7 +129,7 @@ scripts/install-file-manager-dev.sh remove --yes
 
 ## 许可证
 
-GPL 3.0
+GPL-3.0-or-later
 
 ## 友链
 
