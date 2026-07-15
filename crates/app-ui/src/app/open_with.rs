@@ -90,8 +90,7 @@ impl FileBrowser {
         self.archive_creation = None;
         self.archive_extraction = None;
         self.operation_queue.close_panel();
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         self.clear_pointer_driven_interaction_state();
         self.shortcut_capture = None;
     }

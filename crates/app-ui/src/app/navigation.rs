@@ -3,7 +3,6 @@ use iced::Task;
 use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 
-use super::paths::path_text;
 use super::FileBrowser;
 use crate::commands::{
     delayed_thumbnail_refresh_command, load_directory_command, load_expanded_directory_command,
@@ -12,7 +11,7 @@ use crate::commands::{
 use crate::model::{
     trash_location_path, BrowserPaneId, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
     ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, Message,
-    NavigationMode, TRASH_LOCATION_LABEL,
+    NavigationMode,
 };
 use crate::startup_trace;
 impl FileBrowser {
@@ -165,9 +164,6 @@ impl FileBrowser {
                 }
 
                 pane.current_dir = scan.path;
-                pane.path_input = path_text(&pane.current_dir);
-                pane.path_suggestions.clear();
-                pane.path_suggestion_selection = None;
                 pane.entries = scan.entries;
                 pane.directory_loading_placeholder_entries.clear();
                 pane.is_loading = false;
@@ -179,6 +175,7 @@ impl FileBrowser {
             return Task::batch([
                 delayed_thumbnail_refresh_command(request.pane_id, current_dir),
                 self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
+                self.reveal_address_bar_current_segment(request.pane_id),
             ]);
         }
 
@@ -191,9 +188,6 @@ impl FileBrowser {
         }
 
         self.current_dir = scan.path;
-        self.path_input = path_text(&self.current_dir);
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
         self.entries = scan.entries;
         self.directory_loading_placeholder_entries.clear();
         self.is_loading = false;
@@ -208,6 +202,7 @@ impl FileBrowser {
             delayed_thumbnail_refresh_command(request.pane_id, self.current_dir.clone()),
             self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
             self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(request.pane_id),
         ])
     }
 
@@ -225,9 +220,6 @@ impl FileBrowser {
             }
 
             pane.current_dir = trash_location_path();
-            pane.path_input = TRASH_LOCATION_LABEL.to_owned();
-            pane.path_suggestions.clear();
-            pane.path_suggestion_selection = None;
             pane.trash_entries = scan.entries;
             pane.entries = pane
                 .trash_entries
@@ -239,7 +231,10 @@ impl FileBrowser {
             pane.expanded_directories.clear();
             pane.is_loading = false;
             pane.sync_active_tab_state();
-            return delayed_thumbnail_refresh_command(pane_id, pane.current_dir.clone());
+            return Task::batch([
+                delayed_thumbnail_refresh_command(pane_id, pane.current_dir.clone()),
+                self.reveal_address_bar_current_segment(pane_id),
+            ]);
         }
 
         if !self.is_trash_view {
@@ -247,9 +242,6 @@ impl FileBrowser {
         }
 
         self.current_dir = trash_location_path();
-        self.path_input = TRASH_LOCATION_LABEL.to_owned();
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
         self.trash_entries = scan.entries;
         self.entries = self
             .trash_entries
@@ -269,6 +261,7 @@ impl FileBrowser {
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
+        let cancel_address_editing = self.cancel_address_editing();
         self.search.abandon_and_clear_input();
         let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
@@ -278,9 +271,6 @@ impl FileBrowser {
         }
         self.current_dir = path.clone();
         self.is_trash_view = false;
-        self.path_input = path_text(&path);
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
         self.entries.clear();
         self.directory_loading_placeholder_entries = placeholder_entries;
         self.trash_entries.clear();
@@ -296,12 +286,15 @@ impl FileBrowser {
         let request = self.next_directory_load_request(path);
         let cancellation = self.directory_load_cancellation(&request);
         Task::batch([
+            cancel_address_editing,
             load_directory_command(request, self.options.clone(), cancellation),
             self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(self.active_pane_id()),
         ])
     }
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
+        let cancel_address_editing = self.cancel_address_editing();
         self.search.abandon_and_clear_input();
         let pane_id = self.active_pane_id();
         let placeholder_entries = self.capture_directory_loading_placeholder_entries();
@@ -311,9 +304,6 @@ impl FileBrowser {
         }
         self.current_dir = trash_location_path();
         self.is_trash_view = true;
-        self.path_input = TRASH_LOCATION_LABEL.to_owned();
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
         self.entries.clear();
         self.directory_loading_placeholder_entries = placeholder_entries;
         self.trash_entries.clear();
@@ -328,8 +318,10 @@ impl FileBrowser {
         self.cancel_active_directory_load();
         self.sync_active_tab_state();
         Task::batch([
+            cancel_address_editing,
             load_trash_command(pane_id, self.options.clone()),
             self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(pane_id),
         ])
     }
 
@@ -340,9 +332,6 @@ impl FileBrowser {
 
     pub(super) fn reload_current_preserving_list_directory_summaries(&mut self) -> Task<Message> {
         if self.is_trash_view {
-            self.path_input = TRASH_LOCATION_LABEL.to_owned();
-            self.path_suggestions.clear();
-            self.path_suggestion_selection = None;
             self.clear_transient_interaction_state();
             self.directory_loading_placeholder_entries.clear();
             self.is_loading = true;
@@ -354,9 +343,6 @@ impl FileBrowser {
             return load_trash_command(self.active_pane_id(), self.options.clone());
         }
 
-        self.path_input = path_text(&self.current_dir);
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
         self.clear_transient_interaction_state();
         self.directory_loading_placeholder_entries.clear();
         self.is_loading = true;
@@ -404,13 +390,10 @@ impl FileBrowser {
             return Task::none();
         };
 
-        pane.path_suggestions.clear();
-        pane.path_suggestion_selection = None;
         pane.directory_loading_placeholder_entries.clear();
         pane.is_loading = true;
 
         if pane.is_trash_view {
-            pane.path_input = TRASH_LOCATION_LABEL.to_owned();
             pane.deepest_open_column_directory = None;
             for expanded in pane.expanded_directories.values_mut() {
                 Self::cancel_expanded_directory_load(expanded);
@@ -420,7 +403,6 @@ impl FileBrowser {
             return load_trash_command(pane_id, options);
         }
 
-        pane.path_input = path_text(&pane.current_dir);
         let current_dir = pane.current_dir.clone();
         let expanded_paths = pane
             .expanded_directories

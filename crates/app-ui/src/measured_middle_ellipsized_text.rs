@@ -226,6 +226,23 @@ where
     paragraph.min_width()
 }
 
+pub(crate) fn measured_text_natural_width<Renderer>(
+    renderer: &Renderer,
+    content: &str,
+    size: u32,
+) -> f32
+where
+    Renderer: text::Renderer,
+{
+    measured_text_width::<Renderer>(
+        content,
+        Pixels(size as f32),
+        text::LineHeight::default(),
+        renderer.default_font(),
+        shaping_for_content(content),
+    )
+}
+
 fn shaping_for_content(content: &str) -> text::Shaping {
     if content.is_ascii() {
         text::Shaping::Basic

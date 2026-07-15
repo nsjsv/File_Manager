@@ -250,8 +250,7 @@ impl FileBrowser {
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         self.archive_creation = Some(ArchiveCreationState::new(
             sources,
             target_directory,

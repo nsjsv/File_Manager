@@ -48,7 +48,7 @@ impl FileBrowser {
         key: &keyboard::Key,
         modifiers: keyboard::Modifiers,
     ) -> Option<Task<Message>> {
-        if self.path_suggestions.is_empty() {
+        if !self.address_suggestion_keyboard_is_active() {
             return None;
         }
 
@@ -99,7 +99,7 @@ impl FileBrowser {
         match action {
             ShortcutAction::OpenSelected => self.activate_selected_path(),
             ShortcutAction::RenameSelected => self.begin_rename_selected(),
-            ShortcutAction::FocusPathInput => self.focus_active_path_input(),
+            ShortcutAction::FocusPathInput => self.begin_address_editing(self.active_pane_id()),
             ShortcutAction::NavigateBack => {
                 Task::batch([self.commit_rename_if_active(), self.navigate_back()])
             }

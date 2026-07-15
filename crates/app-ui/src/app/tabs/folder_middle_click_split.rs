@@ -49,7 +49,10 @@ impl FileBrowser {
             self.restore_pane_snapshot(destination);
             self.sync_tab_bar_visibility();
         }
-        self.reload_current()
+        Task::batch([
+            self.reload_current(),
+            self.request_breadcrumb_drop_target_bounds_measurement(),
+        ])
     }
 
     fn middle_click_split_destination_pane_id(

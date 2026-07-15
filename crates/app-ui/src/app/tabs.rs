@@ -4,12 +4,11 @@ use std::time::Instant;
 
 use iced::Task;
 
-use super::paths::path_text;
 use super::FileBrowser;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, ColumnBrowserViewport,
     FileDragPhase, Message, NavigationMode, SplitAxis, SplitRegion, TabDragMode, TabDragState,
-    TabSplitTarget, TRASH_LOCATION_LABEL,
+    TabSplitTarget,
 };
 
 mod animation;
@@ -102,6 +101,7 @@ impl FileBrowser {
     }
 
     pub(super) fn open_directory_in_new_tab(&mut self, directory: PathBuf) -> Task<Message> {
+        let cancel_address_editing = self.cancel_address_editing();
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
@@ -117,12 +117,14 @@ impl FileBrowser {
         self.back_stack.clear();
         self.forward_stack.clear();
         Task::batch([
+            cancel_address_editing,
             self.navigate_to(directory, NavigationMode::KeepHistory),
             self.request_browser_session_save(),
         ])
     }
 
     pub(super) fn open_trash_in_new_tab(&mut self) -> Task<Message> {
+        let cancel_address_editing = self.cancel_address_editing();
         self.sync_active_tab_state();
         self.context_menu = None;
         self.clear_preview();
@@ -137,6 +139,7 @@ impl FileBrowser {
         self.back_stack.clear();
         self.forward_stack.clear();
         Task::batch([
+            cancel_address_editing,
             self.open_trash_view(NavigationMode::KeepHistory),
             self.request_browser_session_save(),
         ])
@@ -156,6 +159,7 @@ impl FileBrowser {
             return Task::none();
         };
 
+        let cancel_address_editing = self.cancel_address_editing();
         self.search.abandon_and_clear_input();
         self.sync_active_tab_state();
         self.active_tab_id = tab.id;
@@ -172,7 +176,12 @@ impl FileBrowser {
         self.back_stack = tab.back_stack;
         self.forward_stack = tab.forward_stack;
         self.current_dir = tab.directory;
-        Task::batch([self.reload_current(), self.request_browser_session_save()])
+        Task::batch([
+            cancel_address_editing,
+            self.reload_current(),
+            self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(self.active_pane_id()),
+        ])
     }
 
     pub(super) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
@@ -635,10 +644,6 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         column_viewports: HashMap::new(),
         tabs: vec![tab.clone()],
         active_tab_id: tab.id,
-        path_input: path_input_for_tab(&tab),
-        path_suggestions: Vec::new(),
-        path_suggestion_selection: None,
-        path_suggestion_generation: 0,
         directory_load_generation: 0,
         directory_load_cancel: None,
         back_stack: tab.back_stack.clone(),
@@ -673,19 +678,8 @@ pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.deepest_open_column_directory = tab.deepest_open_column_directory.clone();
     pane.expanded_directories = tab.expanded_directories.clone();
     pane.view_mode = tab.view_mode;
-    pane.path_input = path_input_for_tab(tab);
-    pane.path_suggestions.clear();
-    pane.path_suggestion_selection = None;
     pane.back_stack = tab.back_stack.clone();
     pane.forward_stack = tab.forward_stack.clone();
     pane.is_loading = false;
     pane.sync_active_tab_state();
-}
-
-fn path_input_for_tab(tab: &BrowserTab) -> String {
-    if tab.is_trash_view {
-        TRASH_LOCATION_LABEL.to_owned()
-    } else {
-        path_text(&tab.directory)
-    }
 }

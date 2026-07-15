@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use file_core::DirectoryEntry;
 use iced::Point;
@@ -7,8 +7,9 @@ use iced::Point;
 use super::tabs::{TabAnimationState, TabBarReveal};
 use super::FileBrowser;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
-    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, SplitRegion,
+    displayed_address_directory, AddressEditingSession, BrowserPane, BrowserPaneId,
+    BrowserPaneLayout, BrowserTab, BrowserViewMode, DirectoryLoadingPlaceholderEntry,
+    ExpandedDirectory, FileDragState, SplitRegion,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -31,9 +32,9 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) tabs: &'a [BrowserTab],
     pub(crate) active_tab_id: usize,
     pub(crate) tab_animations: Option<&'a HashMap<usize, TabAnimationState>>,
-    pub(crate) path_input: &'a str,
-    pub(crate) path_suggestions: &'a [PathBuf],
-    pub(crate) path_suggestion_selection: Option<usize>,
+    pub(crate) address_editing: Option<&'a AddressEditingSession>,
+    pub(crate) address_transition_fraction: f32,
+    pub(crate) address_exit_snapshot: Option<&'a str>,
     pub(crate) is_loading: bool,
     pub(crate) renaming: Option<&'a PathBuf>,
     pub(crate) rename_input: &'a str,
@@ -42,6 +43,14 @@ pub(crate) struct BrowserPaneView<'a> {
 }
 
 impl BrowserPaneView<'_> {
+    pub(crate) fn address_bar_directory(&self) -> &Path {
+        displayed_address_directory(
+            self.current_dir,
+            self.view_mode,
+            self.deepest_open_column_directory,
+        )
+    }
+
     pub(crate) fn is_path_selected(&self, path: &std::path::Path) -> bool {
         self.selected_paths.contains(path)
     }
@@ -120,6 +129,8 @@ impl FileBrowser {
     }
 
     pub(crate) fn pane_view(&self, pane_id: BrowserPaneId) -> Option<BrowserPaneView<'_>> {
+        let (address_editing, address_transition_fraction, address_exit_snapshot) =
+            self.address_bar_presentation(pane_id);
         if pane_id == self.active_pane_id() {
             return Some(BrowserPaneView {
                 id: pane_id,
@@ -137,9 +148,9 @@ impl FileBrowser {
                 tabs: &self.tabs,
                 active_tab_id: self.active_tab_id,
                 tab_animations: Some(&self.tab_animations),
-                path_input: &self.path_input,
-                path_suggestions: &self.path_suggestions,
-                path_suggestion_selection: self.path_suggestion_selection,
+                address_editing,
+                address_transition_fraction,
+                address_exit_snapshot,
                 is_loading: self.is_loading,
                 renaming: self.renaming.as_ref(),
                 rename_input: &self.rename_input,
@@ -165,15 +176,38 @@ impl FileBrowser {
             tabs: &pane.tabs,
             active_tab_id: pane.active_tab_id,
             tab_animations: None,
-            path_input: &pane.path_input,
-            path_suggestions: &pane.path_suggestions,
-            path_suggestion_selection: pane.path_suggestion_selection,
+            address_editing,
+            address_transition_fraction,
+            address_exit_snapshot,
             is_loading: pane.is_loading,
             renaming: None,
             rename_input: "",
             file_drag: None,
             tab_bar_reveal_fraction: if pane.tabs.len() > 1 { 1.0 } else { 0.0 },
         })
+    }
+
+    fn address_bar_presentation(
+        &self,
+        pane_id: BrowserPaneId,
+    ) -> (Option<&AddressEditingSession>, f32, Option<&str>) {
+        let editing = self
+            .address_editing
+            .as_ref()
+            .filter(|session| session.pane_id == pane_id);
+        let transition = self
+            .address_bar_transition
+            .as_ref()
+            .filter(|transition| transition.pane_id == pane_id);
+        let editing_fraction = transition
+            .map(|transition| transition.fraction())
+            .unwrap_or_else(|| if editing.is_some() { 1.0 } else { 0.0 });
+        let exit_snapshot = editing
+            .is_none()
+            .then(|| transition.and_then(|transition| transition.exit_snapshot.as_deref()))
+            .flatten();
+
+        (editing, editing_fraction, exit_snapshot)
     }
 
     pub(super) fn pane_by_id(&self, pane_id: BrowserPaneId) -> Option<&BrowserPane> {
@@ -202,6 +236,7 @@ impl FileBrowser {
         let Some(next_pane) = self.pane_by_id(pane_id).cloned() else {
             return;
         };
+        let _ = self.cancel_address_editing();
         self.pane_layout = self.pane_layout.with_active(pane_id);
         self.restore_pane_snapshot(next_pane);
     }
@@ -300,10 +335,6 @@ impl FileBrowser {
             column_viewports: self.column_viewports.clone(),
             tabs: self.tabs.clone(),
             active_tab_id: self.active_tab_id,
-            path_input: self.path_input.clone(),
-            path_suggestions: self.path_suggestions.clone(),
-            path_suggestion_selection: self.path_suggestion_selection,
-            path_suggestion_generation: self.path_suggestion_generation,
             directory_load_generation: self.directory_load_generation,
             directory_load_cancel: self.directory_load_cancel.clone(),
             back_stack: self.back_stack.clone(),
@@ -330,10 +361,6 @@ impl FileBrowser {
         self.tabs = pane.tabs;
         self.active_tab_id = pane.active_tab_id;
         self.tab_animations.clear();
-        self.path_input = pane.path_input;
-        self.path_suggestions = pane.path_suggestions;
-        self.path_suggestion_selection = pane.path_suggestion_selection;
-        self.path_suggestion_generation = pane.path_suggestion_generation;
         self.directory_load_generation = pane.directory_load_generation;
         self.directory_load_cancel = pane.directory_load_cancel;
         self.back_stack = pane.back_stack;

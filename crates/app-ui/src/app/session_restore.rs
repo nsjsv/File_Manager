@@ -3,13 +3,12 @@ use std::path::{Path, PathBuf};
 
 use iced::Task;
 
-use super::paths::path_text;
 use super::FileBrowser;
 use crate::commands::load_directory_command;
 use crate::config::StartupLocationPolicy;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-    BrowserTabSession, ColumnBrowserViewport, Message, TRASH_LOCATION_LABEL,
+    BrowserTabSession, ColumnBrowserViewport, Message,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -88,7 +87,6 @@ impl FileBrowser {
     ) -> Task<Message> {
         self.current_dir = directory.clone();
         self.is_trash_view = false;
-        self.path_input = path_text(&directory);
         self.entries.clear();
         self.directory_loading_placeholder_entries.clear();
         self.trash_entries.clear();
@@ -183,11 +181,6 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
         .iter()
         .map(BrowserTabSession::to_browser_tab)
         .collect::<Vec<_>>();
-    let path_input = if active_tab.is_trash_view {
-        TRASH_LOCATION_LABEL.to_owned()
-    } else {
-        path_text(&active_tab.directory)
-    };
     let active_expanded_directories = active_tab.restored_expanded_directories();
     let mut browser_pane = BrowserPane {
         id: pane.id,
@@ -206,10 +199,6 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
         column_viewports: sanitize_column_viewports(pane.column_viewports),
         tabs,
         active_tab_id: active_tab.id,
-        path_input,
-        path_suggestions: Vec::new(),
-        path_suggestion_selection: None,
-        path_suggestion_generation: 0,
         directory_load_generation: 0,
         directory_load_cancel: None,
         back_stack: active_tab.back_stack,

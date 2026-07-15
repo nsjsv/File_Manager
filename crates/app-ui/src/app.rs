@@ -53,7 +53,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use desktop_linux::{NetworkConnectionId, StorageDeviceId, TerminalEmulator};
+use desktop_linux::{NetworkConnectionId, StorageDeviceId, TerminalEmulator, WaylandDndFileDrop};
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
@@ -87,12 +87,13 @@ use crate::config::UiLanguage;
 use crate::localization;
 use crate::model::search::SearchState;
 use crate::model::{
-    ApplicationLogViewState, AudioPreviewPlayback, BatchRenameState, BrowserPane, BrowserPaneId,
-    BrowserPaneLayout, BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds,
-    ContextMenuState, DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry,
-    ExpandedDirectory, FileDragState, FileDropPrompt, FilePropertiesState, Message,
-    OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
+    AddressBarTransition, AddressEditingSession, ApplicationLogViewState, AudioPreviewPlayback,
+    BatchRenameState, BreadcrumbDropTargetBounds, BrowserPane, BrowserPaneId, BrowserPaneLayout,
+    BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
+    DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
+    FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
+    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
+    PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
     TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
@@ -187,6 +188,9 @@ pub(crate) struct FileBrowser {
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
     file_entry_bounds: Vec<ColumnEntryBounds>,
+    breadcrumb_drop_target_bounds: Vec<BreadcrumbDropTargetBounds>,
+    breadcrumb_drop_target_measurement_generation: u64,
+    pending_wayland_file_drop: Option<PendingWaylandFileDrop>,
     pub(crate) options: ScanOptions,
     user_config: config::UserConfig,
     pub(crate) max_preview_file_mib_input: String,
@@ -197,10 +201,9 @@ pub(crate) struct FileBrowser {
     pub(crate) renderer_restart_notice_visible: bool,
     pub(super) pending_renderer_restart_environment:
         Option<crate::startup_rendering::StartupRenderingEnvironment>,
-    pub(crate) path_input: String,
-    pub(crate) path_suggestions: Vec<PathBuf>,
-    pub(crate) path_suggestion_selection: Option<usize>,
-    path_suggestion_generation: u64,
+    pub(crate) address_editing: Option<AddressEditingSession>,
+    pub(crate) address_bar_transition: Option<AddressBarTransition>,
+    next_address_editing_session_id: u64,
     pub(crate) column_width_overrides: HashMap<usize, f32>,
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
@@ -244,6 +247,11 @@ pub(crate) struct FileBrowser {
     next_pane_id: u64,
     theme: Theme,
     is_shutting_down: bool,
+}
+
+struct PendingWaylandFileDrop {
+    measurement_generation: u64,
+    drop: WaylandDndFileDrop,
 }
 
 #[derive(Debug, Clone)]
@@ -322,10 +330,6 @@ impl FileBrowser {
             column_viewports: HashMap::new(),
             tabs: vec![initial_tab.clone()],
             active_tab_id: initial_tab.id,
-            path_input: String::new(),
-            path_suggestions: Vec::new(),
-            path_suggestion_selection: None,
-            path_suggestion_generation: 0,
             directory_load_generation: 0,
             directory_load_cancel: None,
             back_stack: Vec::new(),
@@ -404,6 +408,9 @@ impl FileBrowser {
             selection_marquee: None,
             file_drag: None,
             file_entry_bounds: Vec::new(),
+            breadcrumb_drop_target_bounds: Vec::new(),
+            breadcrumb_drop_target_measurement_generation: 0,
+            pending_wayland_file_drop: None,
             options: options.clone(),
             user_config: user_config.clone(),
             max_preview_file_mib_input: config::max_preview_file_mib(
@@ -419,10 +426,9 @@ impl FileBrowser {
             rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
             pending_renderer_restart_environment: None,
-            path_input: String::new(),
-            path_suggestions: Vec::new(),
-            path_suggestion_selection: None,
-            path_suggestion_generation: 0,
+            address_editing: None,
+            address_bar_transition: None,
+            next_address_editing_session_id: 1,
             column_width_overrides: HashMap::new(),
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
@@ -549,6 +555,7 @@ impl FileBrowser {
 
         if self.scrollbar_animation_is_active()
             || self.smooth_scroll_animation_is_active()
+            || self.address_bar_transition_is_active()
             || self.tab_bar_reveal_animation_is_active()
             || self.tab_animation_is_active()
             || self.list_directory_animation_is_active()

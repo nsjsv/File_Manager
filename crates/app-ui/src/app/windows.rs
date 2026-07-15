@@ -4,7 +4,7 @@ use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
 use crate::model::{Message, PreviewSize, PreviewWindowProfile, SettingsCategory};
-use crate::view::{path_input_id, rename_input_id};
+use crate::view::{address_input_id, rename_input_id};
 
 const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
 const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
@@ -109,21 +109,28 @@ pub(super) fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize
     }
 }
 
-struct RenameInputFocusCheck {
-    target: advanced_widget::Id,
-    is_focused: bool,
+enum TextInputFocusCheckResult {
+    Address(crate::model::BrowserPaneId),
+    Rename,
 }
 
-impl RenameInputFocusCheck {
-    fn new(target: iced::widget::Id) -> Self {
+struct TextInputFocusCheck {
+    target: advanced_widget::Id,
+    is_focused: bool,
+    result: TextInputFocusCheckResult,
+}
+
+impl TextInputFocusCheck {
+    fn new(target: iced::widget::Id, result: TextInputFocusCheckResult) -> Self {
         Self {
             target: target.into(),
             is_focused: false,
+            result,
         }
     }
 }
 
-impl Operation<Message> for RenameInputFocusCheck {
+impl Operation<Message> for TextInputFocusCheck {
     fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Message>)) {
         operate(self);
     }
@@ -140,12 +147,28 @@ impl Operation<Message> for RenameInputFocusCheck {
     }
 
     fn finish(&self) -> Outcome<Message> {
-        Outcome::Some(Message::RenameInputFocusChecked(self.is_focused))
+        let message = match self.result {
+            TextInputFocusCheckResult::Address(pane_id) => {
+                Message::AddressInputFocusChecked(pane_id, self.is_focused)
+            }
+            TextInputFocusCheckResult::Rename => Message::RenameInputFocusChecked(self.is_focused),
+        };
+        Outcome::Some(message)
     }
 }
 
 fn rename_input_focus_check_command() -> Task<Message> {
-    advanced_widget::operate(RenameInputFocusCheck::new(rename_input_id()))
+    advanced_widget::operate(TextInputFocusCheck::new(
+        rename_input_id(),
+        TextInputFocusCheckResult::Rename,
+    ))
+}
+
+fn address_input_focus_check_command(pane_id: crate::model::BrowserPaneId) -> Task<Message> {
+    advanced_widget::operate(TextInputFocusCheck::new(
+        address_input_id(pane_id),
+        TextInputFocusCheckResult::Address(pane_id),
+    ))
 }
 
 fn clamp_preview_size_to_minimum(profile: PreviewWindowProfile, size: PreviewSize) -> PreviewSize {
@@ -239,8 +262,7 @@ impl FileBrowser {
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         let refresh_application_logs = if self.selected_settings_category == SettingsCategory::Logs
         {
             self.refresh_application_logs()
@@ -437,6 +459,9 @@ impl FileBrowser {
         if self.preview_window == Some(self.focused_window) {
             return self.close_preview_window();
         }
+        if self.address_editing.is_some() {
+            return self.cancel_address_editing();
+        }
         self.dismiss_floating()
     }
 
@@ -464,11 +489,14 @@ impl FileBrowser {
 
         let pointer_command = match (button, status) {
             (mouse::Button::Left | mouse::Button::Right, event::Status::Captured) => {
+                let mut input_focus_checks = Vec::with_capacity(2);
                 if self.renaming.is_some() {
-                    rename_input_focus_check_command()
-                } else {
-                    Task::none()
+                    input_focus_checks.push(rename_input_focus_check_command());
                 }
+                if let Some(session) = &self.address_editing {
+                    input_focus_checks.push(address_input_focus_check_command(session.pane_id));
+                }
+                Task::batch(input_focus_checks)
             }
             (mouse::Button::Left, event::Status::Ignored) => self.dismiss_floating(),
             _ => Task::none(),
@@ -522,7 +550,6 @@ impl FileBrowser {
             return Task::none();
         }
 
-        let had_path_suggestions = !self.path_suggestions.is_empty();
         self.context_menu = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
@@ -530,17 +557,10 @@ impl FileBrowser {
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
-        let command = self.commit_rename_if_active();
-        if had_path_suggestions {
-            Task::batch([
-                command,
-                iced::widget::operation::focus(path_input_id(self.active_pane_id())),
-            ])
-        } else {
-            command
-        }
+        Task::batch([
+            self.cancel_address_editing(),
+            self.commit_rename_if_active(),
+        ])
     }
 
     pub(super) fn close_auxiliary_window(&mut self, window_id: window::Id) -> Task<Message> {
@@ -604,7 +624,7 @@ impl FileBrowser {
         if window == self.main_window {
             self.main_window_width = width.max(1.0);
             self.main_window_height = height.max(1.0);
-            return Task::none();
+            return self.request_breadcrumb_drop_target_bounds_measurement();
         }
 
         if self.preview_window == Some(window) {

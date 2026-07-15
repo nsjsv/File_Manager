@@ -41,8 +41,7 @@ impl FileBrowser {
         self.archive_creation = None;
         self.archive_extraction = None;
         self.renaming = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         let existing_paths = self.batch_rename_existing_paths(&paths);
         let sources = self.batch_rename_sources_for_paths(&paths);
         self.batch_rename = BatchRenameState::new_with_existing_sources(sources, existing_paths);

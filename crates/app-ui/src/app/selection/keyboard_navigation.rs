@@ -201,8 +201,6 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.file_drag = None;
         self.pending_keyboard_column_focus = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
     }
 
     pub(crate) fn request_preview(&mut self) -> Task<Message> {
@@ -264,6 +262,7 @@ impl FileBrowser {
             return Task::batch([
                 self.focus_latest_column(),
                 self.request_browser_session_save(),
+                self.reveal_address_bar_current_segment(self.active_pane_id()),
             ]);
         }
 
@@ -287,6 +286,7 @@ impl FileBrowser {
             load_expanded_directory_command(request, self.options.clone(), cancellation),
             self.focus_latest_column(),
             self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(self.active_pane_id()),
         ])
     }
 

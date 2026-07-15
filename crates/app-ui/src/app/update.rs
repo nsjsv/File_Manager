@@ -328,6 +328,7 @@ impl FileBrowser {
                     self.finish_list_column_reorder_drag_command(),
                     self.finish_drag_selection(release_directory),
                     self.schedule_thumbnail_refresh(),
+                    self.request_breadcrumb_drop_target_bounds_measurement(),
                 ])
             }
             Message::EntryRightClicked(pane_id, path) => {
@@ -386,6 +387,7 @@ impl FileBrowser {
                     self.finish_list_column_reorder_drag_command(),
                     self.finish_drag_selection(release_directory),
                     self.schedule_thumbnail_refresh(),
+                    self.request_breadcrumb_drop_target_bounds_measurement(),
                 ])
             }
             Message::BlankAreaPressed(pane_id) => {
@@ -441,6 +443,9 @@ impl FileBrowser {
             Message::ColumnEntryBoundsMeasured(bounds) => {
                 self.update_selection_from_column_entry_bounds(bounds)
             }
+            Message::BreadcrumbDropTargetBoundsMeasured(generation, bounds) => {
+                self.accept_breadcrumb_drop_target_bounds(generation, bounds)
+            }
             Message::PaneCursorEntered(pane_id) => {
                 self.hovered_pane_id = Some(pane_id);
                 Task::none()
@@ -487,26 +492,27 @@ impl FileBrowser {
                 button,
                 status,
             } => self.handle_window_pointer_pressed(window, button, status),
-            Message::PathInputChanged(pane_id, value) => {
-                self.activate_pane(pane_id);
-                self.update_path_input(value)
+            Message::AddressEditingRequested(pane_id) => self.begin_address_editing(pane_id),
+            Message::BreadcrumbSegmentPressed(pane_id, target) => {
+                self.activate_breadcrumb_target(pane_id, target)
             }
-            Message::PathInputSubmitted(pane_id) => {
-                self.activate_pane(pane_id);
-                self.submit_path_input()
+            Message::AddressDraftChanged(pane_id, value) => {
+                self.update_address_draft(pane_id, value)
             }
-            Message::PathSuggestionSelected(pane_id, path) => {
-                self.activate_pane(pane_id);
-                self.path_suggestions.clear();
-                self.path_suggestion_selection = None;
-                self.navigate_to(path, NavigationMode::RecordHistory)
+            Message::AddressEditingSubmitted(pane_id) => self.submit_address_editing(pane_id),
+            Message::AddressSuggestionSelected(pane_id, target) => {
+                self.submit_address_suggestion(pane_id, target)
             }
-            Message::PathInputStabilized(pane_id, request) => {
-                self.load_stable_path_suggestions(pane_id, request)
+            Message::AddressSuggestionInputStabilized(request) => {
+                self.load_stable_address_suggestions(request)
             }
-            Message::PathSuggestionsLoaded(pane_id, request, suggestions) => {
-                self.accept_path_suggestions(pane_id, request, suggestions)
+            Message::AddressSuggestionsLoaded(request, suggestions) => {
+                self.accept_address_suggestions(request, suggestions)
             }
+            Message::AddressBarScrolled(pane_id) => Task::batch([
+                self.show_scrollbars_temporarily(Region::AddressBar(pane_id)),
+                self.request_breadcrumb_drop_target_bounds_measurement(),
+            ]),
             Message::SearchInputChanged(value) => self.update_search_input(value),
             Message::SearchSubmitted => self.submit_search(),
             Message::SearchResultsLoaded(generation, outcome) => {
@@ -618,6 +624,7 @@ impl FileBrowser {
             Message::WindowChromeAnimationTick => Task::batch([
                 self.advance_smooth_scroll_animation(),
                 self.advance_scrollbar_animation(),
+                self.advance_address_bar_transition(),
                 self.advance_tab_bar_reveal_animation(),
                 self.advance_tab_animations(),
                 self.advance_list_directory_animations(),
@@ -717,6 +724,17 @@ impl FileBrowser {
             Message::PaneForward(pane_id) => {
                 self.activate_pane(pane_id);
                 Task::batch([self.commit_rename_if_active(), self.navigate_forward()])
+            }
+            Message::AddressInputFocusChecked(pane_id, is_focused) => {
+                let checked_session_is_current = self
+                    .address_editing
+                    .as_ref()
+                    .is_some_and(|session| session.pane_id == pane_id);
+                if is_focused || !checked_session_is_current {
+                    Task::none()
+                } else {
+                    self.cancel_address_editing()
+                }
             }
             Message::RenameInputFocusChecked(is_focused) => {
                 if is_focused {

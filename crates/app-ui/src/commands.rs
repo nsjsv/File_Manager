@@ -19,7 +19,7 @@ use iced::Task;
 
 use crate::config;
 use crate::model::{
-    BrowserPaneId, LoadedOperationStore, Message, PathSuggestionRequest, PendingOperation,
+    AddressSuggestionRequest, BrowserPaneId, LoadedOperationStore, Message, PendingOperation,
     SidebarLocation, StartupEnvironment, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
@@ -135,16 +135,11 @@ pub(crate) fn load_trash_command(pane_id: BrowserPaneId, options: ScanOptions) -
     })
 }
 
-pub(crate) fn path_suggestions_command(
-    pane_id: BrowserPaneId,
-    request: PathSuggestionRequest,
-) -> Task<Message> {
+pub(crate) fn path_suggestions_command(request: AddressSuggestionRequest) -> Task<Message> {
     let issued_request = request.clone();
     Task::perform(
-        load_path_suggestions(request.input, request.current_dir),
-        move |suggestions| {
-            Message::PathSuggestionsLoaded(pane_id, issued_request.clone(), suggestions)
-        },
+        load_path_suggestions(request.draft, request.current_dir),
+        move |suggestions| Message::AddressSuggestionsLoaded(issued_request.clone(), suggestions),
     )
 }
 

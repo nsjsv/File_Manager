@@ -1,3 +1,4 @@
+mod address_bar;
 mod application_logs;
 mod archive_creation;
 mod archive_extraction;
@@ -22,6 +23,7 @@ mod toggle_switch;
 mod toolbar_controls;
 mod transfer_conflict;
 
+pub(crate) use address_bar::address_input_id;
 pub(crate) use preview_panel::view_preview_window;
 pub(crate) use properties_window::view_properties_window;
 pub(crate) use settings_window::view_settings_window;
@@ -30,20 +32,16 @@ pub(crate) use tab_motion::translated_with_width_overflow;
 use std::path::Path;
 
 use file_core::{DirectoryEntry, FileKind};
-use iced::widget::{
-    button, container, mouse_area, opaque, row, stack, text_input, Column, Row, Space, Svg,
-};
+use iced::widget::{button, container, mouse_area, opaque, row, stack, Column, Row, Space, Svg};
 use iced::{Alignment, Element, Length, Point, Theme};
 
-use crate::anchored_popup::anchored_popup;
 use crate::app::panes::BrowserPaneView;
 use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::app::FileBrowser;
 use crate::appearance::{
     app_content_style, drag_preview_style, icon_svg_style, navigation_icon_button_style,
-    path_suggestion_item_style, path_suggestions_style, selected_icon_svg_style,
-    selected_path_suggestion_item_style, selected_tab_item_style, tab_item_style,
-    tab_split_overlay_style, tab_strip_style, warning_icon_svg_style,
+    selected_icon_svg_style, selected_tab_item_style, tab_item_style, tab_split_overlay_style,
+    tab_strip_style, warning_icon_svg_style,
 };
 use crate::floating_surface::{
     dismissable_blocking_floating_surface, floating_surface, modal_floating_surface,
@@ -65,6 +63,7 @@ use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
 use self::network_connections::network_connection_editor_panel;
+use address_bar::address_bar;
 use archive_creation::archive_creation_panel;
 use archive_extraction::archive_extraction_panel;
 use batch_rename::batch_rename_panel;
@@ -88,7 +87,6 @@ const TAB_FILL_PORTION: u16 = 1000;
 const TAB_DRAG_PREVIEW_WIDTH: f32 = 220.0;
 pub(super) const MENU_ICON_SIZE: f32 = 16.0;
 const TAB_LABEL_MAX_CHARS: usize = 24;
-const PATH_SUGGESTION_MAX_CHARS: usize = 72;
 const ERROR_NOTIFICATION_CONTENT_OFFSET_X: f32 = 18.0;
 const ERROR_NOTIFICATION_FLOAT_Y: f32 = 18.0;
 const RENDERER_RESTART_NOTICE_ERROR_OFFSET_Y: f32 = 58.0;
@@ -126,10 +124,6 @@ pub(crate) fn rename_input_id() -> iced::widget::Id {
 
 pub(crate) fn batch_rename_preview_name_input_id(path: &Path) -> iced::widget::Id {
     iced::widget::Id::from(format!("batch-rename-preview-name-{}", path.display()))
-}
-
-pub(crate) fn path_input_id(pane_id: BrowserPaneId) -> iced::widget::Id {
-    iced::widget::Id::from(format!("path-input-{}", pane_id.key()))
 }
 
 pub(crate) fn column_browser_scroll_id(pane_id: BrowserPaneId) -> iced::widget::Id {
@@ -369,7 +363,7 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
 
     let navigation_bar = row![
         navigation_button_group(pane_id),
-        path_input_panel(pane),
+        address_bar(browser, pane),
         search_input_panel(browser),
         view_mode_button_group(pane),
     ]
@@ -620,77 +614,6 @@ fn tab_title_text(directory: &Path, is_trash_view: bool) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| directory.to_string_lossy().into_owned());
     format_middle_ellipsized_text(&title, TAB_LABEL_MAX_CHARS)
-}
-
-fn path_input_panel<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
-    if pane.is_trash_view {
-        return container(
-            row![
-                themed_icon(IconSymbol::Trash, IconTone::Normal, TOOLBAR_ICON_SIZE),
-                readable_text(TRASH_LOCATION_LABEL).size(16),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .padding([7, 10])
-        .width(Length::Fill)
-        .into();
-    }
-
-    let input = text_input(
-        &crate::localization::translate_current("Path"),
-        pane.path_input,
-    )
-    .id(path_input_id(pane.id))
-    .on_input(move |value| Message::PathInputChanged(pane.id, value))
-    .on_submit(Message::PathInputSubmitted(pane.id))
-    .padding([7, 10])
-    .size(16)
-    .width(Length::Fill);
-
-    let popup = (!pane.path_suggestions.is_empty()).then(|| path_suggestions_panel(pane));
-
-    container(anchored_popup(input, popup))
-        .width(Length::Fill)
-        .into()
-}
-
-fn path_suggestions_panel<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
-    let mut suggestions = Column::new().spacing(3).padding(4);
-    for (index, suggestion) in pane.path_suggestions.iter().enumerate() {
-        suggestions = suggestions.push(path_suggestion_row(
-            pane.id,
-            suggestion,
-            pane.path_suggestion_selection == Some(index),
-        ));
-    }
-
-    container(suggestions)
-        .width(Length::Fill)
-        .style(path_suggestions_style)
-        .into()
-}
-
-fn path_suggestion_row(
-    pane_id: BrowserPaneId,
-    path: &Path,
-    is_selected: bool,
-) -> Element<'_, Message> {
-    let label = path.to_string_lossy();
-    let label = format_middle_ellipsized_text(label.as_ref(), PATH_SUGGESTION_MAX_CHARS);
-    let item = container(readable_text(label).size(13).width(Length::Fill))
-        .padding([5, 8])
-        .width(Length::Fill);
-    let item = if is_selected {
-        item.style(selected_path_suggestion_item_style)
-    } else {
-        item.style(path_suggestion_item_style)
-    };
-
-    mouse_area(item)
-        .on_press(Message::PathSuggestionSelected(pane_id, path.to_path_buf()))
-        .interaction(iced::mouse::Interaction::Pointer)
-        .into()
 }
 
 pub(super) fn themed_icon(symbol: IconSymbol, tone: IconTone, size: f32) -> Svg<'static, Theme> {

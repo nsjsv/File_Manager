@@ -35,6 +35,12 @@ pub(crate) use crate::text_preview::{
 };
 pub(crate) use file_core::{TransferConflictItem, TransferConflictMetadata};
 
+mod address_bar;
+pub(crate) use address_bar::{
+    allocate_breadcrumb_widths, breadcrumb_segments, displayed_address_directory,
+    AddressBarTransition, AddressEditingSession, AddressEditingSessionId, AddressSuggestionRequest,
+    BreadcrumbSegment, BreadcrumbSegmentKind,
+};
 mod browser_panes;
 pub(crate) use browser_panes::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
@@ -94,14 +100,15 @@ pub(crate) use session::{
 };
 mod drag;
 pub(crate) use drag::{
-    FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, LastActivationClick,
-    PaneDragPointerPress, PaneDragState, PaneDropTarget, SidebarBookmarkDragState,
-    SidebarBookmarkDropSlot, TabDragMode, TabDragState, TabSplitTarget,
+    BreadcrumbDropTargetBounds, FileDragNativeDndState, FileDragPhase, FileDragState,
+    FileDragTarget, LastActivationClick, PaneDragPointerPress, PaneDragState, PaneDropTarget,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode, TabDragState, TabSplitTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ScrollbarRegion {
     Sidebar,
+    AddressBar(BrowserPaneId),
     PaneList(BrowserPaneId),
     ColumnBrowser(BrowserPaneId),
     Column {
@@ -275,6 +282,7 @@ pub(crate) enum Message {
     ColumnBrowserCursorEntered(BrowserPaneId),
     ColumnBrowserCursorExited(BrowserPaneId),
     ColumnEntryBoundsMeasured(Vec<ColumnEntryBounds>),
+    BreadcrumbDropTargetBoundsMeasured(u64, Vec<BreadcrumbDropTargetBounds>),
     PaneCursorEntered(BrowserPaneId),
     PaneCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
@@ -303,11 +311,14 @@ pub(crate) enum Message {
         button: mouse::Button,
         status: event::Status,
     },
-    PathInputChanged(BrowserPaneId, String),
-    PathInputSubmitted(BrowserPaneId),
-    PathSuggestionSelected(BrowserPaneId, PathBuf),
-    PathInputStabilized(BrowserPaneId, PathSuggestionRequest),
-    PathSuggestionsLoaded(BrowserPaneId, PathSuggestionRequest, Vec<PathBuf>),
+    AddressEditingRequested(BrowserPaneId),
+    BreadcrumbSegmentPressed(BrowserPaneId, PathBuf),
+    AddressDraftChanged(BrowserPaneId, String),
+    AddressEditingSubmitted(BrowserPaneId),
+    AddressSuggestionSelected(BrowserPaneId, PathBuf),
+    AddressSuggestionInputStabilized(AddressSuggestionRequest),
+    AddressSuggestionsLoaded(AddressSuggestionRequest, Vec<PathBuf>),
+    AddressBarScrolled(BrowserPaneId),
     SearchInputChanged(String),
     SearchSubmitted,
     SearchResultsLoaded(u64, IndexedSearchOutcome),
@@ -387,6 +398,7 @@ pub(crate) enum Message {
     TrashOpened,
     Back,
     Forward,
+    AddressInputFocusChecked(BrowserPaneId, bool),
     RenameInputFocusChecked(bool),
     RenameInputChanged(String),
     BeginRename(PathBuf),
@@ -699,11 +711,4 @@ pub(crate) enum NavigationMode {
 pub(crate) enum PathSuggestionDirection {
     Next,
     Previous,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PathSuggestionRequest {
-    pub(crate) input: String,
-    pub(crate) current_dir: PathBuf,
-    pub(crate) generation: u64,
 }

@@ -31,6 +31,7 @@ impl FileBrowser {
             self.finish_list_column_reorder_drag_command(),
             self.finish_drag_selection(None),
             self.schedule_thumbnail_refresh(),
+            self.request_breadcrumb_drop_target_bounds_measurement(),
         ])
     }
 

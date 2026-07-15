@@ -7,13 +7,14 @@ use desktop_linux::{
 use iced::{Point, Task};
 
 use crate::app::paths::{self, PasteTargetMode};
-use crate::app::FileBrowser;
+use crate::app::{FileBrowser, PendingWaylandFileDrop};
+use crate::breadcrumb_drop_target_bounds::breadcrumb_drop_target_bounds_command;
 use crate::commands::{
     create_clipboard_file_command, read_desktop_clipboard_command, write_file_clipboard_command,
 };
 use crate::model::{
-    ContextMenuState, DestructiveActionConfirmation, FileDropPrompt, Message, PendingOperation,
-    TransferConflictMode,
+    BreadcrumbDropTargetBounds, ContextMenuState, DestructiveActionConfirmation, FileDropPrompt,
+    Message, PendingOperation, TransferConflictMode,
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
@@ -246,19 +247,71 @@ impl FileBrowser {
         &mut self,
         result: Result<WaylandDndFileDrop, String>,
     ) -> Task<Message> {
-        if self.is_trash_view {
-            return Task::none();
-        }
         match result {
-            Ok(drop) => match drop.origin {
-                WaylandDndDropOrigin::External => self.accept_external_wayland_file_drop(drop),
-                WaylandDndDropOrigin::Internal => self.accept_internal_wayland_file_drop(drop),
-            },
+            Ok(drop) => self.measure_wayland_file_drop_target(drop),
             Err(error) => {
+                self.pending_wayland_file_drop = None;
+                self.breadcrumb_drop_target_measurement_generation = self
+                    .breadcrumb_drop_target_measurement_generation
+                    .wrapping_add(1);
                 self.show_global_error(error);
                 Task::none()
             }
         }
+    }
+
+    fn measure_wayland_file_drop_target(&mut self, drop: WaylandDndFileDrop) -> Task<Message> {
+        let generation = self.next_breadcrumb_drop_target_measurement_generation();
+        self.pending_wayland_file_drop = Some(PendingWaylandFileDrop {
+            measurement_generation: generation,
+            drop,
+        });
+        breadcrumb_drop_target_bounds_command(generation)
+    }
+
+    pub(in crate::app) fn request_breadcrumb_drop_target_bounds_measurement(
+        &mut self,
+    ) -> Task<Message> {
+        if self.pending_wayland_file_drop.is_some() {
+            return Task::none();
+        }
+        let generation = self.next_breadcrumb_drop_target_measurement_generation();
+        breadcrumb_drop_target_bounds_command(generation)
+    }
+
+    pub(in crate::app) fn accept_breadcrumb_drop_target_bounds(
+        &mut self,
+        generation: u64,
+        bounds: Vec<BreadcrumbDropTargetBounds>,
+    ) -> Task<Message> {
+        if generation != self.breadcrumb_drop_target_measurement_generation {
+            return Task::none();
+        }
+
+        self.breadcrumb_drop_target_bounds = bounds;
+        let pending_generation_matches = self
+            .pending_wayland_file_drop
+            .as_ref()
+            .is_some_and(|pending| pending.measurement_generation == generation);
+        if !pending_generation_matches {
+            return Task::none();
+        }
+
+        let pending = self
+            .pending_wayland_file_drop
+            .take()
+            .expect("matching Wayland file drop");
+        match pending.drop.origin {
+            WaylandDndDropOrigin::External => self.accept_external_wayland_file_drop(pending.drop),
+            WaylandDndDropOrigin::Internal => self.accept_internal_wayland_file_drop(pending.drop),
+        }
+    }
+
+    fn next_breadcrumb_drop_target_measurement_generation(&mut self) -> u64 {
+        self.breadcrumb_drop_target_measurement_generation = self
+            .breadcrumb_drop_target_measurement_generation
+            .wrapping_add(1);
+        self.breadcrumb_drop_target_measurement_generation
     }
 
     fn accept_external_wayland_file_drop(&mut self, drop: WaylandDndFileDrop) -> Task<Message> {
@@ -266,7 +319,16 @@ impl FileBrowser {
         if let Some(position) = position {
             self.cursor_position = position;
         }
-        let paste_directory = self.paste_target_directory_for_wayland_drop(position);
+        let paste_directory = position
+            .and_then(|position| self.directory_drop_target_at_position(position))
+            .or_else(|| match position {
+                Some(position) if self.pane_id_at_position(position).is_some() => None,
+                Some(_) | None if !self.is_trash_view => Some(self.paste_target_directory()),
+                Some(_) | None => None,
+            });
+        let Some(paste_directory) = paste_directory else {
+            return Task::none();
+        };
         self.request_file_drop_prompt(paste_directory, drop.selection.paths)
     }
 
@@ -279,7 +341,11 @@ impl FileBrowser {
         let release_directory = position.and_then(|position| {
             self.cursor_position = position;
             self.refresh_file_drag_target_at_position(position);
-            self.file_drag_release_directory_at_position(position)
+            let release_directory = self.directory_drop_target_at_position(position);
+            if release_directory.is_none() && position.x > self.sidebar_width {
+                self.clear_file_drag_target();
+            }
+            release_directory
         });
 
         Task::batch([
@@ -322,8 +388,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.open_with = None;
         self.operation_queue.close_panel();
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         self.file_drop_prompt = Some(FileDropPrompt {
             paste_directory,
             paths,
@@ -451,32 +516,6 @@ impl FileBrowser {
             .or_else(|| self.cursor_paste_directory.clone())
             .unwrap_or_else(|| self.current_dir.clone())
     }
-
-    fn paste_target_directory_for_wayland_drop(&self, position: Option<Point>) -> PathBuf {
-        if let Some(position) = position {
-            for entry_bounds in self.file_entry_bounds.iter().rev() {
-                if entry_bounds.bounds.contains(position) {
-                    if let Some(directory) = self.cursor_paste_directory_for_entry_in_pane(
-                        entry_bounds.pane_id,
-                        &entry_bounds.path,
-                    ) {
-                        return directory;
-                    }
-                }
-            }
-
-            if let Some(directory) = self
-                .pane_id_at_position(position)
-                .and_then(|pane_id| self.pane_view(pane_id))
-                .filter(|pane| !pane.is_trash_view)
-                .map(|pane| pane.current_dir.clone())
-            {
-                return directory;
-            }
-        }
-
-        self.paste_target_directory()
-    }
 }
 
 fn wayland_drop_position(position: Option<WaylandDndDropPosition>) -> Option<Point> {
@@ -494,7 +533,7 @@ mod tests {
     };
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
     use iced::futures::StreamExt;
-    use iced::Task;
+    use iced::{Point, Rectangle, Size, Task};
     use iced_runtime::Action;
 
     use super::*;
@@ -536,6 +575,28 @@ mod tests {
             selection: FileClipboardSelection::new(operation, paths),
             origin,
             position: None,
+        }
+    }
+
+    fn accept_measured_wayland_file_drop(
+        browser: &mut FileBrowser,
+        file_drop: WaylandDndFileDrop,
+        bounds: Vec<BreadcrumbDropTargetBounds>,
+    ) -> Task<Message> {
+        drop(browser.accept_wayland_file_drop(Ok(file_drop)));
+        let generation = browser.breadcrumb_drop_target_measurement_generation;
+        browser.accept_breadcrumb_drop_target_bounds(generation, bounds)
+    }
+
+    fn breadcrumb_target_bounds(
+        pane_id: crate::model::BrowserPaneId,
+        directory: impl Into<PathBuf>,
+    ) -> BreadcrumbDropTargetBounds {
+        BreadcrumbDropTargetBounds {
+            pane_id,
+            directory: directory.into(),
+            item_bounds: Rectangle::new(Point::new(20.0, 8.0), Size::new(100.0, 24.0)),
+            viewport_bounds: Rectangle::new(Point::ORIGIN, Size::new(200.0, 40.0)),
         }
     }
 
@@ -586,11 +647,15 @@ mod tests {
         let mut browser = browser_with_entries(&[]);
         browser.cursor_paste_directory = Some(PathBuf::from("/workspace/project"));
 
-        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
-            FileClipboardOperation::Copy,
-            vec![source.clone()],
-            WaylandDndDropOrigin::External,
-        ))));
+        drop(accept_measured_wayland_file_drop(
+            &mut browser,
+            wayland_file_drop(
+                FileClipboardOperation::Copy,
+                vec![source.clone()],
+                WaylandDndDropOrigin::External,
+            ),
+            Vec::new(),
+        ));
 
         assert!(matches!(
             &browser.file_drop_prompt,
@@ -603,21 +668,88 @@ mod tests {
     }
 
     #[test]
+    fn external_wayland_drop_uses_measured_breadcrumb_target() {
+        let source = PathBuf::from("/outside/report.txt");
+        let target_directory = PathBuf::from("/workspace/project");
+        let mut browser = browser_with_entries(&[]);
+        let pane_id = browser.active_pane_id();
+        let mut file_drop = wayland_file_drop(
+            FileClipboardOperation::Copy,
+            vec![source.clone()],
+            WaylandDndDropOrigin::External,
+        );
+        file_drop.position = Some(WaylandDndDropPosition { x: 50.0, y: 20.0 });
+
+        drop(accept_measured_wayland_file_drop(
+            &mut browser,
+            file_drop,
+            vec![breadcrumb_target_bounds(pane_id, target_directory.clone())],
+        ));
+
+        assert!(matches!(
+            &browser.file_drop_prompt,
+            Some(FileDropPrompt {
+                paste_directory,
+                paths,
+            }) if paste_directory == &target_directory && paths == &vec![source]
+        ));
+    }
+
+    #[test]
+    fn stale_breadcrumb_measurement_does_not_consume_pending_wayland_drop() {
+        let source = PathBuf::from("/outside/report.txt");
+        let mut browser = browser_with_entries(&[]);
+
+        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+            FileClipboardOperation::Copy,
+            vec![source.clone()],
+            WaylandDndDropOrigin::External,
+        ))));
+        let current_generation = browser.breadcrumb_drop_target_measurement_generation;
+
+        drop(
+            browser.accept_breadcrumb_drop_target_bounds(
+                current_generation.wrapping_sub(1),
+                Vec::new(),
+            ),
+        );
+
+        assert!(browser.pending_wayland_file_drop.is_some());
+        assert!(browser.file_drop_prompt.is_none());
+
+        drop(browser.accept_breadcrumb_drop_target_bounds(current_generation, Vec::new()));
+
+        assert!(browser.pending_wayland_file_drop.is_none());
+        assert!(matches!(
+            &browser.file_drop_prompt,
+            Some(FileDropPrompt { paths, .. }) if paths == &vec![source]
+        ));
+    }
+
+    #[test]
     fn second_wayland_file_drop_keeps_pending_prompt() {
         let first_source = PathBuf::from("/outside/first.txt");
         let second_source = PathBuf::from("/outside/second.txt");
         let mut browser = browser_with_entries(&[]);
 
-        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
-            FileClipboardOperation::Move,
-            vec![first_source.clone()],
-            WaylandDndDropOrigin::External,
-        ))));
-        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
-            FileClipboardOperation::Move,
-            vec![second_source],
-            WaylandDndDropOrigin::External,
-        ))));
+        drop(accept_measured_wayland_file_drop(
+            &mut browser,
+            wayland_file_drop(
+                FileClipboardOperation::Move,
+                vec![first_source.clone()],
+                WaylandDndDropOrigin::External,
+            ),
+            Vec::new(),
+        ));
+        drop(accept_measured_wayland_file_drop(
+            &mut browser,
+            wayland_file_drop(
+                FileClipboardOperation::Move,
+                vec![second_source],
+                WaylandDndDropOrigin::External,
+            ),
+            Vec::new(),
+        ));
 
         assert!(matches!(
             &browser.file_drop_prompt,
@@ -639,11 +771,15 @@ mod tests {
         let mut browser = browser_with_entries(&[]);
         browser.current_dir = destination.clone();
 
-        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
-            FileClipboardOperation::Move,
-            vec![source.clone()],
-            WaylandDndDropOrigin::External,
-        ))));
+        drop(accept_measured_wayland_file_drop(
+            &mut browser,
+            wayland_file_drop(
+                FileClipboardOperation::Move,
+                vec![source.clone()],
+                WaylandDndDropOrigin::External,
+            ),
+            Vec::new(),
+        ));
 
         let (mode, transfers, conflicts) = transfer_conflict_check_message(
             browser.apply_file_drop_operation(FileClipboardOperation::Copy),
@@ -676,16 +812,60 @@ mod tests {
             column_directories_snapshot: Vec::new(),
         });
 
-        let (mode, transfers, conflicts) = transfer_conflict_check_message(
-            browser.accept_wayland_file_drop(Ok(wayland_file_drop(
+        let file_drop_task = accept_measured_wayland_file_drop(
+            &mut browser,
+            wayland_file_drop(
                 FileClipboardOperation::Move,
                 vec![source.clone()],
                 WaylandDndDropOrigin::Internal,
-            ))),
-        )
-        .await;
+            ),
+            Vec::new(),
+        );
+        let (mode, transfers, conflicts) = transfer_conflict_check_message(file_drop_task).await;
 
         assert!(browser.file_drop_prompt.is_none());
+        assert!(browser.file_drag.is_none());
+        assert_eq!(mode, TransferConflictMode::Move);
+        assert_eq!(
+            transfers,
+            vec![QueuedTransfer::new(source, destination.join("report.txt"))]
+        );
+        assert!(conflicts.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn internal_wayland_drop_prefers_measured_breadcrumb_over_stale_hover() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let destination = temp_dir.path().join("destination");
+        let stale_destination = temp_dir.path().join("stale-destination");
+        let source = temp_dir.path().join("report.txt");
+        fs::create_dir_all(&destination).expect("create destination");
+        fs::create_dir_all(&stale_destination).expect("create stale destination");
+        fs::write(&source, b"report").expect("write source");
+        let mut browser = browser_with_entries(&[source.clone()]);
+        let pane_id = browser.active_pane_id();
+        browser.file_drag = Some(FileDragState {
+            sources: vec![source.clone()],
+            pressed_path: source.clone(),
+            target: Some(FileDragTarget::Directory(stale_destination)),
+            phase: FileDragPhase::Dragging,
+            native_dnd: FileDragNativeDndState::WaylandRequested,
+            column_directories_snapshot: Vec::new(),
+        });
+        let mut file_drop = wayland_file_drop(
+            FileClipboardOperation::Move,
+            vec![source.clone()],
+            WaylandDndDropOrigin::Internal,
+        );
+        file_drop.position = Some(WaylandDndDropPosition { x: 50.0, y: 20.0 });
+
+        let file_drop_task = accept_measured_wayland_file_drop(
+            &mut browser,
+            file_drop,
+            vec![breadcrumb_target_bounds(pane_id, destination.clone())],
+        );
+        let (mode, transfers, conflicts) = transfer_conflict_check_message(file_drop_task).await;
+
         assert!(browser.file_drag.is_none());
         assert_eq!(mode, TransferConflictMode::Move);
         assert_eq!(
@@ -700,11 +880,15 @@ mod tests {
         let source = PathBuf::from("/outside/report.txt");
         let mut browser = browser_with_entries(&[]);
 
-        drop(browser.accept_wayland_file_drop(Ok(wayland_file_drop(
-            FileClipboardOperation::Move,
-            vec![source],
-            WaylandDndDropOrigin::External,
-        ))));
+        drop(accept_measured_wayland_file_drop(
+            &mut browser,
+            wayland_file_drop(
+                FileClipboardOperation::Move,
+                vec![source],
+                WaylandDndDropOrigin::External,
+            ),
+            Vec::new(),
+        ));
         drop(browser.cancel_file_drop());
 
         assert!(browser.file_drop_prompt.is_none());

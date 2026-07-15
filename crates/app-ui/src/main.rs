@@ -27,6 +27,7 @@ mod animated_image_preview;
 mod app;
 mod appearance;
 mod audio_preview;
+mod breadcrumb_drop_target_bounds;
 mod column_entry_bounds;
 mod commands;
 mod config;

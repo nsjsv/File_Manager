@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use iced::Point;
+use iced::{Point, Rectangle};
 
 use super::SplitRegion;
 
@@ -84,6 +84,14 @@ impl FileDragState {
 pub(crate) enum FileDragTarget {
     Directory(PathBuf),
     SidebarBookmarkSlot(SidebarBookmarkDropSlot),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BreadcrumbDropTargetBounds {
+    pub(crate) pane_id: super::BrowserPaneId,
+    pub(crate) directory: PathBuf,
+    pub(crate) item_bounds: Rectangle,
+    pub(crate) viewport_bounds: Rectangle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

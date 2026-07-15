@@ -176,10 +176,14 @@ impl FileBrowser {
         self.pane_accepts_file_drag(pane_id).then_some(directory)
     }
 
-    pub(crate) fn file_drag_release_directory_at_position(
+    pub(crate) fn directory_drop_target_at_position(
         &self,
         position: iced::Point,
     ) -> Option<PathBuf> {
+        if let Some(directory) = self.breadcrumb_drop_directory_at_position(position) {
+            return Some(directory);
+        }
+
         for entry_bounds in self.file_entry_bounds.iter().rev() {
             if !entry_bounds.bounds.contains(position) {
                 continue;
@@ -192,6 +196,20 @@ impl FileBrowser {
         self.pane_view(pane_id)
             .filter(|pane| !pane.is_trash_view)
             .map(|pane| pane.current_dir.clone())
+    }
+
+    fn breadcrumb_drop_directory_at_position(&self, position: iced::Point) -> Option<PathBuf> {
+        self.breadcrumb_drop_target_bounds
+            .iter()
+            .filter(|target| {
+                target.item_bounds.contains(position)
+                    && target.viewport_bounds.contains(position)
+                    && self
+                        .pane_view(target.pane_id)
+                        .is_some_and(|pane| !pane.is_trash_view)
+            })
+            .max_by_key(|target| target.directory.components().count())
+            .map(|target| target.directory.clone())
     }
 
     fn file_drag_drop_directory_at_cursor(&self) -> Option<PathBuf> {
@@ -282,4 +300,153 @@ fn file_drag_directory_target_needs_fallback(sources: &[PathBuf], target: &Path)
             || target.starts_with(source)
             || source.parent().is_some_and(|parent| parent == target)
     })
+}
+
+#[cfg(test)]
+mod breadcrumb_drop_target_tests {
+    use iced::{keyboard, Point, Rectangle, Size};
+
+    use super::*;
+    use crate::config;
+    use crate::model::BreadcrumbDropTargetBounds;
+
+    fn rectangle(x: f32, y: f32, width: f32, height: f32) -> Rectangle {
+        Rectangle::new(Point::new(x, y), Size::new(width, height))
+    }
+
+    fn browser_with_breadcrumb_targets(targets: Vec<BreadcrumbDropTargetBounds>) -> FileBrowser {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.breadcrumb_drop_target_bounds = targets;
+        browser
+    }
+
+    fn breadcrumb_target(
+        pane_id: BrowserPaneId,
+        directory: impl Into<PathBuf>,
+        item_bounds: Rectangle,
+        viewport_bounds: Rectangle,
+    ) -> BreadcrumbDropTargetBounds {
+        BreadcrumbDropTargetBounds {
+            pane_id,
+            directory: directory.into(),
+            item_bounds,
+            viewport_bounds,
+        }
+    }
+
+    #[test]
+    fn breadcrumb_target_requires_item_and_viewport_hit() {
+        let (browser, _) = FileBrowser::new(config::default_user_config());
+        let pane_id = browser.active_pane_id();
+        let target = breadcrumb_target(
+            pane_id,
+            "/workspace/project",
+            rectangle(90.0, 10.0, 40.0, 24.0),
+            rectangle(0.0, 0.0, 100.0, 40.0),
+        );
+        let browser = browser_with_breadcrumb_targets(vec![target]);
+
+        assert_eq!(
+            browser.breadcrumb_drop_directory_at_position(Point::new(95.0, 20.0)),
+            Some(PathBuf::from("/workspace/project"))
+        );
+        assert_eq!(
+            browser.breadcrumb_drop_directory_at_position(Point::new(120.0, 20.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn deepest_overlapping_breadcrumb_target_wins() {
+        let (browser, _) = FileBrowser::new(config::default_user_config());
+        let pane_id = browser.active_pane_id();
+        let viewport_bounds = rectangle(0.0, 0.0, 200.0, 40.0);
+        let item_bounds = rectangle(20.0, 8.0, 100.0, 24.0);
+        let browser = browser_with_breadcrumb_targets(vec![
+            breadcrumb_target(pane_id, "/workspace", item_bounds, viewport_bounds),
+            breadcrumb_target(
+                pane_id,
+                "/workspace/project/src",
+                item_bounds,
+                viewport_bounds,
+            ),
+        ]);
+
+        assert_eq!(
+            browser.breadcrumb_drop_directory_at_position(Point::new(50.0, 20.0)),
+            Some(PathBuf::from("/workspace/project/src"))
+        );
+    }
+
+    #[test]
+    fn inactive_split_pane_breadcrumb_resolves_without_activation() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let original_pane_id = browser.active_pane_id();
+        browser.keyboard_modifiers = keyboard::Modifiers::SHIFT;
+        drop(browser.open_directory_from_middle_click(PathBuf::from("/workspace/other")));
+        let active_pane_id = browser.active_pane_id();
+        assert_ne!(active_pane_id, original_pane_id);
+
+        let target_directory = PathBuf::from("/workspace/project");
+        browser.breadcrumb_drop_target_bounds = vec![breadcrumb_target(
+            original_pane_id,
+            target_directory.clone(),
+            rectangle(20.0, 8.0, 100.0, 24.0),
+            rectangle(0.0, 0.0, 200.0, 40.0),
+        )];
+
+        assert_eq!(
+            browser.breadcrumb_drop_directory_at_position(Point::new(50.0, 20.0)),
+            Some(target_directory)
+        );
+        assert_eq!(browser.active_pane_id(), active_pane_id);
+    }
+
+    #[test]
+    fn trash_pane_rejects_breadcrumb_target() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.is_trash_view = true;
+        let pane_id = browser.active_pane_id();
+        browser.breadcrumb_drop_target_bounds = vec![breadcrumb_target(
+            pane_id,
+            "/workspace",
+            rectangle(20.0, 8.0, 100.0, 24.0),
+            rectangle(0.0, 0.0, 200.0, 40.0),
+        )];
+
+        assert_eq!(
+            browser.breadcrumb_drop_directory_at_position(Point::new(50.0, 20.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn clearing_breadcrumb_hover_only_clears_matching_drag_target() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let source = PathBuf::from("/workspace/report.txt");
+        let target = PathBuf::from("/workspace/project");
+        browser.file_drag = Some(FileDragState {
+            sources: vec![source.clone()],
+            pressed_path: source,
+            target: Some(FileDragTarget::Directory(target.clone())),
+            phase: FileDragPhase::Dragging,
+            native_dnd: FileDragNativeDndState::NotRequested,
+            column_directories_snapshot: Vec::new(),
+        });
+
+        drop(browser.handle_drop_target_hover_cleared(PathBuf::from("/workspace/other")));
+        assert!(matches!(
+            browser
+                .file_drag
+                .as_ref()
+                .and_then(|file_drag| file_drag.target.as_ref()),
+            Some(FileDragTarget::Directory(directory)) if directory == &target
+        ));
+
+        drop(browser.handle_drop_target_hover_cleared(target));
+        assert!(browser
+            .file_drag
+            .as_ref()
+            .is_some_and(|file_drag| file_drag.target.is_none()));
+    }
 }

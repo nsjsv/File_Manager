@@ -69,8 +69,7 @@ impl FileBrowser {
         self.drag_selection_anchor = None;
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         self.context_menu = Some(ContextMenuState::ListColumns(ListColumnMenuState {
             position: self.cursor_position,
         }));
@@ -305,10 +304,6 @@ mod tests {
             column_viewports: HashMap::<PathBuf, ColumnViewport>::new(),
             tabs: vec![tab.clone()],
             active_tab_id: tab.id,
-            path_input: tab.directory.to_string_lossy().into_owned(),
-            path_suggestions: Vec::new(),
-            path_suggestion_selection: None,
-            path_suggestion_generation: 0,
             directory_load_generation: 0,
             directory_load_cancel: None,
             back_stack: tab.back_stack.clone(),

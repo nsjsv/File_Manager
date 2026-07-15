@@ -205,7 +205,7 @@ impl FileBrowser {
             && self.transfer_conflict.is_none()
             && self.context_menu.is_none()
             && self.open_with.is_none()
-            && self.path_suggestions.is_empty()
+            && self.address_editing.is_none()
             && !self.operation_queue_interaction_is_open()
             && self.tab_drag.is_none()
             && self.sidebar_bookmark_drag.is_none()
@@ -505,10 +505,6 @@ mod tests {
             column_viewports: HashMap::<PathBuf, ColumnViewport>::new(),
             tabs: vec![tab.clone()],
             active_tab_id: tab.id,
-            path_input: tab.directory.to_string_lossy().into_owned(),
-            path_suggestions: Vec::new(),
-            path_suggestion_selection: None,
-            path_suggestion_generation: 0,
             directory_load_generation: 0,
             directory_load_cancel: None,
             back_stack: tab.back_stack.clone(),

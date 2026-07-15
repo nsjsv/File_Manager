@@ -357,6 +357,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SmoothScrollArea<'_> {
 pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
     match region {
         ScrollbarRegion::Sidebar => iced::widget::Id::new("sidebar"),
+        ScrollbarRegion::AddressBar(pane_id) => {
+            iced::widget::Id::from(format!("address-bar-{}", pane_id.key()))
+        }
         ScrollbarRegion::PaneList(pane_id) => {
             iced::widget::Id::from(format!("pane-list-{}", pane_id.key()))
         }
@@ -385,10 +388,12 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
 enum SmoothScrollAxis {
     Vertical,
     Horizontal,
+    HorizontalFromPrimaryWheel,
 }
 
 fn smooth_scroll_axis(region: &ScrollbarRegion) -> SmoothScrollAxis {
     match region {
+        ScrollbarRegion::AddressBar(_) => SmoothScrollAxis::HorizontalFromPrimaryWheel,
         ScrollbarRegion::ColumnBrowser(_) => SmoothScrollAxis::Horizontal,
         _ => SmoothScrollAxis::Vertical,
     }
@@ -402,6 +407,7 @@ fn wheel_delta_for_region(
     let delta = match smooth_scroll_axis(region) {
         SmoothScrollAxis::Vertical => vertical_wheel_delta(shift_pressed, delta),
         SmoothScrollAxis::Horizontal => horizontal_wheel_delta(shift_pressed, delta),
+        SmoothScrollAxis::HorizontalFromPrimaryWheel => horizontal_primary_wheel_delta(delta),
     };
 
     (!delta.delta.is_resting()).then_some(delta)
@@ -438,6 +444,25 @@ fn horizontal_wheel_delta(shift_pressed: bool, delta: mouse::ScrollDelta) -> Whe
         mouse::ScrollDelta::Pixels { x, y } => WheelScrollDelta {
             delta: SmoothScrollDelta {
                 x: -if shift_pressed { y } else { x },
+                y: 0.0,
+            },
+            mode: WheelScrollMode::Direct,
+        },
+    }
+}
+
+fn horizontal_primary_wheel_delta(delta: mouse::ScrollDelta) -> WheelScrollDelta {
+    match delta {
+        mouse::ScrollDelta::Lines { x, y } => WheelScrollDelta {
+            delta: SmoothScrollDelta {
+                x: -if x.abs() > f32::EPSILON { x } else { y } * MOS_SCROLL_STEP,
+                y: 0.0,
+            },
+            mode: WheelScrollMode::MosAnimated,
+        },
+        mouse::ScrollDelta::Pixels { x, y } => WheelScrollDelta {
+            delta: SmoothScrollDelta {
+                x: -if x.abs() > f32::EPSILON { x } else { y },
                 y: 0.0,
             },
             mode: WheelScrollMode::Direct,
@@ -524,6 +549,26 @@ mod tests {
         );
 
         assert_eq!(delta, None);
+    }
+
+    #[test]
+    fn address_bar_uses_primary_wheel_for_horizontal_scroll() {
+        let delta = wheel_delta_for_region(
+            &ScrollbarRegion::AddressBar(BrowserPaneId::PRIMARY),
+            false,
+            mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 },
+        );
+
+        assert_eq!(
+            delta,
+            Some(WheelScrollDelta {
+                delta: SmoothScrollDelta {
+                    x: MOS_SCROLL_STEP * 2.0,
+                    y: 0.0,
+                },
+                mode: WheelScrollMode::MosAnimated,
+            })
+        );
     }
 
     #[test]

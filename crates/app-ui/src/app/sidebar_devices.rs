@@ -103,8 +103,7 @@ impl FileBrowser {
         self.selection_marquee = None;
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
-        self.path_suggestions.clear();
-        self.path_suggestion_selection = None;
+        let _ = self.cancel_address_editing();
         self.context_menu = Some(ContextMenuState::SidebarDevice(
             SidebarDeviceContextMenuState {
                 device,

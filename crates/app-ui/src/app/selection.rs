@@ -5,7 +5,6 @@ use std::time::Instant;
 use file_core::FileKind;
 use iced::Task;
 
-use super::paths;
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
 
 use crate::model::{
@@ -181,6 +180,7 @@ impl FileBrowser {
         if self.cursor_paste_directory.as_ref() == Some(&directory) {
             self.cursor_paste_directory = None;
         }
+        self.clear_file_drag_target_if_matching(&directory);
         Task::none()
     }
 
@@ -436,7 +436,6 @@ impl FileBrowser {
         self.selected = None;
         self.selection_anchor = None;
         self.rename_input.clear();
-        self.sync_path_input_to_current_directory();
     }
 
     pub(super) fn update_selection_marquee(&mut self, position: iced::Point) -> bool {
@@ -488,11 +487,9 @@ impl FileBrowser {
         self.selected_paths = next_selection;
         self.selected = self.last_visible_selected_path();
         if let Some(selected) = self.selected.clone() {
-            self.sync_path_input_to_selected_directory(&selected);
             self.update_rename_input(&selected);
         } else {
             self.rename_input.clear();
-            self.sync_path_input_to_current_directory();
         }
         Task::none()
     }
@@ -643,7 +640,6 @@ impl FileBrowser {
                 self.focus_path(selected);
             } else {
                 self.rename_input.clear();
-                self.sync_path_input_to_current_directory();
             }
         } else {
             self.selected_paths.insert(path.clone());
@@ -739,24 +735,10 @@ impl FileBrowser {
 
     fn focus_path(&mut self, path: PathBuf) {
         self.pending_keyboard_column_focus = None;
-        self.sync_path_input_to_selected_directory(&path);
         self.update_rename_input(&path);
         self.selected = Some(path);
         self.clear_preview();
         self.context_menu = None;
-    }
-
-    fn sync_path_input_to_selected_directory(&mut self, path: &Path) {
-        let directory = if self.entry_kind(path) == Some(FileKind::Directory) {
-            path.to_path_buf()
-        } else {
-            self.entry_parent_directory(path)
-        };
-        self.path_input = paths::path_text(&directory);
-    }
-
-    fn sync_path_input_to_current_directory(&mut self) {
-        self.path_input = paths::path_text(&self.current_dir);
     }
 
     fn update_rename_input(&mut self, path: &Path) {
