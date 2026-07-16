@@ -69,6 +69,7 @@ pub(crate) use search::{directory_fallback_search_command, search_command};
 mod search_service;
 mod search_service_endpoint;
 mod search_service_recovery;
+mod search_service_systemd;
 pub(crate) use search_service::{ensure_search_service_command, search_service_status_command};
 pub(crate) use search_service_recovery::search_service_recovery_command;
 mod sidebar_devices;

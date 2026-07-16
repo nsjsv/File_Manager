@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use file_search::{default_socket_path, SearchServiceStatus};
+use file_search::{SearchRuntimeIdentity, SearchServiceStatus};
 use iced::Task;
 
 use super::search_service::{
@@ -26,8 +26,10 @@ pub(crate) fn search_service_recovery_command(
 async fn recover_search_service(
     action: SearchServiceRecoveryAction,
 ) -> Result<SearchServiceStatus, String> {
-    let unit_controller = SearchUnitController::system();
-    recover_search_service_with(&unit_controller, &default_socket_path(), action).await
+    let runtime_identity =
+        SearchRuntimeIdentity::from_environment().map_err(|error| error.to_string())?;
+    let unit_controller = SearchUnitController::system(runtime_identity);
+    recover_search_service_with(&unit_controller, &runtime_identity.socket_path(), action).await
 }
 
 pub(super) async fn recover_search_service_with(

@@ -265,11 +265,9 @@ enum SearchServiceBackend {
     Runtime(Arc<dyn SearchSocketService>),
 }
 
-pub fn default_socket_path() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("file-manager-search.sock")
+pub fn default_socket_path() -> SearchResult<PathBuf> {
+    crate::runtime_identity::SearchRuntimeIdentity::from_environment()
+        .map(crate::runtime_identity::SearchRuntimeIdentity::socket_path)
 }
 
 pub async fn search_via_socket(

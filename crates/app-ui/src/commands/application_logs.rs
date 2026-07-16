@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, UNIX_EPOCH};
 
+use file_search::SearchRuntimeIdentity;
 use iced::Task;
 use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -11,7 +12,7 @@ use tokio::process::Command;
 use crate::model::{
     bounded_application_log_message, ApplicationLogEntry, ApplicationLogLevel,
     ApplicationLogRequest, ApplicationLogSource, Message, APPLICATION_LOG_ENTRY_LIMIT,
-    APP_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_UNIT,
+    APP_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_IDENTIFIER,
 };
 
 const APPLICATION_LOG_QUERY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -28,10 +29,13 @@ pub(crate) fn application_logs_command(request: ApplicationLogRequest) -> Task<M
 async fn read_application_logs(
     request: ApplicationLogRequest,
 ) -> Result<Vec<ApplicationLogEntry>, String> {
+    let runtime_identity =
+        SearchRuntimeIdentity::from_environment().map_err(|error| error.to_string())?;
     read_application_logs_with(
         Path::new("journalctl"),
         request.threshold,
         APPLICATION_LOG_QUERY_TIMEOUT,
+        runtime_identity,
     )
     .await
 }
@@ -40,10 +44,11 @@ async fn read_application_logs_with(
     journalctl_executable: &Path,
     threshold: ApplicationLogLevel,
     query_timeout: Duration,
+    runtime_identity: SearchRuntimeIdentity,
 ) -> Result<Vec<ApplicationLogEntry>, String> {
     let mut command = Command::new(journalctl_executable);
     command
-        .args(journalctl_arguments(threshold))
+        .args(journalctl_arguments(threshold, runtime_identity))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -88,7 +93,7 @@ async fn read_application_logs_with(
 
     let stdout = String::from_utf8(stdout)
         .map_err(|error| format!("journalctl returned non-UTF-8 output: {error}"))?;
-    parse_journal_output(&stdout)
+    parse_journal_output(&stdout, runtime_identity)
 }
 
 async fn read_bounded_stream(
@@ -120,7 +125,10 @@ async fn read_bounded_stream(
     Ok(collected)
 }
 
-fn journalctl_arguments(threshold: ApplicationLogLevel) -> Vec<OsString> {
+fn journalctl_arguments(
+    threshold: ApplicationLogLevel,
+    runtime_identity: SearchRuntimeIdentity,
+) -> Vec<OsString> {
     [
         "--user".to_owned(),
         "--boot=0".to_owned(),
@@ -136,14 +144,17 @@ fn journalctl_arguments(threshold: ApplicationLogLevel) -> Vec<OsString> {
         format!("SYSLOG_IDENTIFIER={APP_JOURNAL_IDENTIFIER}"),
         "+".to_owned(),
         format!("SYSLOG_IDENTIFIER={SEARCH_JOURNAL_IDENTIFIER}"),
-        format!("_SYSTEMD_USER_UNIT={SEARCH_JOURNAL_UNIT}"),
+        format!("_SYSTEMD_USER_UNIT={}", runtime_identity.systemd_unit()),
     ]
     .into_iter()
     .map(OsString::from)
     .collect()
 }
 
-fn parse_journal_output(stdout: &str) -> Result<Vec<ApplicationLogEntry>, String> {
+fn parse_journal_output(
+    stdout: &str,
+    runtime_identity: SearchRuntimeIdentity,
+) -> Result<Vec<ApplicationLogEntry>, String> {
     let mut entries = Vec::new();
     for (line_index, journal_line) in stdout.lines().enumerate() {
         if journal_line.trim().is_empty() {
@@ -155,7 +166,7 @@ fn parse_journal_output(stdout: &str) -> Result<Vec<ApplicationLogEntry>, String
             .as_object()
             .ok_or_else(|| format!("journal line {} must be a JSON object", line_index + 1))?;
         entries.push(
-            parse_journal_fields(journal_fields)
+            parse_journal_fields(journal_fields, runtime_identity)
                 .map_err(|error| format!("journal line {} is invalid: {error}", line_index + 1))?,
         );
         if entries.len() == APPLICATION_LOG_ENTRY_LIMIT {
@@ -167,6 +178,7 @@ fn parse_journal_output(stdout: &str) -> Result<Vec<ApplicationLogEntry>, String
 
 fn parse_journal_fields(
     journal_fields: &Map<String, Value>,
+    runtime_identity: SearchRuntimeIdentity,
 ) -> Result<ApplicationLogEntry, String> {
     let priority = required_journal_string(journal_fields, "PRIORITY")?
         .parse::<u8>()
@@ -187,17 +199,18 @@ fn parse_journal_fields(
         .ok_or_else(|| "__REALTIME_TIMESTAMP is outside SystemTime range".to_owned())?;
 
     let identifier = required_journal_string(journal_fields, "SYSLOG_IDENTIFIER")?;
+    let trusted_search_unit = runtime_identity.systemd_unit();
     let source = match identifier {
         APP_JOURNAL_IDENTIFIER => ApplicationLogSource::App,
         SEARCH_JOURNAL_IDENTIFIER
             if optional_journal_string(journal_fields, "_SYSTEMD_USER_UNIT")?
-                == Some(SEARCH_JOURNAL_UNIT) =>
+                == Some(trusted_search_unit) =>
         {
             ApplicationLogSource::SearchService
         }
         SEARCH_JOURNAL_IDENTIFIER => {
             return Err(format!(
-                "{SEARCH_JOURNAL_IDENTIFIER} is not owned by {SEARCH_JOURNAL_UNIT}"
+                "{SEARCH_JOURNAL_IDENTIFIER} is not owned by {trusted_search_unit}"
             ));
         }
         _ => return Err(format!("unknown SYSLOG_IDENTIFIER={identifier}")),
@@ -279,20 +292,22 @@ mod tests {
 
     #[test]
     fn journal_json_maps_priority_timestamp_source_message_and_error() {
+        let runtime_identity = SearchRuntimeIdentity::Release;
+        let trusted_search_unit = runtime_identity.systemd_unit();
         let stdout = [
             journal_line("3", APP_JOURNAL_IDENTIFIER, "app failed", None),
             journal_line(
                 "4",
                 SEARCH_JOURNAL_IDENTIFIER,
                 "watch degraded",
-                Some(SEARCH_JOURNAL_UNIT),
+                Some(trusted_search_unit),
             ),
             journal_line("6", APP_JOURNAL_IDENTIFIER, "app ready", None),
             journal_line(
                 "7",
                 SEARCH_JOURNAL_IDENTIFIER,
                 "batch complete",
-                Some(SEARCH_JOURNAL_UNIT),
+                Some(trusted_search_unit),
             ),
         ]
         .join("\n");
@@ -302,7 +317,7 @@ mod tests {
         warning_fields[JOURNAL_ERROR_FIELD] = Value::String("watch backend unavailable".to_owned());
         lines[1] = warning_fields.to_string();
 
-        let entries = parse_journal_output(&lines.join("\n")).unwrap();
+        let entries = parse_journal_output(&lines.join("\n"), runtime_identity).unwrap();
 
         assert_eq!(
             entries.iter().map(|entry| entry.level).collect::<Vec<_>>(),
@@ -349,8 +364,23 @@ mod tests {
             "[]".to_owned(),
             "not-json".to_owned(),
         ] {
-            assert!(parse_journal_output(&journal_line).is_err());
+            assert!(parse_journal_output(&journal_line, SearchRuntimeIdentity::Release).is_err());
         }
+    }
+
+    #[test]
+    fn daemon_log_source_follows_the_configured_runtime_identity() {
+        let development_line = journal_line(
+            "6",
+            SEARCH_JOURNAL_IDENTIFIER,
+            "development daemon ready",
+            Some(SearchRuntimeIdentity::Development.systemd_unit()),
+        );
+
+        assert!(
+            parse_journal_output(&development_line, SearchRuntimeIdentity::Development).is_ok()
+        );
+        assert!(parse_journal_output(&development_line, SearchRuntimeIdentity::Release).is_err());
     }
 
     #[test]
@@ -361,14 +391,17 @@ mod tests {
             .join("\n");
 
         assert_eq!(
-            parse_journal_output(&stdout).unwrap().len(),
+            parse_journal_output(&stdout, SearchRuntimeIdentity::Release)
+                .unwrap()
+                .len(),
             APPLICATION_LOG_ENTRY_LIMIT
         );
     }
 
     #[test]
     fn journalctl_arguments_are_fixed_and_threshold_bounded() {
-        let arguments = journalctl_arguments(ApplicationLogLevel::Info);
+        let runtime_identity = SearchRuntimeIdentity::Development;
+        let arguments = journalctl_arguments(ApplicationLogLevel::Info, runtime_identity);
         let arguments = arguments
             .iter()
             .map(|argument| argument.to_string_lossy())
@@ -383,7 +416,8 @@ mod tests {
         assert!(arguments.contains(&"--priority=0..6".into()));
         assert!(arguments.contains(&format!("SYSLOG_IDENTIFIER={APP_JOURNAL_IDENTIFIER}").into()));
         assert!(arguments.contains(&"+".into()));
-        assert!(arguments.contains(&format!("_SYSTEMD_USER_UNIT={SEARCH_JOURNAL_UNIT}").into()));
+        assert!(arguments
+            .contains(&format!("_SYSTEMD_USER_UNIT={}", runtime_identity.systemd_unit()).into()));
     }
 
     #[tokio::test]
@@ -418,6 +452,7 @@ mod tests {
             &failing_journalctl,
             ApplicationLogLevel::Info,
             Duration::from_secs(1),
+            SearchRuntimeIdentity::Release,
         )
         .await
         .unwrap_err();
@@ -425,6 +460,7 @@ mod tests {
             &slow_journalctl,
             ApplicationLogLevel::Info,
             Duration::from_millis(20),
+            SearchRuntimeIdentity::Release,
         )
         .await
         .unwrap_err();
@@ -432,6 +468,7 @@ mod tests {
             &binary_journalctl,
             ApplicationLogLevel::Info,
             Duration::from_secs(1),
+            SearchRuntimeIdentity::Release,
         )
         .await
         .unwrap_err();
@@ -439,6 +476,7 @@ mod tests {
             &temporary_directory.path().join("missing-journalctl"),
             ApplicationLogLevel::Info,
             Duration::from_secs(1),
+            SearchRuntimeIdentity::Release,
         )
         .await
         .unwrap_err();

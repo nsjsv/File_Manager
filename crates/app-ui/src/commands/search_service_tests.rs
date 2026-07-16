@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use file_search::{
     daemon_build_id, read_service_request, write_service_event, IndexedQueryAvailability,
-    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus,
-    PROTOCOL_VERSION,
+    SearchRuntimeIdentity, SearchServiceEvent, SearchServicePhase, SearchServiceRequest,
+    SearchServiceStatus, PROTOCOL_VERSION,
 };
 use tempfile::tempdir;
 use tokio::net::UnixListener;
@@ -18,7 +18,7 @@ use super::{
 use crate::model::SearchServiceRecoveryAction;
 
 fn valid_snapshot_text() -> &'static str {
-    "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\n"
+    "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\nFragmentPath=/home/test/.config/systemd/user/file-manager-search.service\nDropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/override.conf\nExecStart={ path=/home/test/.local/share/file-manager-dev/file-searchd ; argv[]=/home/test/.local/share/file-manager-dev/file-searchd ; }\n"
 }
 
 async fn create_valid_search_cgroup(cgroup_root: &Path) -> PathBuf {
@@ -96,7 +96,8 @@ fn spawn_compatible_endpoint(
 
 #[test]
 fn unit_snapshot_parses_properties_without_order_dependency() {
-    let snapshot = SearchUnitSnapshot::parse(valid_snapshot_text()).unwrap();
+    let snapshot =
+        SearchUnitSnapshot::parse(valid_snapshot_text(), SearchRuntimeIdentity::Release).unwrap();
 
     assert_eq!(snapshot.active_state, UnitActiveState::Active);
     assert_eq!(snapshot.sub_state, "running");
@@ -111,6 +112,31 @@ fn unit_snapshot_parses_properties_without_order_dependency() {
     assert_eq!(snapshot.service_result, "success");
     assert_eq!(snapshot.exec_main_status, 0);
     assert_eq!(snapshot.restart_count, 0);
+    assert!(snapshot
+        .description()
+        .contains("FragmentPath=/home/test/.config/systemd/user/file-manager-search.service"));
+    assert!(snapshot
+        .description()
+        .contains("ExecStartPath=/home/test/.local/share/file-manager-dev/file-searchd"));
+    assert!(snapshot.description().contains("recovery action:"));
+}
+
+#[test]
+fn unit_snapshot_reports_only_the_exec_start_executable_path() {
+    let snapshot_text = valid_snapshot_text().replace(
+        "argv[]=/home/test/.local/share/file-manager-dev/file-searchd ;",
+        "argv[]=/home/test/.local/share/file-manager-dev/file-searchd --api-key very-secret ;",
+    );
+
+    let snapshot =
+        SearchUnitSnapshot::parse(&snapshot_text, SearchRuntimeIdentity::Release).unwrap();
+    let description = snapshot.description();
+
+    assert!(
+        description.contains("ExecStartPath=/home/test/.local/share/file-manager-dev/file-searchd")
+    );
+    assert!(!description.contains("--api-key"));
+    assert!(!description.contains("very-secret"));
 }
 
 #[test]
@@ -128,7 +154,8 @@ fn unit_snapshot_rejects_failed_or_restarted_service_as_ready() {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let snapshot = SearchUnitSnapshot::parse(&snapshot_text).unwrap();
+        let snapshot =
+            SearchUnitSnapshot::parse(&snapshot_text, SearchRuntimeIdentity::Release).unwrap();
 
         assert!(snapshot.ready_main_pid().is_err());
     }
@@ -147,6 +174,9 @@ fn unit_snapshot_rejects_missing_and_invalid_properties() {
         "Result",
         "ExecMainStatus",
         "NRestarts",
+        "FragmentPath",
+        "DropInPaths",
+        "ExecStart",
     ] {
         let snapshot_without_property = valid_snapshot_text()
             .lines()
@@ -154,7 +184,8 @@ fn unit_snapshot_rejects_missing_and_invalid_properties() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            SearchUnitSnapshot::parse(&snapshot_without_property).is_err(),
+            SearchUnitSnapshot::parse(&snapshot_without_property, SearchRuntimeIdentity::Release)
+                .is_err(),
             "missing {property_name} must fail closed"
         );
     }
@@ -185,10 +216,58 @@ fn unit_snapshot_rejects_missing_and_invalid_properties() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            SearchUnitSnapshot::parse(&invalid_snapshot).is_err(),
+            SearchUnitSnapshot::parse(&invalid_snapshot, SearchRuntimeIdentity::Release).is_err(),
             "{invalid_property} must fail closed"
         );
     }
+
+    let control_character_snapshot = valid_snapshot_text().replace(
+        "DropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/override.conf",
+        "DropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/\toverride.conf",
+    );
+    assert!(
+        SearchUnitSnapshot::parse(&control_character_snapshot, SearchRuntimeIdentity::Release)
+            .is_err()
+    );
+
+    let oversized_exec_start = format!(
+        "{{ path=/tmp/file-searchd ; argv[]={}; }}",
+        "x".repeat(20_000)
+    );
+    let oversized_snapshot = valid_snapshot_text().replace(
+        "{ path=/home/test/.local/share/file-manager-dev/file-searchd ; argv[]=/home/test/.local/share/file-manager-dev/file-searchd ; }",
+        &oversized_exec_start,
+    );
+    assert!(
+        SearchUnitSnapshot::parse(&oversized_snapshot, SearchRuntimeIdentity::Release).is_err()
+    );
+}
+
+#[tokio::test]
+async fn systemctl_output_is_drained_with_a_hard_size_limit() {
+    let temporary_directory = tempdir().unwrap();
+    let systemctl_path = temporary_directory.path().join("oversized-systemctl");
+    tokio::fs::write(
+        &systemctl_path,
+        "#!/usr/bin/env bash\nprintf '%070000d' 0\n",
+    )
+    .await
+    .unwrap();
+    let mut permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&systemctl_path, permissions).unwrap();
+    let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
+        systemctl_executable: systemctl_path,
+        cgroup_root: temporary_directory.path().to_path_buf(),
+    };
+
+    let error = unit_controller
+        .execute(SearchUnitAction::Show)
+        .await
+        .expect_err("oversized stdout must be rejected");
+
+    assert!(error.contains("stdout exceeded"));
 }
 
 #[test]
@@ -199,7 +278,8 @@ fn inactive_snapshot_allows_an_empty_control_group_for_recovery() {
         .replace("MainPID=42", "MainPID=0")
         .replace("ControlGroup=/user.slice/search.service", "ControlGroup=");
 
-    let snapshot = SearchUnitSnapshot::parse(&snapshot_text).unwrap();
+    let snapshot =
+        SearchUnitSnapshot::parse(&snapshot_text, SearchRuntimeIdentity::Release).unwrap();
 
     assert_eq!(snapshot.control_group, None);
     assert!(!snapshot.may_have_processes());
@@ -208,42 +288,33 @@ fn inactive_snapshot_allows_an_empty_control_group_for_recovery() {
 
 #[test]
 fn unit_actions_use_user_systemd_without_a_shell() {
+    let release_identity = SearchRuntimeIdentity::Release;
+    let development_identity = SearchRuntimeIdentity::Development;
+    let show_arguments = SearchUnitAction::Show.arguments(release_identity);
+    assert!(show_arguments.contains(&"--property=FragmentPath".into()));
+    assert!(show_arguments.contains(&"--property=DropInPaths".into()));
+    assert!(show_arguments.contains(&"--property=ExecStart".into()));
     assert_eq!(
-        SearchUnitAction::Show.arguments(),
-        &[
-            "--user",
-            "--no-pager",
-            "--property=ActiveState",
-            "--property=SubState",
-            "--property=MainPID",
-            "--property=ControlGroup",
-            "--property=MemoryHigh",
-            "--property=MemoryMax",
-            "--property=MemorySwapMax",
-            "--property=Result",
-            "--property=ExecMainStatus",
-            "--property=NRestarts",
-            "show",
-            "file-manager-search.service",
-        ]
+        show_arguments.last().unwrap(),
+        release_identity.systemd_unit()
     );
     assert_eq!(
-        SearchUnitAction::DaemonReload.arguments(),
-        &["--user", "--no-pager", "daemon-reload"]
+        SearchUnitAction::DaemonReload.arguments(release_identity),
+        ["--user", "--no-pager", "daemon-reload"]
     );
     assert_eq!(
-        SearchUnitAction::Start.arguments(),
-        &[
+        SearchUnitAction::Start.arguments(development_identity),
+        [
             "--user",
             "--no-pager",
             "--no-block",
             "start",
-            "file-manager-search.service"
+            "file-manager-search-dev.service"
         ]
     );
     assert_eq!(
-        SearchUnitAction::Restart.arguments(),
-        &[
+        SearchUnitAction::Restart.arguments(release_identity),
+        [
             "--user",
             "--no-pager",
             "--no-block",
@@ -252,8 +323,8 @@ fn unit_actions_use_user_systemd_without_a_shell() {
         ]
     );
     assert_eq!(
-        SearchUnitAction::KillControlGroup.arguments(),
-        &[
+        SearchUnitAction::KillControlGroup.arguments(release_identity),
+        [
             "--user",
             "--no-pager",
             "--signal=SIGKILL",
@@ -263,8 +334,8 @@ fn unit_actions_use_user_systemd_without_a_shell() {
         ]
     );
     assert_eq!(
-        SearchUnitAction::ResetFailed.arguments(),
-        &[
+        SearchUnitAction::ResetFailed.arguments(release_identity),
+        [
             "--user",
             "--no-pager",
             "reset-failed",
@@ -278,10 +349,12 @@ async fn effective_cgroup_accepts_only_safe_kernel_rounding() {
     let temporary_directory = tempdir().unwrap();
     let cgroup_directory = create_valid_search_cgroup(temporary_directory.path()).await;
     let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable: PathBuf::from("unused-systemctl"),
         cgroup_root: temporary_directory.path().to_path_buf(),
     };
-    let snapshot = SearchUnitSnapshot::parse(valid_snapshot_text()).unwrap();
+    let snapshot =
+        SearchUnitSnapshot::parse(valid_snapshot_text(), SearchRuntimeIdentity::Release).unwrap();
 
     assert_eq!(
         unit_controller.validated_main_pid(&snapshot).await.unwrap(),
@@ -510,6 +583,7 @@ async fn incompatible_endpoint_is_restarted_only_once_before_compatibility() {
         }
     });
     let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable: systemctl_path,
         cgroup_root,
     };
@@ -563,6 +637,7 @@ async fn graceful_recovery_retries_a_transient_disconnect_without_sending_sigkil
             .unwrap();
     });
     let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable,
         cgroup_root,
     };
@@ -617,6 +692,7 @@ async fn force_recovery_kills_the_whole_control_group_before_restart() {
     };
     let endpoint_server = spawn_compatible_endpoint(listener, expected_status.clone());
     let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable,
         cgroup_root,
     };
@@ -664,6 +740,7 @@ async fn force_recovery_stops_after_a_systemctl_kill_failure() {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&systemctl_path, permissions).unwrap();
     let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable: systemctl_path,
         cgroup_root: temporary_directory.path().join("unused-cgroup"),
     };
@@ -683,7 +760,7 @@ async fn force_recovery_stops_after_a_systemctl_kill_failure() {
     assert_eq!(
         systemctl_log.lines().collect::<Vec<_>>(),
         [
-            "--user --no-pager --property=ActiveState --property=SubState --property=MainPID --property=ControlGroup --property=MemoryHigh --property=MemoryMax --property=MemorySwapMax --property=Result --property=ExecMainStatus --property=NRestarts show file-manager-search.service",
+            "--user --no-pager --property=ActiveState --property=SubState --property=MainPID --property=ControlGroup --property=MemoryHigh --property=MemoryMax --property=MemorySwapMax --property=Result --property=ExecMainStatus --property=NRestarts --property=FragmentPath --property=DropInPaths --property=ExecStart show file-manager-search.service",
             "--user --no-pager --signal=SIGKILL --kill-whom=all kill file-manager-search.service",
         ]
     );
@@ -727,6 +804,7 @@ async fn recovery_immediately_reports_an_incompatible_replacement_endpoint() {
         .unwrap();
     });
     let unit_controller = SearchUnitController {
+        runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable,
         cgroup_root,
     };

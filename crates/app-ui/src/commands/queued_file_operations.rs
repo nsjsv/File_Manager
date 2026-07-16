@@ -19,7 +19,10 @@ use iced::futures::SinkExt;
 use iced::Subscription;
 
 use crate::model::Message;
-use crate::operation_history::{CompletedTransfer, FileOperationOutcome};
+use crate::operation_history::{
+    CompletedTransfer, FileOperationCompletion, FileOperationHistoryEligibility,
+    FileOperationOutcome,
+};
 use crate::operation_queue::{
     FileOperationProgressUpdate, QueuedFileOperation, QueuedTransfer, RunningFileOperation,
     NEW_DIRECTORY_NAME, NEW_FILE_NAME,
@@ -72,8 +75,8 @@ async fn run_queued_file_operation(
     controls: FileOperationControls,
     task_id: u64,
     output: &mut IcedSender<Message>,
-) -> Result<FileOperationOutcome, String> {
-    match operation {
+) -> FileOperationCompletion {
+    let result = match operation {
         QueuedFileOperation::Rename { path, new_name } => {
             run_queued_rename(path, new_name, controls, task_id, output).await
         }
@@ -84,17 +87,21 @@ async fn run_queued_file_operation(
                 FileOperationProgressUpdate::Indeterminate,
             )
             .await;
-            let outcome = run_queued_batch_rename(items, controls).await?;
-            send_file_operation_progress(
-                output,
-                task_id,
-                FileOperationProgressUpdate::Items {
-                    completed: 1,
-                    total: 1,
-                },
-            )
-            .await;
-            Ok(outcome)
+            match run_queued_batch_rename(items, controls).await {
+                Ok(outcome) => {
+                    send_file_operation_progress(
+                        output,
+                        task_id,
+                        FileOperationProgressUpdate::Items {
+                            completed: 1,
+                            total: 1,
+                        },
+                    )
+                    .await;
+                    Ok(outcome)
+                }
+                Err(error) => Err(error),
+            }
         }
         QueuedFileOperation::CreateDirectory { parent } => {
             run_queued_create_directory(parent, controls, task_id, output).await
@@ -119,29 +126,33 @@ async fn run_queued_file_operation(
             transfers,
             verification,
         } => {
-            run_queued_transfers(
-                transfers,
-                controls,
-                task_id,
-                output,
-                QueuedTransferMode::Copy,
-                verification,
-            )
-            .await
+            return {
+                run_queued_transfers(
+                    transfers,
+                    controls,
+                    task_id,
+                    output,
+                    QueuedTransferMode::Copy,
+                    verification,
+                )
+                .await
+            }
         }
         QueuedFileOperation::Move {
             transfers,
             verification,
         } => {
-            run_queued_transfers(
-                transfers,
-                controls,
-                task_id,
-                output,
-                QueuedTransferMode::Move,
-                verification,
-            )
-            .await
+            return {
+                run_queued_transfers(
+                    transfers,
+                    controls,
+                    task_id,
+                    output,
+                    QueuedTransferMode::Move,
+                    verification,
+                )
+                .await
+            }
         }
         QueuedFileOperation::CreateArchive {
             sources,
@@ -165,7 +176,9 @@ async fn run_queued_file_operation(
         QueuedFileOperation::ExtractArchive { request } => {
             run_queued_extract_archive(request, controls, task_id, output).await
         }
-    }
+    };
+
+    FileOperationCompletion::from_result(result)
 }
 
 async fn run_queued_extract_archive(
@@ -498,12 +511,16 @@ async fn run_queued_transfers(
     output: &mut IcedSender<Message>,
     mode: QueuedTransferMode,
     verification: FileOperationVerification,
-) -> Result<FileOperationOutcome, String> {
-    let can_record_history = transfers.iter().all(history_safe_transfer);
+) -> FileOperationCompletion {
+    let history_eligibility = if transfers.iter().all(history_safe_transfer) {
+        FileOperationHistoryEligibility::Replayable
+    } else {
+        FileOperationHistoryEligibility::NotReplayable
+    };
     let total = transfers.len();
     let mut completed = Vec::new();
     for (index, transfer) in transfers.into_iter().enumerate() {
-        if let Some(completed_transfer) = run_queued_transfer(
+        let transfer_outcome = run_queued_transfer(
             transfer,
             controls.clone(),
             task_id,
@@ -513,9 +530,18 @@ async fn run_queued_transfers(
             index,
             total,
         )
-        .await?
-        {
-            completed.push(completed_transfer);
+        .await;
+        match transfer_outcome {
+            Ok(Some(completed_transfer)) => completed.push(completed_transfer),
+            Ok(None) => {}
+            Err(error) => {
+                return match mode {
+                    QueuedTransferMode::Copy => FileOperationCompletion::from_result(Err(error)),
+                    QueuedTransferMode::Move => {
+                        FileOperationCompletion::failed_after_completed_moves(error, completed)
+                    }
+                };
+            }
         }
         send_file_operation_progress(
             output,
@@ -528,17 +554,23 @@ async fn run_queued_transfers(
         .await;
     }
 
-    if !can_record_history {
-        return Ok(FileOperationOutcome::NoHistory);
-    }
-
     match mode {
-        QueuedTransferMode::Copy => Ok(FileOperationOutcome::Copy {
-            transfers: completed,
-        }),
-        QueuedTransferMode::Move => Ok(FileOperationOutcome::Move {
-            transfers: completed,
-        }),
+        QueuedTransferMode::Copy
+            if history_eligibility == FileOperationHistoryEligibility::Replayable =>
+        {
+            FileOperationCompletion::Succeeded(FileOperationOutcome::Copy {
+                transfers: completed,
+            })
+        }
+        QueuedTransferMode::Copy => {
+            FileOperationCompletion::Succeeded(FileOperationOutcome::NoHistory)
+        }
+        QueuedTransferMode::Move => {
+            FileOperationCompletion::Succeeded(FileOperationOutcome::Move {
+                transfers: completed,
+                history_eligibility,
+            })
+        }
     }
 }
 

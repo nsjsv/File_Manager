@@ -4,6 +4,10 @@ use std::path::PathBuf;
 use file_core::{DirectoryEntry, TrashEntry};
 use tokio_util::sync::CancellationToken;
 
+use crate::operation_history::{
+    completed_migrations_cross_directory_tree_boundary, completed_migrations_touch_directory_tree,
+    path_after_completed_migrations, CompletedPathMigration,
+};
 use crate::thumbnail_cache::ColumnViewport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -172,6 +176,64 @@ impl BrowserPane {
         tab.back_stack = self.back_stack.clone();
         tab.forward_stack = self.forward_stack.clone();
     }
+
+    pub(crate) fn migrate_completed_paths(&mut self, migrations: &[CompletedPathMigration]) {
+        let original_directory = self.current_dir.clone();
+        let migrated_directory = path_after_completed_migrations(&original_directory, migrations);
+        let directory_was_migrated = migrated_directory != original_directory;
+        let directory_tree_was_touched =
+            completed_migrations_touch_directory_tree(&original_directory, migrations);
+        let migration_crossed_directory_tree =
+            completed_migrations_cross_directory_tree_boundary(&original_directory, migrations);
+
+        self.current_dir = migrated_directory;
+        if directory_was_migrated || directory_tree_was_touched {
+            self.cancel_current_directory_load();
+        }
+        if !directory_was_migrated && migration_crossed_directory_tree {
+            self.invalidate_cached_directory_tree();
+        } else {
+            self.migrate_cached_directory_tree_paths(migrations);
+        }
+        migrate_path_list(&mut self.back_stack, migrations);
+        migrate_path_list(&mut self.forward_stack, migrations);
+        for tab in &mut self.tabs {
+            tab.migrate_completed_paths(migrations);
+        }
+    }
+
+    fn cancel_current_directory_load(&mut self) {
+        if let Some(cancellation) = self.directory_load_cancel.take() {
+            cancellation.cancel();
+        }
+        self.directory_load_generation = self.directory_load_generation.saturating_add(1);
+        self.is_loading = false;
+    }
+
+    fn migrate_cached_directory_tree_paths(&mut self, migrations: &[CompletedPathMigration]) {
+        migrate_directory_entries(&mut self.entries, migrations);
+        for placeholder in &mut self.directory_loading_placeholder_entries {
+            migrate_directory_entry(&mut placeholder.entry, migrations);
+        }
+        migrate_optional_path(&mut self.selected, migrations);
+        migrate_path_set(&mut self.selected_paths, migrations);
+        migrate_optional_path(&mut self.selection_anchor, migrations);
+        migrate_optional_path(&mut self.deepest_open_column_directory, migrations);
+        migrate_expanded_directories(&mut self.expanded_directories, migrations);
+        migrate_path_map_keys(&mut self.column_viewports, migrations);
+    }
+
+    fn invalidate_cached_directory_tree(&mut self) {
+        self.entries.clear();
+        self.directory_loading_placeholder_entries.clear();
+        self.selected = None;
+        self.selected_paths.clear();
+        self.selection_anchor = None;
+        self.deepest_open_column_directory = None;
+        cancel_and_clear_expanded_directories(&mut self.expanded_directories);
+        self.column_browser_viewport = ColumnBrowserViewport::default();
+        self.column_viewports.clear();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +289,41 @@ impl BrowserTab {
             forward_stack: Vec::new(),
         }
     }
+
+    fn migrate_completed_paths(&mut self, migrations: &[CompletedPathMigration]) {
+        let original_directory = self.directory.clone();
+        let migrated_directory = path_after_completed_migrations(&original_directory, migrations);
+        let directory_was_migrated = migrated_directory != original_directory;
+        let migration_crossed_directory_tree =
+            completed_migrations_cross_directory_tree_boundary(&original_directory, migrations);
+
+        self.directory = migrated_directory;
+        if !directory_was_migrated && migration_crossed_directory_tree {
+            self.invalidate_cached_directory_tree();
+        } else {
+            self.migrate_cached_directory_tree_paths(migrations);
+        }
+        migrate_path_list(&mut self.back_stack, migrations);
+        migrate_path_list(&mut self.forward_stack, migrations);
+    }
+
+    fn migrate_cached_directory_tree_paths(&mut self, migrations: &[CompletedPathMigration]) {
+        migrate_directory_entries(&mut self.entries, migrations);
+        migrate_optional_path(&mut self.selected, migrations);
+        migrate_path_set(&mut self.selected_paths, migrations);
+        migrate_optional_path(&mut self.selection_anchor, migrations);
+        migrate_optional_path(&mut self.deepest_open_column_directory, migrations);
+        migrate_expanded_directories(&mut self.expanded_directories, migrations);
+    }
+
+    fn invalidate_cached_directory_tree(&mut self) {
+        self.entries.clear();
+        self.selected = None;
+        self.selected_paths.clear();
+        self.selection_anchor = None;
+        self.deepest_open_column_directory = None;
+        cancel_and_clear_expanded_directories(&mut self.expanded_directories);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -245,4 +342,85 @@ pub(crate) enum ExpandedDirectoryStatus {
     Loading,
     Loaded,
     Error,
+}
+
+fn migrate_directory_entries(
+    entries: &mut [DirectoryEntry],
+    migrations: &[CompletedPathMigration],
+) {
+    for entry in entries {
+        migrate_directory_entry(entry, migrations);
+    }
+}
+
+fn migrate_directory_entry(entry: &mut DirectoryEntry, migrations: &[CompletedPathMigration]) {
+    let migrated_path = path_after_completed_migrations(&entry.path, migrations);
+    if migrated_path == entry.path {
+        return;
+    }
+    entry.name = migrated_path
+        .file_name()
+        .unwrap_or_else(|| migrated_path.as_os_str())
+        .to_os_string();
+    entry.path = migrated_path;
+}
+
+fn migrate_optional_path(path: &mut Option<PathBuf>, migrations: &[CompletedPathMigration]) {
+    if let Some(path) = path {
+        *path = path_after_completed_migrations(path, migrations);
+    }
+}
+
+fn migrate_path_list(paths: &mut [PathBuf], migrations: &[CompletedPathMigration]) {
+    for path in paths {
+        *path = path_after_completed_migrations(path, migrations);
+    }
+}
+
+fn migrate_path_set(paths: &mut HashSet<PathBuf>, migrations: &[CompletedPathMigration]) {
+    *paths = paths
+        .drain()
+        .map(|path| path_after_completed_migrations(&path, migrations))
+        .collect();
+}
+
+fn migrate_path_map_keys<Value>(
+    paths: &mut HashMap<PathBuf, Value>,
+    migrations: &[CompletedPathMigration],
+) {
+    *paths = paths
+        .drain()
+        .map(|(path, value)| (path_after_completed_migrations(&path, migrations), value))
+        .collect();
+}
+
+fn migrate_expanded_directories(
+    directories: &mut HashMap<PathBuf, ExpandedDirectory>,
+    migrations: &[CompletedPathMigration],
+) {
+    *directories = directories
+        .drain()
+        .filter_map(|(path, mut directory)| {
+            if let Some(cancellation) = directory.load_cancel.take() {
+                cancellation.cancel();
+            }
+            if matches!(directory.status, ExpandedDirectoryStatus::Loading) {
+                return None;
+            }
+            migrate_directory_entries(&mut directory.entries, migrations);
+            Some((
+                path_after_completed_migrations(&path, migrations),
+                directory,
+            ))
+        })
+        .collect();
+}
+
+fn cancel_and_clear_expanded_directories(directories: &mut HashMap<PathBuf, ExpandedDirectory>) {
+    for directory in directories.values_mut() {
+        if let Some(cancellation) = directory.load_cancel.take() {
+            cancellation.cancel();
+        }
+    }
+    directories.clear();
 }

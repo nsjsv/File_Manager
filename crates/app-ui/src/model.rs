@@ -21,7 +21,7 @@ use crate::config::{RenderingGpuPreference, UiLanguage, UiLanguageSetting, UserC
 use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
-use crate::operation_history::FileOperationOutcome;
+use crate::operation_history::FileOperationCompletion;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::{ShortcutAction, ShortcutBindingId};
 use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
@@ -87,7 +87,6 @@ pub(crate) use application_logs::{
     bounded_application_log_message, sanitized_application_log_detail, ApplicationLogEntry,
     ApplicationLogLevel, ApplicationLogRequest, ApplicationLogSource, ApplicationLogViewState,
     APPLICATION_LOG_ENTRY_LIMIT, APP_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_IDENTIFIER,
-    SEARCH_JOURNAL_UNIT,
 };
 pub(crate) mod search;
 pub(crate) use search::{
@@ -230,7 +229,7 @@ pub(crate) enum Message {
     VideoPreviewFinished(PathBuf, u64),
     VideoPreviewFailed(PathBuf, u64, String),
     FileOperationProgressed(u64, FileOperationProgressUpdate),
-    FileOperationFinished(u64, Result<FileOperationOutcome, String>),
+    FileOperationFinished(u64, FileOperationCompletion),
     FileOperationIndicatorPressed,
     FileOperationAutoHideElapsed(u64),
     FileOperationPauseToggled(u64),

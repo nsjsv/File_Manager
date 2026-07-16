@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use file_search::{
-    daemon_build_id, default_socket_path, read_service_event, serve_bound_search_socket,
-    shutdown_connected_service, shutdown_via_socket, write_service_request, BoundSearchSocket,
-    SearchIndexConfig, SearchServiceEvent, SearchServiceRequest, SearchServiceRuntime,
+    daemon_build_id, read_service_event, serve_bound_search_socket, shutdown_connected_service,
+    shutdown_via_socket, write_service_request, BoundSearchSocket, SearchIndexConfig,
+    SearchRuntimeIdentity, SearchServiceEvent, SearchServiceRequest, SearchServiceRuntime,
     SearchSocketService, PROTOCOL_VERSION,
 };
 use tokio::net::UnixStream;
@@ -82,11 +82,13 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime_identity = SearchRuntimeIdentity::from_environment()?;
+    let socket_path = runtime_identity.socket_path();
     match DaemonInvocation::parse(std::env::args_os().skip(1))? {
-        DaemonInvocation::Serve => serve().await,
-        DaemonInvocation::ShutdownExisting => shutdown_existing(&default_socket_path()).await,
+        DaemonInvocation::Serve => serve(socket_path).await,
+        DaemonInvocation::ShutdownExisting => shutdown_existing(&socket_path).await,
         DaemonInvocation::CheckExisting { expected_main_pid } => {
-            check_existing_with_timeout(&default_socket_path(), expected_main_pid).await
+            check_existing_with_timeout(&socket_path, expected_main_pid).await
         }
     }
 }
@@ -240,10 +242,10 @@ fn is_file_searchd_executable_path(executable_path: &Path) -> bool {
     )
 }
 
-async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+async fn serve(socket_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut terminate_signal = signal(SignalKind::terminate())?;
     let database_path = database_path()?;
-    let bound_socket = BoundSearchSocket::bind(default_socket_path())?;
+    let bound_socket = BoundSearchSocket::bind(socket_path)?;
     let shutdown_socket_path = bound_socket.path().to_path_buf();
     let service_runtime = Arc::new(SearchServiceRuntime::new());
     service_runtime.start_in_background(database_path, SearchIndexConfig::default());

@@ -345,6 +345,18 @@ impl FileBrowser {
 
     pub(super) fn restore_pane_snapshot(&mut self, pane: BrowserPane) {
         self.search.abandon_and_clear_input();
+        self.apply_pane_browsing_snapshot(pane);
+        self.tab_animations.clear();
+        self.hovered_entry = None;
+        self.cursor_paste_directory = None;
+        self.drag_selection_anchor = None;
+        self.selection_marquee = None;
+        self.column_resize_drag = None;
+        self.pending_keyboard_column_focus = None;
+        self.last_activation_click = None;
+    }
+
+    pub(super) fn apply_pane_browsing_snapshot(&mut self, pane: BrowserPane) {
         self.current_dir = pane.current_dir;
         self.is_trash_view = pane.is_trash_view;
         self.entries = pane.entries;
@@ -360,7 +372,6 @@ impl FileBrowser {
         self.column_viewports = pane.column_viewports;
         self.tabs = pane.tabs;
         self.active_tab_id = pane.active_tab_id;
-        self.tab_animations.clear();
         self.directory_load_generation = pane.directory_load_generation;
         self.directory_load_cancel = pane.directory_load_cancel;
         self.back_stack = pane.back_stack;
@@ -371,13 +382,6 @@ impl FileBrowser {
         } else {
             TabBarReveal::Hidden
         };
-        self.hovered_entry = None;
-        self.cursor_paste_directory = None;
-        self.drag_selection_anchor = None;
-        self.selection_marquee = None;
-        self.column_resize_drag = None;
-        self.pending_keyboard_column_focus = None;
-        self.last_activation_click = None;
     }
 
     fn split_content_width(&self) -> f32 {

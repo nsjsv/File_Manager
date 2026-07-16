@@ -9,6 +9,7 @@ mod filesystem;
 mod logging;
 mod model;
 mod protocol;
+mod runtime_identity;
 mod service_runtime;
 mod writer;
 
@@ -37,5 +38,6 @@ pub use protocol::{
     shutdown_via_socket, status_via_socket, version_via_socket, write_service_event,
     write_service_request, BoundSearchSocket, SearchSocketService,
 };
+pub use runtime_identity::{SearchRuntimeIdentity, SEARCH_RUNTIME_IDENTITY_ENV};
 pub use service_runtime::SearchServiceRuntime;
 pub use writer::IndexWriter;

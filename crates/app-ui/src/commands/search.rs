@@ -70,7 +70,11 @@ pub(crate) fn directory_fallback_search_command(
 }
 
 async fn search_once(query: SearchQuery, cancellation: CancellationToken) -> IndexedSearchOutcome {
-    match search_via_socket_with_cancellation(&default_socket_path(), query, cancellation).await {
+    let socket_path = match default_socket_path() {
+        Ok(socket_path) => socket_path,
+        Err(error) => return indexed_outcome_from_error(error),
+    };
+    match search_via_socket_with_cancellation(&socket_path, query, cancellation).await {
         Ok(batch) => IndexedSearchOutcome::Batch(batch),
         Err(error) => indexed_outcome_from_error(error),
     }

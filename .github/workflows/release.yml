@@ -68,15 +68,17 @@ jobs:
 
       - name: Verify Cargo package version
         run: |
-          package_id="$(cargo pkgid -p "${CARGO_PACKAGE}")"
-          package_version="${package_id##*#}"
-          if [[ "${package_version}" == "${package_id}" ]]; then
-            package_version="${package_id##*@}"
-          fi
-          if [[ "${package_version}" != "${{ steps.metadata.outputs.semver }}" ]]; then
-            echo "::error::${CARGO_PACKAGE} version ${package_version} does not match release ${{ steps.metadata.outputs.version }}"
-            exit 1
-          fi
+          for package_name in "${CARGO_PACKAGE}" "${DAEMON_CARGO_PACKAGE}"; do
+            package_id="$(cargo pkgid -p "${package_name}")"
+            package_version="${package_id##*#}"
+            if [[ "${package_version}" == "${package_id}" ]]; then
+              package_version="${package_id##*@}"
+            fi
+            if [[ "${package_version}" != "${{ steps.metadata.outputs.semver }}" ]]; then
+              echo "::error::${package_name} version ${package_version} does not match release ${{ steps.metadata.outputs.version }}"
+              exit 1
+            fi
+          done
 
       - name: Build release binaries
         run: cargo build --release --locked -p "${CARGO_PACKAGE}" -p "${DAEMON_CARGO_PACKAGE}"

@@ -331,8 +331,14 @@ impl FileBrowser {
     }
 
     pub(super) fn reload_current_preserving_list_directory_summaries(&mut self) -> Task<Message> {
+        self.clear_transient_interaction_state();
+        self.schedule_current_directory_reload_preserving_list_directory_summaries()
+    }
+
+    fn schedule_current_directory_reload_preserving_list_directory_summaries(
+        &mut self,
+    ) -> Task<Message> {
         if self.is_trash_view {
-            self.clear_transient_interaction_state();
             self.directory_loading_placeholder_entries.clear();
             self.is_loading = true;
             self.clear_global_error();
@@ -343,7 +349,6 @@ impl FileBrowser {
             return load_trash_command(self.active_pane_id(), self.options.clone());
         }
 
-        self.clear_transient_interaction_state();
         self.directory_loading_placeholder_entries.clear();
         self.is_loading = true;
         self.clear_global_error();
@@ -362,6 +367,29 @@ impl FileBrowser {
     pub(super) fn reload_visible_panes(&mut self) -> Task<Message> {
         self.invalidate_list_directory_summaries_for_visible_panes();
         self.reload_visible_panes_preserving_list_directory_summaries()
+    }
+
+    pub(super) fn reload_visible_panes_after_file_operation(&mut self) -> Task<Message> {
+        self.invalidate_list_directory_summaries_for_visible_panes();
+        self.reload_visible_panes_after_file_operation_preserving_list_directory_summaries()
+    }
+
+    pub(super) fn reload_visible_panes_after_file_operation_preserving_list_directory_summaries(
+        &mut self,
+    ) -> Task<Message> {
+        let active_pane_id = self.active_pane_id();
+        let mut commands =
+            vec![self.schedule_current_directory_reload_preserving_list_directory_summaries()];
+        self.sync_active_pane_state();
+
+        for pane_id in self.pane_layout.visible_pane_ids() {
+            if pane_id != active_pane_id {
+                commands
+                    .push(self.reload_inactive_pane_preserving_list_directory_summaries(pane_id));
+            }
+        }
+
+        Task::batch(commands)
     }
 
     pub(super) fn reload_visible_panes_preserving_list_directory_summaries(
