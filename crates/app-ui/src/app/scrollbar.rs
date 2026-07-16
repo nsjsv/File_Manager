@@ -245,4 +245,18 @@ mod tests {
             Some(ScrollbarAnimation::Hiding { .. })
         ));
     }
+
+    #[test]
+    fn icon_grid_uses_global_auto_hide_scrollbar_state() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let region = ScrollbarRegion::PaneIcons(crate::model::BrowserPaneId::PRIMARY);
+
+        drop(browser.show_scrollbars_temporarily(region.clone()));
+
+        assert!(browser.scrollbar_visibility_for(&region).opacity() > 0.0);
+        assert_eq!(
+            browser.scrollbar_visibility_for(&ScrollbarRegion::Sidebar),
+            ScrollbarVisibility::Hidden
+        );
+    }
 }

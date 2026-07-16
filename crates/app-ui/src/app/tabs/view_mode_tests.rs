@@ -263,6 +263,119 @@ fn switching_from_list_to_columns_replaces_stale_column_history() {
 }
 
 #[test]
+fn entering_icons_keeps_hierarchy_and_removes_hidden_selection() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let hidden_child = project.join("hidden.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.view_mode = BrowserViewMode::List;
+    browser.deepest_open_column_directory = Some(project.clone());
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(hidden_child.clone(), FileKind::File)]),
+    );
+    browser.selected = Some(hidden_child.clone());
+    browser.selected_paths = HashSet::from([hidden_child.clone()]);
+    browser.selection_anchor = Some(hidden_child);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Icons));
+
+    assert_eq!(browser.view_mode, BrowserViewMode::Icons);
+    assert_eq!(browser.deepest_open_column_directory, Some(project.clone()));
+    assert!(browser.expanded_directories.contains_key(&project));
+    assert_eq!(browser.selected, None);
+    assert!(browser.selected_paths.is_empty());
+    assert_eq!(browser.selection_anchor, None);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+
+    assert!(browser.expanded_directories.contains_key(&project));
+    assert_eq!(browser.deepest_open_column_directory, Some(project));
+}
+
+#[test]
+fn icons_to_columns_rebuilds_chain_from_direct_selection() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let stale = root.join("stale");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(stale.clone(), FileKind::Directory),
+    ];
+    browser.view_mode = BrowserViewMode::Icons;
+    browser.selected = Some(project.clone());
+    browser.selected_paths = HashSet::from([project.clone()]);
+    browser.deepest_open_column_directory = Some(stale.clone());
+    browser
+        .expanded_directories
+        .insert(project.clone(), loaded_directory(Vec::new()));
+    browser
+        .expanded_directories
+        .insert(stale, loaded_directory(Vec::new()));
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+
+    assert_eq!(browser.deepest_open_column_directory, Some(project.clone()));
+    assert_eq!(
+        browser
+            .expanded_directories
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![project.clone()]
+    );
+    assert_eq!(
+        crate::three_column_view::column_directories(&browser),
+        vec![root, project]
+    );
+}
+
+#[test]
+fn icons_to_columns_without_selection_preserves_hidden_chain() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.view_mode = BrowserViewMode::Icons;
+    browser.deepest_open_column_directory = Some(project.clone());
+    browser
+        .expanded_directories
+        .insert(project.clone(), loaded_directory(Vec::new()));
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+
+    assert_eq!(browser.deepest_open_column_directory, Some(project.clone()));
+    assert!(browser.expanded_directories.contains_key(&project));
+}
+
+#[test]
+fn icon_selection_without_focus_restores_direct_focus_before_columns() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.view_mode = BrowserViewMode::List;
+    browser.selected = None;
+    browser.selected_paths = HashSet::from([project.clone()]);
+    browser
+        .expanded_directories
+        .insert(project.clone(), loaded_directory(Vec::new()));
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Icons));
+
+    assert_eq!(browser.selected, Some(project.clone()));
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+
+    assert_eq!(browser.deepest_open_column_directory, Some(project));
+}
+
+#[test]
 fn activating_split_panes_preserves_each_pane_view_mode() {
     let left_dir = PathBuf::from("/workspace/left");
     let right_dir = PathBuf::from("/workspace/right");
@@ -275,7 +388,7 @@ fn activating_split_panes_preserves_each_pane_view_mode() {
     browser.current_dir = left_dir.clone();
     browser.tabs = vec![left_tab.clone()];
     browser.active_tab_id = left_tab.id;
-    browser.view_mode = BrowserViewMode::List;
+    browser.view_mode = BrowserViewMode::Icons;
     browser.pane_layout = BrowserPaneLayout::Split {
         axis: SplitAxis::Horizontal,
         first: BrowserPaneId::PRIMARY,
@@ -296,7 +409,7 @@ fn activating_split_panes_preserves_each_pane_view_mode() {
     browser.activate_pane(BrowserPaneId::PRIMARY);
 
     assert_eq!(browser.current_dir, left_dir);
-    assert_eq!(browser.view_mode, BrowserViewMode::List);
+    assert_eq!(browser.view_mode, BrowserViewMode::Icons);
     assert!(browser
         .pane_by_id(BrowserPaneId(1))
         .is_some_and(|pane| pane.view_mode == BrowserViewMode::Columns));

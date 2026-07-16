@@ -314,6 +314,7 @@ impl FileBrowser {
 
         merge_pane_tabs(&mut target, source);
         self.panes.retain(|pane| pane.id != source_pane_id);
+        self.icon_grid_viewports.remove(&source_pane_id);
         if let Some(target_slot) = self.pane_by_id_mut(target_pane_id) {
             *target_slot = target.clone();
         } else {

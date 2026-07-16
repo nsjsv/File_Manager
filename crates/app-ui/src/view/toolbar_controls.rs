@@ -48,6 +48,12 @@ pub(super) fn view_mode_button_group(pane: BrowserPaneView<'_>) -> Element<'stat
             BrowserViewMode::List,
             IconSymbol::List,
         ),
+        view_mode_button(
+            pane.id,
+            pane.view_mode,
+            BrowserViewMode::Icons,
+            IconSymbol::Grid,
+        ),
     ])
 }
 

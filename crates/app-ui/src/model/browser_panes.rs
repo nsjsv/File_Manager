@@ -113,12 +113,20 @@ impl BrowserPaneLayout {
 pub(crate) enum BrowserViewMode {
     Columns,
     List,
+    Icons,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct ColumnBrowserViewport {
     pub(crate) offset_x: f32,
     pub(crate) width: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct IconGridViewport {
+    pub(crate) offset_y: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -342,6 +350,35 @@ pub(crate) enum ExpandedDirectoryStatus {
     Loading,
     Loaded,
     Error,
+}
+
+pub(crate) fn retain_direct_entry_selection(
+    entries: &[DirectoryEntry],
+    selected: &mut Option<PathBuf>,
+    selected_paths: &mut HashSet<PathBuf>,
+    selection_anchor: &mut Option<PathBuf>,
+) {
+    let direct_paths = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<HashSet<_>>();
+    selected_paths.retain(|path| direct_paths.contains(path));
+    if !selected
+        .as_ref()
+        .is_some_and(|path| direct_paths.contains(path))
+    {
+        *selected = entries
+            .iter()
+            .rev()
+            .find(|entry| selected_paths.contains(&entry.path))
+            .map(|entry| entry.path.clone());
+    }
+    if selection_anchor
+        .as_ref()
+        .is_some_and(|path| !direct_paths.contains(path))
+    {
+        *selection_anchor = None;
+    }
 }
 
 fn migrate_directory_entries(

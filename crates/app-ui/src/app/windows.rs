@@ -624,7 +624,10 @@ impl FileBrowser {
         if window == self.main_window {
             self.main_window_width = width.max(1.0);
             self.main_window_height = height.max(1.0);
-            return self.request_breadcrumb_drop_target_bounds_measurement();
+            return Task::batch([
+                self.request_breadcrumb_drop_target_bounds_measurement(),
+                self.schedule_thumbnail_refresh(),
+            ]);
         }
 
         if self.preview_window == Some(window) {

@@ -9,7 +9,7 @@ use super::FileBrowser;
 use crate::model::{
     displayed_address_directory, AddressEditingSession, BrowserPane, BrowserPaneId,
     BrowserPaneLayout, BrowserTab, BrowserViewMode, DirectoryLoadingPlaceholderEntry,
-    ExpandedDirectory, FileDragState, SplitRegion,
+    ExpandedDirectory, FileDragState, IconGridViewport, SplitAxis, SplitRegion,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -28,6 +28,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) hovered_entry: Option<&'a PathBuf>,
     pub(crate) expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) column_viewports: &'a HashMap<PathBuf, ColumnViewport>,
+    pub(crate) icon_grid_viewport: IconGridViewport,
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) tabs: &'a [BrowserTab],
     pub(crate) active_tab_id: usize,
@@ -144,6 +145,7 @@ impl FileBrowser {
                 hovered_entry: self.hovered_entry.as_ref(),
                 expanded_directories: &self.expanded_directories,
                 column_viewports: &self.column_viewports,
+                icon_grid_viewport: self.icon_grid_viewport_for(pane_id, &self.current_dir),
                 view_mode: self.view_mode,
                 tabs: &self.tabs,
                 active_tab_id: self.active_tab_id,
@@ -172,6 +174,7 @@ impl FileBrowser {
             hovered_entry: None,
             expanded_directories: &pane.expanded_directories,
             column_viewports: &pane.column_viewports,
+            icon_grid_viewport: self.icon_grid_viewport_for(pane_id, &pane.current_dir),
             view_mode: pane.view_mode,
             tabs: &pane.tabs,
             active_tab_id: pane.active_tab_id,
@@ -216,6 +219,31 @@ impl FileBrowser {
 
     pub(super) fn pane_by_id_mut(&mut self, pane_id: BrowserPaneId) -> Option<&mut BrowserPane> {
         self.panes.iter_mut().find(|pane| pane.id == pane_id)
+    }
+
+    pub(crate) fn pane_content_width(&self) -> f32 {
+        let content_width = (self.main_window_width - self.sidebar_width).max(1.0);
+        match self.pane_layout {
+            BrowserPaneLayout::Split {
+                axis: SplitAxis::Horizontal,
+                ..
+            } => content_width / 2.0,
+            BrowserPaneLayout::Single { .. } | BrowserPaneLayout::Split { .. } => content_width,
+        }
+    }
+
+    fn icon_grid_viewport_for(&self, pane_id: BrowserPaneId, directory: &Path) -> IconGridViewport {
+        let mut viewport = self
+            .icon_grid_viewports
+            .get(&pane_id)
+            .filter(|state| state.directory == directory)
+            .map(|state| state.viewport)
+            .unwrap_or_default();
+        let pane_width = self.pane_content_width();
+        if viewport.width <= f32::EPSILON || (viewport.width - pane_width).abs() > 1.0 {
+            viewport.width = pane_width;
+        }
+        viewport
     }
 
     pub(super) fn sync_active_pane_state(&mut self) {

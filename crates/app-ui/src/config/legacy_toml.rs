@@ -7,8 +7,8 @@ use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, Ter
 use super::startup;
 use super::{
     browser_view_mode_from_config_value, file_operation_verification_from_config_value,
-    normalize_max_preview_file_bytes, normalize_sidebar_width, toml_string, SidebarFavoriteConfig,
-    UserConfig, CONFIG_FILE_NAME,
+    normalize_icon_grid_size, normalize_max_preview_file_bytes, normalize_sidebar_width,
+    toml_string, SidebarFavoriteConfig, UserConfig, CONFIG_FILE_NAME,
 };
 use crate::network_connections::SavedNetworkConnection;
 
@@ -31,6 +31,7 @@ const TERMINAL_EMULATOR_KEY: &str = "terminal_emulator";
 const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
 const BROWSER_VIEW_MODE_KEY: &str = "browser_view_mode";
+const ICON_GRID_SIZE_KEY: &str = "icon_grid_size";
 const SHORTCUTS_KEY: &str = "shortcuts";
 
 pub(super) fn load_legacy_user_config_from_dir(
@@ -98,6 +99,13 @@ pub(super) fn parse_toml_user_config(content: &str, default: UserConfig) -> User
         if let Some(view_mode) = browser_view_mode_from_config_value(value) {
             config.browser_view_mode = view_mode;
         }
+    }
+    if let Some(size) = document
+        .get(ICON_GRID_SIZE_KEY)
+        .and_then(toml_positive_integer_as_u64)
+        .and_then(|size| u32::try_from(size).ok())
+    {
+        config.icon_grid_size = normalize_icon_grid_size(size);
     }
     startup::apply_toml_startup_config(&mut config, &document);
     if let Some(table) = document.get(SHORTCUTS_KEY).and_then(toml::Value::as_table) {

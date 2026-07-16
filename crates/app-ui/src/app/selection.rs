@@ -53,7 +53,7 @@ impl FileBrowser {
         )
     }
 
-    pub(super) fn handle_list_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
+    pub(super) fn handle_flat_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
         let column_directories_snapshot = Vec::new();
         self.handle_file_entry_clicked(
             path,
@@ -730,7 +730,19 @@ impl FileBrowser {
     }
 
     fn visible_entry_paths(&self) -> Vec<PathBuf> {
-        crate::visible_entries::visible_entry_paths(&self.entries, &self.expanded_directories)
+        match self.view_mode {
+            BrowserViewMode::Icons => self
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect(),
+            BrowserViewMode::Columns | BrowserViewMode::List => {
+                crate::visible_entries::visible_entry_paths(
+                    &self.entries,
+                    &self.expanded_directories,
+                )
+            }
+        }
     }
 
     fn focus_path(&mut self, path: PathBuf) {

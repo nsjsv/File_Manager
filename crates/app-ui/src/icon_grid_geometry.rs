@@ -1,0 +1,262 @@
+use crate::config::{
+    normalize_icon_grid_size, ICON_GRID_SIZE_STEP, MAX_ICON_GRID_SIZE, MIN_ICON_GRID_SIZE,
+};
+use crate::model::IconGridViewport;
+use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
+
+pub(crate) const ICON_GRID_CONTENT_PADDING: f32 = 12.0;
+pub(crate) const ICON_GRID_GAP: f32 = 12.0;
+pub(crate) const ICON_GRID_OVERSCAN_ROWS: usize = 3;
+const ICON_GRID_TILE_EXTRA_WIDTH: f32 = 32.0;
+const ICON_GRID_TILE_EXTRA_HEIGHT: f32 = 52.0;
+const ICON_GRID_INITIAL_ROWS: usize = ICON_GRID_OVERSCAN_ROWS * 2 + 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IconGridDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IconGridZoom {
+    In,
+    Out,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct IconGridVisibleRange {
+    pub(crate) start_row: usize,
+    pub(crate) end_row: usize,
+    pub(crate) start_entry: usize,
+    pub(crate) end_entry: usize,
+    pub(crate) before_height: f32,
+    pub(crate) after_height: f32,
+}
+
+pub(crate) fn tile_width(icon_edge: u32) -> f32 {
+    icon_edge as f32 + ICON_GRID_TILE_EXTRA_WIDTH
+}
+
+pub(crate) fn tile_visual_height(icon_edge: u32) -> f32 {
+    icon_edge as f32 + ICON_GRID_TILE_EXTRA_HEIGHT
+}
+
+pub(crate) fn row_height(icon_edge: u32) -> f32 {
+    tile_visual_height(icon_edge) + ICON_GRID_GAP
+}
+
+pub(crate) fn column_count_for_width(viewport_width: f32, icon_edge: u32) -> usize {
+    let available_width = (viewport_width - ICON_GRID_CONTENT_PADDING * 2.0).max(0.0);
+    let column_slot_width = tile_width(icon_edge) + ICON_GRID_GAP;
+    ((available_width + ICON_GRID_GAP) / column_slot_width)
+        .floor()
+        .max(1.0) as usize
+}
+
+pub(crate) fn row_count_for_entries(entry_count: usize, column_count: usize) -> usize {
+    entry_count.div_ceil(column_count.max(1))
+}
+
+pub(crate) fn visible_entry_range(
+    viewport: IconGridViewport,
+    entry_count: usize,
+    icon_edge: u32,
+) -> IconGridVisibleRange {
+    let column_count = column_count_for_width(viewport.width, icon_edge);
+    let total_rows = row_count_for_entries(entry_count, column_count);
+    let row_height = row_height(icon_edge);
+    let rows = if viewport.width > f32::EPSILON && viewport.height > f32::EPSILON {
+        virtual_range_for_viewport(
+            total_rows,
+            row_height,
+            (viewport.offset_y - ICON_GRID_CONTENT_PADDING).max(0.0),
+            viewport.height,
+            ICON_GRID_OVERSCAN_ROWS,
+        )
+    } else {
+        initial_virtual_range(total_rows, row_height, ICON_GRID_INITIAL_ROWS)
+    };
+
+    IconGridVisibleRange {
+        start_row: rows.start,
+        end_row: rows.end,
+        start_entry: rows.start.saturating_mul(column_count).min(entry_count),
+        end_entry: rows.end.saturating_mul(column_count).min(entry_count),
+        before_height: rows.before_height,
+        after_height: rows.after_height,
+    }
+}
+
+pub(crate) fn keyboard_target_index(
+    current_index: Option<usize>,
+    direction: IconGridDirection,
+    entry_count: usize,
+    column_count: usize,
+) -> Option<usize> {
+    if entry_count == 0 {
+        return None;
+    }
+
+    let last_index = entry_count - 1;
+    let Some(current_index) = current_index.filter(|index| *index < entry_count) else {
+        return Some(match direction {
+            IconGridDirection::Up | IconGridDirection::Left => last_index,
+            IconGridDirection::Down | IconGridDirection::Right => 0,
+        });
+    };
+    let column_count = column_count.max(1);
+
+    Some(match direction {
+        IconGridDirection::Up => current_index.saturating_sub(column_count),
+        IconGridDirection::Down => current_index.saturating_add(column_count).min(last_index),
+        IconGridDirection::Left => current_index.saturating_sub(1),
+        IconGridDirection::Right => current_index.saturating_add(1).min(last_index),
+    })
+}
+
+pub(crate) fn scroll_delta_to_reveal_row(
+    viewport: IconGridViewport,
+    target_row: usize,
+    icon_edge: u32,
+) -> f32 {
+    if viewport.height <= f32::EPSILON {
+        return 0.0;
+    }
+
+    let row_top = ICON_GRID_CONTENT_PADDING + target_row as f32 * row_height(icon_edge);
+    let row_bottom = row_top + tile_visual_height(icon_edge);
+    let viewport_top = viewport.offset_y.max(0.0);
+    let viewport_bottom = viewport_top + viewport.height;
+
+    if row_top < viewport_top {
+        row_top - viewport_top
+    } else if row_bottom > viewport_bottom {
+        row_bottom - viewport_bottom
+    } else {
+        0.0
+    }
+}
+
+pub(crate) fn stepped_icon_grid_size(current: u32, zoom: IconGridZoom) -> u32 {
+    let current = normalize_icon_grid_size(current);
+    match zoom {
+        IconGridZoom::In => current
+            .saturating_add(ICON_GRID_SIZE_STEP)
+            .min(MAX_ICON_GRID_SIZE),
+        IconGridZoom::Out => current
+            .saturating_sub(ICON_GRID_SIZE_STEP)
+            .max(MIN_ICON_GRID_SIZE),
+    }
+}
+
+pub(crate) fn thumbnail_edge(icon_edge: u32) -> u32 {
+    icon_edge.saturating_mul(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_width_always_keeps_one_column() {
+        assert_eq!(column_count_for_width(1.0, 96), 1);
+    }
+
+    #[test]
+    fn column_count_changes_at_exact_slot_boundary() {
+        let two_columns_width =
+            ICON_GRID_CONTENT_PADDING * 2.0 + tile_width(96) * 2.0 + ICON_GRID_GAP;
+
+        assert_eq!(column_count_for_width(two_columns_width - 0.1, 96), 1);
+        assert_eq!(column_count_for_width(two_columns_width, 96), 2);
+        assert_eq!(column_count_for_width(500.0, 96), 3);
+    }
+
+    #[test]
+    fn incomplete_last_row_is_counted_once() {
+        assert_eq!(row_count_for_entries(7, 3), 3);
+        assert_eq!(row_count_for_entries(0, 3), 0);
+    }
+
+    #[test]
+    fn visible_range_uses_row_overscan_and_clamps_partial_row() {
+        let viewport = IconGridViewport {
+            offset_y: ICON_GRID_CONTENT_PADDING + row_height(96) * 10.0,
+            width: 500.0,
+            height: row_height(96) * 2.0,
+        };
+        let range = visible_entry_range(viewport, 44, 96);
+
+        assert_eq!(range.start_row, 7);
+        assert_eq!(range.end_row, 15);
+        assert_eq!(range.start_entry, 21);
+        assert_eq!(range.end_entry, 44);
+    }
+
+    #[test]
+    fn keyboard_navigation_clamps_to_entry_boundaries() {
+        assert_eq!(
+            keyboard_target_index(Some(5), IconGridDirection::Up, 8, 3),
+            Some(2)
+        );
+        assert_eq!(
+            keyboard_target_index(Some(5), IconGridDirection::Down, 8, 3),
+            Some(7)
+        );
+        assert_eq!(
+            keyboard_target_index(Some(0), IconGridDirection::Left, 8, 3),
+            Some(0)
+        );
+        assert_eq!(
+            keyboard_target_index(Some(7), IconGridDirection::Right, 8, 3),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn keyboard_navigation_without_selection_uses_directional_edge() {
+        assert_eq!(
+            keyboard_target_index(None, IconGridDirection::Up, 8, 3),
+            Some(7)
+        );
+        assert_eq!(
+            keyboard_target_index(None, IconGridDirection::Right, 8, 3),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn scroll_delta_only_reveals_rows_outside_viewport() {
+        let viewport = IconGridViewport {
+            offset_y: 160.0,
+            width: 500.0,
+            height: 320.0,
+        };
+
+        assert!(scroll_delta_to_reveal_row(viewport, 0, 96) < 0.0);
+        assert_eq!(scroll_delta_to_reveal_row(viewport, 1, 96), 0.0);
+        assert!(scroll_delta_to_reveal_row(viewport, 3, 96) > 0.0);
+    }
+
+    #[test]
+    fn zoom_steps_and_clamps_at_limits() {
+        assert_eq!(stepped_icon_grid_size(96, IconGridZoom::In), 112);
+        assert_eq!(stepped_icon_grid_size(96, IconGridZoom::Out), 80);
+        assert_eq!(
+            stepped_icon_grid_size(MAX_ICON_GRID_SIZE, IconGridZoom::In),
+            MAX_ICON_GRID_SIZE
+        );
+        assert_eq!(
+            stepped_icon_grid_size(MIN_ICON_GRID_SIZE, IconGridZoom::Out),
+            MIN_ICON_GRID_SIZE
+        );
+    }
+
+    #[test]
+    fn thumbnail_request_uses_double_display_edge() {
+        assert_eq!(thumbnail_edge(96), 192);
+        assert_eq!(thumbnail_edge(192), 384);
+    }
+}

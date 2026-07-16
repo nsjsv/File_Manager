@@ -43,10 +43,10 @@ pub(crate) use address_bar::{
 };
 mod browser_panes;
 pub(crate) use browser_panes::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
-    ColumnBrowserViewport, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
-    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, SplitAxis,
-    SplitRegion,
+    retain_direct_entry_selection, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
+    BrowserViewMode, ColumnBrowserViewport, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
+    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridViewport,
+    SplitAxis, SplitRegion,
 };
 mod list_view_preferences;
 pub(crate) use list_view_preferences::{
@@ -109,6 +109,7 @@ pub(crate) enum ScrollbarRegion {
     Sidebar,
     AddressBar(BrowserPaneId),
     PaneList(BrowserPaneId),
+    PaneIcons(BrowserPaneId),
     ColumnBrowser(BrowserPaneId),
     Column {
         pane_id: BrowserPaneId,
@@ -240,7 +241,7 @@ pub(crate) enum Message {
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
     BrowserViewModeSelected(BrowserPaneId, BrowserViewMode),
     ListDirectoryToggled(BrowserPaneId, PathBuf),
-    ListEntryClicked(BrowserPaneId, PathBuf),
+    FlatEntryClicked(BrowserPaneId, PathBuf),
     ListHeaderRightClicked(BrowserPaneId),
     ListColumnVisibilityToggled(ListColumnKind),
     ListColumnResizeStarted(BrowserPaneId, ListColumnKind),
@@ -383,6 +384,7 @@ pub(crate) enum Message {
     ColumnBrowserScrolled(BrowserPaneId, f32, f32),
     ColumnScrolled(BrowserPaneId, PathBuf, f32, f32),
     ListScrolled(BrowserPaneId, f32, f32),
+    IconGridScrolled(BrowserPaneId, f32, f32, f32),
     ColumnResizeStarted(BrowserPaneId, usize),
     OpenDirectoryFromMiddleClick(BrowserPaneId, PathBuf),
     OpenTrashInNewTab(BrowserPaneId),

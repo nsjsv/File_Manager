@@ -207,7 +207,7 @@ fn browser_session_roundtrip_replace_and_clear() {
                     "/home/user/Documents",
                 ))),
                 expanded_directories: vec![StoredPath::from_path(Path::new("/home/user/Projects"))],
-                view_mode: StoredBrowserViewMode::List,
+                view_mode: StoredBrowserViewMode::Icons,
                 back_stack: vec![StoredPath::from_path(Path::new("/home/user/Downloads"))],
                 forward_stack: Vec::new(),
             }],
@@ -241,6 +241,18 @@ fn browser_session_roundtrip_replace_and_clear() {
 }
 
 #[test]
+fn icon_browser_view_mode_uses_stable_json_value() {
+    assert_eq!(
+        serde_json::to_string(&StoredBrowserViewMode::Icons).unwrap(),
+        "\"icons\""
+    );
+    assert_eq!(
+        serde_json::from_str::<StoredBrowserViewMode>("\"icons\"").unwrap(),
+        StoredBrowserViewMode::Icons
+    );
+}
+
+#[test]
 fn user_preferences_roundtrip_replace() {
     let (store, root) = test_store();
     assert_eq!(store.read_user_preferences().unwrap(), None);
@@ -264,6 +276,7 @@ fn user_preferences_roundtrip_replace() {
         terminal_emulator: "ghostty".to_owned(),
         file_operation_verification: "strong".to_owned(),
         browser_view_mode: "list".to_owned(),
+        icon_grid_size: 144,
         startup_location: "previous_session".to_owned(),
         startup_custom_directory: StoredPath::from_path(Path::new("/workspace")),
         save_view_state: true,
@@ -337,6 +350,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("list_sort_field");
     object.remove("list_sort_direction");
     object.remove("list_directory_size_display_mode");
+    object.remove("icon_grid_size");
     let payload_json = serde_json::to_string(&payload).unwrap();
     let connection = Connection::open(store.db_path()).unwrap();
     connection
@@ -361,6 +375,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.list_sort_direction, "ascending");
     assert_eq!(preferences.list_directory_size_display_mode, "item_count");
     assert_eq!(preferences.language_setting, "system");
+    assert_eq!(preferences.icon_grid_size, 96);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -410,6 +425,7 @@ fn legacy_user_preferences_ignore_removed_search_fields() {
 
     assert!(preferences.network_list_thumbnail_downloads_enabled);
     assert_eq!(preferences.language_setting, "chinese");
+    assert_eq!(preferences.icon_grid_size, 96);
     let _ = fs::remove_dir_all(root);
 }
 

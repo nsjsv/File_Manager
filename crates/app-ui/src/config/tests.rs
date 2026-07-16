@@ -198,6 +198,7 @@ fn user_preferences_round_trip_through_sqlite() {
     config.startup_custom_directory = PathBuf::from("/workspace");
     config.save_view_state = config.startup_location_policy.saves_view_state();
     config.browser_view_mode = BrowserViewMode::List;
+    config.icon_grid_size = 160;
     config
         .list_view_preferences
         .set_column_visible(ListColumnKind::Kind, false);
@@ -256,6 +257,7 @@ fn user_preferences_round_trip_through_sqlite() {
     assert_eq!(loaded.startup_custom_directory, PathBuf::from("/workspace"));
     assert!(loaded.save_view_state);
     assert_eq!(loaded.browser_view_mode, BrowserViewMode::List);
+    assert_eq!(loaded.icon_grid_size, 160);
     let loaded_columns = loaded
         .list_view_preferences
         .columns()
@@ -422,6 +424,46 @@ fn stored_preferences_default_list_directory_size_mode_is_item_count() {
 }
 
 #[test]
+fn icon_grid_mode_uses_stable_config_value() {
+    assert_eq!(
+        browser_view_mode_from_config_value("icons"),
+        Some(BrowserViewMode::Icons)
+    );
+    assert_eq!(
+        browser_view_mode_config_value(BrowserViewMode::Icons),
+        "icons"
+    );
+}
+
+#[test]
+fn stored_icon_grid_size_is_normalized_at_config_boundary() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.icon_grid_size = 1;
+    assert_eq!(
+        UserPreferences::from_stored(stored.clone(), &default).icon_grid_size,
+        MIN_ICON_GRID_SIZE
+    );
+
+    stored.icon_grid_size = u32::MAX;
+    assert_eq!(
+        UserPreferences::from_stored(stored, &default).icon_grid_size,
+        MAX_ICON_GRID_SIZE
+    );
+}
+
+#[test]
+fn legacy_icon_grid_preferences_are_loaded_and_normalized() {
+    let parsed = legacy_toml::parse_toml_user_config(
+        "browser_view_mode = \"icons\"\nicon_grid_size = 1000\n",
+        default_user_config(),
+    );
+
+    assert_eq!(parsed.browser_view_mode, BrowserViewMode::Icons);
+    assert_eq!(parsed.icon_grid_size, MAX_ICON_GRID_SIZE);
+}
+
+#[test]
 fn migrates_legacy_toml_preferences_to_sqlite_once() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let config_dir = temp_dir.path().join("config");
@@ -497,6 +539,7 @@ terminal_emulator = "missing"
 rendering_backend = "metal"
 file_operation_verification = "maybe"
 browser_view_mode = "cover-flow"
+icon_grid_size = 1
 startup_location = "moon"
 startup_custom_directory = ""
 save_view_state = "maybe"
@@ -524,6 +567,7 @@ save_view_state = "maybe"
         default.file_operation_verification
     );
     assert_eq!(parsed.browser_view_mode, default.browser_view_mode);
+    assert_eq!(parsed.icon_grid_size, MIN_ICON_GRID_SIZE);
     assert_eq!(
         parsed.startup_location_policy,
         default.startup_location_policy
@@ -549,6 +593,7 @@ fn default_user_config_keeps_expected_preview_defaults() {
         DEFAULT_MAX_PREVIEW_FILE_BYTES
     );
     assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
+    assert_eq!(config.icon_grid_size, DEFAULT_ICON_GRID_SIZE);
     assert!(!config.save_view_state);
     assert_eq!(
         config.list_directory_size_display_mode,

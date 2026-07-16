@@ -263,12 +263,12 @@ impl FileBrowser {
             Message::ListDirectoryToggled(pane_id, path) => {
                 self.toggle_list_directory(pane_id, path)
             }
-            Message::ListEntryClicked(pane_id, path) => {
+            Message::FlatEntryClicked(pane_id, path) => {
                 self.activate_pane(pane_id);
                 if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
                     return Task::none();
                 }
-                self.handle_list_entry_clicked(path)
+                self.handle_flat_entry_clicked(path)
             }
             Message::ListHeaderRightClicked(pane_id) => self.open_list_column_menu(pane_id),
             Message::ListColumnVisibilityToggled(column) => {
@@ -668,6 +668,10 @@ impl FileBrowser {
                 self.show_scrollbars_temporarily(Region::PaneList(pane_id)),
                 self.handle_list_scrolled(pane_id, offset_y, height),
                 self.request_browser_session_save(),
+            ]),
+            Message::IconGridScrolled(pane_id, offset_y, width, height) => Task::batch([
+                self.show_scrollbars_temporarily(Region::PaneIcons(pane_id)),
+                self.handle_icon_grid_scrolled(pane_id, offset_y, width, height),
             ]),
             Message::ColumnResizeStarted(pane_id, column_index) => {
                 self.activate_pane(pane_id);

@@ -34,6 +34,10 @@ pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
 pub(crate) const PREVIEW_FILE_SIZE_UNIT_BYTES: u64 = 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PREVIEW_FILE_BYTES: u64 = 3 * 1024 * 1024;
 pub(crate) const DEFAULT_SEARCH_MAX_EXTRACT_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const DEFAULT_ICON_GRID_SIZE: u32 = 96;
+pub(crate) const MIN_ICON_GRID_SIZE: u32 = 64;
+pub(crate) const MAX_ICON_GRID_SIZE: u32 = 192;
+pub(crate) const ICON_GRID_SIZE_STEP: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
@@ -169,6 +173,7 @@ pub(crate) fn browser_view_mode_from_config_value(value: &str) -> Option<Browser
     match value {
         "columns" => Some(BrowserViewMode::Columns),
         "list" => Some(BrowserViewMode::List),
+        "icons" => Some(BrowserViewMode::Icons),
         _ => None,
     }
 }
@@ -177,6 +182,7 @@ pub(crate) fn browser_view_mode_config_value(view_mode: BrowserViewMode) -> &'st
     match view_mode {
         BrowserViewMode::Columns => "columns",
         BrowserViewMode::List => "list",
+        BrowserViewMode::Icons => "icons",
     }
 }
 
@@ -242,6 +248,7 @@ pub(crate) struct UserConfig {
     pub(crate) search_max_extract_bytes: u64,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) icon_grid_size: u32,
     pub(crate) list_view_preferences: crate::model::ListViewPreferences,
     pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
@@ -284,6 +291,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         search_max_extract_bytes: DEFAULT_SEARCH_MAX_EXTRACT_BYTES,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        icon_grid_size: DEFAULT_ICON_GRID_SIZE,
         list_view_preferences: crate::model::ListViewPreferences::default(),
         list_directory_size_display_mode: ListDirectorySizeDisplayMode::ItemCount,
         startup_location_policy: StartupLocationPolicy::Home,
@@ -309,6 +317,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         search_max_extract_bytes: DEFAULT_SEARCH_MAX_EXTRACT_BYTES,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        icon_grid_size: DEFAULT_ICON_GRID_SIZE,
         list_view_preferences: crate::model::ListViewPreferences::default(),
         list_directory_size_display_mode: ListDirectorySizeDisplayMode::ItemCount,
         startup_location_policy: StartupLocationPolicy::Home,
@@ -336,6 +345,10 @@ pub(crate) fn normalize_sidebar_width(width: f32) -> f32 {
 
 pub(crate) fn normalize_max_preview_file_bytes(bytes: u64) -> u64 {
     bytes.max(1)
+}
+
+pub(crate) fn normalize_icon_grid_size(size: u32) -> u32 {
+    size.clamp(MIN_ICON_GRID_SIZE, MAX_ICON_GRID_SIZE)
 }
 
 pub(crate) fn max_preview_file_mib(bytes: u64) -> u64 {

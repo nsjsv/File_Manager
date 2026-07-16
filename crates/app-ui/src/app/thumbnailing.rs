@@ -4,11 +4,11 @@ use file_core::DirectoryEntry;
 use iced::Task;
 use thumbnails::ThumbnailRequest;
 
-use super::FileBrowser;
+use super::{FileBrowser, PaneIconGridViewport};
 use crate::commands::thumbnail_batch_command;
 use crate::model::{
-    sanitized_application_log_detail, BrowserPane, BrowserPaneId, BrowserViewMode, Message,
-    PreviewContent, PreviewState,
+    sanitized_application_log_detail, BrowserPane, BrowserPaneId, BrowserViewMode,
+    IconGridViewport, Message, PreviewContent, PreviewState,
 };
 use crate::thumbnail_cache::{
     request_for_entry, request_for_transfer_conflict_path, ColumnViewport, ThumbnailHandleEntry,
@@ -26,7 +26,7 @@ const PREVIEW_RESIZE_EXTRA_PIXELS: u32 = 128;
 impl FileBrowser {
     pub(super) fn schedule_thumbnail_refresh(&mut self) -> Task<Message> {
         self.schedule_interaction_thumbnails();
-        self.schedule_rendered_column_thumbnails();
+        self.schedule_rendered_browser_thumbnails();
         self.pump_thumbnail_queue()
     }
 
@@ -37,7 +37,7 @@ impl FileBrowser {
         if pane_id == self.active_pane_id() {
             self.schedule_interaction_thumbnails();
         }
-        self.schedule_rendered_column_thumbnails_for_pane(pane_id);
+        self.schedule_rendered_browser_thumbnails_for_pane(pane_id);
         self.pump_thumbnail_queue()
     }
 
@@ -91,6 +91,31 @@ impl FileBrowser {
             self.schedule_visible_list_directory_summary_range_for_pane(pane_id, Some(viewport)),
             self.pump_thumbnail_queue(),
         ])
+    }
+
+    pub(super) fn handle_icon_grid_scrolled(
+        &mut self,
+        pane_id: BrowserPaneId,
+        offset_y: f32,
+        width: f32,
+        height: f32,
+    ) -> Task<Message> {
+        let Some(directory) = self.pane_view(pane_id).map(|pane| pane.current_dir.clone()) else {
+            return Task::none();
+        };
+        self.icon_grid_viewports.insert(
+            pane_id,
+            PaneIconGridViewport {
+                directory,
+                viewport: IconGridViewport {
+                    offset_y: offset_y.max(0.0),
+                    width: width.max(1.0),
+                    height: height.max(1.0),
+                },
+            },
+        );
+        self.schedule_visible_icon_grid_thumbnails_for_pane(pane_id);
+        self.pump_thumbnail_queue()
     }
 
     pub(super) fn request_preview_thumbnail_for_entry(
@@ -299,6 +324,13 @@ impl FileBrowser {
     }
 
     fn schedule_interaction_thumbnails(&mut self) {
+        if self
+            .pane_view(self.active_pane_id())
+            .is_some_and(|pane| pane.view_mode == BrowserViewMode::Icons)
+        {
+            return;
+        }
+
         if let Some(path) = self.selected.clone() {
             if let Some(entry) = self.entry_for_path(&path).cloned() {
                 self.enqueue_list_thumbnail_for_entry(
@@ -320,19 +352,24 @@ impl FileBrowser {
         }
     }
 
-    fn schedule_rendered_column_thumbnails(&mut self) {
+    fn schedule_rendered_browser_thumbnails(&mut self) {
         for pane_id in self.pane_layout.visible_pane_ids() {
-            self.schedule_rendered_column_thumbnails_for_pane(pane_id);
+            self.schedule_rendered_browser_thumbnails_for_pane(pane_id);
         }
     }
 
-    fn schedule_rendered_column_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
-        if self
-            .pane_view(pane_id)
-            .is_some_and(|pane| pane.view_mode == BrowserViewMode::List)
-        {
-            self.schedule_visible_list_thumbnails_for_pane(pane_id);
-            return;
+    fn schedule_rendered_browser_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
+        match self.pane_view(pane_id).map(|pane| pane.view_mode) {
+            Some(BrowserViewMode::List) => {
+                self.schedule_visible_list_thumbnails_for_pane(pane_id);
+                return;
+            }
+            Some(BrowserViewMode::Icons) => {
+                self.schedule_visible_icon_grid_thumbnails_for_pane(pane_id);
+                return;
+            }
+            Some(BrowserViewMode::Columns) => {}
+            None => return,
         }
 
         let directories = rendered_column_directories_for_browser(self, pane_id);
@@ -344,6 +381,38 @@ impl FileBrowser {
                 ThumbnailPriority::Visible
             };
             self.schedule_column_directory_thumbnails_for_pane(pane_id, directory, priority);
+        }
+    }
+
+    fn schedule_visible_icon_grid_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
+        let icon_edge = self.user_config.icon_grid_size;
+        let thumbnail_edge = crate::icon_grid_geometry::thumbnail_edge(icon_edge);
+        let Some((directory, requests)) = self.pane_view(pane_id).map(|pane| {
+            let range = crate::icon_grid_geometry::visible_entry_range(
+                pane.icon_grid_viewport,
+                pane.entries.len(),
+                icon_edge,
+            );
+            let requests = pane.entries[range.start_entry..range.end_entry]
+                .iter()
+                .filter_map(|entry| request_for_entry(entry, thumbnail_edge))
+                .collect::<Vec<_>>();
+            (pane.current_dir.clone(), requests)
+        }) else {
+            return;
+        };
+        let scope = thumbnail_scope_for_pane_directory(pane_id, &directory);
+        let keep = requests
+            .iter()
+            .map(ThumbnailRequest::key)
+            .collect::<Vec<_>>();
+        self.thumbnail_cache.prune_scope_except(&scope, &keep);
+        for request in requests {
+            self.enqueue_list_thumbnail_request_for_scope(
+                request,
+                ThumbnailPriority::Visible,
+                scope.clone(),
+            );
         }
     }
 
@@ -609,13 +678,15 @@ impl FileBrowser {
     }
 
     fn active_entry_thumbnail_edge(&self) -> u32 {
-        if self
+        match self
             .pane_view(self.active_pane_id())
-            .is_some_and(|pane| pane.view_mode == BrowserViewMode::Columns)
+            .map(|pane| pane.view_mode)
         {
-            COLUMN_THUMBNAIL_EDGE
-        } else {
-            LIST_THUMBNAIL_EDGE
+            Some(BrowserViewMode::Columns) => COLUMN_THUMBNAIL_EDGE,
+            Some(BrowserViewMode::Icons) => {
+                crate::icon_grid_geometry::thumbnail_edge(self.user_config.icon_grid_size)
+            }
+            Some(BrowserViewMode::List) | None => LIST_THUMBNAIL_EDGE,
         }
     }
 }

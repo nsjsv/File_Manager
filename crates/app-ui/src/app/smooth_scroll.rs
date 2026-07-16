@@ -142,6 +142,25 @@ impl FileBrowser {
         region: ScrollbarRegion,
         delta: mouse::ScrollDelta,
     ) -> Task<Message> {
+        if matches!(region, ScrollbarRegion::PaneIcons(_)) && self.keyboard_modifiers.control() {
+            self.smooth_scroll.stop();
+            let Some(zoom) = icon_grid_zoom_from_wheel(delta) else {
+                return Task::none();
+            };
+            let next_size = crate::icon_grid_geometry::stepped_icon_grid_size(
+                self.user_config.icon_grid_size,
+                zoom,
+            );
+            if next_size == self.user_config.icon_grid_size {
+                return Task::none();
+            }
+            self.user_config.icon_grid_size = next_size;
+            return Task::batch([
+                self.persist_user_preferences_command(),
+                self.schedule_thumbnail_refresh(),
+            ]);
+        }
+
         let Some(scroll_delta) = self.smooth_scroll_delta_for_region(&region, delta) else {
             return Task::none();
         };
@@ -363,6 +382,9 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
         ScrollbarRegion::PaneList(pane_id) => {
             iced::widget::Id::from(format!("pane-list-{}", pane_id.key()))
         }
+        ScrollbarRegion::PaneIcons(pane_id) => {
+            iced::widget::Id::from(format!("pane-icons-{}", pane_id.key()))
+        }
         ScrollbarRegion::ColumnBrowser(pane_id) => {
             iced::widget::Id::from(format!("column-browser-{}", pane_id.key()))
         }
@@ -411,6 +433,27 @@ fn wheel_delta_for_region(
     };
 
     (!delta.delta.is_resting()).then_some(delta)
+}
+
+fn icon_grid_zoom_from_wheel(
+    delta: mouse::ScrollDelta,
+) -> Option<crate::icon_grid_geometry::IconGridZoom> {
+    let primary_delta = match delta {
+        mouse::ScrollDelta::Lines { x, y } | mouse::ScrollDelta::Pixels { x, y } => {
+            if y.abs() > f32::EPSILON {
+                y
+            } else {
+                x
+            }
+        }
+    };
+    if primary_delta > f32::EPSILON {
+        Some(crate::icon_grid_geometry::IconGridZoom::In)
+    } else if primary_delta < -f32::EPSILON {
+        Some(crate::icon_grid_geometry::IconGridZoom::Out)
+    } else {
+        None
+    }
 }
 
 fn vertical_wheel_delta(shift_pressed: bool, delta: mouse::ScrollDelta) -> WheelScrollDelta {
@@ -503,6 +546,9 @@ pub(crate) fn path_hash(path: &Path) -> String {
     }
     hasher.finalize().to_hex().to_string()
 }
+
+#[cfg(test)]
+mod icon_grid_tests;
 
 #[cfg(test)]
 mod tests {

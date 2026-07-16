@@ -7,8 +7,7 @@ use iced::Task;
 use super::FileBrowser;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, ColumnBrowserViewport,
-    FileDragPhase, Message, NavigationMode, SplitAxis, SplitRegion, TabDragMode, TabDragState,
-    TabSplitTarget,
+    FileDragPhase, Message, NavigationMode, SplitRegion, TabDragMode, TabDragState, TabSplitTarget,
 };
 
 mod animation;
@@ -608,21 +607,10 @@ impl FileBrowser {
 
     fn tab_reorder_slot_width(&self) -> f32 {
         let tab_count = self.tabs.len().max(1) as f32;
-        let available_width = self.active_tab_bar_width_estimate()
+        let available_width = self.pane_content_width()
             - TAB_REORDER_HORIZONTAL_PADDING
             - TAB_REORDER_SPACING * (tab_count - 1.0);
         (available_width / tab_count).max(TAB_REORDER_MIN_SLOT_WIDTH)
-    }
-
-    fn active_tab_bar_width_estimate(&self) -> f32 {
-        let content_width = (self.main_window_width - self.sidebar_width).max(1.0);
-        match self.pane_layout {
-            BrowserPaneLayout::Split {
-                axis: SplitAxis::Horizontal,
-                ..
-            } => content_width / 2.0,
-            BrowserPaneLayout::Single { .. } | BrowserPaneLayout::Split { .. } => content_width,
-        }
     }
 }
 

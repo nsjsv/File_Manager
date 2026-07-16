@@ -14,10 +14,10 @@ use super::{
     app_config_dir_path, browser_view_mode_config_value, browser_view_mode_from_config_value,
     default_state_database_path, default_user_config, file_operation_verification_config_value,
     file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
-    list_directory_size_display_mode_from_config_value, normalize_max_preview_file_bytes,
-    normalize_sidebar_width, sort_direction_config_value, sort_direction_from_config_value,
-    sort_field_config_value, sort_field_from_config_value, SidebarFavoriteConfig,
-    UiLanguageSetting, UserConfig,
+    list_directory_size_display_mode_from_config_value, normalize_icon_grid_size,
+    normalize_max_preview_file_bytes, normalize_sidebar_width, sort_direction_config_value,
+    sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
+    SidebarFavoriteConfig, UiLanguageSetting, UserConfig,
 };
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
@@ -38,6 +38,7 @@ pub(crate) struct UserPreferences {
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) icon_grid_size: u32,
     pub(crate) list_view_preferences: ListViewPreferences,
     pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
@@ -60,6 +61,7 @@ impl UserPreferences {
             terminal_emulator: config.terminal_emulator,
             file_operation_verification: config.file_operation_verification,
             browser_view_mode: config.browser_view_mode,
+            icon_grid_size: normalize_icon_grid_size(config.icon_grid_size),
             list_view_preferences: config.list_view_preferences.clone(),
             list_directory_size_display_mode: config.list_directory_size_display_mode,
             startup_location_policy: config.startup_location_policy,
@@ -81,6 +83,7 @@ impl UserPreferences {
         config.terminal_emulator = self.terminal_emulator;
         config.file_operation_verification = self.file_operation_verification;
         config.browser_view_mode = self.browser_view_mode;
+        config.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
         config.list_view_preferences = self.list_view_preferences.clone();
         config.list_directory_size_display_mode = self.list_directory_size_display_mode;
         config.startup_location_policy = self.startup_location_policy;
@@ -108,6 +111,7 @@ impl UserPreferences {
             file_operation_verification_config_value(self.file_operation_verification).to_owned();
         stored.browser_view_mode =
             browser_view_mode_config_value(self.browser_view_mode).to_owned();
+        stored.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
         stored.list_view_columns = stored_list_view_columns(&self.list_view_preferences);
         stored.list_sort_field =
             sort_field_config_value(self.list_view_preferences.sort().field).to_owned();
@@ -150,6 +154,7 @@ impl UserPreferences {
             .unwrap_or(default_preferences.file_operation_verification),
             browser_view_mode: browser_view_mode_from_config_value(&stored.browser_view_mode)
                 .unwrap_or(default_preferences.browser_view_mode),
+            icon_grid_size: normalize_icon_grid_size(stored.icon_grid_size),
             list_view_preferences,
             list_directory_size_display_mode: list_directory_size_display_mode_from_config_value(
                 &stored.list_directory_size_display_mode,

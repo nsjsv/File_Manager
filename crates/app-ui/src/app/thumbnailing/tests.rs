@@ -12,7 +12,8 @@ use crate::animated_image_preview::{
 };
 use crate::config::ui_thread_startup_config;
 use crate::model::{
-    BrowserPaneLayout, BrowserTab, SplitAxis, TransferConflictMode, TransferConflictState,
+    BrowserPaneLayout, BrowserTab, ExpandedDirectory, ExpandedDirectoryStatus, IconGridViewport,
+    SplitAxis, TransferConflictMode, TransferConflictState,
 };
 use crate::network_connections::NetworkConnectionState;
 use crate::operation_queue::QueuedTransfer;
@@ -117,6 +118,77 @@ fn list_scrolled_schedules_visible_list_thumbnail_requests() {
     assert!(batch
         .iter()
         .all(|work| work.load_policy == ThumbnailLoadPolicy::LoadOrGenerate));
+}
+
+#[test]
+fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
+    let mut config = crate::config::default_user_config();
+    config.icon_grid_size = 112;
+    let (mut browser, _) = FileBrowser::new(config);
+    browser.current_dir = PathBuf::from("/workspace");
+    browser.view_mode = BrowserViewMode::Icons;
+    browser.main_window_width = 500.0;
+    browser.sidebar_width = 0.0;
+    browser.entries = (0..100)
+        .map(|index| image_entry(&format!("/workspace/{index}.png")))
+        .collect();
+    browser.expanded_directories.insert(
+        PathBuf::from("/workspace/subdir"),
+        ExpandedDirectory {
+            entries: vec![image_entry("/workspace/subdir/hidden.png")],
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: true,
+            is_collapsing: false,
+            animation_progress: 1.0,
+            load_generation: 0,
+            load_cancel: None,
+        },
+    );
+    let viewport = IconGridViewport {
+        offset_y: crate::icon_grid_geometry::ICON_GRID_CONTENT_PADDING
+            + crate::icon_grid_geometry::row_height(112) * 10.0,
+        width: 500.0,
+        height: crate::icon_grid_geometry::row_height(112) * 2.0,
+    };
+    browser.icon_grid_viewports.insert(
+        BrowserPaneId::PRIMARY,
+        PaneIconGridViewport {
+            directory: browser.current_dir.clone(),
+            viewport,
+        },
+    );
+    let visible = crate::icon_grid_geometry::visible_entry_range(viewport, 100, 112);
+
+    browser.schedule_visible_icon_grid_thumbnails_for_pane(BrowserPaneId::PRIMARY);
+
+    let mut queued = Vec::new();
+    loop {
+        let batch = browser.thumbnail_cache.take_next_batch();
+        if batch.is_empty() {
+            break;
+        }
+        for work in batch {
+            browser.thumbnail_cache.finish(&work.key());
+            queued.push(work);
+        }
+    }
+    let queued_sources = queued
+        .iter()
+        .map(|work| work.request.source.clone())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(queued.len(), visible.end_entry - visible.start_entry);
+    assert!(queued.iter().all(|work| work.request.max_edge == 224));
+    assert!(queued.iter().all(|work| {
+        let file_name = work
+            .request
+            .source
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.parse::<usize>().ok());
+        file_name.is_some_and(|index| (visible.start_entry..visible.end_entry).contains(&index))
+    }));
+    assert!(!queued_sources.contains(&PathBuf::from("/workspace/subdir/hidden.png")));
 }
 
 #[test]

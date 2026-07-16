@@ -165,6 +165,14 @@ impl FileBrowser {
 
                 pane.current_dir = scan.path;
                 pane.entries = scan.entries;
+                if pane.view_mode == crate::model::BrowserViewMode::Icons {
+                    crate::model::retain_direct_entry_selection(
+                        &pane.entries,
+                        &mut pane.selected,
+                        &mut pane.selected_paths,
+                        &mut pane.selection_anchor,
+                    );
+                }
                 pane.directory_loading_placeholder_entries.clear();
                 pane.is_loading = false;
                 pane.directory_load_cancel = None;
@@ -189,6 +197,9 @@ impl FileBrowser {
 
         self.current_dir = scan.path;
         self.entries = scan.entries;
+        if self.view_mode == crate::model::BrowserViewMode::Icons {
+            self.retain_direct_entry_selection();
+        }
         self.directory_loading_placeholder_entries.clear();
         self.is_loading = false;
         self.directory_load_cancel = None;
@@ -226,6 +237,14 @@ impl FileBrowser {
                 .iter()
                 .map(|trash_entry| trash_entry.entry.clone())
                 .collect();
+            if pane.view_mode == crate::model::BrowserViewMode::Icons {
+                crate::model::retain_direct_entry_selection(
+                    &pane.entries,
+                    &mut pane.selected,
+                    &mut pane.selected_paths,
+                    &mut pane.selection_anchor,
+                );
+            }
             pane.directory_loading_placeholder_entries.clear();
             pane.deepest_open_column_directory = None;
             pane.expanded_directories.clear();
@@ -248,6 +267,9 @@ impl FileBrowser {
             .iter()
             .map(|trash_entry| trash_entry.entry.clone())
             .collect();
+        if self.view_mode == crate::model::BrowserViewMode::Icons {
+            self.retain_direct_entry_selection();
+        }
         self.directory_loading_placeholder_entries.clear();
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();

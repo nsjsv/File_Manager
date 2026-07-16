@@ -23,20 +23,34 @@ impl FileBrowser {
             return Task::none();
         }
 
-        let transition_command = match view_mode {
-            BrowserViewMode::List => {
+        let previous_mode = self.view_mode;
+        if previous_mode == BrowserViewMode::Icons || view_mode == BrowserViewMode::Icons {
+            self.retain_direct_entry_selection();
+        }
+        let transition_command = match (previous_mode, view_mode) {
+            (BrowserViewMode::Columns, BrowserViewMode::List) => {
                 self.sync_expanded_directories_to_open_columns();
                 Task::none()
             }
-            BrowserViewMode::Columns => self.sync_open_column_directory_to_list_selection(),
+            (BrowserViewMode::List, BrowserViewMode::Columns) => {
+                self.sync_open_column_directory_to_list_selection()
+            }
+            (BrowserViewMode::Icons, BrowserViewMode::Columns)
+                if self.selected_is_direct_entry() =>
+            {
+                self.sync_open_column_directory_to_list_selection()
+            }
+            _ => Task::none(),
         };
         self.view_mode = view_mode;
         self.hovered_entry = None;
         self.cursor_paste_directory = None;
         self.selection_marquee = None;
+        self.drag_selection_anchor = None;
         self.file_drag = None;
         self.pending_keyboard_column_focus = None;
         self.column_resize_drag = None;
+        self.file_entry_bounds.clear();
         self.user_config.browser_view_mode = view_mode;
         self.sync_active_tab_state();
         let list_directory_summary_command = if view_mode == BrowserViewMode::List {
@@ -51,6 +65,21 @@ impl FileBrowser {
             self.schedule_thumbnail_refresh(),
             self.request_browser_session_save(),
         ])
+    }
+
+    pub(super) fn retain_direct_entry_selection(&mut self) {
+        crate::model::retain_direct_entry_selection(
+            &self.entries,
+            &mut self.selected,
+            &mut self.selected_paths,
+            &mut self.selection_anchor,
+        );
+    }
+
+    fn selected_is_direct_entry(&self) -> bool {
+        self.selected
+            .as_ref()
+            .is_some_and(|selected| self.entries.iter().any(|entry| entry.path == *selected))
     }
 
     pub(super) fn list_directory_animation_is_active(&self) -> bool {

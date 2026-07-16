@@ -91,9 +91,9 @@ use crate::model::{
     BatchRenameState, BreadcrumbDropTargetBounds, BrowserPane, BrowserPaneId, BrowserPaneLayout,
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    FileDragState, FileDropPrompt, FilePropertiesState, Message, OperationQueuePanelMode,
-    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
+    FileDragState, FileDropPrompt, FilePropertiesState, IconGridViewport, Message,
+    OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
+    PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
     TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
 };
@@ -152,6 +152,7 @@ pub(crate) struct FileBrowser {
     pub(crate) thumbnail_cache: ThumbnailCache,
     pub(crate) column_browser_viewport: ColumnBrowserViewport,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
+    icon_grid_viewports: HashMap<BrowserPaneId, PaneIconGridViewport>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) open_with: Option<OpenWithState>,
     pub(crate) file_drop_prompt: Option<FileDropPrompt>,
@@ -253,6 +254,12 @@ pub(crate) struct FileBrowser {
 struct PendingWaylandFileDrop {
     measurement_generation: u64,
     drop: WaylandDndFileDrop,
+}
+
+#[derive(Debug, Clone)]
+struct PaneIconGridViewport {
+    directory: PathBuf,
+    viewport: IconGridViewport,
 }
 
 #[derive(Debug, Clone)]
@@ -371,6 +378,7 @@ impl FileBrowser {
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
             column_browser_viewport: ColumnBrowserViewport::default(),
             column_viewports: HashMap::new(),
+            icon_grid_viewports: HashMap::new(),
             context_menu: None,
             open_with: None,
             file_drop_prompt: None,

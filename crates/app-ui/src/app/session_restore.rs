@@ -94,6 +94,7 @@ impl FileBrowser {
         self.expanded_directories.clear();
         self.column_browser_viewport = ColumnBrowserViewport::default();
         self.column_viewports.clear();
+        self.icon_grid_viewports.clear();
         self.back_stack.clear();
         self.forward_stack.clear();
         self.is_loading = true;
@@ -133,6 +134,7 @@ impl FileBrowser {
             );
         }
         self.panes = restored_panes.clone();
+        self.icon_grid_viewports.clear();
         self.pane_layout = sanitize_layout(layout, &restored_panes);
         let active_pane_id = self.pane_layout.active();
         let active_pane = restored_panes

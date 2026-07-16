@@ -425,7 +425,7 @@ fn list_entry_row<'a>(
     let row_area = mouse_area(row_container)
         .on_enter(Message::EntryHovered(pane.id, entry.path.clone()))
         .on_exit(Message::EntryHoverCleared(pane.id, entry.path.clone()))
-        .on_press(Message::ListEntryClicked(pane.id, entry.path.clone()))
+        .on_press(Message::FlatEntryClicked(pane.id, entry.path.clone()))
         .on_release(Message::EntryReleased(pane.id, entry.path.clone()))
         .on_right_press(Message::EntryRightClicked(pane.id, entry.path.clone()))
         .interaction(iced::mouse::Interaction::Pointer);

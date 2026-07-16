@@ -19,6 +19,8 @@ pub struct StoredUserPreferences {
     pub terminal_emulator: String,
     pub file_operation_verification: String,
     pub browser_view_mode: String,
+    #[serde(default = "default_icon_grid_size")]
+    pub icon_grid_size: u32,
     pub startup_location: String,
     pub startup_custom_directory: StoredPath,
     pub save_view_state: bool,
@@ -46,6 +48,7 @@ impl Default for StoredUserPreferences {
             terminal_emulator: "automatic".to_owned(),
             file_operation_verification: "basic_metadata".to_owned(),
             browser_view_mode: "columns".to_owned(),
+            icon_grid_size: default_icon_grid_size(),
             startup_location: "home".to_owned(),
             startup_custom_directory: StoredPath::from_path(Path::new("")),
             save_view_state: false,
@@ -121,6 +124,10 @@ fn default_list_directory_size_display_mode() -> String {
 
 fn default_language_setting() -> String {
     "system".to_owned()
+}
+
+fn default_icon_grid_size() -> u32 {
+    96
 }
 
 impl TaskQueueStore {

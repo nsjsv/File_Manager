@@ -7,6 +7,7 @@ use crate::StoredPath;
 pub enum StoredBrowserViewMode {
     Columns,
     List,
+    Icons,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

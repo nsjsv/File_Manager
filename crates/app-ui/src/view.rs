@@ -48,6 +48,7 @@ use crate::floating_surface::{
     pass_through_dismissable_floating_surface, FloatingContent, FloatingPlacement,
 };
 use crate::formatting::format_middle_ellipsized_text;
+use crate::icon_grid_view::icon_grid_view;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::list_view::list_browser_view;
 use crate::model::{
@@ -398,6 +399,7 @@ fn browser_content_view<'a>(
     match pane.view_mode {
         BrowserViewMode::Columns => column_browser_view(browser, pane),
         BrowserViewMode::List => list_browser_view(browser, pane),
+        BrowserViewMode::Icons => icon_grid_view(browser, pane),
     }
 }
 

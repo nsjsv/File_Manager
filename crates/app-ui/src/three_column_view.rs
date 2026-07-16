@@ -606,6 +606,7 @@ mod tests {
             hovered_entry: None,
             expanded_directories,
             column_viewports,
+            icon_grid_viewport: crate::model::IconGridViewport::default(),
             view_mode: crate::model::BrowserViewMode::Columns,
             tabs: &[],
             active_tab_id: 0,

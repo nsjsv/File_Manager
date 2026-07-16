@@ -307,6 +307,7 @@ fn view_mode_from_stored(view_mode: StoredBrowserViewMode) -> BrowserViewMode {
     match view_mode {
         StoredBrowserViewMode::Columns => BrowserViewMode::Columns,
         StoredBrowserViewMode::List => BrowserViewMode::List,
+        StoredBrowserViewMode::Icons => BrowserViewMode::Icons,
     }
 }
 
@@ -314,6 +315,7 @@ fn view_mode_to_stored(view_mode: BrowserViewMode) -> StoredBrowserViewMode {
     match view_mode {
         BrowserViewMode::Columns => StoredBrowserViewMode::Columns,
         BrowserViewMode::List => StoredBrowserViewMode::List,
+        BrowserViewMode::Icons => StoredBrowserViewMode::Icons,
     }
 }
 
@@ -347,5 +349,22 @@ fn restored_expanded_directory() -> ExpandedDirectory {
         animation_progress: 1.0,
         load_generation: 0,
         load_cancel: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_view_mode_round_trips_through_stored_session_value() {
+        assert_eq!(
+            view_mode_from_stored(StoredBrowserViewMode::Icons),
+            BrowserViewMode::Icons
+        );
+        assert_eq!(
+            view_mode_to_stored(BrowserViewMode::Icons),
+            StoredBrowserViewMode::Icons
+        );
     }
 }

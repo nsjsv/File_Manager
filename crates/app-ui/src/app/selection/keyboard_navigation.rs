@@ -44,6 +44,10 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.view_mode == BrowserViewMode::Icons {
+            return self.move_file_selection_in_icon_grid(direction);
+        }
+
         match direction {
             FileSelectionDirection::Up if self.view_mode == BrowserViewMode::List => {
                 self.move_file_selection_in_visible_list(SelectionStep::Previous)
@@ -66,6 +70,67 @@ impl FileBrowser {
             FileSelectionDirection::Left => self.move_file_selection_to_parent_column(),
             FileSelectionDirection::Right => self.move_file_selection_to_child_column(),
         }
+    }
+
+    fn move_file_selection_in_icon_grid(
+        &mut self,
+        direction: FileSelectionDirection,
+    ) -> Task<Message> {
+        let viewport = self
+            .pane_view(self.active_pane_id())
+            .map(|pane| pane.icon_grid_viewport)
+            .unwrap_or_default();
+        let icon_edge = self.user_config.icon_grid_size;
+        let column_count =
+            crate::icon_grid_geometry::column_count_for_width(viewport.width, icon_edge);
+        let current_index = self.selected.as_ref().and_then(|selected| {
+            self.entries
+                .iter()
+                .position(|entry| &entry.path == selected)
+        });
+        let direction = match direction {
+            FileSelectionDirection::Up => crate::icon_grid_geometry::IconGridDirection::Up,
+            FileSelectionDirection::Down => crate::icon_grid_geometry::IconGridDirection::Down,
+            FileSelectionDirection::Left => crate::icon_grid_geometry::IconGridDirection::Left,
+            FileSelectionDirection::Right => crate::icon_grid_geometry::IconGridDirection::Right,
+        };
+        let Some(target_index) = crate::icon_grid_geometry::keyboard_target_index(
+            current_index,
+            direction,
+            self.entries.len(),
+            column_count,
+        ) else {
+            return Task::none();
+        };
+        let Some(target) = self
+            .entries
+            .get(target_index)
+            .map(|entry| entry.path.clone())
+        else {
+            return Task::none();
+        };
+
+        self.select_path_from_keyboard(target);
+        let scroll_delta = crate::icon_grid_geometry::scroll_delta_to_reveal_row(
+            viewport,
+            target_index / column_count,
+            icon_edge,
+        );
+        let scroll_task = if scroll_delta.abs() > f32::EPSILON {
+            iced::widget::operation::scroll_by(
+                crate::app::smooth_scroll::smooth_scroll_id(
+                    &crate::model::ScrollbarRegion::PaneIcons(self.active_pane_id()),
+                ),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: 0.0,
+                    y: scroll_delta,
+                },
+            )
+        } else {
+            Task::none()
+        };
+
+        Task::batch([scroll_task, self.schedule_thumbnail_refresh()])
     }
 
     fn move_file_selection_in_visible_list(&mut self, step: SelectionStep) -> Task<Message> {
@@ -434,4 +499,55 @@ fn stepped_selection_target(
         (None, SelectionStep::Next) => 0,
     };
     paths.get(index).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+
+    use super::*;
+    use crate::config;
+
+    fn entry(index: usize) -> DirectoryEntry {
+        DirectoryEntry::new(
+            PathBuf::from(format!("/workspace/{index}.txt")),
+            FileKind::File,
+            EntryMetadata::default(),
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn icon_grid_keyboard_navigation_uses_current_column_count() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.view_mode = BrowserViewMode::Icons;
+        browser.main_window_width = 500.0;
+        browser.sidebar_width = 0.0;
+        browser.entries = (0..8).map(entry).collect();
+        browser.select_path(browser.entries[1].path.clone());
+
+        drop(browser.move_file_selection(FileSelectionDirection::Down));
+        assert_eq!(browser.selected, Some(browser.entries[4].path.clone()));
+
+        drop(browser.move_file_selection(FileSelectionDirection::Left));
+        assert_eq!(browser.selected, Some(browser.entries[3].path.clone()));
+    }
+
+    #[test]
+    fn icon_grid_keyboard_navigation_clamps_in_incomplete_last_row() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.view_mode = BrowserViewMode::Icons;
+        browser.main_window_width = 500.0;
+        browser.sidebar_width = 0.0;
+        browser.entries = (0..8).map(entry).collect();
+        browser.select_path(browser.entries[5].path.clone());
+
+        drop(browser.move_file_selection(FileSelectionDirection::Down));
+
+        assert_eq!(browser.selected, Some(browser.entries[7].path.clone()));
+    }
 }

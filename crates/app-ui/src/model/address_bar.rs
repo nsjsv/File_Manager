@@ -39,7 +39,7 @@ pub(crate) fn displayed_address_directory<'a>(
         BrowserViewMode::Columns => deepest_open_column_directory
             .map(PathBuf::as_path)
             .unwrap_or(current_dir),
-        BrowserViewMode::List => current_dir,
+        BrowserViewMode::List | BrowserViewMode::Icons => current_dir,
     }
 }
 
@@ -349,6 +349,21 @@ mod tests {
             displayed_address_directory(
                 current_dir,
                 BrowserViewMode::List,
+                Some(&deepest_open_directory),
+            ),
+            current_dir
+        );
+    }
+
+    #[test]
+    fn icon_view_ignores_hidden_column_open_directory() {
+        let current_dir = Path::new("/workspace");
+        let deepest_open_directory = PathBuf::from("/workspace/project/src");
+
+        assert_eq!(
+            displayed_address_directory(
+                current_dir,
+                BrowserViewMode::Icons,
                 Some(&deepest_open_directory),
             ),
             current_dir

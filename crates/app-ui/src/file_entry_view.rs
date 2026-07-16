@@ -25,6 +25,7 @@ const COLUMN_ENTRY_ICON_SIZE: f32 = 16.0;
 pub(crate) enum FileEntryIconDensity {
     List,
     Column,
+    Grid(u32),
 }
 
 impl FileEntryIconDensity {
@@ -32,6 +33,7 @@ impl FileEntryIconDensity {
         match self {
             Self::List => LIST_THUMBNAIL_EDGE,
             Self::Column => COLUMN_THUMBNAIL_EDGE,
+            Self::Grid(icon_edge) => crate::icon_grid_geometry::thumbnail_edge(icon_edge),
         }
     }
 
@@ -39,6 +41,7 @@ impl FileEntryIconDensity {
         match self {
             Self::List => LIST_THUMBNAIL_SIZE,
             Self::Column => COLUMN_THUMBNAIL_SIZE,
+            Self::Grid(icon_edge) => icon_edge as f32,
         }
     }
 
@@ -46,6 +49,7 @@ impl FileEntryIconDensity {
         match self {
             Self::List => ENTRY_ICON_SIZE,
             Self::Column => COLUMN_ENTRY_ICON_SIZE,
+            Self::Grid(icon_edge) => icon_edge as f32 * 0.68,
         }
     }
 }
