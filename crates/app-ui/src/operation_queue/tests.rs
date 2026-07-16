@@ -90,9 +90,12 @@ fn finished_tasks_stay_until_queue_is_cleared() {
     queue.enqueue(sample_operation());
     let task_id = queue.tasks()[0].id;
 
-    let (finished, error) = queue.finish(task_id, Ok(()));
+    let (terminal_status, error) = queue.finish(task_id, Ok(()));
 
-    assert!(finished);
+    assert_eq!(
+        terminal_status,
+        Some(FileOperationTerminalStatus::Completed)
+    );
     assert!(error.is_none());
     assert_eq!(queue.tasks().len(), 1);
     assert_eq!(queue.tasks()[0].status, FileOperationStatus::Completed);
@@ -114,6 +117,41 @@ fn finished_tasks_stay_until_queue_is_cleared() {
 }
 
 #[test]
+fn pending_and_terminal_tasks_reject_completion_messages() {
+    let mut queue = FileOperationQueue::new();
+    queue.enqueue(sample_operation());
+    queue.enqueue(sample_operation());
+    let running_task_id = queue.tasks()[0].id;
+    let pending_task_id = queue.tasks()[1].id;
+
+    assert_eq!(queue.finish(pending_task_id, Ok(())), (None, None));
+    assert_eq!(
+        queue.tasks()[1].status,
+        FileOperationStatus::Pending,
+        "pending task must not accept another task's completion"
+    );
+    assert_eq!(
+        queue.finish(running_task_id, Ok(())).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    assert_eq!(queue.finish(running_task_id, Ok(())), (None, None));
+}
+
+#[test]
+fn late_cancel_request_keeps_successful_completion_semantics() {
+    let mut queue = FileOperationQueue::new();
+    queue.enqueue(sample_operation());
+    let task_id = queue.tasks()[0].id;
+    queue.cancel(task_id);
+
+    assert_eq!(
+        queue.finish(task_id, Ok(())),
+        (Some(FileOperationTerminalStatus::Completed), None)
+    );
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Completed);
+}
+
+#[test]
 fn failed_operation_records_once_but_cancel_completion_does_not() {
     RECORDED_FILE_OPERATION_FAILURES.with(|count| count.set(0));
     let mut failed_queue = FileOperationQueue::new();
@@ -124,8 +162,18 @@ fn failed_operation_records_once_but_cancel_completion_does_not() {
     let canceled_task_id = canceled_queue.tasks()[0].id;
     canceled_queue.cancel(canceled_task_id);
 
-    failed_queue.finish(failed_task_id, Err("create failed".to_owned()));
-    canceled_queue.finish(canceled_task_id, Err("cancelled".to_owned()));
+    assert_eq!(
+        failed_queue.finish(failed_task_id, Err("create failed".to_owned())),
+        (Some(FileOperationTerminalStatus::Failed), None)
+    );
+    assert_eq!(
+        failed_queue.finish(failed_task_id, Err("duplicate failure".to_owned())),
+        (None, None)
+    );
+    assert_eq!(
+        canceled_queue.finish(canceled_task_id, Err("cancelled".to_owned())),
+        (Some(FileOperationTerminalStatus::Canceled), None)
+    );
 
     RECORDED_FILE_OPERATION_FAILURES.with(|count| assert_eq!(count.get(), 1));
     assert_eq!(failed_queue.tasks()[0].status, FileOperationStatus::Failed);

@@ -231,6 +231,7 @@ pub(crate) enum Message {
     VideoPreviewFailed(PathBuf, u64, String),
     FileOperationProgressed(u64, FileOperationProgressUpdate),
     FileOperationFinished(u64, FileOperationCompletion),
+    DesktopNotificationPublished(Result<(), String>),
     FileOperationIndicatorPressed,
     FileOperationAutoHideElapsed(u64),
     FileOperationPauseToggled(u64),

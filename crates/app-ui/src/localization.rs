@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::UiLanguage;
 
+mod file_operation_notifications;
 mod index_status;
 mod search_service_recovery;
 
@@ -34,6 +35,10 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
     }
 
     if let Some(translated) = search_service_recovery::translate(text) {
+        return Cow::Owned(translated);
+    }
+
+    if let Some(translated) = file_operation_notifications::translate(text) {
         return Cow::Owned(translated);
     }
 
@@ -354,6 +359,7 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Failed" => Some("失败"),
         "Completed" => Some("已完成"),
         "Canceled" => Some("已取消"),
+        "See the task queue for details." => Some("请在任务队列中查看详情。"),
         "Resume" => Some("继续"),
         "Pause" => Some("暂停"),
         "Cancel" => Some("取消"),

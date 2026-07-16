@@ -211,8 +211,11 @@ impl FileBrowser {
                 }
                 Task::none()
             }
-            Message::FileOperationFinished(task_id, result) => {
-                self.accept_file_operation_finished(task_id, result)
+            Message::FileOperationFinished(task_id, completion) => {
+                self.accept_file_operation_finished(task_id, completion)
+            }
+            Message::DesktopNotificationPublished(outcome) => {
+                self.accept_desktop_notification_published(outcome)
             }
             Message::FileOperationIndicatorPressed => {
                 self.context_menu = None;

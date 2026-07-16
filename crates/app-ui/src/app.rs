@@ -7,6 +7,7 @@ mod column_resize;
 mod column_scroll;
 mod config_persistence;
 mod events;
+mod file_operation_notifications;
 mod file_operations;
 mod global_error;
 mod list_directory_summaries;
@@ -149,6 +150,7 @@ pub(crate) struct FileBrowser {
     wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
+    system_focused_window: Option<window::Id>,
     pub(crate) thumbnail_cache: ThumbnailCache,
     pub(crate) column_browser_viewport: ColumnBrowserViewport,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
@@ -376,6 +378,7 @@ impl FileBrowser {
             wayland_dnd: None,
             preview_window: None,
             focused_window: main_window,
+            system_focused_window: None,
             thumbnail_cache: ThumbnailCache::new(user_config.thumbnail_cache_dir.clone()),
             column_browser_viewport: ColumnBrowserViewport::default(),
             column_viewports: HashMap::new(),

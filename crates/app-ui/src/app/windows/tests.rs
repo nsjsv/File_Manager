@@ -107,6 +107,39 @@ async fn close_all_windows_saves_browser_session_before_exit() {
 }
 
 #[test]
+fn system_window_focus_ignores_late_unfocus_from_an_older_window() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let main_window = browser.main_window;
+    let settings_window = window::Id::unique();
+
+    assert_eq!(browser.system_focused_window, None);
+    drop(browser.handle_window_focused(main_window));
+    assert_eq!(browser.system_focused_window, Some(main_window));
+
+    drop(browser.handle_window_focused(settings_window));
+    drop(browser.handle_window_unfocused(main_window));
+    assert_eq!(browser.system_focused_window, Some(settings_window));
+    assert_eq!(browser.focused_window, settings_window);
+
+    drop(browser.handle_window_unfocused(settings_window));
+    assert_eq!(browser.system_focused_window, None);
+}
+
+#[test]
+fn closing_focused_auxiliary_window_clears_system_focus() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let settings_window = window::Id::unique();
+    browser.settings_window = Some(settings_window);
+    browser.focused_window = settings_window;
+    browser.system_focused_window = Some(settings_window);
+
+    drop(browser.close_settings_window());
+
+    assert_eq!(browser.system_focused_window, None);
+    assert_eq!(browser.focused_window, browser.main_window);
+}
+
+#[test]
 fn image_preview_size_fits_large_landscape_to_max_width() {
     let size = clamped_image_size(3_000, 1_000);
     let max_size = image_preview_initial_fit_max_size();

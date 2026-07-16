@@ -1,4 +1,5 @@
 mod desktop_entries;
+mod desktop_notifications;
 pub mod display_renderer;
 pub mod file_clipboard;
 pub mod network_mounts;
@@ -8,6 +9,7 @@ pub mod open_with;
 pub mod storage_devices;
 pub mod wayland_dnd;
 
+pub use desktop_notifications::{publish_desktop_notification, DesktopNotificationError};
 pub use display_renderer::{
     detect_display_renderer_gpu, detect_display_renderer_gpu_class, DisplayRendererGpu,
     DisplayRendererGpuClass,

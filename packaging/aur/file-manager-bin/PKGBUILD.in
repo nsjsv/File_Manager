@@ -5,7 +5,7 @@ pkgdesc='Linux desktop file manager written in Rust and Iced'
 arch=('x86_64')
 url='https://github.com/nsjsv/File_Manager'
 license=('GPL-3.0-or-later')
-depends=('alsa-lib' 'fontconfig' 'libxkbcommon' 'wayland')
+depends=('alsa-lib' 'fontconfig' 'libnotify' 'libxkbcommon' 'wayland')
 optdepends=(
     'ffmpeg: video preview and metadata support'
     'ffmpegthumbnailer: video thumbnail generation'

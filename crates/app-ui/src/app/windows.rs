@@ -305,9 +305,7 @@ impl FileBrowser {
         let Some(window) = self.settings_window.take() else {
             return Task::none();
         };
-        if self.focused_window == window {
-            self.focused_window = self.main_window;
-        }
+        self.clear_closed_window_focus(window);
         window::close(window)
     }
 
@@ -328,9 +326,7 @@ impl FileBrowser {
         let Some(window) = self.properties_window.take() else {
             return Task::none();
         };
-        if self.focused_window == window {
-            self.focused_window = self.main_window;
-        }
+        self.clear_closed_window_focus(window);
         window::close(window)
     }
 
@@ -392,9 +388,7 @@ impl FileBrowser {
         self.pending_preview_resize = Some(self.preview_size);
 
         let close_command = if let Some(window) = self.preview_window.take() {
-            if self.focused_window == window {
-                self.focused_window = self.main_window;
-            }
+            self.clear_closed_window_focus(window);
             window::close(window)
         } else {
             Task::none()
@@ -427,18 +421,29 @@ impl FileBrowser {
         let Some(window) = self.preview_window.take() else {
             return Task::none();
         };
+        self.clear_closed_window_focus(window);
+        window::close(window)
+    }
+
+    fn clear_closed_window_focus(&mut self, window: window::Id) {
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
-        window::close(window)
+        if self.system_focused_window == Some(window) {
+            self.system_focused_window = None;
+        }
     }
 
     pub(super) fn handle_window_focused(&mut self, window: window::Id) -> Task<Message> {
         self.focused_window = window;
+        self.system_focused_window = Some(window);
         Task::none()
     }
 
     pub(super) fn handle_window_unfocused(&mut self, window: window::Id) -> Task<Message> {
+        if self.system_focused_window == Some(window) {
+            self.system_focused_window = None;
+        }
         if self.preview_window == Some(window) {
             self.close_preview_window()
         } else {
@@ -585,6 +590,7 @@ impl FileBrowser {
 
     fn close_all_windows(&mut self) -> Task<Message> {
         self.is_shutting_down = true;
+        self.system_focused_window = None;
         self.search.abandon_and_clear_input();
         let _ = self.operation_queue.cancel_all();
         self.clear_file_properties_state();

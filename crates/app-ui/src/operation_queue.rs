@@ -159,6 +159,13 @@ pub(crate) enum FileOperationStatus {
     Canceled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileOperationTerminalStatus {
+    Completed,
+    Failed,
+    Canceled,
+}
+
 impl FileOperationStatus {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -408,13 +415,25 @@ impl FileOperationQueue {
         None
     }
 
-    pub(crate) fn finish(&mut self, id: u64, result: Result<(), String>) -> (bool, Option<String>) {
+    pub(crate) fn finish(
+        &mut self,
+        id: u64,
+        outcome: Result<(), String>,
+    ) -> (Option<FileOperationTerminalStatus>, Option<String>) {
         let Some(position) = self.tasks.iter().position(|task| task.id == id) else {
-            return (false, None);
+            return (None, None);
         };
+        if !matches!(
+            self.tasks[position].status,
+            FileOperationStatus::Running
+                | FileOperationStatus::Paused
+                | FileOperationStatus::Canceling
+        ) {
+            return (None, None);
+        }
 
         let was_canceling = self.tasks[position].status == FileOperationStatus::Canceling;
-        let mut storage_error = match result {
+        let mut storage_error = match outcome {
             Ok(()) => {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Completed;
@@ -441,9 +460,20 @@ impl FileOperationQueue {
                 self.persist_task_state(position)
             }
         };
+        let terminal_status = match self.tasks[position].status {
+            FileOperationStatus::Completed => FileOperationTerminalStatus::Completed,
+            FileOperationStatus::Failed => FileOperationTerminalStatus::Failed,
+            FileOperationStatus::Canceled => FileOperationTerminalStatus::Canceled,
+            FileOperationStatus::Pending
+            | FileOperationStatus::Running
+            | FileOperationStatus::Paused
+            | FileOperationStatus::Canceling => {
+                unreachable!("file operation finish did not produce a terminal status");
+            }
+        };
 
         storage_error = combine_storage_errors(storage_error, self.start_next());
-        (true, storage_error)
+        (Some(terminal_status), storage_error)
     }
 
     pub(crate) fn toggle_pause(&mut self, id: u64) -> Option<String> {

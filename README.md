@@ -44,6 +44,7 @@ File Manager 是一个面向 Linux 桌面的文件管理器，主要面向 Wayla
 - 视频预览和视频缩略图建议安装 `ffmpeg` 和 `ffprobe`，视频缩略图也可以使用 `ffmpegthumbnailer`
 - 创建 `.7z` 压缩包以及预览、解压 `.7z` 和 `.rar` 文件，需要安装 `7z`、`7zz` 或 `7za`
 - SMB、WebDAV 和 SFTP 连接需要系统提供 `gio` 及对应的 GVfs backend，保存密码需要 `secret-tool`
+- 文件任务桌面通知需要 `notify-send`；Arch Linux 由 `libnotify` 包提供
 - 存储设备管理需要系统运行 UDisks2 服务
 
 ## 安装
