@@ -44,6 +44,7 @@ impl FileBrowser {
         };
         self.view_mode = view_mode;
         self.hovered_entry = None;
+        self.clear_list_header_hover_in_pane(pane_id);
         self.cursor_paste_directory = None;
         self.selection_marquee = None;
         self.drag_selection_anchor = None;

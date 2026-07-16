@@ -5,6 +5,12 @@ mod container {
     pub use iced::widget::container::*;
     pub type Appearance = Style;
 }
+mod list_header;
+
+pub(crate) use list_header::{
+    list_header_cell_style, list_header_reorder_indicator_style, list_header_style,
+    ListHeaderCellVisualState,
+};
 
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::model::ScrollbarVisibility;
@@ -328,70 +334,6 @@ pub(crate) fn column_panel_style(theme: &Theme) -> container::Appearance {
 pub(crate) fn list_panel_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
         text_color: Some(base_text_color(theme)),
-        ..container::Appearance::default()
-    }
-}
-
-pub(crate) fn list_header_style(theme: &Theme) -> container::Appearance {
-    container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(27, 35, 48, 0.88)
-        } else {
-            Color::from_rgba8(239, 243, 249, 0.92)
-        })),
-        text_color: Some(base_text_color(theme)),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            ..Border::default()
-        },
-        ..container::Appearance::default()
-    }
-}
-
-pub(crate) fn list_header_reorder_cell_style(
-    is_dragged: bool,
-    is_drop_target: bool,
-) -> impl Fn(&Theme) -> container::Appearance + Clone {
-    move |theme| {
-        if !is_dragged && !is_drop_target {
-            return container::Appearance::default();
-        }
-
-        let accent = list_header_reorder_accent_color(theme);
-        let background = if is_drop_target {
-            Background::Color(Color { a: 0.18, ..accent })
-        } else if is_dark_theme(theme) {
-            Background::Color(Color::from_rgba8(61, 76, 98, 0.42))
-        } else {
-            Background::Color(Color::from_rgba8(217, 229, 247, 0.82))
-        };
-        let border = Border {
-            color: if is_drop_target {
-                Color { a: 0.92, ..accent }
-            } else {
-                Color { a: 0.58, ..accent }
-            },
-            width: 1.0,
-            radius: 6.0.into(),
-        };
-
-        container::Appearance {
-            background: Some(background),
-            text_color: Some(base_text_color(theme)),
-            border,
-            ..container::Appearance::default()
-        }
-    }
-}
-
-pub(crate) fn list_header_reorder_indicator_style(theme: &Theme) -> container::Appearance {
-    container::Appearance {
-        background: Some(Background::Color(list_header_reorder_accent_color(theme))),
-        border: Border {
-            radius: 999.0.into(),
-            ..Border::default()
-        },
         ..container::Appearance::default()
     }
 }
@@ -832,14 +774,6 @@ pub(crate) fn subtle_border_color(theme: &Theme) -> Color {
         Color::from_rgb8(54, 65, 82)
     } else {
         Color::from_rgb8(218, 225, 235)
-    }
-}
-
-fn list_header_reorder_accent_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(125, 179, 255)
-    } else {
-        Color::from_rgb8(74, 137, 220)
     }
 }
 

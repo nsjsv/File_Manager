@@ -6,9 +6,9 @@ use crate::app::panes::BrowserPaneView;
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, column_resize_divider_style,
-    icon_svg_style, list_header_reorder_cell_style, list_header_reorder_indicator_style,
-    list_header_style, list_panel_style, list_row_style,
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, icon_svg_style,
+    list_header_cell_style, list_header_reorder_indicator_style, list_header_style,
+    list_panel_style, list_row_style, ListHeaderCellVisualState,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::file_entry_presentation::SelectionRunPosition;
@@ -29,7 +29,12 @@ use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 const LIST_ROW_TEXT_SIZE: u32 = 15;
 const LIST_HEADER_TEXT_SIZE: u32 = 12;
 const LIST_HEADER_SORT_ICON_SIZE: f32 = 12.0;
-const LIST_CONTENT_PADDING: [u16; 2] = [4, 6];
+const LIST_CONTENT_PADDING: iced::Padding = iced::Padding {
+    top: 0.0,
+    right: 6.0,
+    bottom: 4.0,
+    left: 6.0,
+};
 pub(crate) const LIST_ROW_HEIGHT: f32 = 46.0;
 pub(crate) const LIST_OVERSCAN_ROWS: usize = 16;
 pub(crate) const LIST_INITIAL_ROWS: usize = LIST_OVERSCAN_ROWS * 2 + 1;
@@ -42,7 +47,6 @@ const LIST_TOGGLE_ICON_SIZE: f32 = 14.0;
 const LIST_HEADER_CELL_HEIGHT: f32 = 24.0;
 const LIST_HEADER_DROP_INDICATOR_WIDTH: f32 = 3.0;
 const LIST_COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 5.0;
-const LIST_COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 
 pub(crate) fn list_browser_view<'a>(
     browser: &'a FileBrowser,
@@ -230,6 +234,7 @@ fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<
         .list_view_preferences
         .visible_columns()
         .collect::<Vec<_>>();
+    let hovered_column = browser.hovered_list_header_column(pane_id);
     let dragged_column = browser.list_column_being_reordered();
     let drop_target = browser.list_column_reorder_insertion_target();
     let sort = browser.user_config().list_view_preferences.sort();
@@ -249,13 +254,16 @@ fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<
             .sort_field()
             .filter(|field| *field == sort.field)
             .map(|_| sort.direction);
-        header = header.push(header_cell(
-            pane_id,
-            column,
-            sort_direction,
-            dragged_column == Some(column.kind),
-            drop_target == Some(column.kind),
-        ));
+        let visual_state = if drop_target == Some(column.kind) {
+            ListHeaderCellVisualState::DropTarget
+        } else if dragged_column == Some(column.kind) {
+            ListHeaderCellVisualState::Dragged
+        } else if hovered_column == Some(column.kind) {
+            ListHeaderCellVisualState::Hovered
+        } else {
+            ListHeaderCellVisualState::Idle
+        };
+        header = header.push(header_cell(pane_id, column, sort_direction, visual_state));
     }
     if let Some(last_column) = visible_columns.last() {
         header = header.push(list_column_resize_divider(pane_id, last_column.kind));
@@ -275,8 +283,7 @@ fn header_cell(
     pane_id: BrowserPaneId,
     column: &ListColumnConfig,
     sort_direction: Option<SortDirection>,
-    is_dragged: bool,
-    is_drop_target: bool,
+    visual_state: ListHeaderCellVisualState,
 ) -> Element<'static, Message> {
     let content: Element<'static, Message> = if let Some(direction) = sort_direction {
         row![
@@ -301,9 +308,9 @@ fn header_cell(
             .width(Length::Fill)
             .height(Length::Fill)
             .clip(true)
-            .style(list_header_reorder_cell_style(is_dragged, is_drop_target)),
+            .style(list_header_cell_style(visual_state)),
     );
-    if is_drop_target {
+    if visual_state == ListHeaderCellVisualState::DropTarget {
         layers = layers.push(list_header_drop_indicator());
     }
 
@@ -314,8 +321,8 @@ fn header_cell(
             .height(Length::Fixed(LIST_HEADER_CELL_HEIGHT)),
     )
     .on_press(Message::ListColumnReorderStarted(pane_id, column.kind))
-    .on_enter(Message::ListColumnReorderTargetEntered(column.kind))
-    .on_exit(Message::ListColumnReorderTargetExited(column.kind))
+    .on_enter(Message::ListHeaderColumnEntered(pane_id, column.kind))
+    .on_exit(Message::ListHeaderColumnExited(pane_id, column.kind))
     .on_release(Message::DragSelectionFinished)
     .interaction(iced::mouse::Interaction::Grab)
     .into()
@@ -348,17 +355,9 @@ fn list_column_resize_divider(
     pane_id: BrowserPaneId,
     column: ListColumnKind,
 ) -> Element<'static, Message> {
-    let visible_line = container(Space::new().width(Length::Fixed(LIST_COLUMN_RESIZE_LINE_WIDTH)))
-        .width(Length::Fixed(LIST_COLUMN_RESIZE_LINE_WIDTH))
-        .height(Length::Fill)
-        .style(column_resize_divider_style);
-    let divider = row![
-        Space::new().width(Length::Fill),
-        visible_line,
-        Space::new().width(Length::Fill),
-    ]
-    .width(Length::Fixed(LIST_COLUMN_RESIZE_DIVIDER_WIDTH))
-    .height(Length::Fill);
+    let divider = Space::new()
+        .width(Length::Fixed(LIST_COLUMN_RESIZE_DIVIDER_WIDTH))
+        .height(Length::Fill);
 
     mouse_area(divider)
         .on_press(Message::ListColumnResizeStarted(pane_id, column))
@@ -739,6 +738,20 @@ mod tests {
     fn list_column_width_uses_proportional_layout_weight() {
         assert_eq!(list_column_width(160.0), Length::FillPortion(160));
         assert_eq!(list_column_width(0.0), Length::FillPortion(1));
+    }
+
+    #[test]
+    fn list_header_spacing_balances_vertical_whitespace() {
+        assert_eq!(
+            LIST_CONTENT_PADDING,
+            iced::Padding {
+                top: 0.0,
+                right: 6.0,
+                bottom: 4.0,
+                left: 6.0,
+            }
+        );
+        assert_eq!(LIST_HEADER_PADDING[0], 4);
     }
 
     fn test_entry(metadata: EntryMetadata) -> DirectoryEntry {

@@ -40,6 +40,15 @@ impl FileBrowser {
         }
     }
 
+    pub(crate) fn hovered_list_header_column(
+        &self,
+        pane_id: BrowserPaneId,
+    ) -> Option<ListColumnKind> {
+        self.hovered_list_header_column
+            .filter(|(hovered_pane_id, _)| *hovered_pane_id == pane_id)
+            .map(|(_, column)| column)
+    }
+
     pub(super) fn select_list_sort_column(&mut self, column: ListColumnKind) -> Task<Message> {
         let before_sort = self.user_config.list_view_preferences.sort();
         self.user_config
@@ -60,6 +69,7 @@ impl FileBrowser {
 
     pub(super) fn open_list_column_menu(&mut self, pane_id: BrowserPaneId) -> Task<Message> {
         self.activate_pane(pane_id);
+        self.clear_list_header_hover_in_pane(pane_id);
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.operation_queue.close_panel();
@@ -179,10 +189,16 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn enter_list_column_reorder_target(
+    pub(super) fn enter_list_header_column(
         &mut self,
+        pane_id: BrowserPaneId,
         target: ListColumnKind,
     ) -> Task<Message> {
+        self.hovered_list_header_column = Some((pane_id, target));
+        self.enter_list_column_reorder_target(target)
+    }
+
+    fn enter_list_column_reorder_target(&mut self, target: ListColumnKind) -> Task<Message> {
         let Some(drag) = self.list_column_reorder_drag.as_mut() else {
             return Task::none();
         };
@@ -190,10 +206,18 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn exit_list_column_reorder_target(
+    pub(super) fn exit_list_header_column(
         &mut self,
+        pane_id: BrowserPaneId,
         target: ListColumnKind,
     ) -> Task<Message> {
+        if self.hovered_list_header_column == Some((pane_id, target)) {
+            self.hovered_list_header_column = None;
+        }
+        self.exit_list_column_reorder_target(target)
+    }
+
+    fn exit_list_column_reorder_target(&mut self, target: ListColumnKind) -> Task<Message> {
         let Some(drag) = self.list_column_reorder_drag.as_mut() else {
             return Task::none();
         };
@@ -201,6 +225,12 @@ impl FileBrowser {
             drag.drop_target = None;
         }
         Task::none()
+    }
+
+    pub(super) fn clear_list_header_hover_in_pane(&mut self, pane_id: BrowserPaneId) {
+        if self.hovered_list_header_column.map(|(id, _)| id) == Some(pane_id) {
+            self.hovered_list_header_column = None;
+        }
     }
 
     pub(super) fn finish_list_column_reorder_drag_command(&mut self) -> Task<Message> {
@@ -489,6 +519,32 @@ mod tests {
             .list_directory_summary_cache
             .summary_for_path(&directory)
             .is_some());
+    }
+
+    #[test]
+    fn list_header_hover_is_pane_scoped_and_ignores_stale_exit() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let secondary = BrowserPaneId(1);
+
+        drop(browser.enter_list_header_column(BrowserPaneId::PRIMARY, ListColumnKind::Size));
+        assert_eq!(
+            browser.hovered_list_header_column(BrowserPaneId::PRIMARY),
+            Some(ListColumnKind::Size)
+        );
+        assert_eq!(browser.hovered_list_header_column(secondary), None);
+
+        drop(browser.enter_list_header_column(BrowserPaneId::PRIMARY, ListColumnKind::Modified));
+        drop(browser.exit_list_header_column(BrowserPaneId::PRIMARY, ListColumnKind::Size));
+        assert_eq!(
+            browser.hovered_list_header_column(BrowserPaneId::PRIMARY),
+            Some(ListColumnKind::Modified)
+        );
+        assert_eq!(browser.list_column_reorder_insertion_target(), None);
+
+        drop(browser.exit_list_header_column(BrowserPaneId::PRIMARY, ListColumnKind::Modified));
+        assert!(browser
+            .hovered_list_header_column(BrowserPaneId::PRIMARY)
+            .is_none());
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
-    ColumnBrowserViewport, ExpandedDirectory, ExpandedDirectoryStatus, SplitAxis,
+    ColumnBrowserViewport, ExpandedDirectory, ExpandedDirectoryStatus, ListColumnKind, SplitAxis,
     StartupEnvironment,
 };
 use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
@@ -113,11 +113,16 @@ fn loaded_user_config_updates_startup_view_mode() {
 #[test]
 fn selecting_view_mode_updates_persisted_default_view_mode() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    drop(browser.enter_list_header_column(BrowserPaneId::PRIMARY, ListColumnKind::Name));
 
     drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
 
     assert_eq!(browser.view_mode, BrowserViewMode::List);
     assert_eq!(browser.user_config.browser_view_mode, BrowserViewMode::List);
+    assert_eq!(
+        browser.hovered_list_header_column(BrowserPaneId::PRIMARY),
+        None
+    );
 }
 
 #[test]

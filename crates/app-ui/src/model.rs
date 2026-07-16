@@ -246,8 +246,8 @@ pub(crate) enum Message {
     ListColumnVisibilityToggled(ListColumnKind),
     ListColumnResizeStarted(BrowserPaneId, ListColumnKind),
     ListColumnReorderStarted(BrowserPaneId, ListColumnKind),
-    ListColumnReorderTargetEntered(ListColumnKind),
-    ListColumnReorderTargetExited(ListColumnKind),
+    ListHeaderColumnEntered(BrowserPaneId, ListColumnKind),
+    ListHeaderColumnExited(BrowserPaneId, ListColumnKind),
     ListDirectorySummaryLoaded(
         ListDirectorySummaryLoadRequest,
         Result<ListDirectorySummary, String>,

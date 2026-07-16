@@ -280,11 +280,11 @@ impl FileBrowser {
             Message::ListColumnReorderStarted(pane_id, column) => {
                 self.start_list_column_reorder_drag(pane_id, column)
             }
-            Message::ListColumnReorderTargetEntered(column) => {
-                self.enter_list_column_reorder_target(column)
+            Message::ListHeaderColumnEntered(pane_id, column) => {
+                self.enter_list_header_column(pane_id, column)
             }
-            Message::ListColumnReorderTargetExited(column) => {
-                self.exit_list_column_reorder_target(column)
+            Message::ListHeaderColumnExited(pane_id, column) => {
+                self.exit_list_header_column(pane_id, column)
             }
             Message::ListDirectorySummaryLoaded(request, outcome) => {
                 self.accept_list_directory_summary(request, outcome)
@@ -451,6 +451,7 @@ impl FileBrowser {
                 Task::none()
             }
             Message::PaneCursorExited(pane_id) => {
+                self.clear_list_header_hover_in_pane(pane_id);
                 if self.hovered_pane_id == Some(pane_id) {
                     self.hovered_pane_id = None;
                 }

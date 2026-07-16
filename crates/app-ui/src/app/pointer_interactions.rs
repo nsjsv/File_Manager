@@ -17,6 +17,7 @@ impl FileBrowser {
         self.column_resize_drag = None;
         self.list_column_resize_drag = None;
         self.list_column_reorder_drag = None;
+        self.hovered_list_header_column = None;
     }
 
     pub(super) fn finish_pointer_drag_interactions(&mut self) -> Task<Message> {
