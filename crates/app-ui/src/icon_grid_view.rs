@@ -2,7 +2,7 @@ use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{container, mouse_area, scrollable, text, text_input, Column, Row, Space};
 use iced::{alignment, Alignment, Element, Length};
 
-use crate::app::panes::BrowserPaneView;
+use crate::app::panes::{BrowserPaneView, DirectoryContentAvailability};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
@@ -34,31 +34,33 @@ pub(crate) fn icon_grid_view<'a>(
         .padding(ICON_GRID_CONTENT_PADDING as u16)
         .width(Length::Fill);
 
-    if pane.is_loading && pane.entries.is_empty() {
-        content = content.push(grid_message("Loading..."));
-    } else if pane.entries.is_empty() {
-        content = content.push(grid_message(if pane.is_trash_view {
-            "Trash is empty"
-        } else {
-            "No items"
-        }));
-    } else {
-        let range = visible_entry_range(pane.icon_grid_viewport, pane.entries.len(), icon_edge);
-        content = content.push(vertical_spacer(range.before_height));
-        for row_index in range.start_row..range.end_row {
-            let mut row = Row::new()
-                .spacing(ICON_GRID_GAP)
-                .align_y(Alignment::Start)
-                .width(Length::Fill)
-                .height(Length::Fixed(row_height(icon_edge)));
-            let start = row_index.saturating_mul(column_count);
-            let end = start.saturating_add(column_count).min(pane.entries.len());
-            for entry in &pane.entries[start..end] {
-                row = row.push(icon_grid_entry(browser, pane, entry, icon_edge));
-            }
-            content = content.push(row);
+    match pane.current_directory_content() {
+        DirectoryContentAvailability::Pending => {}
+        DirectoryContentAvailability::Available([]) => {
+            content = content.push(grid_message(if pane.is_trash_view {
+                "Trash is empty"
+            } else {
+                "No items"
+            }));
         }
-        content = content.push(vertical_spacer(range.after_height));
+        DirectoryContentAvailability::Available(entries) => {
+            let range = visible_entry_range(pane.icon_grid_viewport, entries.len(), icon_edge);
+            content = content.push(vertical_spacer(range.before_height));
+            for row_index in range.start_row..range.end_row {
+                let mut row = Row::new()
+                    .spacing(ICON_GRID_GAP)
+                    .align_y(Alignment::Start)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(row_height(icon_edge)));
+                let start = row_index.saturating_mul(column_count);
+                let end = start.saturating_add(column_count).min(entries.len());
+                for entry in &entries[start..end] {
+                    row = row.push(icon_grid_entry(browser, pane, entry, icon_edge));
+                }
+                content = content.push(row);
+            }
+            content = content.push(vertical_spacer(range.after_height));
+        }
     }
 
     let scrollbar_region = ScrollbarRegion::PaneIcons(pane.id);

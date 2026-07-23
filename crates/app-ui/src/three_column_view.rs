@@ -4,7 +4,7 @@ use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space};
 use iced::{Alignment, Element, Length};
 
-use crate::app::panes::BrowserPaneView;
+use crate::app::panes::{BrowserPaneView, DirectoryContentAvailability};
 use crate::app::smooth_scroll::{smooth_scroll_content_with_shift, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
@@ -217,9 +217,7 @@ fn directory_column<'a>(
             }
             content = content.push(vertical_spacer(range.after_height));
         }
-        ColumnContent::Loading => {
-            content = content.push(column_message("Loading..."));
-        }
+        ColumnContent::Pending => {}
         ColumnContent::Empty => {
             let message = if pane.is_trash_view {
                 "Trash is empty"
@@ -451,26 +449,24 @@ fn selection_run_position_for_entry_index(
 
 fn column_content<'a>(pane: BrowserPaneView<'a>, directory: &Path) -> ColumnContent<'a> {
     if directory == pane.current_dir.as_path() {
-        if pane.is_loading && pane.entries.is_empty() {
-            return ColumnContent::Loading;
-        }
-        if pane.entries.is_empty() {
-            return ColumnContent::Empty;
-        }
-        return ColumnContent::Entries(pane.entries);
+        return match pane.current_directory_content() {
+            DirectoryContentAvailability::Pending => ColumnContent::Pending,
+            DirectoryContentAvailability::Available([]) => ColumnContent::Empty,
+            DirectoryContentAvailability::Available(entries) => ColumnContent::Entries(entries),
+        };
     }
 
     match pane.expanded_directories.get(directory) {
         Some(expanded) => match &expanded.status {
             ExpandedDirectoryStatus::Loading if expanded.entries.is_empty() => {
-                ColumnContent::Loading
+                ColumnContent::Pending
             }
             ExpandedDirectoryStatus::Loading => ColumnContent::Entries(&expanded.entries),
             ExpandedDirectoryStatus::Loaded if expanded.entries.is_empty() => ColumnContent::Empty,
             ExpandedDirectoryStatus::Loaded => ColumnContent::Entries(&expanded.entries),
             ExpandedDirectoryStatus::Error => ColumnContent::Empty,
         },
-        None => ColumnContent::Loading,
+        None => ColumnContent::Pending,
     }
 }
 
@@ -545,10 +541,14 @@ fn active_child_for_column(
 }
 
 enum ColumnContent<'a> {
-    Loading,
+    Pending,
     Empty,
     Entries(&'a [DirectoryEntry]),
 }
+
+#[cfg(test)]
+#[path = "three_column_view/directory_content_tests.rs"]
+mod directory_content_tests;
 
 #[cfg(test)]
 mod tests {

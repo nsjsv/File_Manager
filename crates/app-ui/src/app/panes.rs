@@ -15,6 +15,12 @@ use crate::thumbnail_cache::ColumnViewport;
 
 const SPLIT_TARGET_MIN_CONTENT_WIDTH: f32 = 1.0;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DirectoryContentAvailability<'a> {
+    Pending,
+    Available(&'a [DirectoryEntry]),
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct BrowserPaneView<'a> {
     pub(crate) id: BrowserPaneId,
@@ -43,7 +49,15 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) tab_bar_reveal_fraction: f32,
 }
 
-impl BrowserPaneView<'_> {
+impl<'a> BrowserPaneView<'a> {
+    pub(crate) fn current_directory_content(&self) -> DirectoryContentAvailability<'a> {
+        if self.is_loading && self.entries.is_empty() {
+            DirectoryContentAvailability::Pending
+        } else {
+            DirectoryContentAvailability::Available(self.entries)
+        }
+    }
+
     pub(crate) fn address_bar_directory(&self) -> &Path {
         displayed_address_directory(
             self.current_dir,
@@ -414,5 +428,69 @@ impl FileBrowser {
 
     fn split_content_width(&self) -> f32 {
         (self.main_window_width - self.sidebar_width).max(1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+
+    use super::*;
+
+    #[test]
+    fn directory_content_distinguishes_pending_empty_and_streamed_entries() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        let pane_id = browser.active_pane_id();
+
+        browser.entries.clear();
+        browser.is_loading = true;
+        assert!(matches!(
+            browser
+                .pane_view(pane_id)
+                .expect("active pane")
+                .current_directory_content(),
+            DirectoryContentAvailability::Pending
+        ));
+
+        browser.is_loading = false;
+        let DirectoryContentAvailability::Available(entries) = browser
+            .pane_view(pane_id)
+            .expect("active pane")
+            .current_directory_content()
+        else {
+            panic!("loaded empty directory must be available");
+        };
+        assert!(entries.is_empty());
+
+        browser.is_loading = true;
+        browser.entries.push(DirectoryEntry::new(
+            PathBuf::from("/streamed.txt"),
+            FileKind::File,
+            EntryMetadata::default(),
+            false,
+            false,
+            false,
+        ));
+        let DirectoryContentAvailability::Available(entries) = browser
+            .pane_view(pane_id)
+            .expect("active pane")
+            .current_directory_content()
+        else {
+            panic!("a streamed batch must become visible before completion");
+        };
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn directory_content_views_never_render_loading_copy() {
+        let directory_view_sources = [
+            include_str!("../list_view.rs"),
+            include_str!("../icon_grid_view.rs"),
+            include_str!("../three_column_view.rs"),
+        ];
+
+        assert!(directory_view_sources
+            .iter()
+            .all(|source| !source.contains("\"Loading...\"")));
     }
 }

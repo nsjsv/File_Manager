@@ -2,7 +2,7 @@ use file_core::{DirectoryEntry, FileKind, SortDirection};
 use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space, Stack};
 use iced::{Alignment, Element, Length};
 
-use crate::app::panes::BrowserPaneView;
+use crate::app::panes::{BrowserPaneView, DirectoryContentAvailability};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
@@ -55,17 +55,16 @@ pub(crate) fn list_browser_view<'a>(
     let mut rows = Column::new().spacing(0).width(Length::Fill);
     rows = rows.push(list_header(browser, pane.id));
 
-    if pane.is_loading && pane.entries.is_empty() {
-        if pane.directory_loading_placeholder_entries.is_empty() {
-            rows = rows.push(list_message("Loading..."));
-        } else {
-            for (row_index, placeholder) in pane
-                .directory_loading_placeholder_entries
-                .iter()
-                .enumerate()
-            {
-                rows = rows.push(list_placeholder_entry_row(browser, placeholder, row_index));
-            }
+    if matches!(
+        pane.current_directory_content(),
+        DirectoryContentAvailability::Pending
+    ) {
+        for (row_index, placeholder) in pane
+            .directory_loading_placeholder_entries
+            .iter()
+            .enumerate()
+        {
+            rows = rows.push(list_placeholder_entry_row(browser, placeholder, row_index));
         }
     } else if pane.entries.is_empty() {
         rows = rows.push(list_message(if pane.is_trash_view {
@@ -209,12 +208,7 @@ fn list_directory_status_for_entry<'a>(
 
     let animation_height = LIST_ROW_HEIGHT * expanded.animation_progress.clamp(0.0, 1.0);
     match &expanded.status {
-        ExpandedDirectoryStatus::Loading => Some(list_directory_status_row(
-            "Loading...",
-            depth,
-            parent_row_index,
-            animation_height,
-        )),
+        ExpandedDirectoryStatus::Loading => None,
         ExpandedDirectoryStatus::Error => Some(list_directory_status_row(
             "Could not load",
             depth,
@@ -727,6 +721,10 @@ fn timestamp_text(value: Option<std::time::SystemTime>) -> String {
         .map(format_system_time)
         .unwrap_or_else(|| "-".to_owned())
 }
+
+#[cfg(test)]
+#[path = "list_view/directory_status_tests.rs"]
+mod directory_status_tests;
 
 #[cfg(test)]
 mod tests {
