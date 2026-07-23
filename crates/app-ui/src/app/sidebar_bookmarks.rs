@@ -5,6 +5,10 @@ use file_core::FileKind;
 use iced::{Point, Task};
 
 use super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
+use crate::animation::{
+    ease_out_cubic as sidebar_bookmark_ease_out_cubic,
+    elapsed_fraction as sidebar_bookmark_animation_progress,
+};
 use crate::model::{
     ContextMenuState, FileDragPhase, FileDragTarget, Message, NavigationMode,
     SidebarBookmarkContextMenuState, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
@@ -539,15 +543,6 @@ fn projected_sidebar_bookmark_index(
     let last_index = favorite_count.saturating_sub(1);
     let projected = source_index as f32 + cursor_offset_y / sidebar_bookmark_motion_stride();
     projected.round().clamp(0.0, last_index as f32) as usize
-}
-
-fn sidebar_bookmark_animation_progress(started_at: Instant, duration: Duration) -> f32 {
-    (started_at.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
-}
-
-fn sidebar_bookmark_ease_out_cubic(progress: f32) -> f32 {
-    let progress = progress.clamp(0.0, 1.0);
-    1.0 - (1.0 - progress).powi(3)
 }
 
 fn sidebar_bookmark_label(path: &std::path::Path) -> String {

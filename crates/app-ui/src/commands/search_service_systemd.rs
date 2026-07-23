@@ -6,8 +6,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use file_search::SearchRuntimeIdentity;
-use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+
+use super::bounded_child_output::read_bounded_child_output;
 
 const SEARCH_CONTROL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAXIMUM_SYSTEMCTL_STDOUT_BYTES: usize = 64 * 1024;
@@ -126,8 +127,8 @@ impl SearchUnitController {
         let command_result = tokio::time::timeout(SEARCH_CONTROL_ATTEMPT_TIMEOUT, async move {
             let (status_result, stdout_result, stderr_result) = tokio::join!(
                 child.wait(),
-                read_bounded_stream(stdout, MAXIMUM_SYSTEMCTL_STDOUT_BYTES),
-                read_bounded_stream(stderr, MAXIMUM_SYSTEMCTL_STDERR_BYTES),
+                read_bounded_child_output(stdout, MAXIMUM_SYSTEMCTL_STDOUT_BYTES),
+                read_bounded_child_output(stderr, MAXIMUM_SYSTEMCTL_STDERR_BYTES),
             );
             Ok::<_, std::io::Error>((status_result?, stdout_result?, stderr_result?))
         })
@@ -302,39 +303,6 @@ impl SearchUnitController {
         self.validate_effective_cgroup(snapshot).await?;
         Ok(main_pid)
     }
-}
-
-struct BoundedStreamOutput {
-    bytes: Vec<u8>,
-    exceeded_limit: bool,
-}
-
-async fn read_bounded_stream<Reader>(
-    mut reader: Reader,
-    maximum_bytes: usize,
-) -> std::io::Result<BoundedStreamOutput>
-where
-    Reader: AsyncRead + Unpin,
-{
-    let mut retained_bytes = Vec::with_capacity(maximum_bytes.min(8192));
-    let mut exceeded_limit = false;
-    let mut buffer = [0_u8; 8192];
-    loop {
-        let bytes_read = reader.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            break;
-        }
-        let available_capacity = maximum_bytes.saturating_sub(retained_bytes.len());
-        let bytes_to_retain = available_capacity.min(bytes_read);
-        retained_bytes.extend_from_slice(&buffer[..bytes_to_retain]);
-        if bytes_to_retain < bytes_read {
-            exceeded_limit = true;
-        }
-    }
-    Ok(BoundedStreamOutput {
-        bytes: retained_bytes,
-        exceeded_limit,
-    })
 }
 
 async fn read_effective_cgroup_setting(

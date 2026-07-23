@@ -1,4 +1,11 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
+
+use time::format_description::FormatItem;
+use time::macros::format_description;
+use time::OffsetDateTime;
+
+const UTC_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second] UTC");
 
 pub(crate) fn format_file_size(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -36,40 +43,9 @@ pub(crate) fn format_duration(duration: Duration) -> String {
 }
 
 pub(crate) fn format_system_time(time: SystemTime) -> String {
-    let seconds = match time.duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs() as i64,
-        Err(error) => -(error.duration().as_secs() as i64),
-    };
-    format_unix_seconds_utc(seconds)
-}
-
-fn format_unix_seconds_utc(seconds: i64) -> String {
-    let days = seconds.div_euclid(86_400);
-    let seconds_of_day = seconds.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
-}
-
-fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
-    let days = days_since_epoch + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_phase = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_phase + 2) / 5 + 1;
-    let month = month_phase + if month_phase < 10 { 3 } else { -9 };
-    if month <= 2 {
-        year += 1;
-    }
-
-    (year, month, day)
+    OffsetDateTime::from(time)
+        .format(UTC_TIMESTAMP_FORMAT)
+        .expect("the static UTC timestamp format is valid")
 }
 
 pub(crate) fn format_middle_ellipsized_text(content: &str, max_chars: usize) -> String {
@@ -151,7 +127,26 @@ mod tests {
 
     #[test]
     fn formats_system_time_as_utc_timestamp() {
-        let time = UNIX_EPOCH + Duration::from_secs(1_704_067_200);
-        assert_eq!(format_system_time(time), "2024-01-01 00:00:00 UTC");
+        for (time, expected) in [
+            (UNIX_EPOCH, "1970-01-01 00:00:00 UTC"),
+            (
+                UNIX_EPOCH - Duration::from_secs(1),
+                "1969-12-31 23:59:59 UTC",
+            ),
+            (
+                UNIX_EPOCH + Duration::from_secs(951_782_400),
+                "2000-02-29 00:00:00 UTC",
+            ),
+            (
+                UNIX_EPOCH + Duration::from_secs(1_704_067_200),
+                "2024-01-01 00:00:00 UTC",
+            ),
+            (
+                UNIX_EPOCH + Duration::from_secs(4_107_542_400),
+                "2100-03-01 00:00:00 UTC",
+            ),
+        ] {
+            assert_eq!(format_system_time(time), expected);
+        }
     }
 }

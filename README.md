@@ -37,15 +37,26 @@ File Manager 是一个面向 Linux 桌面的文件管理器，主要面向 Wayla
 - Rodio
 - pulldown-cmark
 
-## 可选运行依赖
+## 运行依赖
 
-部分预览功能会调用系统工具：
+核心桌面集成功能会调用以下系统命令：
 
-- 视频预览和视频缩略图建议安装 `ffmpeg` 和 `ffprobe`，视频缩略图也可以使用 `ffmpegthumbnailer`
-- 创建 `.7z` 压缩包以及预览、解压 `.7z` 和 `.rar` 文件，需要安装 `7z`、`7zz` 或 `7za`
-- SMB、WebDAV 和 SFTP 连接需要系统提供 `gio` 及对应的 GVfs backend，保存密码需要 `secret-tool`
+- 打开文件和查询默认应用需要 `xdg-open`、`xdg-mime`；Arch Linux 由 `xdg-utils` 包提供
+- Wayland 文件剪贴板需要 `wl-copy`、`wl-paste`；Arch Linux 由 `wl-clipboard` 包提供
+- “打开方式”需要 `gio`；Arch Linux 由 `glib2` 包提供
 - 文件任务桌面通知需要 `notify-send`；Arch Linux 由 `libnotify` 包提供
-- 存储设备管理需要系统运行 UDisks2 服务
+
+可选预览和压缩包工具：
+
+- 视频预览和元数据读取需要 `ffmpeg`、`ffprobe`，视频缩略图也可以使用 `ffmpegthumbnailer`
+- 创建 `.7z` 压缩包以及预览、解压 `.7z` 和 `.rar` 文件，需要 `7z`、`7zz` 或 `7za`；Arch Linux 由 `7zip` 包提供
+
+可选桌面服务：
+
+- SFTP 和 WebDAV 连接需要 `gio` 及 GVfs backend；Arch Linux 由 `gvfs` 包提供
+- SMB 连接还需要 SMB GVfs backend；Arch Linux 由 `gvfs-smb` 包提供
+- 保存网络连接密码需要 `secret-tool`；Arch Linux 由 `libsecret` 包提供
+- 存储设备发现、挂载和安全移除需要 UDisks2 服务；Arch Linux 由 `udisks2` 包提供
 
 ## 安装
 
@@ -71,11 +82,18 @@ journalctl --user -u file-manager-search.service -f
 
 ## 编译运行
 
-需要先安装 Rust 工具链和系统构建依赖。Arch Linux 可以使用：
+需要先安装 Rust 工具链、系统构建依赖和核心运行命令。Arch Linux 可以使用：
 
 ```bash
 sudo pacman -S --needed base-devel git rust cargo pkgconf \
-  alsa-lib fontconfig libxkbcommon wayland
+  alsa-lib fontconfig glib2 libnotify libxkbcommon wayland wl-clipboard xdg-utils
+```
+
+按需安装可选预览、压缩包、网络位置、密码和存储设备支持：
+
+```bash
+sudo pacman -S --needed 7zip ffmpeg ffmpegthumbnailer \
+  gvfs gvfs-smb libsecret udisks2
 ```
 
 克隆仓库并直接运行 App：

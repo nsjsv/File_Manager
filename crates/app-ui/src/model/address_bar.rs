@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::animation::{ease_out_cubic, elapsed_fraction_at};
+
 use super::{BrowserPaneId, BrowserViewMode};
 
 pub(crate) const ADDRESS_BAR_TRANSITION_DURATION: Duration = Duration::from_millis(160);
@@ -293,12 +295,8 @@ impl AddressBarTransition {
     }
 
     pub(crate) fn fraction_at(&self, now: Instant) -> f32 {
-        if self.duration.is_zero() {
-            return self.target_fraction;
-        }
-        let linear_progress = now.saturating_duration_since(self.started_at).as_secs_f32()
-            / self.duration.as_secs_f32();
-        let eased_progress = ease_out_cubic(linear_progress.clamp(0.0, 1.0));
+        let progress = elapsed_fraction_at(self.started_at, now, self.duration);
+        let eased_progress = ease_out_cubic(progress);
         self.start_fraction + (self.target_fraction - self.start_fraction) * eased_progress
     }
 
@@ -313,10 +311,6 @@ impl AddressBarTransition {
     pub(crate) fn target_fraction(&self) -> f32 {
         self.target_fraction
     }
-}
-
-fn ease_out_cubic(progress: f32) -> f32 {
-    1.0 - (1.0 - progress).powi(3)
 }
 
 #[cfg(test)]

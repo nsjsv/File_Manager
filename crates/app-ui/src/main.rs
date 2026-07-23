@@ -24,6 +24,7 @@
 
 mod anchored_popup;
 mod animated_image_preview;
+mod animation;
 mod app;
 mod appearance;
 mod audio_preview;

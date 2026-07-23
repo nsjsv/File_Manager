@@ -5,11 +5,24 @@ pkgdesc='Linux desktop file manager written in Rust and Iced'
 arch=('x86_64')
 url='https://github.com/nsjsv/File_Manager'
 license=('GPL-3.0-or-later')
-depends=('alsa-lib' 'fontconfig' 'libnotify' 'libxkbcommon' 'wayland')
+depends=(
+    'alsa-lib'
+    'fontconfig'
+    'glib2'
+    'libnotify'
+    'libxkbcommon'
+    'wayland'
+    'wl-clipboard'
+    'xdg-utils'
+)
 optdepends=(
+    '7zip: 7z and rar preview and extraction, plus 7z creation'
     'ffmpeg: video preview and metadata support'
     'ffmpegthumbnailer: video thumbnail generation'
-    'p7zip: 7z and rar archive preview support'
+    'gvfs: SFTP and WebDAV network locations'
+    'gvfs-smb: SMB network locations'
+    'libsecret: saved network passwords'
+    'udisks2: storage device discovery and management'
 )
 provides=('file-manager')
 conflicts=('file-manager')

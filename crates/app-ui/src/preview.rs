@@ -29,7 +29,7 @@ pub(crate) async fn load_preview(
             reject_file_over_preview_limit(&path, max_file_bytes).await?;
             if archive_extraction_format_for_path(&path).is_some() {
                 load_archive_preview(path).await
-            } else if is_known_archive_path(&path) {
+            } else if is_recognized_unsupported_archive_path(&path) {
                 Err(format!(
                     "This archive format is not supported yet. {SUPPORTED_ARCHIVE_FORMAT_MESSAGE}"
                 ))
@@ -101,15 +101,13 @@ async fn load_archive_preview(path: PathBuf) -> Result<PreviewContent, String> {
     })
 }
 
-fn is_known_archive_path(path: &Path) -> bool {
+fn is_recognized_unsupported_archive_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            [
-                "zip", "tar", "gz", "tgz", "xz", "bz2", "7z", "rar", "zst", "deb", "rpm",
-            ]
-            .iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            ["xz", "bz2", "zst", "deb", "rpm"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
         })
 }
 

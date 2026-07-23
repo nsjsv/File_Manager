@@ -242,9 +242,9 @@ impl PendingDaemonWork {
             let roots = self.containing_roots(&path);
             for root in &roots {
                 self.changed_watch_paths
-                    .retain(|pending| !path_is_same_or_descendant(pending, root));
+                    .retain(|pending| !pending.starts_with(root));
                 self.coverage_repair_scopes
-                    .retain(|pending| !path_is_same_or_descendant(pending, root));
+                    .retain(|pending| !pending.starts_with(root));
             }
             self.request_dirty_roots(roots, now);
         }
@@ -334,7 +334,7 @@ impl PendingDaemonWork {
         let roots = self
             .roots
             .iter()
-            .filter(|root| path_is_same_or_descendant(path, root))
+            .filter(|root| path.starts_with(root))
             .cloned()
             .collect::<Vec<_>>();
         if roots.is_empty() {
@@ -808,10 +808,6 @@ fn work_request_label(work_request: &DaemonWorkRequest) -> String {
         }
         DaemonWorkRequest::Shutdown => "shutdown".to_owned(),
     }
-}
-
-fn path_is_same_or_descendant(path: &Path, scope: &Path) -> bool {
-    path == scope || path.starts_with(scope)
 }
 
 fn daemon_core_stopped() -> SearchError {

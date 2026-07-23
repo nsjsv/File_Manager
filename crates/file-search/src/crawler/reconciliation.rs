@@ -17,9 +17,9 @@ use crate::writer::{scan_file_mutation_bytes, MAX_WRITER_FILE_PAYLOAD_BYTES};
 
 use super::{
     collapse_affected_prefixes, directory_signature, extraction_plan_reads_content,
-    observed_file_signature, path_is_same_or_descendant, push_pending_entry,
-    report_checking_if_needed, report_crawling, report_crawling_if_needed,
-    ChangedFilePipelineOutcome, IndexMaintenanceProgress, RebuildStats, SearchIndexer,
+    observed_file_signature, push_pending_entry, report_checking_if_needed, report_crawling,
+    report_crawling_if_needed, ChangedFilePipelineOutcome, IndexMaintenanceProgress, RebuildStats,
+    SearchIndexer,
 };
 
 impl SearchIndexer {
@@ -703,7 +703,7 @@ impl SearchIndexer {
         let Some((root, root_device)) = self
             .root_devices
             .iter()
-            .filter(|(root, _)| path_is_same_or_descendant(path, root))
+            .filter(|(root, _)| path.starts_with(root))
             .max_by_key(|(root, _)| root.components().count())
         else {
             return Ok(FilesystemObservation::PolicyExcluded {
@@ -742,7 +742,7 @@ impl SearchIndexer {
             .config
             .roots
             .iter()
-            .filter(|root| path_is_same_or_descendant(path, root))
+            .filter(|root| path.starts_with(root))
             .max_by_key(|root| root.components().count())
             .cloned()
         else {

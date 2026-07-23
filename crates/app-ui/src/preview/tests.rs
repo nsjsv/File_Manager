@@ -39,6 +39,55 @@ async fn load_preview_reads_zip_archive_tree() {
 }
 
 #[tokio::test]
+async fn load_preview_reports_recognized_unsupported_archive_format() {
+    let temp_dir = tempdir().expect("temp dir");
+    let archive_path = temp_dir.path().join("sample.XZ");
+    std::fs::write(&archive_path, b"not an archive").expect("write archive fixture");
+
+    let error = load_preview(
+        archive_path,
+        FileKind::File,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect_err("unsupported archive should be identified");
+
+    assert!(error.contains("This archive format is not supported yet"));
+    assert!(error.contains(SUPPORTED_ARCHIVE_FORMAT_MESSAGE));
+}
+
+#[test]
+fn unsupported_archive_classifier_does_not_overlap_supported_formats() {
+    for path in [
+        "sample.xz",
+        "sample.BZ2",
+        "sample.zst",
+        "sample.deb",
+        "sample.rpm",
+    ] {
+        assert!(
+            is_recognized_unsupported_archive_path(Path::new(path)),
+            "{path}"
+        );
+    }
+    for path in [
+        "sample.zip",
+        "sample.tar",
+        "sample.tar.gz",
+        "sample.tgz",
+        "sample.7z",
+        "sample.rar",
+        "sample.txt",
+    ] {
+        assert!(
+            !is_recognized_unsupported_archive_path(Path::new(path)),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn load_preview_reads_directory_top_layer_only() {
     let temp_dir = tempdir().expect("temp dir");
     let nested_dir = temp_dir.path().join("src");

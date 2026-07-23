@@ -6,9 +6,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use file_search::SearchRuntimeIdentity;
 use iced::Task;
 use serde_json::{Map, Value};
-use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
+use super::bounded_child_output::{read_bounded_child_output, BoundedChildOutput};
 use crate::model::{
     bounded_application_log_message, ApplicationLogEntry, ApplicationLogLevel,
     ApplicationLogRequest, ApplicationLogSource, Message, APPLICATION_LOG_ENTRY_LIMIT,
@@ -65,8 +65,8 @@ async fn read_application_logs_with(
         .ok_or_else(|| "could not capture journalctl stderr".to_owned())?;
     let (stdout, stderr, status) = tokio::time::timeout(query_timeout, async {
         tokio::join!(
-            read_bounded_stream(stdout, APPLICATION_LOG_STDOUT_BYTE_LIMIT, "stdout"),
-            read_bounded_stream(stderr, APPLICATION_LOG_STDERR_BYTE_LIMIT, "stderr"),
+            read_bounded_child_output(stdout, APPLICATION_LOG_STDOUT_BYTE_LIMIT),
+            read_bounded_child_output(stderr, APPLICATION_LOG_STDERR_BYTE_LIMIT),
             child.wait(),
         )
     })
@@ -77,9 +77,11 @@ async fn read_application_logs_with(
             query_timeout.as_millis()
         )
     })?;
-    let stdout = stdout?;
-    let stderr = stderr?;
+    let stdout = stdout.map_err(|error| format!("could not read journalctl stdout: {error}"))?;
+    let stderr = stderr.map_err(|error| format!("could not read journalctl stderr: {error}"))?;
     let status = status.map_err(|error| format!("could not wait for journalctl: {error}"))?;
+    let stdout = journal_output_within_limit(stdout, APPLICATION_LOG_STDOUT_BYTE_LIMIT, "stdout")?;
+    let stderr = journal_output_within_limit(stderr, APPLICATION_LOG_STDERR_BYTE_LIMIT, "stderr")?;
 
     if !status.success() {
         let stderr = bounded_application_log_message(String::from_utf8_lossy(&stderr).trim());
@@ -96,33 +98,17 @@ async fn read_application_logs_with(
     parse_journal_output(&stdout, runtime_identity)
 }
 
-async fn read_bounded_stream(
-    mut stream: impl AsyncRead + Unpin,
+fn journal_output_within_limit(
+    output: BoundedChildOutput,
     byte_limit: usize,
     stream_name: &'static str,
 ) -> Result<Vec<u8>, String> {
-    let mut collected = Vec::with_capacity(byte_limit.min(8_192));
-    let mut chunk = [0_u8; 8_192];
-    let mut exceeded_limit = false;
-    loop {
-        let bytes_read = stream
-            .read(&mut chunk)
-            .await
-            .map_err(|error| format!("could not read journalctl {stream_name}: {error}"))?;
-        if bytes_read == 0 {
-            break;
-        }
-        let remaining = byte_limit.saturating_sub(collected.len());
-        let bytes_to_keep = bytes_read.min(remaining);
-        collected.extend_from_slice(&chunk[..bytes_to_keep]);
-        exceeded_limit |= bytes_to_keep < bytes_read;
-    }
-    if exceeded_limit {
+    if output.exceeded_limit {
         return Err(format!(
             "journalctl {stream_name} exceeded the {byte_limit}-byte limit"
         ));
     }
-    Ok(collected)
+    Ok(output.bytes)
 }
 
 fn journalctl_arguments(
@@ -261,7 +247,6 @@ mod tests {
 
     use serde_json::json;
     use tempfile::tempdir;
-    use tokio::io::AsyncWriteExt;
 
     use super::*;
 
@@ -420,19 +405,19 @@ mod tests {
             .contains(&format!("_SYSTEMD_USER_UNIT={}", runtime_identity.systemd_unit()).into()));
     }
 
-    #[tokio::test]
-    async fn journal_output_reader_enforces_a_byte_limit_while_draining() {
-        let (mut sender, receiver) = tokio::io::duplex(16);
-        let send = tokio::spawn(async move {
-            sender.write_all(b"0123456789abcdef").await.unwrap();
-        });
+    #[test]
+    fn journal_output_limit_error_keeps_stream_context() {
+        let error = journal_output_within_limit(
+            BoundedChildOutput {
+                bytes: b"01234567".to_vec(),
+                exceeded_limit: true,
+            },
+            8,
+            "stdout",
+        )
+        .expect_err("output should be rejected");
 
-        let error = read_bounded_stream(receiver, 8, "stdout")
-            .await
-            .unwrap_err();
-        send.await.unwrap();
-
-        assert!(error.contains("exceeded the 8-byte limit"));
+        assert_eq!(error, "journalctl stdout exceeded the 8-byte limit");
     }
 
     #[tokio::test]

@@ -440,7 +440,7 @@ impl NetworkConnectionState {
             .flat_map(|entry| {
                 entry
                     .mount_path()
-                    .filter(|mount_path| path_is_inside_mount(current_dir, mount_path))
+                    .filter(|mount_path| current_dir.starts_with(mount_path))
                     .map(|mount_path| (entry.id(), mount_path.components().count()))
             })
             .max_by_key(|(_, depth)| *depth)
@@ -451,7 +451,7 @@ impl NetworkConnectionState {
         self.entries.iter().any(|entry| {
             entry
                 .mount_path()
-                .is_some_and(|mount_path| path_is_inside_mount(path, mount_path))
+                .is_some_and(|mount_path| path.starts_with(mount_path))
         })
     }
 
@@ -469,10 +469,6 @@ impl NetworkConnectionState {
         }
         NetworkConnectionId::new(candidate)
     }
-}
-
-fn path_is_inside_mount(path: &Path, mount_point: &Path) -> bool {
-    path == mount_point || path.starts_with(mount_point)
 }
 
 fn network_connections_share_remote_identity(

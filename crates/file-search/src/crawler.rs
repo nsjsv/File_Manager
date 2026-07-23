@@ -221,10 +221,7 @@ impl SearchIndexer {
     }
 
     fn path_belongs_to_index_roots(&self, path: &Path) -> bool {
-        self.config
-            .roots
-            .iter()
-            .any(|root| path_is_same_or_descendant(path, root))
+        self.config.roots.iter().any(|root| path.starts_with(root))
     }
 
     fn plan_changed_file_pipeline(
@@ -461,7 +458,7 @@ fn collapse_affected_prefixes(mut affected_prefixes: Vec<PathBuf>) -> Vec<PathBu
     'candidate: for affected_prefix in affected_prefixes {
         if collapsed_prefixes
             .iter()
-            .any(|existing_prefix| path_is_same_or_descendant(&affected_prefix, existing_prefix))
+            .any(|existing_prefix| affected_prefix.starts_with(existing_prefix))
         {
             continue 'candidate;
         }
@@ -471,10 +468,6 @@ fn collapse_affected_prefixes(mut affected_prefixes: Vec<PathBuf>) -> Vec<PathBu
 
     collapsed_prefixes.sort();
     collapsed_prefixes
-}
-
-fn path_is_same_or_descendant(path: &Path, candidate_prefix: &Path) -> bool {
-    path == candidate_prefix || path.starts_with(candidate_prefix)
 }
 
 async fn push_pending_entry(

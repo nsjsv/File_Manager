@@ -146,15 +146,11 @@ pub(crate) fn selected_sidebar_device<'a>(
             device
                 .mount_points
                 .iter()
-                .filter(move |mount_point| path_is_inside_mount(current_dir, mount_point))
+                .filter(move |mount_point| current_dir.starts_with(mount_point))
                 .map(move |mount_point| (device, mount_point.components().count()))
         })
         .max_by_key(|(_, depth)| *depth)
         .map(|(device, _)| device)
-}
-
-fn path_is_inside_mount(path: &Path, mount_point: &Path) -> bool {
-    path == mount_point || path.starts_with(mount_point)
 }
 
 #[cfg(test)]

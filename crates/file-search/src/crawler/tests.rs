@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use crate::extractor::{CommandSpec, ExtractionExecutionMode, ExtractionStatus};
 use crate::model::SearchQuery;
 use crate::writer::IndexWriter;
 
-use super::{observed_file_signature, SearchIndexer};
+use super::{collapse_affected_prefixes, observed_file_signature, SearchIndexer};
 
 fn config_for(root: &std::path::Path) -> SearchIndexConfig {
     SearchIndexConfig {
@@ -31,6 +32,24 @@ fn config_for(root: &std::path::Path) -> SearchIndexConfig {
 fn writer_in(db_dir: &tempfile::TempDir) -> Arc<IndexWriter> {
     let db_path = db_dir.path().join("search.sqlite");
     Arc::new(IndexWriter::spawn(SearchDatabase::open(&db_path).unwrap()))
+}
+
+#[test]
+fn affected_prefix_collapse_respects_path_component_boundaries() {
+    let collapsed = collapse_affected_prefixes(vec![
+        PathBuf::from("/workspace/project"),
+        PathBuf::from("/workspace/project/src"),
+        PathBuf::from("/workspace/project"),
+        PathBuf::from("/workspace/project-old"),
+    ]);
+
+    assert_eq!(
+        collapsed,
+        vec![
+            PathBuf::from("/workspace/project"),
+            PathBuf::from("/workspace/project-old"),
+        ]
+    );
 }
 
 #[test]

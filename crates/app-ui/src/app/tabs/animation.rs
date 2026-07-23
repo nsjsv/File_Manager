@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::animation::{ease_out_cubic, elapsed_fraction as animation_progress};
+
 const TAB_BAR_REVEAL_DURATION: Duration = Duration::from_millis(180);
 const TAB_BAR_HIDE_DURATION: Duration = Duration::from_millis(140);
 const TAB_INTRO_DURATION: Duration = Duration::from_millis(180);
@@ -138,13 +140,4 @@ struct TabCloseAnimation {
 struct TabShiftAnimation {
     started_at: Instant,
     initial_offset: f32,
-}
-
-fn animation_progress(started_at: Instant, duration: Duration) -> f32 {
-    (started_at.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
-}
-
-fn ease_out_cubic(progress: f32) -> f32 {
-    let progress = progress.clamp(0.0, 1.0);
-    1.0 - (1.0 - progress).powi(3)
 }

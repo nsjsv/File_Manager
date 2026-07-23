@@ -4,6 +4,7 @@ use iced::Task;
 
 use super::runtime::scrollbar_auto_hide_command;
 use super::FileBrowser;
+use crate::animation::{ease_out_cubic, elapsed_fraction as scrollbar_animation_progress};
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
 
 pub(super) const SCROLLBAR_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
@@ -155,15 +156,6 @@ fn advance_scrollbar_hide(
     let opacity = initial_opacity * (1.0 - smoothstep(progress));
     scrollbar.visibility = ScrollbarVisibility::with_opacity(opacity);
     true
-}
-
-fn scrollbar_animation_progress(started_at: Instant, duration: Duration) -> f32 {
-    (started_at.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
-}
-
-fn ease_out_cubic(progress: f32) -> f32 {
-    let progress = progress.clamp(0.0, 1.0);
-    1.0 - (1.0 - progress).powi(3)
 }
 
 fn smoothstep(progress: f32) -> f32 {
