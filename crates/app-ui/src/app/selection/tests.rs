@@ -352,6 +352,7 @@ fn pressing_child_column_blank_preserves_open_column_before_release() {
     ];
     browser.selected = Some(second);
     browser.selected_paths = HashSet::from([first]);
+    browser.deepest_open_column_directory = Some(child_directory.clone());
 
     let command = browser.start_column_blank_selection_marquee(child_directory.clone());
     drop(command);
@@ -385,6 +386,7 @@ fn dragging_child_column_blank_preserves_open_column_context() {
     ];
     browser.selected = Some(second);
     browser.selected_paths = HashSet::from([first]);
+    browser.deepest_open_column_directory = Some(child_directory.clone());
 
     let press_command = browser.start_column_blank_selection_marquee(child_directory.clone());
     drop(press_command);

@@ -9,13 +9,15 @@ use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANC
 
 use crate::model::{
     trash_location_path, BrowserPaneId, BrowserViewMode, ColumnEntryBounds, ContextMenuState,
-    FileContextMenuExpansion, FileContextMenuState, FileDeleteAction, LastActivationClick, Message,
-    SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
+    FileContextMenuExpansion, FileContextMenuState, FileDeleteAction, FileDragStationaryAction,
+    LastActivationClick, Message, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
 };
 
 #[cfg(test)]
 mod activation_tests;
 mod clipboard;
+#[cfg(test)]
+mod column_gesture_tests;
 mod conflict;
 mod drag;
 mod keyboard_navigation;
@@ -26,12 +28,6 @@ mod wayland_target;
 
 #[cfg(test)]
 use drag::resolve_file_drag_target;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EntryClickActivation {
-    OpenColumn,
-    SelectOnly,
-}
 
 impl FileBrowser {
     pub(crate) fn is_path_selected(&self, path: &Path) -> bool {
@@ -50,7 +46,7 @@ impl FileBrowser {
         let column_directories_snapshot = crate::three_column_view::column_directories(self);
         self.handle_file_entry_clicked(
             path,
-            EntryClickActivation::OpenColumn,
+            FileDragStationaryAction::ActivateColumnEntry,
             column_directories_snapshot,
         )
     }
@@ -59,7 +55,7 @@ impl FileBrowser {
         let column_directories_snapshot = Vec::new();
         self.handle_file_entry_clicked(
             path,
-            EntryClickActivation::SelectOnly,
+            FileDragStationaryAction::SelectionOnly,
             column_directories_snapshot,
         )
     }
@@ -67,7 +63,7 @@ impl FileBrowser {
     fn handle_file_entry_clicked(
         &mut self,
         path: PathBuf,
-        activation: EntryClickActivation,
+        stationary_action: FileDragStationaryAction,
         column_directories_snapshot: Vec<PathBuf>,
     ) -> Task<Message> {
         let was_selected = self.is_path_selected(&path);
@@ -112,12 +108,9 @@ impl FileBrowser {
             } else {
                 self.select_path(path.clone());
             }
-            if activation == EntryClickActivation::OpenColumn {
-                self.update_open_column_directory_for_entry(&path);
-            }
             self.drag_selection_anchor = None;
             self.selection_marquee = None;
-            self.start_file_drag(path.clone(), column_directories_snapshot);
+            self.start_file_drag(path.clone(), stationary_action, column_directories_snapshot);
         }
 
         self.last_activation_click = if has_selection_modifier {
@@ -133,13 +126,8 @@ impl FileBrowser {
             self.drag_selection_anchor = None;
             self.file_drag = None;
             self.activate_path(path)
-        } else if has_selection_modifier {
-            Task::none()
         } else {
-            match activation {
-                EntryClickActivation::OpenColumn => self.open_column_for_directory(path),
-                EntryClickActivation::SelectOnly => Task::none(),
-            }
+            Task::none()
         };
         Task::batch([
             rename_command,
@@ -378,14 +366,18 @@ impl FileBrowser {
         self.file_drag = None;
         let preserve_existing = self.keyboard_modifiers.control();
         let base_selection = self.selected_paths.clone();
-        if column_context_directory.is_some() || !preserve_existing {
-            self.set_deepest_open_column_directory(column_context_directory.clone());
+        if matches!(&source, SelectionMarqueeSource::PaneBlank) && !preserve_existing {
+            self.set_deepest_open_column_directory(None);
         }
         if !preserve_existing {
-            if let Some(directory) = column_context_directory {
-                self.select_path(directory);
-            } else {
-                self.clear_column_blank_selection_context();
+            match (&source, column_context_directory) {
+                (_, Some(directory)) => self.select_path(directory),
+                (SelectionMarqueeSource::ColumnBlank { .. }, None) => {
+                    self.clear_file_selection();
+                }
+                (SelectionMarqueeSource::PaneBlank, None) => {
+                    self.clear_column_blank_selection_context();
+                }
             }
         }
         self.record_pane_drag_pointer_press();
@@ -432,12 +424,16 @@ impl FileBrowser {
         });
     }
 
-    fn clear_column_blank_selection_context(&mut self) {
-        self.deepest_open_column_directory = None;
+    fn clear_file_selection(&mut self) {
         self.selected_paths.clear();
         self.selected = None;
         self.selection_anchor = None;
         self.rename_input.clear();
+    }
+
+    fn clear_column_blank_selection_context(&mut self) {
+        self.deepest_open_column_directory = None;
+        self.clear_file_selection();
     }
 
     pub(super) fn update_selection_marquee(&mut self, position: iced::Point) -> bool {

@@ -57,10 +57,17 @@ pub(crate) struct PaneDragPointerPress {
     pub(crate) origin: Point,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileDragStationaryAction {
+    SelectionOnly,
+    ActivateColumnEntry,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FileDragState {
     pub(crate) sources: Vec<PathBuf>,
     pub(crate) pressed_path: PathBuf,
+    pub(crate) stationary_action: FileDragStationaryAction,
     pub(crate) target: Option<FileDragTarget>,
     pub(crate) phase: FileDragPhase,
     pub(crate) native_dnd: FileDragNativeDndState,

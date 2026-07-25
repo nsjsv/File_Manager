@@ -101,10 +101,10 @@ pub(crate) use session::{
 mod drag;
 pub(crate) use drag::{
     BreadcrumbDropTargetBounds, DirectoryFileDragTargetBounds, FileDragHitTestBounds,
-    FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, LastActivationClick,
-    PaneDragPointerPress, PaneDragState, PaneDropTarget, SidebarBookmarkDragState,
-    SidebarBookmarkDropSlot, SidebarFileDragTargetBounds, TabDragMode, TabDragState,
-    TabSplitTarget, WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds,
+    FileDragNativeDndState, FileDragPhase, FileDragState, FileDragStationaryAction, FileDragTarget,
+    LastActivationClick, PaneDragPointerPress, PaneDragState, PaneDropTarget,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarFileDragTargetBounds, TabDragMode,
+    TabDragState, TabSplitTarget, WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds,
     WaylandFileDragTargetSnapshot,
 };
 

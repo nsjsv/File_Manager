@@ -42,6 +42,7 @@ fn start_directory_file_drag(browser: &mut FileBrowser, path: &Path) {
     browser.file_drag = Some(FileDragState {
         sources: vec![path.to_path_buf()],
         pressed_path: path.to_path_buf(),
+        stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
         target: None,
         phase: FileDragPhase::Dragging,
         native_dnd: FileDragNativeDndState::NotRequested,

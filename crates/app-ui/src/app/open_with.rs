@@ -146,6 +146,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![path.clone()],
             pressed_path: path.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::NotRequested,

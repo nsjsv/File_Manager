@@ -10,8 +10,9 @@ use crate::file_drag_hit_test_bounds::{
 };
 use crate::model::{
     BrowserPaneId, FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase, FileDragState,
-    FileDragTarget, Message, SelectionMarqueeSource, TransferConflictMode,
-    WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds, WaylandFileDragTargetSnapshot,
+    FileDragStationaryAction, FileDragTarget, Message, SelectionMarqueeSource,
+    TransferConflictMode, WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds,
+    WaylandFileDragTargetSnapshot,
 };
 use crate::operation_queue::QueuedTransfer;
 
@@ -176,8 +177,7 @@ impl FileBrowser {
         };
 
         if !file_drag.is_dragging() {
-            self.finish_stationary_file_drag(file_drag);
-            return Task::none();
+            return self.finish_stationary_file_drag(file_drag);
         }
 
         self.finish_active_file_drag(file_drag, release_directory)
@@ -257,6 +257,7 @@ impl FileBrowser {
     pub(crate) fn start_file_drag(
         &mut self,
         pressed_path: PathBuf,
+        stationary_action: FileDragStationaryAction,
         column_directories_snapshot: Vec<PathBuf>,
     ) {
         self.sidebar_bookmark_drop_slot = None;
@@ -269,6 +270,7 @@ impl FileBrowser {
         self.file_drag = (!sources.is_empty()).then_some(FileDragState {
             sources,
             pressed_path,
+            stationary_action,
             target: None,
             phase: FileDragPhase::WaitingForMovement {
                 origin: self.cursor_position,
@@ -279,14 +281,25 @@ impl FileBrowser {
         });
     }
 
-    fn finish_stationary_file_drag(&mut self, file_drag: FileDragState) {
+    fn finish_stationary_file_drag(&mut self, file_drag: FileDragState) -> Task<Message> {
         if file_drag.sources.len() > 1
             && file_drag
                 .sources
                 .iter()
                 .any(|source| source == &file_drag.pressed_path)
         {
-            self.select_path(file_drag.pressed_path);
+            self.select_path(file_drag.pressed_path.clone());
+        }
+
+        match file_drag.stationary_action {
+            FileDragStationaryAction::SelectionOnly => Task::none(),
+            FileDragStationaryAction::ActivateColumnEntry => {
+                self.update_open_column_directory_for_entry(&file_drag.pressed_path);
+                Task::batch([
+                    self.open_column_for_directory(file_drag.pressed_path),
+                    self.request_browser_session_save(),
+                ])
+            }
         }
     }
 
@@ -653,6 +666,7 @@ mod breadcrumb_drop_target_tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source,
+            stationary_action: FileDragStationaryAction::SelectionOnly,
             target: Some(FileDragTarget::Directory(target.clone())),
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::NotRequested,

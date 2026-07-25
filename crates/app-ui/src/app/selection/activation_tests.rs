@@ -357,10 +357,7 @@ fn column_single_click_still_opens_child_column() {
     drop(browser.handle_column_entry_clicked(directory.clone()));
 
     assert_eq!(browser.current_dir, PathBuf::from("/workspace"));
-    assert_eq!(
-        browser.deepest_open_column_directory,
-        Some(directory.clone())
-    );
+    assert_eq!(browser.deepest_open_column_directory, None);
     assert_eq!(
         crate::three_column_view::column_directories(&browser),
         vec![PathBuf::from("/workspace")]

@@ -459,6 +459,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::Started(session_id),
@@ -529,6 +530,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: Some(FileDragTarget::Directory(stale_destination)),
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::Started(session_id),
@@ -580,6 +582,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::Started(session_id),
@@ -628,6 +631,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::Started(active_session_id),
@@ -667,6 +671,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::Started(session_id),
@@ -722,6 +727,7 @@ mod tests {
         browser.file_drag = Some(FileDragState {
             sources: vec![source.clone()],
             pressed_path: source.clone(),
+            stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::Started(session_id),
