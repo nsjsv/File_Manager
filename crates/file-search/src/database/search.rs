@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use rusqlite::params_from_iter;
 use rusqlite::types::Value;
 
@@ -9,15 +7,12 @@ use crate::model::{
     SearchScope,
 };
 
-use super::{path_to_storage, SearchDatabase};
+use super::{
+    path_from_storage_bytes, path_to_storage, recursive_storage_range, RecursiveStorageRange,
+    SearchDatabase,
+};
 
 const QUERY_VISIBLE_PREDICATE: &str = "f.tombstoned = 0 AND f.observation_state = 'observable'";
-
-struct RecursivePathRange {
-    exact_path: Option<String>,
-    descendant_lower: String,
-    descendant_upper: String,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FullTextQueryPlan {
@@ -37,13 +32,13 @@ impl SearchDatabase {
             let mut statement = transaction.prepare(&sql)?;
             let rows = statement
                 .query_map(params_from_iter(values), |row| {
-                    let path_string: String = row.get(0)?;
+                    let path_bytes: Vec<u8> = row.get(0)?;
                     let display_name: String = row.get(1)?;
                     let kind = SearchFileKind::from_storage_value(row.get_ref(2)?.as_str()?);
                     let score: f64 = row.get(7)?;
                     let match_source = match_source_for_hit(&query.terms, &display_name);
                     Ok(SearchHit {
-                        path: PathBuf::from(path_string),
+                        path: path_from_storage_bytes(path_bytes),
                         display_name,
                         kind,
                         size: row.get::<_, i64>(3)? as u64,
@@ -209,55 +204,36 @@ fn append_scope_filter(sql: &mut String, values: &mut Vec<Value>, query: &Search
         append_recursive_path_range(sql, values, "f.path", &range);
     } else {
         sql.push_str(" AND f.parent_path = ?");
-        values.push(Value::Text(path_to_storage(directory)));
+        values.push(Value::Blob(path_to_storage(directory)));
     }
 }
 
-fn recursive_path_range(query: &SearchQuery) -> Option<RecursivePathRange> {
+fn recursive_path_range(query: &SearchQuery) -> Option<RecursiveStorageRange> {
     if !query.recursive {
         return None;
     }
     let SearchScope::Directory(directory) = &query.scope else {
         return None;
     };
-    let directory = path_to_storage(directory);
-    if directory == "/" {
-        return Some(RecursivePathRange {
-            exact_path: None,
-            descendant_lower: "/".to_owned(),
-            descendant_upper: "0".to_owned(),
-        });
-    }
-    Some(RecursivePathRange {
-        exact_path: Some(directory.clone()),
-        descendant_lower: format!("{directory}/"),
-        descendant_upper: format!("{directory}0"),
-    })
+    Some(recursive_storage_range(directory))
 }
 
 fn append_recursive_path_range(
     sql: &mut String,
     values: &mut Vec<Value>,
     column: &str,
-    range: &RecursivePathRange,
+    range: &RecursiveStorageRange,
 ) {
-    if let Some(exact_path) = &range.exact_path {
-        sql.push('(');
-        sql.push_str(column);
-        sql.push_str(" = ? OR (");
-        values.push(Value::Text(exact_path.clone()));
-    } else {
-        sql.push('(');
-    }
+    sql.push('(');
+    sql.push_str(column);
+    sql.push_str(" = ? OR (");
+    values.push(Value::Blob(range.exact_path.clone()));
     sql.push_str(column);
     sql.push_str(" >= ? AND ");
     sql.push_str(column);
-    sql.push_str(" < ?)");
-    values.push(Value::Text(range.descendant_lower.clone()));
-    values.push(Value::Text(range.descendant_upper.clone()));
-    if range.exact_path.is_some() {
-        sql.push(')');
-    }
+    sql.push_str(" < ?))");
+    values.push(Value::Blob(range.descendant_lower.clone()));
+    values.push(Value::Blob(range.descendant_upper.clone()));
 }
 
 fn append_filters(sql: &mut String, values: &mut Vec<Value>, query: &SearchQuery) {

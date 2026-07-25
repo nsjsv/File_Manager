@@ -43,10 +43,6 @@ pub(super) fn global_event_message(
         });
     }
 
-    if matches!(&event, Event::Mouse(mouse::Event::CursorLeft)) {
-        return Some(Message::CursorLeft(window));
-    }
-
     if let Some(message) = pointer_pressed_message(&event, status, window) {
         return Some(message);
     }
@@ -173,19 +169,6 @@ mod tests {
         assert_eq!(received_window, window);
         assert_eq!(received.x, position.x);
         assert_eq!(received.y, position.y);
-    }
-
-    #[test]
-    fn cursor_left_reports_source_window() {
-        let window = window::Id::unique();
-        let event = Event::Mouse(mouse::Event::CursorLeft);
-
-        let message = route_event_with_window(event, event::Status::Captured, window);
-
-        assert!(matches!(
-            message,
-            Some(Message::CursorLeft(received_window)) if received_window == window
-        ));
     }
 
     #[test]

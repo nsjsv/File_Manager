@@ -48,13 +48,7 @@ impl FileBrowser {
         self.promote_ctrl_shift_pane_drag_from_active_pointer_drag();
         self.update_tab_drag(position);
         self.update_pane_drag(position);
-        let cursor_inside_main_window = (0.0..=self.main_window_width).contains(&position.x)
-            && (0.0..=self.main_window_height).contains(&position.y);
-        let file_drag_command = if cursor_inside_main_window {
-            self.update_file_drag(position)
-        } else {
-            self.request_file_drag_wayland_dnd_on_window_exit()
-        };
+        let file_drag_command = self.update_file_drag(position);
         self.update_sidebar_bookmark_drag(position);
         self.update_sidebar_resize_drag(position);
         self.update_column_resize_drag(position);

@@ -5,10 +5,12 @@ use iced::Task;
 use super::FileBrowser;
 use crate::commands::{
     operation_store_command, sidebar_devices_command, sidebar_locations_command,
+    startup_session_plan_command,
 };
 use crate::config::UserConfig;
 use crate::model::{
     BrowserPaneId, LoadedOperationStore, Message, SidebarLocation, StartupEnvironment,
+    StartupSessionPlan,
 };
 use crate::sidebar::{home_sidebar_location, sidebar_favorite_configs};
 use crate::startup_trace;
@@ -32,14 +34,23 @@ impl FileBrowser {
         self.renderer_restart_notice_visible = self.pending_renderer_restart_environment.is_some();
         let configured_favorites = self.user_config.sidebar_favorites.clone();
         self.sidebar_locations = vec![home_sidebar_location(&home)];
-        let startup_command = if self.user_config.startup_location_policy
-            == crate::config::StartupLocationPolicy::PreviousSession
-        {
-            Task::none()
-        } else {
-            let startup_plan = self.startup_session_plan(&home, None);
-            self.apply_startup_session_plan(startup_plan, &home)
+        let startup_request = self.startup_session_plan_request(&home);
+        let startup_command = match self.user_config.startup_location_policy {
+            crate::config::StartupLocationPolicy::Home => self.apply_startup_session_plan(
+                StartupSessionPlan::Directory {
+                    directory: home.clone(),
+                    error: None,
+                },
+                &home,
+            ),
+            crate::config::StartupLocationPolicy::CustomDirectory => {
+                startup_session_plan_command(startup_request.clone())
+            }
+            crate::config::StartupLocationPolicy::PreviousSession => Task::none(),
         };
+        let operation_store_startup_request = (self.user_config.startup_location_policy
+            == crate::config::StartupLocationPolicy::PreviousSession)
+            .then_some(startup_request);
 
         Task::batch([
             startup_command,
@@ -47,7 +58,7 @@ impl FileBrowser {
             sidebar_devices_command(),
             self.refresh_network_mount_states(),
             self.startup_auto_connect_network_connections(),
-            operation_store_command(state_database_path),
+            operation_store_command(state_database_path, operation_store_startup_request),
         ])
     }
 
@@ -76,7 +87,7 @@ impl FileBrowser {
         match operation_store {
             Ok(loaded_store) => {
                 let persisted_column_width_overrides = loaded_store.column_width_overrides;
-                let persisted_browser_session = loaded_store.browser_session;
+                let classified_startup_session = loaded_store.classified_startup_session;
                 let previous_task_count = self.operation_queue.task_count();
                 if let Some(error) = self.operation_queue.set_store_and_restore(
                     loaded_store.task_queue_store,
@@ -96,10 +107,9 @@ impl FileBrowser {
                 let session_command = if self.user_config.startup_location_policy
                     == crate::config::StartupLocationPolicy::PreviousSession
                 {
-                    let home_dir = self.home_dir.clone();
-                    let startup_plan =
-                        self.startup_session_plan(&home_dir, persisted_browser_session);
-                    self.apply_startup_session_plan(startup_plan, &home_dir)
+                    classified_startup_session
+                        .map(|classified| self.accept_startup_plan(classified))
+                        .unwrap_or_else(Task::none)
                 } else {
                     Task::none()
                 };
@@ -159,6 +169,7 @@ impl FileBrowser {
         self.max_preview_file_mib_input =
             crate::config::max_preview_file_mib(user_config.max_preview_file_bytes).to_string();
         self.max_preview_file_mib_error = None;
+        self.invalidate_startup_directory_validation();
         self.startup_custom_directory_input = user_config
             .startup_custom_directory
             .to_string_lossy()
@@ -180,11 +191,13 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::app::FileBrowser;
+    use crate::commands::classify_startup_session;
     use crate::config::{self, StartupLocationPolicy};
     use crate::model::{
         BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-        BrowserTabSession, BrowserViewMode, ColumnBrowserViewport, ExpandedDirectoryStatus,
-        LoadedOperationStore, SidebarLocation, SidebarLocationKind, SplitAxis, StartupEnvironment,
+        BrowserTabSession, BrowserViewMode, ClassifiedStartupSession, ColumnBrowserViewport,
+        ExpandedDirectoryStatus, LoadedOperationStore, SidebarLocation, SidebarLocationKind,
+        SplitAxis, StartupEnvironment, StartupSessionPlanRequest, StartupSessionSource,
     };
     use crate::network_connections::SavedNetworkConnection;
     use crate::startup_rendering::{
@@ -218,17 +231,30 @@ mod tests {
         directory
     }
 
-    fn loaded_store_with_session(
+    fn loaded_store(
         root: &TempDir,
-        session: Option<BrowserSessionSnapshot>,
+        classified_startup_session: Option<ClassifiedStartupSession>,
     ) -> LoadedOperationStore {
         LoadedOperationStore {
             task_queue_store: TaskQueueStore::new(root.path().join("state.sqlite"))
                 .expect("create operation store"),
             column_width_overrides: HashMap::new(),
-            browser_session: session,
+            classified_startup_session,
             restored_tasks: Vec::new(),
         }
+    }
+
+    fn classify_previous_session(
+        home: PathBuf,
+        session: Option<BrowserSessionSnapshot>,
+    ) -> ClassifiedStartupSession {
+        classify_startup_session(
+            StartupSessionPlanRequest {
+                home,
+                source: StartupSessionSource::PreviousSession,
+            },
+            session,
+        )
     }
 
     fn tab_session(id: usize, directory: PathBuf, view_mode: BrowserViewMode) -> BrowserTabSession {
@@ -321,10 +347,14 @@ mod tests {
         let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
 
         drop(browser.accept_startup_environment(startup_environment(
-            home,
+            home.clone(),
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
+        assert_ne!(browser.current_dir, workspace);
+        let classified =
+            classify_startup_session(browser.startup_session_plan_request(&home), None);
+        drop(browser.accept_startup_plan(classified));
 
         assert_eq!(browser.current_dir, workspace);
         assert_eq!(browser.error, None);
@@ -346,6 +376,10 @@ mod tests {
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
+        assert_eq!(browser.error, None);
+        let classified =
+            classify_startup_session(browser.startup_session_plan_request(&home), None);
+        drop(browser.accept_startup_plan(classified));
 
         assert_eq!(browser.current_dir, home);
         assert!(browser
@@ -381,10 +415,10 @@ mod tests {
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
-        drop(
-            browser
-                .accept_operation_store(Ok(loaded_store_with_session(&temp_dir, Some(snapshot)))),
-        );
+        drop(browser.accept_operation_store(Ok(loaded_store(
+            &temp_dir,
+            Some(classify_previous_session(home, Some(snapshot))),
+        ))));
 
         assert_eq!(browser.current_dir, previous);
         assert!(browser.user_config.save_view_state);
@@ -398,7 +432,7 @@ mod tests {
         user_config.save_view_state = false;
         let (mut browser, _) = FileBrowser::new(user_config);
 
-        drop(browser.accept_operation_store(Ok(loaded_store_with_session(&temp_dir, None))));
+        drop(browser.accept_operation_store(Ok(loaded_store(&temp_dir, None))));
         drop(browser.request_browser_session_save());
 
         assert!(!browser.pending_browser_session_save);
@@ -470,10 +504,10 @@ mod tests {
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
-        drop(
-            browser
-                .accept_operation_store(Ok(loaded_store_with_session(&temp_dir, Some(snapshot)))),
-        );
+        drop(browser.accept_operation_store(Ok(loaded_store(
+            &temp_dir,
+            Some(classify_previous_session(home.clone(), Some(snapshot))),
+        ))));
 
         assert_eq!(browser.current_dir, right);
         assert_eq!(browser.view_mode, BrowserViewMode::List);
@@ -547,10 +581,10 @@ mod tests {
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
-        drop(
-            browser
-                .accept_operation_store(Ok(loaded_store_with_session(&temp_dir, Some(snapshot)))),
-        );
+        drop(browser.accept_operation_store(Ok(loaded_store(
+            &temp_dir,
+            Some(classify_previous_session(home.clone(), Some(snapshot))),
+        ))));
 
         assert_eq!(browser.current_dir, home.clone());
         assert_eq!(
@@ -569,6 +603,32 @@ mod tests {
             crate::three_column_view::column_directories(&browser),
             vec![home, project, source]
         );
+    }
+
+    #[test]
+    fn previous_session_without_saved_state_falls_back_home_with_error() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let home = create_directory(&temp_dir, "home");
+        let mut user_config = config::default_user_config();
+        user_config.startup_location_policy = StartupLocationPolicy::PreviousSession;
+        user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+
+        drop(browser.accept_startup_environment(startup_environment(
+            home.clone(),
+            user_config,
+            temp_dir.path().join("state.sqlite"),
+        )));
+        drop(browser.accept_operation_store(Ok(loaded_store(
+            &temp_dir,
+            Some(classify_previous_session(home.clone(), None)),
+        ))));
+
+        assert_eq!(browser.current_dir, home);
+        assert!(browser
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("No saved view state was found")));
     }
 
     #[test]
@@ -598,10 +658,10 @@ mod tests {
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
-        drop(
-            browser
-                .accept_operation_store(Ok(loaded_store_with_session(&temp_dir, Some(snapshot)))),
-        );
+        drop(browser.accept_operation_store(Ok(loaded_store(
+            &temp_dir,
+            Some(classify_previous_session(home.clone(), Some(snapshot))),
+        ))));
 
         assert_eq!(browser.current_dir, home);
         assert!(browser

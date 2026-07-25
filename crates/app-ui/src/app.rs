@@ -95,8 +95,9 @@ use crate::model::{
     FileDragState, FileDropPrompt, FilePropertiesState, IconGridViewport, ListColumnKind, Message,
     OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation, TabDragState,
-    TextPreviewDocument, TransferConflictState, VideoPreviewPlayback,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
+    StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
+    VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -193,6 +194,7 @@ pub(crate) struct FileBrowser {
     file_entry_bounds: Vec<ColumnEntryBounds>,
     breadcrumb_drop_target_bounds: Vec<BreadcrumbDropTargetBounds>,
     breadcrumb_drop_target_measurement_generation: u64,
+    native_file_drag_target_measurement_generation: u64,
     pending_wayland_file_drop: Option<PendingWaylandFileDrop>,
     pub(crate) options: ScanOptions,
     user_config: config::UserConfig,
@@ -200,6 +202,8 @@ pub(crate) struct FileBrowser {
     pub(crate) max_preview_file_mib_error: Option<String>,
     pub(crate) startup_custom_directory_input: String,
     pub(crate) startup_custom_directory_error: Option<String>,
+    pending_startup_directory_validation: Option<StartupDirectoryValidationRequest>,
+    startup_directory_validation_generation: u64,
     pub(crate) rendering_gpu_preference: config::RenderingGpuPreference,
     pub(crate) renderer_restart_notice_visible: bool,
     pub(super) pending_renderer_restart_environment:
@@ -423,6 +427,7 @@ impl FileBrowser {
             file_entry_bounds: Vec::new(),
             breadcrumb_drop_target_bounds: Vec::new(),
             breadcrumb_drop_target_measurement_generation: 0,
+            native_file_drag_target_measurement_generation: 0,
             pending_wayland_file_drop: None,
             options: options.clone(),
             user_config: user_config.clone(),
@@ -436,6 +441,8 @@ impl FileBrowser {
                 .to_string_lossy()
                 .into_owned(),
             startup_custom_directory_error: None,
+            pending_startup_directory_validation: None,
+            startup_directory_validation_generation: 0,
             rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
             pending_renderer_restart_environment: None,

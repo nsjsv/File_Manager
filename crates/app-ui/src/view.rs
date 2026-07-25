@@ -43,6 +43,8 @@ use crate::appearance::{
     selected_icon_svg_style, selected_tab_item_style, tab_item_style, tab_split_overlay_style,
     tab_strip_style, warning_icon_svg_style,
 };
+use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
+use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::floating_surface::{
     dismissable_blocking_floating_surface, floating_surface, modal_floating_surface,
     pass_through_dismissable_floating_surface, FloatingContent, FloatingPlacement,
@@ -393,13 +395,31 @@ fn browser_content_view<'a>(
     pane: BrowserPaneView<'a>,
 ) -> Element<'a, Message> {
     if browser.search.is_active() {
-        return search_results_view(browser);
+        return track_file_drag_hit_test_marker(
+            search_results_view(browser),
+            FileDragHitTestMarker::DirectoryTarget {
+                pane_id: pane.id,
+                directory: pane.current_dir.clone(),
+            },
+        );
     }
 
     match pane.view_mode {
         BrowserViewMode::Columns => column_browser_view(browser, pane),
-        BrowserViewMode::List => list_browser_view(browser, pane),
-        BrowserViewMode::Icons => icon_grid_view(browser, pane),
+        BrowserViewMode::List => track_file_drag_hit_test_marker(
+            list_browser_view(browser, pane),
+            FileDragHitTestMarker::DirectoryTarget {
+                pane_id: pane.id,
+                directory: pane.current_dir.clone(),
+            },
+        ),
+        BrowserViewMode::Icons => track_file_drag_hit_test_marker(
+            icon_grid_view(browser, pane),
+            FileDragHitTestMarker::DirectoryTarget {
+                pane_id: pane.id,
+                directory: pane.current_dir.clone(),
+            },
+        ),
     }
 }
 
@@ -420,7 +440,7 @@ fn drag_preview_position(cursor_position: Point) -> Point {
 
 fn drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>> {
     let drag = browser.file_drag.as_ref()?;
-    if !drag.is_dragging() {
+    if !drag.displays_iced_drag_preview() {
         return None;
     }
     let source = drag.sources.first()?;

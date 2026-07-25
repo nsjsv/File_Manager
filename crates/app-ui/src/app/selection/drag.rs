@@ -3,12 +3,21 @@ use std::path::{Path, PathBuf};
 use iced::Task;
 
 use super::super::paths::{self, PasteTargetMode};
+use super::super::wayland_dnd::WaylandFileDragRequest;
 use super::super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
+use crate::file_drag_hit_test_bounds::{
+    file_drag_hit_test_bounds_command, FileDragHitTestBoundsRequest,
+};
 use crate::model::{
-    BrowserPaneId, FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, Message,
-    SelectionMarqueeSource, TransferConflictMode,
+    BrowserPaneId, FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase, FileDragState,
+    FileDragTarget, Message, SelectionMarqueeSource, TransferConflictMode,
+    WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds, WaylandFileDragTargetSnapshot,
 };
 use crate::operation_queue::QueuedTransfer;
+
+struct FileDragDirectoryPositionTarget {
+    directory: PathBuf,
+}
 
 impl FileBrowser {
     pub(crate) fn update_file_drag(&mut self, position: iced::Point) -> Task<Message> {
@@ -31,23 +40,94 @@ impl FileBrowser {
             file_drag.phase = FileDragPhase::Dragging;
         }
 
-        crate::column_entry_bounds::column_entry_bounds_command()
+        self.prepare_native_file_drag_after_activation()
     }
 
-    pub(crate) fn request_file_drag_wayland_dnd_on_window_exit(&mut self) -> Task<Message> {
-        let drag_sources = self
-            .file_drag
-            .as_ref()
-            .filter(|file_drag| file_drag.can_request_wayland_dnd())
-            .map(|file_drag| file_drag.sources.clone());
+    fn prepare_native_file_drag_after_activation(&mut self) -> Task<Message> {
+        let can_prepare_native_drag = self.wayland_dnd.is_some()
+            && self
+                .file_drag
+                .as_ref()
+                .is_some_and(FileDragState::can_start_native_dnd);
+        if !can_prepare_native_drag {
+            return crate::column_entry_bounds::column_entry_bounds_command();
+        }
+
+        self.native_file_drag_target_measurement_generation = self
+            .native_file_drag_target_measurement_generation
+            .wrapping_add(1);
+        let measurement_id = self.native_file_drag_target_measurement_generation;
+        if let Some(file_drag) = &mut self.file_drag {
+            file_drag.native_dnd = FileDragNativeDndState::MeasuringTargets(measurement_id);
+        }
+        file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::NativeFileDrag(
+            measurement_id,
+        ))
+    }
+
+    pub(in crate::app) fn accept_native_bounds(
+        &mut self,
+        measurement_id: u64,
+        hit_test_bounds: FileDragHitTestBounds,
+    ) -> Task<Message> {
+        let drag_sources = self.file_drag.as_ref().and_then(|file_drag| {
+            (file_drag.native_dnd == FileDragNativeDndState::MeasuringTargets(measurement_id))
+                .then(|| file_drag.sources.clone())
+        });
         let Some(drag_sources) = drag_sources else {
             return Task::none();
         };
 
-        if self.request_wayland_file_drag(drag_sources) {
-            if let Some(file_drag) = &mut self.file_drag {
-                file_drag.phase = FileDragPhase::Dragging;
-                file_drag.native_dnd = FileDragNativeDndState::WaylandRequested;
+        let bookmark_source = (drag_sources.len() == 1
+            && self.entry_kind(&drag_sources[0]) == Some(file_core::FileKind::Directory))
+        .then(|| drag_sources[0].clone());
+        let entries = hit_test_bounds
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                self.file_drag_release_directory_for_entry(entry.pane_id, &entry.path)
+                    .map(|directory| WaylandFileDragEntryTargetBounds {
+                        directory,
+                        path: entry.path.clone(),
+                        bounds: entry.bounds,
+                    })
+            })
+            .collect();
+        let directory_targets = hit_test_bounds
+            .directory_targets
+            .into_iter()
+            .filter(|target| self.pane_accepts_file_drag(target.pane_id))
+            .collect();
+        let wayland_hit_test_bounds = WaylandFileDragHitTestBounds {
+            entries,
+            breadcrumbs: hit_test_bounds.breadcrumbs,
+            directory_targets,
+            sidebar_directories: hit_test_bounds.sidebar_directories,
+            empty_sidebar_bookmarks: hit_test_bounds.empty_sidebar_bookmarks,
+        };
+        match self.request_wayland_file_drag(drag_sources) {
+            WaylandFileDragRequest::Unavailable => {
+                if let Some(file_drag) = &mut self.file_drag {
+                    file_drag.native_dnd = FileDragNativeDndState::NotRequested;
+                }
+            }
+            WaylandFileDragRequest::Requested(session_id) => {
+                if let Some(file_drag) = &mut self.file_drag {
+                    file_drag.native_dnd = FileDragNativeDndState::Requested(session_id);
+                    file_drag.wayland_target = Some(WaylandFileDragTargetSnapshot {
+                        session_id,
+                        hit_test_bounds: wayland_hit_test_bounds,
+                        bookmark_source,
+                        position: None,
+                        target: None,
+                    });
+                }
+            }
+            WaylandFileDragRequest::Rejected(error) => {
+                self.file_drag = None;
+                self.drag_selection_anchor = None;
+                self.sidebar_bookmark_drop_slot = None;
+                self.show_global_error(error);
             }
         }
 
@@ -58,6 +138,24 @@ impl FileBrowser {
         &mut self,
         release_directory: Option<PathBuf>,
     ) -> Task<Message> {
+        let native_dnd = self
+            .file_drag
+            .as_ref()
+            .map(|file_drag| file_drag.native_dnd);
+        if native_dnd.is_some_and(|state| state.session_id().is_some()) {
+            return Task::none();
+        }
+        if matches!(
+            native_dnd,
+            Some(FileDragNativeDndState::MeasuringTargets(_))
+        ) {
+            self.drag_selection_anchor = None;
+            self.selection_marquee = None;
+            self.sidebar_bookmark_drop_slot = None;
+            self.file_drag = None;
+            return Task::none();
+        }
+
         let column_blank_click = self.selection_marquee.as_ref().and_then(|marquee| {
             if marquee.is_selecting() {
                 return None;
@@ -82,6 +180,65 @@ impl FileBrowser {
             return Task::none();
         }
 
+        self.finish_active_file_drag(file_drag, release_directory)
+    }
+
+    pub(in crate::app) fn finish_wayland_file_drag(
+        &mut self,
+        session_id: desktop_linux::WaylandFileDragSessionId,
+        target: Option<FileDragTarget>,
+    ) -> Task<Message> {
+        let session_matches = self.file_drag.as_ref().is_some_and(|file_drag| {
+            file_drag.native_dnd.session_id() == Some(session_id)
+                && file_drag
+                    .wayland_target
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.session_id == session_id)
+        });
+        if !session_matches {
+            return Task::none();
+        }
+
+        self.drag_selection_anchor = None;
+        self.selection_marquee = None;
+        self.sidebar_bookmark_drop_slot = None;
+        let file_drag = self.file_drag.take().expect("matching Wayland file drag");
+        let Some(target) = safe_file_drag_target(&file_drag.sources, target) else {
+            return Task::none();
+        };
+        match target {
+            FileDragTarget::Directory(target_directory) => {
+                self.move_dragged_files(file_drag.sources, target_directory)
+            }
+            FileDragTarget::SidebarBookmarkSlot(slot) => file_drag
+                .wayland_target
+                .and_then(|snapshot| snapshot.bookmark_source)
+                .map_or_else(Task::none, |source| {
+                    self.insert_sidebar_bookmark_from_drag(slot, source)
+                }),
+        }
+    }
+
+    fn apply_file_drag_target(
+        &mut self,
+        sources: Vec<PathBuf>,
+        target: FileDragTarget,
+    ) -> Task<Message> {
+        match target {
+            FileDragTarget::Directory(target_directory) => {
+                self.move_dragged_files(sources, target_directory)
+            }
+            FileDragTarget::SidebarBookmarkSlot(slot) => {
+                self.add_dragged_sidebar_bookmark(slot, sources)
+            }
+        }
+    }
+
+    fn finish_active_file_drag(
+        &mut self,
+        file_drag: FileDragState,
+        release_directory: Option<PathBuf>,
+    ) -> Task<Message> {
         let cursor_fallback_directory = release_directory
             .clone()
             .or_else(|| self.file_drag_drop_directory_at_cursor());
@@ -94,14 +251,7 @@ impl FileBrowser {
             return Task::none();
         };
 
-        match target {
-            FileDragTarget::Directory(target_directory) => {
-                self.move_dragged_files(file_drag.sources, target_directory)
-            }
-            FileDragTarget::SidebarBookmarkSlot(slot) => {
-                self.add_dragged_sidebar_bookmark(slot, file_drag.sources)
-            }
-        }
+        self.apply_file_drag_target(file_drag.sources, target)
     }
 
     pub(crate) fn start_file_drag(
@@ -124,6 +274,7 @@ impl FileBrowser {
                 origin: self.cursor_position,
             },
             native_dnd: FileDragNativeDndState::NotRequested,
+            wayland_target: None,
             column_directories_snapshot,
         });
     }
@@ -180,26 +331,54 @@ impl FileBrowser {
         &self,
         position: iced::Point,
     ) -> Option<PathBuf> {
-        if let Some(directory) = self.breadcrumb_drop_directory_at_position(position) {
-            return Some(directory);
+        self.file_drag_directory_target_at_position(
+            position,
+            &self.file_entry_bounds,
+            &self.breadcrumb_drop_target_bounds,
+        )
+        .map(|target| target.directory)
+    }
+
+    fn file_drag_directory_target_at_position(
+        &self,
+        position: iced::Point,
+        entry_bounds: &[crate::model::ColumnEntryBounds],
+        breadcrumb_bounds: &[crate::model::BreadcrumbDropTargetBounds],
+    ) -> Option<FileDragDirectoryPositionTarget> {
+        if let Some(directory) =
+            self.breadcrumb_drop_directory_in_bounds(position, breadcrumb_bounds)
+        {
+            return Some(FileDragDirectoryPositionTarget { directory });
         }
 
-        for entry_bounds in self.file_entry_bounds.iter().rev() {
+        for entry_bounds in entry_bounds.iter().rev() {
             if !entry_bounds.bounds.contains(position) {
                 continue;
             }
             return self
-                .file_drag_release_directory_for_entry(entry_bounds.pane_id, &entry_bounds.path);
+                .file_drag_release_directory_for_entry(entry_bounds.pane_id, &entry_bounds.path)
+                .map(|directory| FileDragDirectoryPositionTarget { directory });
         }
 
         let pane_id = self.pane_id_at_position(position)?;
         self.pane_view(pane_id)
             .filter(|pane| !pane.is_trash_view)
-            .map(|pane| pane.current_dir.clone())
+            .map(|pane| FileDragDirectoryPositionTarget {
+                directory: pane.current_dir.clone(),
+            })
     }
 
+    #[cfg(test)]
     fn breadcrumb_drop_directory_at_position(&self, position: iced::Point) -> Option<PathBuf> {
-        self.breadcrumb_drop_target_bounds
+        self.breadcrumb_drop_directory_in_bounds(position, &self.breadcrumb_drop_target_bounds)
+    }
+
+    fn breadcrumb_drop_directory_in_bounds(
+        &self,
+        position: iced::Point,
+        breadcrumb_bounds: &[crate::model::BreadcrumbDropTargetBounds],
+    ) -> Option<PathBuf> {
+        breadcrumb_bounds
             .iter()
             .filter(|target| {
                 target.item_bounds.contains(position)
@@ -227,15 +406,23 @@ impl FileBrowser {
         sources: Vec<PathBuf>,
         target_directory: PathBuf,
     ) -> Task<Message> {
-        let transfers = paths::transfer_targets(&target_directory, &sources, PasteTargetMode::Move)
-            .into_iter()
-            .filter(|(source, target)| source != target && !target.starts_with(source))
-            .map(|(source, target)| QueuedTransfer::new(source, target))
-            .collect::<Vec<_>>();
-
-        if transfers.is_empty() {
+        let transfer_targets =
+            paths::transfer_targets(&target_directory, &sources, PasteTargetMode::Move);
+        if transfer_targets.is_empty()
+            || transfer_targets.iter().any(|(source, target)| {
+                source == target
+                    || target.starts_with(source)
+                    || source
+                        .parent()
+                        .is_some_and(|parent| parent == target_directory)
+            })
+        {
             return Task::none();
         }
+        let transfers = transfer_targets
+            .into_iter()
+            .map(|(source, target)| QueuedTransfer::new(source, target))
+            .collect::<Vec<_>>();
 
         let open_drop_target = if sources
             .first()
@@ -294,12 +481,50 @@ pub(super) fn resolve_file_drag_target(
     }
 }
 
+pub(super) fn safe_file_drag_target(
+    sources: &[PathBuf],
+    target: Option<FileDragTarget>,
+) -> Option<FileDragTarget> {
+    match target {
+        Some(FileDragTarget::Directory(directory))
+            if file_drag_directory_target_needs_fallback(sources, &directory) =>
+        {
+            None
+        }
+        target => target,
+    }
+}
+
 fn file_drag_directory_target_needs_fallback(sources: &[PathBuf], target: &Path) -> bool {
     sources.iter().any(|source| {
         source == target
             || target.starts_with(source)
             || source.parent().is_some_and(|parent| parent == target)
     })
+}
+
+#[cfg(test)]
+mod file_drag_safety_tests {
+    use super::*;
+
+    #[test]
+    fn unsafe_directory_targets_are_rejected_for_every_source_relationship() {
+        let file_source = PathBuf::from("/workspace/report.txt");
+        let directory_source = PathBuf::from("/workspace/project");
+
+        for (sources, target) in [
+            (vec![file_source.clone()], PathBuf::from("/workspace")),
+            (vec![directory_source.clone()], directory_source.clone()),
+            (
+                vec![directory_source.clone()],
+                directory_source.join("nested"),
+            ),
+        ] {
+            assert!(
+                safe_file_drag_target(&sources, Some(FileDragTarget::Directory(target)),).is_none()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -431,6 +656,7 @@ mod breadcrumb_drop_target_tests {
             target: Some(FileDragTarget::Directory(target.clone())),
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::NotRequested,
+            wayland_target: None,
             column_directories_snapshot: Vec::new(),
         });
 

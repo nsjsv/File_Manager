@@ -279,6 +279,9 @@ impl FileBrowser {
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
         self.shortcut_capture = None;
         self.search.cancel_force_restart_confirmation();
+        if category != SettingsCategory::General {
+            self.invalidate_startup_directory_validation();
+        }
         self.selected_settings_category = category;
         if category == SettingsCategory::Logs {
             self.refresh_application_logs()
@@ -302,6 +305,7 @@ impl FileBrowser {
     pub(super) fn close_settings_window(&mut self) -> Task<Message> {
         self.shortcut_capture = None;
         self.search.cancel_force_restart_confirmation();
+        self.invalidate_startup_directory_validation();
         let Some(window) = self.settings_window.take() else {
             return Task::none();
         };
@@ -592,6 +596,7 @@ impl FileBrowser {
         self.is_shutting_down = true;
         self.system_focused_window = None;
         self.search.abandon_and_clear_input();
+        self.invalidate_startup_directory_validation();
         let _ = self.operation_queue.cancel_all();
         self.clear_file_properties_state();
         self.archive_creation = None;

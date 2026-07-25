@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use iced::Task;
 
 use super::FileBrowser;
+use crate::commands::startup_directory_validation_command;
 use crate::config::{StartupLocationPolicy, UiLanguageSetting};
-use crate::model::Message;
+use crate::model::{Message, StartupDirectoryAvailability, StartupDirectoryValidationRequest};
 
 impl FileBrowser {
     pub(super) fn select_language_setting(
@@ -29,6 +30,7 @@ impl FileBrowser {
         {
             return Task::none();
         }
+        self.invalidate_startup_directory_validation();
         self.user_config.startup_location_policy = policy;
         self.user_config.save_view_state = save_view_state;
         if !save_view_state {
@@ -41,30 +43,66 @@ impl FileBrowser {
     }
 
     pub(super) fn update_startup_custom_directory_input(&mut self, value: String) -> Task<Message> {
+        self.invalidate_startup_directory_validation();
         self.startup_custom_directory_input = value;
         self.startup_custom_directory_error = None;
         Task::none()
     }
 
     pub(super) fn commit_startup_custom_directory_input(&mut self) -> Task<Message> {
+        self.invalidate_startup_directory_validation();
         let trimmed = self.startup_custom_directory_input.trim();
         if trimmed.is_empty() {
             self.startup_custom_directory_error = Some("Enter a directory path.".to_owned());
             return Task::none();
         }
-        let directory = PathBuf::from(trimmed);
-        if !std::fs::metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
-            self.startup_custom_directory_error = Some("Choose an existing directory.".to_owned());
+        let request = StartupDirectoryValidationRequest {
+            generation: self.startup_directory_validation_generation,
+            input: self.startup_custom_directory_input.clone(),
+            directory: PathBuf::from(trimmed),
+        };
+        self.pending_startup_directory_validation = Some(request.clone());
+        self.startup_custom_directory_error = None;
+        startup_directory_validation_command(request)
+    }
+
+    pub(super) fn accept_startup_directory_validation(
+        &mut self,
+        request: StartupDirectoryValidationRequest,
+        availability: StartupDirectoryAvailability,
+    ) -> Task<Message> {
+        let request_is_current = self
+            .pending_startup_directory_validation
+            .as_ref()
+            .is_some_and(|pending| pending == &request)
+            && self.startup_custom_directory_input == request.input;
+        if !request_is_current {
             return Task::none();
         }
-        self.user_config.startup_custom_directory = directory;
-        self.startup_custom_directory_input = self
-            .user_config
-            .startup_custom_directory
-            .to_string_lossy()
-            .into_owned();
-        self.startup_custom_directory_error = None;
-        self.persist_user_preferences_command()
+        self.pending_startup_directory_validation = None;
+        match availability {
+            StartupDirectoryAvailability::Usable => {
+                self.user_config.startup_custom_directory = request.directory;
+                self.startup_custom_directory_input = self
+                    .user_config
+                    .startup_custom_directory
+                    .to_string_lossy()
+                    .into_owned();
+                self.startup_custom_directory_error = None;
+                self.persist_user_preferences_command()
+            }
+            StartupDirectoryAvailability::Unavailable => {
+                self.startup_custom_directory_error =
+                    Some("Choose an existing directory.".to_owned());
+                Task::none()
+            }
+        }
+    }
+
+    pub(super) fn invalidate_startup_directory_validation(&mut self) {
+        self.startup_directory_validation_generation =
+            self.startup_directory_validation_generation.wrapping_add(1);
+        self.pending_startup_directory_validation = None;
     }
 }
 
@@ -122,5 +160,164 @@ mod tests {
         drop(browser.select_language_setting(UiLanguageSetting::English));
 
         assert_eq!(browser.active_language(), config::UiLanguage::English);
+    }
+
+    #[test]
+    fn current_startup_directory_validation_saves_only_usable_directory() {
+        let mut user_config = config::ui_thread_startup_config();
+        let original_directory = PathBuf::from("/original");
+        user_config.startup_custom_directory = original_directory.clone();
+        let (mut browser, _) = FileBrowser::new(user_config);
+        let requested_directory = PathBuf::from("/requested");
+
+        drop(browser.update_startup_custom_directory_input(
+            requested_directory.to_string_lossy().into_owned(),
+        ));
+        drop(browser.commit_startup_custom_directory_input());
+        let request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("pending validation request");
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            original_directory
+        );
+        drop(
+            browser
+                .accept_startup_directory_validation(request, StartupDirectoryAvailability::Usable),
+        );
+
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            requested_directory
+        );
+        assert_eq!(browser.startup_custom_directory_error, None);
+        assert!(browser.pending_startup_directory_validation.is_none());
+
+        drop(browser.update_startup_custom_directory_input("/unavailable".to_owned()));
+        drop(browser.commit_startup_custom_directory_input());
+        let request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("pending validation request");
+        drop(browser.accept_startup_directory_validation(
+            request,
+            StartupDirectoryAvailability::Unavailable,
+        ));
+
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            requested_directory
+        );
+        assert_eq!(
+            browser.startup_custom_directory_error.as_deref(),
+            Some("Choose an existing directory.")
+        );
+    }
+
+    #[test]
+    fn input_change_rejects_late_startup_directory_success_and_failure() {
+        let mut user_config = config::ui_thread_startup_config();
+        let original_directory = PathBuf::from("/original");
+        user_config.startup_custom_directory = original_directory.clone();
+        let (mut browser, _) = FileBrowser::new(user_config);
+
+        drop(browser.update_startup_custom_directory_input("/first".to_owned()));
+        drop(browser.commit_startup_custom_directory_input());
+        let first_request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("first validation request");
+        drop(browser.update_startup_custom_directory_input("/second".to_owned()));
+        drop(browser.accept_startup_directory_validation(
+            first_request,
+            StartupDirectoryAvailability::Usable,
+        ));
+
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            original_directory
+        );
+        assert_eq!(browser.startup_custom_directory_error, None);
+
+        drop(browser.commit_startup_custom_directory_input());
+        let second_request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("second validation request");
+        drop(browser.update_startup_custom_directory_input("/third".to_owned()));
+        drop(browser.accept_startup_directory_validation(
+            second_request,
+            StartupDirectoryAvailability::Unavailable,
+        ));
+
+        assert_eq!(browser.startup_custom_directory_error, None);
+        assert_eq!(browser.startup_custom_directory_input, "/third");
+    }
+
+    #[test]
+    fn newer_startup_directory_request_replaces_same_input_generation() {
+        let mut user_config = config::ui_thread_startup_config();
+        let original_directory = PathBuf::from("/original");
+        user_config.startup_custom_directory = original_directory.clone();
+        let (mut browser, _) = FileBrowser::new(user_config);
+
+        drop(browser.update_startup_custom_directory_input("/requested".to_owned()));
+        drop(browser.commit_startup_custom_directory_input());
+        let first_request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("first validation request");
+        drop(browser.commit_startup_custom_directory_input());
+        let second_request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("replacement validation request");
+        assert_ne!(first_request.generation, second_request.generation);
+
+        drop(browser.accept_startup_directory_validation(
+            first_request,
+            StartupDirectoryAvailability::Usable,
+        ));
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            original_directory
+        );
+
+        drop(browser.accept_startup_directory_validation(
+            second_request,
+            StartupDirectoryAvailability::Usable,
+        ));
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            PathBuf::from("/requested")
+        );
+    }
+
+    #[test]
+    fn closing_settings_rejects_late_startup_directory_validation() {
+        let mut user_config = config::ui_thread_startup_config();
+        let original_directory = PathBuf::from("/original");
+        user_config.startup_custom_directory = original_directory.clone();
+        let (mut browser, _) = FileBrowser::new(user_config);
+        browser.settings_window = Some(iced::window::Id::unique());
+
+        drop(browser.update_startup_custom_directory_input("/requested".to_owned()));
+        drop(browser.commit_startup_custom_directory_input());
+        let request = browser
+            .pending_startup_directory_validation
+            .clone()
+            .expect("pending validation request");
+        drop(browser.close_settings_window());
+        drop(
+            browser
+                .accept_startup_directory_validation(request, StartupDirectoryAvailability::Usable),
+        );
+
+        assert_eq!(
+            browser.user_config.startup_custom_directory,
+            original_directory
+        );
+        assert!(browser.pending_startup_directory_validation.is_none());
     }
 }

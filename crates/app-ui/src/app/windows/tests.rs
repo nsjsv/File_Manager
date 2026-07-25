@@ -74,7 +74,7 @@ async fn close_all_windows_saves_browser_session_before_exit() {
     drop(browser.accept_operation_store(Ok(LoadedOperationStore {
         task_queue_store: store.clone(),
         column_width_overrides: HashMap::new(),
-        browser_session: None,
+        classified_startup_session: None,
         restored_tasks: Vec::new(),
     })));
 

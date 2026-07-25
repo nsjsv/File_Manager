@@ -9,8 +9,8 @@ use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
     trash_location_path, BrowserPaneId, BrowserViewMode, ExpandedDirectory,
-    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, FileDragNativeDndState, FileDragPhase,
-    Message,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, FileDragHitTestBounds,
+    FileDragNativeDndState, FileDragPhase, Message,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -54,6 +54,37 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
 }
 
 #[test]
+fn pending_column_drag_preserves_the_press_time_target_columns() {
+    let root = PathBuf::from("/workspace");
+    let source = root.join("report.txt");
+    let target_directory = root.join("downloads");
+    let mut browser = browser_with_entries(&[]);
+    browser.entries = vec![
+        test_entry(source.clone(), FileKind::File),
+        test_entry(target_directory.clone(), FileKind::Directory),
+    ];
+    browser
+        .expanded_directories
+        .insert(target_directory.clone(), loaded_directory(Vec::new()));
+    browser.deepest_open_column_directory = Some(target_directory.clone());
+    assert_eq!(
+        crate::three_column_view::column_directories(&browser),
+        vec![root.clone(), target_directory.clone()]
+    );
+
+    drop(browser.handle_column_entry_clicked(source));
+
+    assert!(matches!(
+        browser.file_drag.as_ref().map(|drag| &drag.phase),
+        Some(FileDragPhase::WaitingForMovement { .. })
+    ));
+    assert_eq!(
+        crate::three_column_view::column_directories(&browser),
+        vec![root, target_directory]
+    );
+}
+
+#[test]
 fn shift_range_click_does_not_seed_activation_double_click() {
     let first = PathBuf::from("/workspace/first.txt");
     let second = PathBuf::from("/workspace/second.txt");
@@ -94,28 +125,34 @@ fn shift_range_click_does_not_seed_activation_double_click() {
 }
 
 #[test]
-fn file_drag_requests_wayland_dnd_only_after_window_exit() {
+fn file_drag_starts_wayland_dnd_after_current_target_bounds_are_measured() {
     let source = PathBuf::from("/workspace/report.txt");
     let mut browser = browser_with_entries(std::slice::from_ref(&source));
+    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
 
     drop(browser.handle_column_entry_clicked(source));
-    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+    drop(browser.update_file_drag(Point::new(2.0, 0.0)));
     assert_eq!(
         browser.file_drag.as_ref().map(|drag| drag.native_dnd),
         Some(FileDragNativeDndState::NotRequested)
     );
 
-    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
-    drop(browser.request_file_drag_wayland_dnd_on_window_exit());
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+    let measurement_id = match browser.file_drag.as_ref().map(|drag| drag.native_dnd) {
+        Some(FileDragNativeDndState::MeasuringTargets(measurement_id)) => measurement_id,
+        state => panic!("expected target measurement, got {state:?}"),
+    };
 
-    assert_eq!(
+    drop(browser.accept_native_bounds(measurement_id, FileDragHitTestBounds::default()));
+
+    assert!(matches!(
         browser.file_drag.as_ref().map(|drag| drag.native_dnd),
-        Some(FileDragNativeDndState::WaylandRequested)
-    );
+        Some(FileDragNativeDndState::Requested(_))
+    ));
 }
 
 #[test]
-fn main_window_outside_cursor_move_requests_wayland_dnd() {
+fn main_window_outside_cursor_move_prepares_wayland_dnd_target_measurement() {
     let source = PathBuf::from("/workspace/report.txt");
     let mut browser = browser_with_entries(std::slice::from_ref(&source));
     drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
@@ -131,10 +168,47 @@ fn main_window_outside_cursor_move_requests_wayland_dnd() {
         .as_ref()
         .expect("file drag remains active");
     assert!(file_drag.is_dragging());
-    assert_eq!(
+    assert!(matches!(
         file_drag.native_dnd,
-        FileDragNativeDndState::WaylandRequested
+        FileDragNativeDndState::MeasuringTargets(_)
+    ));
+}
+
+#[test]
+fn stale_native_target_measurement_does_not_start_wayland_source() {
+    let source = PathBuf::from("/workspace/report.txt");
+    let mut browser = browser_with_entries(std::slice::from_ref(&source));
+    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
+
+    drop(browser.handle_column_entry_clicked(source));
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+    let measurement_id = match browser.file_drag.as_ref().map(|drag| drag.native_dnd) {
+        Some(FileDragNativeDndState::MeasuringTargets(measurement_id)) => measurement_id,
+        state => panic!("expected target measurement, got {state:?}"),
+    };
+
+    drop(browser.accept_native_bounds(
+        measurement_id.wrapping_sub(1),
+        FileDragHitTestBounds::default(),
+    ));
+
+    assert_eq!(
+        browser.file_drag.as_ref().map(|drag| drag.native_dnd),
+        Some(FileDragNativeDndState::MeasuringTargets(measurement_id))
     );
+}
+
+#[test]
+fn release_while_native_target_measurement_is_pending_cancels_file_drag() {
+    let source = PathBuf::from("/workspace/report.txt");
+    let mut browser = browser_with_entries(std::slice::from_ref(&source));
+    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
+
+    drop(browser.handle_column_entry_clicked(source));
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+    drop(browser.finish_drag_selection(None));
+
+    assert!(browser.file_drag.is_none());
 }
 
 #[test]
@@ -287,6 +361,13 @@ fn column_single_click_still_opens_child_column() {
         browser.deepest_open_column_directory,
         Some(directory.clone())
     );
+    assert_eq!(
+        crate::three_column_view::column_directories(&browser),
+        vec![PathBuf::from("/workspace")]
+    );
+
+    drop(browser.finish_drag_selection(None));
+
     assert_eq!(
         crate::three_column_view::column_directories(&browser),
         vec![PathBuf::from("/workspace"), directory.clone()]

@@ -119,9 +119,18 @@ impl FileBrowser {
         let Some(source) = sources.first().filter(|_| sources.len() == 1).cloned() else {
             return Task::none();
         };
-        if self.entry_kind(&source) != Some(FileKind::Directory)
-            || self.sidebar_favorite_exists(&source)
-        {
+        if self.entry_kind(&source) != Some(FileKind::Directory) {
+            return Task::none();
+        }
+        self.insert_sidebar_bookmark_from_drag(slot, source)
+    }
+
+    pub(super) fn insert_sidebar_bookmark_from_drag(
+        &mut self,
+        slot: SidebarBookmarkDropSlot,
+        source: PathBuf,
+    ) -> Task<Message> {
+        if self.sidebar_favorite_exists(&source) {
             return Task::none();
         }
 
@@ -481,15 +490,20 @@ fn sidebar_bookmark_pointer_target(
             continue;
         }
 
-        if position_y <= row_top + SIDEBAR_BOOKMARK_INSERT_EDGE_HEIGHT {
-            return SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert { index });
-        }
-        if position_y >= row_bottom - SIDEBAR_BOOKMARK_INSERT_EDGE_HEIGHT {
-            return SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert {
-                index: index + 1,
-            });
-        }
-        return SidebarBookmarkPointerTarget::Directory(location.path.clone());
+        return match sidebar_bookmark_row_pointer_target(position_y, row_top, row_bottom - row_top)
+        {
+            SidebarBookmarkRowPointerTarget::InsertBefore => {
+                SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert { index })
+            }
+            SidebarBookmarkRowPointerTarget::Directory => {
+                SidebarBookmarkPointerTarget::Directory(location.path.clone())
+            }
+            SidebarBookmarkRowPointerTarget::InsertAfter => {
+                SidebarBookmarkPointerTarget::Insert(SidebarBookmarkDropSlot::Insert {
+                    index: index + 1,
+                })
+            }
+        };
     }
 
     let last_row_bottom = first_row_top
@@ -501,6 +515,28 @@ fn sidebar_bookmark_pointer_target(
         })
     } else {
         SidebarBookmarkPointerTarget::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum SidebarBookmarkRowPointerTarget {
+    InsertBefore,
+    Directory,
+    InsertAfter,
+}
+
+pub(in crate::app) fn sidebar_bookmark_row_pointer_target(
+    position_y: f32,
+    row_top: f32,
+    row_height: f32,
+) -> SidebarBookmarkRowPointerTarget {
+    let edge_height = SIDEBAR_BOOKMARK_INSERT_EDGE_HEIGHT.min(row_height / 2.0);
+    if position_y <= row_top + edge_height {
+        SidebarBookmarkRowPointerTarget::InsertBefore
+    } else if position_y >= row_top + row_height - edge_height {
+        SidebarBookmarkRowPointerTarget::InsertAfter
+    } else {
+        SidebarBookmarkRowPointerTarget::Directory
     }
 }
 

@@ -113,7 +113,14 @@ fn wayland_file_dnd_stream(
         while let Some(event) = event_receiver.recv().await {
             let message = match event {
                 WaylandDndEvent::FilesDropped(drop) => Message::WaylandFilesDropped(Ok(drop)),
-                WaylandDndEvent::Failed(error) => Message::WaylandFilesDropped(Err(error)),
+                WaylandDndEvent::FileDropFailed(error) => Message::WaylandFilesDropped(Err(error)),
+                WaylandDndEvent::FileDragSource(event) => {
+                    Message::WaylandFileDragSourceEvent(event)
+                }
+                WaylandDndEvent::FileDragSelfTarget(event) => {
+                    Message::WaylandFileDragSelfTargetEvent(event)
+                }
+                WaylandDndEvent::RuntimeFailed(error) => Message::WaylandDndRuntimeFailed(error),
             };
             if output.send(message).await.is_err() {
                 break;

@@ -1,4 +1,3 @@
-use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, File};
 use std::io;
@@ -226,6 +225,7 @@ fn write_zip_archive(
     cancel: &CancellationToken,
     progress: &mut impl FnMut(ArchiveCreationProgress),
 ) -> Result<(), FileError> {
+    let archive_names = zip_archive_names(entries)?;
     let file = create_archive_file(&request.target)?;
     let mut archive = zip::ZipWriter::new(file);
     let method = if request.compression_level == ArchiveCompressionLevel::Store {
@@ -239,9 +239,8 @@ fn write_zip_archive(
         .large_file(true);
     let total_entries = entries.len();
 
-    for (index, entry) in entries.iter().enumerate() {
+    for (index, (entry, archive_name)) in entries.iter().zip(archive_names).enumerate() {
         cancel_if_requested(cancel)?;
-        let archive_name = zip_archive_name(&entry.relative_path)?;
         if entry.is_directory {
             archive
                 .add_directory(archive_name, options)
@@ -309,6 +308,9 @@ async fn create_archive_with_seven_zip(
     cancel: CancellationToken,
 ) -> Result<PathBuf, FileError> {
     let base_directory = common_source_parent(&request.sources)?;
+    if request.format == ArchiveFormat::Zip {
+        validate_external_zip_entry_encoding(&request, &base_directory, &cancel).await?;
+    }
     let mut relative_sources = Vec::with_capacity(request.sources.len());
     for source in &request.sources {
         relative_sources.push(archive_relative_path(source, &base_directory)?);
@@ -348,6 +350,26 @@ async fn create_archive_with_seven_zip(
     }
 
     Err(FileError::Unsupported("7z, 7zz or 7za command is required"))
+}
+
+async fn validate_external_zip_entry_encoding(
+    request: &ArchiveCreationRequest,
+    base_directory: &Path,
+    cancel: &CancellationToken,
+) -> Result<(), FileError> {
+    let sources = request.sources.clone();
+    let base_directory = base_directory.to_path_buf();
+    let cancel = cancel.clone();
+    let join_target = request.target.clone();
+    tokio::task::spawn_blocking(move || {
+        let entries = collect_archive_entries(&sources, &base_directory, &cancel)?;
+        zip_archive_names(&entries).map(|_| ())
+    })
+    .await
+    .map_err(|error| FileError::Archive {
+        path: join_target,
+        message: error.to_string(),
+    })?
 }
 
 fn spawn_seven_zip_archive(
@@ -453,33 +475,32 @@ fn path_has_parent_reference(path: &Path) -> bool {
     })
 }
 
-fn zip_archive_name(path: &Path) -> Result<String, FileError> {
+fn zip_archive_names(entries: &[ArchiveEntry]) -> Result<Vec<String>, FileError> {
+    entries.iter().map(zip_archive_name).collect()
+}
+
+fn zip_archive_name(entry: &ArchiveEntry) -> Result<String, FileError> {
     let mut parts = Vec::new();
-    for component in path.components() {
+    for component in entry.relative_path.components() {
         let Component::Normal(part) = component else {
             return Err(FileError::InvalidInput {
-                path: path.to_path_buf(),
+                path: entry.path.clone(),
                 message: "archive entry path is not safe".to_owned(),
             });
         };
-        parts.push(os_str_to_archive_component(part));
+        let component = part.to_str().ok_or_else(|| FileError::InvalidInput {
+            path: entry.path.clone(),
+            message: "ZIP archive entry names must be valid UTF-8".to_owned(),
+        })?;
+        parts.push(component);
     }
     if parts.is_empty() {
         return Err(FileError::InvalidInput {
-            path: path.to_path_buf(),
+            path: entry.path.clone(),
             message: "archive entry path is empty".to_owned(),
         });
     }
     Ok(parts.join("/"))
-}
-
-fn os_str_to_archive_component(component: &OsStr) -> String {
-    let text = component.to_string_lossy();
-    if text.is_empty() {
-        OsString::from("_").to_string_lossy().into_owned()
-    } else {
-        text.into_owned()
-    }
 }
 
 fn archive_write_error(path: &Path, source: zip::result::ZipError) -> FileError {

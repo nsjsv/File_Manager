@@ -142,7 +142,7 @@ impl IconSymbol {
             .height(Length::Fixed(size))
     }
 
-    fn bytes(self) -> &'static [u8] {
+    pub(crate) fn bytes(self) -> &'static [u8] {
         match self {
             Self::ArrowLeft => include_bytes!("../assets/icons/lucide/arrow-left.svg"),
             Self::ArrowRight => include_bytes!("../assets/icons/lucide/arrow-right.svg"),

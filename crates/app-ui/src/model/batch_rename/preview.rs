@@ -2,6 +2,11 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
 use super::{
     BatchRenamePreview, BatchRenamePreviewRow, BatchRenamePreviewStatus, BatchRenameSortMode,
     BatchRenameSortRule, BatchRenameSource, BatchRenameState,
@@ -16,7 +21,7 @@ pub(super) fn build_batch_rename_preview(state: &BatchRenameState) -> BatchRenam
     for (index, item) in sorted_items.into_iter().enumerate() {
         let target_name_result = prepared_rules.rename_item_name(item, index, state);
         let has_rule_error = target_name_result.is_err();
-        let rule_target_name = target_name_result.unwrap_or_else(|_| item.name.clone());
+        let rule_target_name = target_name_result.unwrap_or_else(|_| item.source_name_text.clone());
         let target_name = state
             .manual_target_name_override(&item.path)
             .map(ToOwned::to_owned)
@@ -28,7 +33,7 @@ pub(super) fn build_batch_rename_preview(state: &BatchRenameState) -> BatchRenam
             .unwrap_or_else(|| PathBuf::from(&target_name));
         rows.push(BatchRenamePreviewRow {
             source: item.path.clone(),
-            original_name: item.name.clone(),
+            original_name: item.source_name_text.clone(),
             target,
             target_name,
             status: if has_rule_error {
@@ -81,13 +86,24 @@ fn sorted_batch_rename_items<'a>(
     match sort.mode {
         BatchRenameSortMode::SelectionOrder => {}
         BatchRenameSortMode::NaturalAscending => {
-            sorted.sort_by(|left, right| natural_name_cmp(&left.name, &right.name));
+            sorted.sort_by(|left, right| {
+                natural_name_cmp(&left.source_name_text, &right.source_name_text)
+            });
         }
         BatchRenameSortMode::NameAscending => {
-            sorted.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+            sorted.sort_by(|left, right| {
+                left.source_name_text
+                    .to_lowercase()
+                    .cmp(&right.source_name_text.to_lowercase())
+            });
         }
         BatchRenameSortMode::NameDescending => {
-            sorted.sort_by(|left, right| right.name.to_lowercase().cmp(&left.name.to_lowercase()));
+            sorted.sort_by(|left, right| {
+                right
+                    .source_name_text
+                    .to_lowercase()
+                    .cmp(&left.source_name_text.to_lowercase())
+            });
         }
         BatchRenameSortMode::ModifiedAscending => {
             sorted.sort_by(|left, right| modified_sort_key(left).cmp(&modified_sort_key(right)));
@@ -100,12 +116,14 @@ fn sorted_batch_rename_items<'a>(
         }
         BatchRenameSortMode::ExtensionAscending => {
             sorted.sort_by(|left, right| {
-                file_extension_for_sort(&left.name).cmp(&file_extension_for_sort(&right.name))
+                file_extension_for_sort(&left.source_name_text)
+                    .cmp(&file_extension_for_sort(&right.source_name_text))
             });
         }
         BatchRenameSortMode::ExtensionDescending => {
             sorted.sort_by(|left, right| {
-                file_extension_for_sort(&right.name).cmp(&file_extension_for_sort(&left.name))
+                file_extension_for_sort(&right.source_name_text)
+                    .cmp(&file_extension_for_sort(&left.source_name_text))
             });
         }
         BatchRenameSortMode::Reverse => sorted.reverse(),
@@ -125,20 +143,39 @@ fn modified_sort_key(item: &BatchRenameSource) -> (bool, Option<std::time::Syste
     (
         item.modified.is_none(),
         item.modified,
-        item.name.to_lowercase(),
+        item.source_name_text.to_lowercase(),
     )
 }
 
 fn deterministic_sort_key(item: &BatchRenameSource) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(item.path.as_os_str().to_string_lossy().as_bytes());
+    hasher.update(b"batch-rename-path\0");
+    update_path_hash(&mut hasher, &item.path);
     if let Some(modified) = item.modified {
         if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+            hasher.update(b"\0modified\0");
             hasher.update(&duration.as_secs().to_le_bytes());
             hasher.update(&duration.subsec_nanos().to_le_bytes());
         }
     }
     *hasher.finalize().as_bytes()
+}
+
+#[cfg(unix)]
+fn update_path_hash(hasher: &mut blake3::Hasher, path: &Path) {
+    hasher.update(path.as_os_str().as_bytes());
+}
+
+#[cfg(windows)]
+fn update_path_hash(hasher: &mut blake3::Hasher, path: &Path) {
+    for code_unit in path.as_os_str().encode_wide() {
+        hasher.update(&code_unit.to_le_bytes());
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn update_path_hash(hasher: &mut blake3::Hasher, path: &Path) {
+    hasher.update(path.as_os_str().as_encoded_bytes());
 }
 
 fn natural_name_cmp(left: &str, right: &str) -> Ordering {
@@ -205,5 +242,33 @@ fn compare_ascii_digit_runs(left: &str, right: &str) -> Ordering {
             ordering => ordering,
         },
         ordering => ordering,
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::*;
+
+    #[test]
+    fn random_sort_key_uses_original_path_bytes() {
+        let source_name_text = "entry-\u{fffd}".to_owned();
+        let first = BatchRenameSource {
+            path: PathBuf::from("/tmp").join(OsString::from_vec(b"entry-\x80".to_vec())),
+            source_name_text: source_name_text.clone(),
+            modified: None,
+        };
+        let second = BatchRenameSource {
+            path: PathBuf::from("/tmp").join(OsString::from_vec(b"entry-\x81".to_vec())),
+            source_name_text,
+            modified: None,
+        };
+
+        assert_ne!(
+            deterministic_sort_key(&first),
+            deterministic_sort_key(&second)
+        );
     }
 }

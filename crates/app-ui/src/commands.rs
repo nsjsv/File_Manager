@@ -20,7 +20,7 @@ use iced::Task;
 use crate::config;
 use crate::model::{
     AddressSuggestionRequest, BrowserPaneId, LoadedOperationStore, Message, PendingOperation,
-    SidebarLocation, StartupEnvironment, TransferConflictMode,
+    SidebarLocation, StartupEnvironment, StartupSessionPlanRequest, TransferConflictMode,
 };
 use crate::operation_queue::QueuedTransfer;
 use crate::sidebar::{home_sidebar_location, sidebar_locations};
@@ -77,6 +77,12 @@ pub(crate) use search_service::{ensure_search_service_command, search_service_st
 pub(crate) use search_service_recovery::search_service_recovery_command;
 mod sidebar_devices;
 pub(crate) use sidebar_devices::{sidebar_device_action_command, sidebar_devices_command};
+mod startup_paths;
+#[cfg(test)]
+pub(crate) use startup_paths::classify_startup_session;
+pub(crate) use startup_paths::{
+    startup_directory_validation_command, startup_session_plan_command,
+};
 mod wayland_dnd;
 pub(crate) use wayland_dnd::wayland_dnd_window_handle_command;
 
@@ -100,8 +106,14 @@ pub(crate) fn sidebar_locations_command(
     )
 }
 
-pub(crate) fn operation_store_command(path: PathBuf) -> Task<Message> {
-    Task::perform(load_operation_store(path), Message::OperationStoreLoaded)
+pub(crate) fn operation_store_command(
+    path: PathBuf,
+    startup_session_request: Option<StartupSessionPlanRequest>,
+) -> Task<Message> {
+    Task::perform(
+        load_operation_store(path, startup_session_request),
+        Message::OperationStoreLoaded,
+    )
 }
 
 pub(crate) fn delayed_thumbnail_refresh_command(
@@ -324,7 +336,10 @@ async fn delayed_thumbnail_refresh(directory: PathBuf) -> PathBuf {
     directory
 }
 
-async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, String> {
+async fn load_operation_store(
+    path: PathBuf,
+    startup_session_request: Option<StartupSessionPlanRequest>,
+) -> Result<LoadedOperationStore, String> {
     if path.as_os_str().is_empty() {
         return Err("state database path is unavailable".to_owned());
     }
@@ -344,10 +359,12 @@ async fn load_operation_store(path: PathBuf) -> Result<LoadedOperationStore, Str
                 (column_index, config::normalize_column_width(width as f32))
             })
             .collect();
+        let classified_startup_session = startup_session_request
+            .map(|request| startup_paths::classify_startup_session(request, browser_session));
         Ok::<LoadedOperationStore, file_operation_store::StoreError>(LoadedOperationStore {
             task_queue_store: store,
             column_width_overrides,
-            browser_session,
+            classified_startup_session,
             restored_tasks,
         })
     })

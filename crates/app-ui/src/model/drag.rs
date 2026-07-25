@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use desktop_linux::WaylandFileDragSessionId;
 use iced::{Point, Rectangle};
 
 use super::SplitRegion;
@@ -63,6 +64,7 @@ pub(crate) struct FileDragState {
     pub(crate) target: Option<FileDragTarget>,
     pub(crate) phase: FileDragPhase,
     pub(crate) native_dnd: FileDragNativeDndState,
+    pub(crate) wayland_target: Option<WaylandFileDragTargetSnapshot>,
     pub(crate) column_directories_snapshot: Vec<PathBuf>,
 }
 
@@ -71,11 +73,17 @@ impl FileDragState {
         matches!(self.phase, FileDragPhase::Dragging)
     }
 
-    pub(crate) fn can_request_wayland_dnd(&self) -> bool {
-        self.native_dnd == FileDragNativeDndState::NotRequested
+    pub(crate) fn can_start_native_dnd(&self) -> bool {
+        self.native_dnd == FileDragNativeDndState::NotRequested && self.is_dragging()
+    }
+
+    pub(crate) fn displays_iced_drag_preview(&self) -> bool {
+        self.is_dragging()
             && matches!(
-                self.phase,
-                FileDragPhase::WaitingForMovement { .. } | FileDragPhase::Dragging
+                self.native_dnd,
+                FileDragNativeDndState::NotRequested
+                    | FileDragNativeDndState::MeasuringTargets(_)
+                    | FileDragNativeDndState::Requested(_)
             )
     }
 }
@@ -84,6 +92,54 @@ impl FileDragState {
 pub(crate) enum FileDragTarget {
     Directory(PathBuf),
     SidebarBookmarkSlot(SidebarBookmarkDropSlot),
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FileDragHitTestBounds {
+    pub(crate) entries: Vec<super::ColumnEntryBounds>,
+    pub(crate) breadcrumbs: Vec<BreadcrumbDropTargetBounds>,
+    pub(crate) directory_targets: Vec<DirectoryFileDragTargetBounds>,
+    pub(crate) sidebar_directories: Vec<SidebarFileDragTargetBounds>,
+    pub(crate) empty_sidebar_bookmarks: Option<Rectangle>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DirectoryFileDragTargetBounds {
+    pub(crate) pane_id: super::BrowserPaneId,
+    pub(crate) directory: PathBuf,
+    pub(crate) bounds: Rectangle,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SidebarFileDragTargetBounds {
+    pub(crate) directory: PathBuf,
+    pub(crate) favorite_index: Option<usize>,
+    pub(crate) bounds: Rectangle,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WaylandFileDragEntryTargetBounds {
+    pub(crate) directory: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) bounds: Rectangle,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WaylandFileDragHitTestBounds {
+    pub(crate) entries: Vec<WaylandFileDragEntryTargetBounds>,
+    pub(crate) breadcrumbs: Vec<BreadcrumbDropTargetBounds>,
+    pub(crate) directory_targets: Vec<DirectoryFileDragTargetBounds>,
+    pub(crate) sidebar_directories: Vec<SidebarFileDragTargetBounds>,
+    pub(crate) empty_sidebar_bookmarks: Option<Rectangle>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WaylandFileDragTargetSnapshot {
+    pub(crate) session_id: WaylandFileDragSessionId,
+    pub(crate) hit_test_bounds: WaylandFileDragHitTestBounds,
+    pub(crate) bookmark_source: Option<PathBuf>,
+    pub(crate) position: Option<Point>,
+    pub(crate) target: Option<FileDragTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +153,21 @@ pub(crate) struct BreadcrumbDropTargetBounds {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileDragNativeDndState {
     NotRequested,
-    WaylandRequested,
+    MeasuringTargets(u64),
+    Requested(WaylandFileDragSessionId),
+    Started(WaylandFileDragSessionId),
+    Dropped(WaylandFileDragSessionId),
+}
+
+impl FileDragNativeDndState {
+    pub(crate) fn session_id(self) -> Option<WaylandFileDragSessionId> {
+        match self {
+            Self::NotRequested | Self::MeasuringTargets(_) => None,
+            Self::Requested(session_id) | Self::Started(session_id) | Self::Dropped(session_id) => {
+                Some(session_id)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

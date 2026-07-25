@@ -6,9 +6,9 @@ use crate::error::{SearchError, SearchResult};
 use crate::model::SearchFileKind;
 
 use super::{
-    path_to_storage, DirectorySignature, DirectorySnapshot, EntryObservationState,
-    EntryStageProgress, FileSignature, IndexedEntryStageState, KnownDirectChild, KnownEntryState,
-    KnownFileEntry, SearchDatabase,
+    path_from_storage_bytes, path_to_storage, recursive_storage_range, DirectorySignature,
+    DirectorySnapshot, EntryObservationState, EntryStageProgress, FileSignature,
+    IndexedEntryStageState, KnownDirectChild, KnownEntryState, KnownFileEntry, SearchDatabase,
 };
 
 /// 单批上限同时约束 SQL 参数、writer 交接和返回状态，容量与索引规模无关。
@@ -78,7 +78,7 @@ impl SearchDatabase {
         limit: usize,
     ) -> SearchResult<Vec<KnownFileEntry>> {
         validate_page_limit(limit)?;
-        let scope = path_to_storage(scope);
+        let scope_range = recursive_storage_range(scope);
         let after_path = after_path.map(path_to_storage).unwrap_or_default();
         let mut statement = self.connection.prepare_cached(
             "SELECT
@@ -94,7 +94,7 @@ impl SearchDatabase {
              FROM files AS f
              LEFT JOIN file_stage_state AS s ON s.path = f.path
              WHERE f.tombstoned = 0
-               AND f.path > ?2
+               AND f.path > ?4
                AND NOT EXISTS (
                     SELECT 1
                     FROM directory_snapshots AS parent_directory
@@ -103,27 +103,33 @@ impl SearchDatabase {
                )
                AND (
                     f.path = ?1
-                    OR (
-                        substr(f.path, 1, length(?1)) = ?1
-                        AND (?1 = '/' OR substr(f.path, length(?1) + 1, 1) = '/')
-                    )
+                    OR (f.path >= ?2 AND f.path < ?3)
                )
              ORDER BY f.path
-             LIMIT ?3",
+             LIMIT ?5",
         )?;
-        let rows = statement.query_map(params![scope, after_path, limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<i64>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        })?;
+        let rows = statement.query_map(
+            params![
+                scope_range.exact_path,
+                scope_range.descendant_lower,
+                scope_range.descendant_upper,
+                after_path,
+                limit as i64,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            },
+        )?;
 
         rows.map(|row| {
             let (
@@ -138,7 +144,7 @@ impl SearchDatabase {
                 observation_state,
             ) = row?;
             Ok(KnownFileEntry {
-                path: PathBuf::from(path),
+                path: path_from_storage_bytes(path),
                 state: known_entry_state(
                     device,
                     inode,
@@ -161,26 +167,30 @@ impl SearchDatabase {
         limit: usize,
     ) -> SearchResult<Vec<DirectorySnapshot>> {
         validate_page_limit(limit)?;
-        let scope = path_to_storage(scope);
+        let scope_range = recursive_storage_range(scope);
         let after_path = after_path.map(path_to_storage).unwrap_or_default();
         let mut statement = self.connection.prepare_cached(
             "SELECT path, parent_path, root_path, device, inode, mtime_ns, ctime_ns,
                     observation_state
              FROM directory_snapshots
-             WHERE path > ?2
+             WHERE path > ?4
                AND (
                     path = ?1
-                    OR (
-                        substr(path, 1, length(?1)) = ?1
-                        AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                    )
+                    OR (path >= ?2 AND path < ?3)
                )
              ORDER BY path
-             LIMIT ?3",
+             LIMIT ?5",
         )?;
-        let rows = statement.query_map(params![scope, after_path, limit as i64], |row| {
-            read_directory_snapshot_row(row)
-        })?;
+        let rows = statement.query_map(
+            params![
+                scope_range.exact_path,
+                scope_range.descendant_lower,
+                scope_range.descendant_upper,
+                after_path,
+                limit as i64,
+            ],
+            read_directory_snapshot_row,
+        )?;
         rows.map(|row| row.map_err(Into::into)).collect()
     }
 
@@ -199,7 +209,7 @@ impl SearchDatabase {
              LIMIT ?2",
         )?;
         let rows = statement.query_map(params![after_path, limit as i64], |row| {
-            row.get::<_, String>(0).map(PathBuf::from)
+            row.get::<_, Vec<u8>>(0).map(path_from_storage_bytes)
         })?;
         rows.map(|row| row.map_err(Into::into)).collect()
     }
@@ -278,7 +288,7 @@ impl SearchDatabase {
              LIMIT ?3",
         )?;
         let rows = statement.query_map(params![parent, after_path, limit as i64], |row| {
-            let path = PathBuf::from(row.get::<_, String>(0)?);
+            let path = path_from_storage_bytes(row.get::<_, Vec<u8>>(0)?);
             let kind = SearchFileKind::from_storage_value(&row.get::<_, String>(1)?);
             Ok(KnownDirectChild { path, kind })
         })?;
@@ -287,7 +297,7 @@ impl SearchDatabase {
 
     pub(crate) fn mark_scope_inaccessible(&self, scope: &Path) -> SearchResult<bool> {
         let transaction = self.connection.unchecked_transaction()?;
-        let scope = path_to_storage(scope);
+        let scope_range = recursive_storage_range(scope);
         let files_changed = transaction.execute(
             "UPDATE files
              SET observation_state = 'inaccessible'
@@ -295,12 +305,13 @@ impl SearchDatabase {
                AND observation_state <> 'inaccessible'
                AND (
                     path = ?1
-                    OR (
-                        substr(path, 1, length(?1)) = ?1
-                        AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                    )
-            )",
-            params![scope],
+                    OR (path >= ?2 AND path < ?3)
+               )",
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
         )?;
         let directories_changed = transaction.execute(
             "UPDATE directory_snapshots
@@ -308,12 +319,13 @@ impl SearchDatabase {
              WHERE observation_state <> 'inaccessible'
                AND (
                     path = ?1
-                    OR (
-                        substr(path, 1, length(?1)) = ?1
-                        AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                    )
+                    OR (path >= ?2 AND path < ?3)
                )",
-            params![scope],
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
         )?;
         transaction.commit()?;
         Ok(files_changed > 0 || directories_changed > 0)
@@ -321,48 +333,48 @@ impl SearchDatabase {
 
     pub(crate) fn delete_scope(&self, scope: &Path) -> SearchResult<()> {
         let transaction = self.connection.unchecked_transaction()?;
-        let scope = path_to_storage(scope);
+        let scope_range = recursive_storage_range(scope);
         transaction.execute(
             "DELETE FROM file_search_fts
-             WHERE path IN (
-                SELECT path FROM files
-                WHERE path = ?1
-                   OR (
-                        substr(path, 1, length(?1)) = ?1
-                        AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                   )
+             WHERE rowid IN (
+                SELECT rowid FROM files
+                WHERE path = ?1 OR (path >= ?2 AND path < ?3)
              )",
-            params![scope],
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
         )?;
         transaction.execute(
             "DELETE FROM file_stage_state
              WHERE path IN (
                 SELECT path FROM files
-                WHERE path = ?1
-                   OR (
-                        substr(path, 1, length(?1)) = ?1
-                        AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                   )
+                WHERE path = ?1 OR (path >= ?2 AND path < ?3)
              )",
-            params![scope],
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
         )?;
         transaction.execute(
             "DELETE FROM files
-             WHERE path = ?1
-                OR (
-                    substr(path, 1, length(?1)) = ?1
-                    AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                )",
-            params![scope],
+             WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
         )?;
         transaction.execute(
             "DELETE FROM directory_snapshots
-             WHERE path = ?1
-                OR (
-                    substr(path, 1, length(?1)) = ?1
-                    AND (?1 = '/' OR substr(path, length(?1) + 1, 1) = '/')
-                )",
-            params![scope],
+             WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
         )?;
         transaction.commit()?;
         Ok(())
@@ -406,7 +418,7 @@ fn validate_page_limit(limit: usize) -> SearchResult<()> {
 
 fn read_known_entry(
     statement: &mut rusqlite::Statement<'_>,
-    storage_path: &str,
+    storage_path: &[u8],
 ) -> SearchResult<Option<KnownEntryState>> {
     let stored_row = statement
         .query_row(params![storage_path], |row| {
@@ -497,9 +509,9 @@ fn read_directory_snapshot_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dire
         }
     };
     Ok(DirectorySnapshot {
-        path: PathBuf::from(row.get::<_, String>(0)?),
-        parent_path: PathBuf::from(row.get::<_, String>(1)?),
-        root_path: PathBuf::from(row.get::<_, String>(2)?),
+        path: path_from_storage_bytes(row.get::<_, Vec<u8>>(0)?),
+        parent_path: path_from_storage_bytes(row.get::<_, Vec<u8>>(1)?),
+        root_path: path_from_storage_bytes(row.get::<_, Vec<u8>>(2)?),
         signature: DirectorySignature {
             device: row.get::<_, i64>(3)? as u64,
             inode: row.get::<_, i64>(4)? as u64,

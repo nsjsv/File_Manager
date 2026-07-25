@@ -1,39 +1,22 @@
-use std::path::PathBuf;
-
 use iced::advanced::{layout, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
-use iced::{mouse, Element, Event, Length, Rectangle, Size, Task, Vector};
+use iced::{mouse, Element, Event, Length, Rectangle, Size, Vector};
 
-use crate::file_drag_hit_test_bounds::{
-    file_drag_hit_test_bounds_command, FileDragHitTestBoundsRequest, FileDragHitTestMarker,
-};
-use crate::model::{BrowserPaneId, Message};
+use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 
-pub(crate) fn track_breadcrumb_viewport<'a>(
+pub(crate) fn track_file_drag_hit_test_marker<'a, Message>(
     content: impl Into<Element<'a, Message>>,
-    pane_id: BrowserPaneId,
-) -> Element<'a, Message> {
-    Element::new(BreadcrumbBoundsTracker {
+    marker: FileDragHitTestMarker,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    Element::new(FileDragHitTestMarkerTracker {
         content: content.into(),
-        marker: FileDragHitTestMarker::BreadcrumbViewport { pane_id },
+        marker,
     })
 }
 
-pub(crate) fn track_breadcrumb_drop_target<'a>(
-    content: impl Into<Element<'a, Message>>,
-    pane_id: BrowserPaneId,
-    directory: PathBuf,
-) -> Element<'a, Message> {
-    Element::new(BreadcrumbBoundsTracker {
-        content: content.into(),
-        marker: FileDragHitTestMarker::BreadcrumbDirectory { pane_id, directory },
-    })
-}
-
-pub(crate) fn breadcrumb_drop_target_bounds_command(generation: u64) -> Task<Message> {
-    file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::Breadcrumbs(generation))
-}
-
-struct BreadcrumbBoundsTracker<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
+struct FileDragHitTestMarkerTracker<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
 where
     Renderer: iced::advanced::Renderer,
 {
@@ -42,7 +25,7 @@ where
 }
 
 impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
-    for BreadcrumbBoundsTracker<'a, Message, Theme, Renderer>
+    for FileDragHitTestMarkerTracker<'a, Message, Theme, Renderer>
 where
     Message: Clone + 'a,
     Theme: 'a,

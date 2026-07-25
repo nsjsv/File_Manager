@@ -11,6 +11,8 @@ use crate::appearance::{
     sidebar_style,
 };
 use crate::config;
+use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
+use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::{
@@ -64,7 +66,15 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
         .collect::<Vec<_>>();
     let can_drop_bookmark = browser.can_drop_sidebar_bookmark();
     if can_drop_bookmark || !favorite_locations.is_empty() {
-        sidebar = sidebar.push(sidebar_section_label("Favorites"));
+        let favorites_label = sidebar_section_label("Favorites");
+        sidebar = sidebar.push(if can_drop_bookmark && favorite_locations.is_empty() {
+            track_file_drag_hit_test_marker(
+                favorites_label,
+                FileDragHitTestMarker::EmptySidebarBookmarks,
+            )
+        } else {
+            favorites_label
+        });
 
         for (index, location) in favorite_locations.iter().enumerate() {
             sidebar = sidebar.push(sidebar_location_item_with_index(browser, location, index));
@@ -294,7 +304,13 @@ fn sidebar_location_item_content<'a>(
         item
     };
 
-    item.into()
+    track_file_drag_hit_test_marker(
+        item,
+        FileDragHitTestMarker::SidebarDirectory {
+            directory: location.path.clone(),
+            favorite_index,
+        },
+    )
 }
 
 fn sidebar_bookmark_drop_overlay<'a>(

@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 #[tokio::test]
 async fn create_zip_archive_preserves_selected_tree() {
@@ -104,6 +108,83 @@ async fn create_tar_gz_archive_preserves_selected_file() {
         })
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["note.txt".to_owned()]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn zip_rejects_non_utf8_entries_before_creating_target() {
+    let dir = tempdir().unwrap();
+    let first_name = OsString::from_vec(b"entry-\x80".to_vec());
+    let second_name = OsString::from_vec(b"entry-\x81".to_vec());
+    let first_source = dir.path().join(&first_name);
+    let second_source = dir.path().join(&second_name);
+    fs::write(&first_source, b"first").unwrap();
+    fs::write(&second_source, b"second").unwrap();
+    assert_ne!(first_name.as_bytes(), second_name.as_bytes());
+    assert_eq!(first_name.to_string_lossy(), second_name.to_string_lossy());
+
+    for (target_name, password) in [
+        ("plain.zip", None),
+        (
+            "password-protected.zip",
+            file_core::ArchivePassword::new("secret"),
+        ),
+    ] {
+        let target = dir.path().join(target_name);
+        let error = create_archive_with_progress(
+            ArchiveCreationRequest {
+                sources: vec![first_source.clone(), second_source.clone()],
+                target: target.clone(),
+                format: ArchiveFormat::Zip,
+                compression_level: ArchiveCompressionLevel::Balanced,
+                password,
+            },
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        match error {
+            FileError::InvalidInput { path, message } => {
+                assert_eq!(path, first_source);
+                assert!(message.contains("UTF-8"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!target.exists());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn tar_gz_preserves_non_utf8_entry_name() {
+    let dir = tempdir().unwrap();
+    let source_name = OsString::from_vec(b"entry-\x80".to_vec());
+    let source = dir.path().join(&source_name);
+    fs::write(&source, b"content").unwrap();
+    let target = dir.path().join("bundle.tar.gz");
+
+    create_archive_with_progress(
+        ArchiveCreationRequest {
+            sources: vec![source],
+            target: target.clone(),
+            format: ArchiveFormat::TarGz,
+            compression_level: ArchiveCompressionLevel::Balanced,
+            password: None,
+        },
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    let file = fs::File::open(target).unwrap();
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    let entry = archive.entries().unwrap().next().unwrap().unwrap();
+
+    assert_eq!(entry.path_bytes().as_ref(), source_name.as_bytes());
 }
 
 #[tokio::test]

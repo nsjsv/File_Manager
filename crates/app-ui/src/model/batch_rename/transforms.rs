@@ -63,13 +63,13 @@ impl PreparedBatchRenameRules {
         let remove_start = parse_optional_usize(&state.remove.start_input);
         let remove_length = parse_optional_usize(&state.remove.length_input);
         let random_text = deterministic_random_text(
-            &item.name,
+            &item.source_name_text,
             preview_index,
             parse_usize_or_default(&state.random.length_input, 6).min(64),
             &state.random.alphabet,
         );
 
-        let (mut stem, mut extension) = split_file_name(&item.name);
+        let (mut stem, mut extension) = split_file_name(&item.source_name_text);
         if !state.replace.find.is_empty() {
             stem = replace_text(
                 &stem,
@@ -255,14 +255,14 @@ fn render_custom_template(
     random_text: &str,
 ) -> String {
     let (current_stem, current_extension) = split_file_name(current_name);
-    let (original_stem, original_extension) = split_file_name(&item.name);
+    let (original_stem, original_extension) = split_file_name(&item.source_name_text);
     template
         .replace("{name}", current_name)
         .replace("{stem}", &current_stem)
         .replace("{ext}", current_extension.as_deref().unwrap_or(""))
         .replace("{index}", &sequence_number.to_string())
         .replace("{n}", &padded_number(sequence_number, padding))
-        .replace("{original}", &item.name)
+        .replace("{original}", &item.source_name_text)
         .replace("{original_stem}", &original_stem)
         .replace(
             "{original_ext}",

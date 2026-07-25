@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::FileBrowser;
-use crate::model::{same_parent, BatchRenameMessage, BatchRenameSource, BatchRenameState, Message};
+use crate::model::{
+    same_parent, BatchRenameMessage, BatchRenameSource, BatchRenameSourceNameError,
+    BatchRenameState, Message,
+};
 use crate::operation_queue::QueuedFileOperation;
 use crate::view::batch_rename_preview_name_input_id;
 
@@ -42,8 +45,15 @@ impl FileBrowser {
         self.archive_extraction = None;
         self.renaming = None;
         let _ = self.cancel_address_editing();
+        let sources = match self.batch_rename_sources_for_paths(&paths) {
+            Ok(sources) => sources,
+            Err(error) => {
+                self.batch_rename = None;
+                self.show_global_error(error.to_string());
+                return Task::none();
+            }
+        };
         let existing_paths = self.batch_rename_existing_paths(&paths);
-        let sources = self.batch_rename_sources_for_paths(&paths);
         self.batch_rename = BatchRenameState::new_with_existing_sources(sources, existing_paths);
         Task::none()
     }
@@ -102,12 +112,94 @@ impl FileBrowser {
             .collect()
     }
 
-    fn batch_rename_sources_for_paths(&self, selected_paths: &[PathBuf]) -> Vec<BatchRenameSource> {
+    fn batch_rename_sources_for_paths(
+        &self,
+        selected_paths: &[PathBuf],
+    ) -> Result<Vec<BatchRenameSource>, BatchRenameSourceNameError> {
         let selected = selected_paths.iter().cloned().collect::<HashSet<_>>();
         crate::visible_entries::visible_entries(&self.entries, &self.expanded_directories)
             .into_iter()
             .filter(|visible| selected.contains(&visible.entry.path))
-            .map(|visible| BatchRenameSource::from_entry(visible.entry))
+            .map(|visible| BatchRenameSource::try_from_entry(visible.entry))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    use super::*;
+    use crate::config;
+    use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+
+    fn file_entry(path: PathBuf) -> DirectoryEntry {
+        DirectoryEntry::new(
+            path,
+            FileKind::File,
+            EntryMetadata::default(),
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_non_utf8_selection_rejects_the_entire_batch() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let first_name = OsString::from_vec(b"entry-\x80".to_vec());
+        let second_name = OsString::from_vec(b"entry-\x81".to_vec());
+        let first_path = directory.path().join(&first_name);
+        let second_path = directory.path().join(&second_name);
+        fs::write(&first_path, b"first").expect("create first source");
+        fs::write(&second_path, b"second").expect("create second source");
+        assert_ne!(first_name.as_bytes(), second_name.as_bytes());
+        assert_eq!(first_name.to_string_lossy(), second_name.to_string_lossy());
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        browser.entries = vec![
+            file_entry(first_path.clone()),
+            file_entry(second_path.clone()),
+        ];
+        browser.selected_paths = HashSet::from([first_path.clone(), second_path.clone()]);
+
+        drop(browser.handle_batch_rename_message(BatchRenameMessage::OpenSelected));
+
+        assert!(browser.batch_rename.is_none());
+        assert_eq!(browser.operation_queue.task_count(), 0);
+        assert!(browser
+            .current_error()
+            .is_some_and(|error| error.contains("non-UTF-8")));
+        assert_eq!(fs::read(first_path).unwrap(), b"first");
+        assert_eq!(fs::read(second_path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn canceling_batch_rename_keeps_sources_and_queue_unchanged() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let first_path = directory.path().join("first.txt");
+        let second_path = directory.path().join("second.txt");
+        fs::write(&first_path, b"first").expect("create first source");
+        fs::write(&second_path, b"second").expect("create second source");
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        browser.entries = vec![
+            file_entry(first_path.clone()),
+            file_entry(second_path.clone()),
+        ];
+        browser.selected_paths = HashSet::from([first_path.clone(), second_path.clone()]);
+
+        drop(browser.handle_batch_rename_message(BatchRenameMessage::OpenSelected));
+        assert!(browser.batch_rename.is_some());
+        drop(browser.handle_batch_rename_message(BatchRenameMessage::Cancel));
+
+        assert!(browser.batch_rename.is_none());
+        assert_eq!(browser.operation_queue.task_count(), 0);
+        assert_eq!(fs::read(first_path).unwrap(), b"first");
+        assert_eq!(fs::read(second_path).unwrap(), b"second");
     }
 }

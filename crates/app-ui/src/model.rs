@@ -5,6 +5,7 @@ use std::time::Duration;
 use desktop_linux::{
     DesktopClipboardContent, FileClipboardOperation, OpenWithApplicationList, StorageDevice,
     StorageDeviceId, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
+    WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 use file_operation_store::{StoredTask, TaskQueueStore};
@@ -63,7 +64,7 @@ pub(crate) use batch_rename::{
     same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode,
     BatchRenameMessage, BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass,
     BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode,
-    BatchRenameSortMode, BatchRenameSource, BatchRenameState,
+    BatchRenameSortMode, BatchRenameSource, BatchRenameSourceNameError, BatchRenameState,
 };
 mod properties;
 pub(crate) use properties::{
@@ -99,9 +100,12 @@ pub(crate) use session::{
 };
 mod drag;
 pub(crate) use drag::{
-    BreadcrumbDropTargetBounds, FileDragNativeDndState, FileDragPhase, FileDragState,
-    FileDragTarget, LastActivationClick, PaneDragPointerPress, PaneDragState, PaneDropTarget,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, TabDragMode, TabDragState, TabSplitTarget,
+    BreadcrumbDropTargetBounds, DirectoryFileDragTargetBounds, FileDragHitTestBounds,
+    FileDragNativeDndState, FileDragPhase, FileDragState, FileDragTarget, LastActivationClick,
+    PaneDragPointerPress, PaneDragState, PaneDropTarget, SidebarBookmarkDragState,
+    SidebarBookmarkDropSlot, SidebarFileDragTargetBounds, TabDragMode, TabDragState,
+    TabSplitTarget, WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds,
+    WaylandFileDragTargetSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -127,11 +131,52 @@ pub(crate) enum ScrollbarRegion {
     MarkdownPreview,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StartupDirectoryValidationRequest {
+    pub(crate) generation: u64,
+    pub(crate) input: String,
+    pub(crate) directory: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartupDirectoryAvailability {
+    Usable,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StartupSessionSource {
+    Home,
+    CustomDirectory(PathBuf),
+    PreviousSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StartupSessionPlanRequest {
+    pub(crate) home: PathBuf,
+    pub(crate) source: StartupSessionSource,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum StartupSessionPlan {
+    Directory {
+        directory: PathBuf,
+        error: Option<String>,
+    },
+    Session(BrowserSessionSnapshot),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ClassifiedStartupSession {
+    pub(crate) request: StartupSessionPlanRequest,
+    pub(crate) plan: StartupSessionPlan,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedOperationStore {
     pub(crate) task_queue_store: TaskQueueStore,
     pub(crate) column_width_overrides: HashMap<usize, f32>,
-    pub(crate) browser_session: Option<BrowserSessionSnapshot>,
+    pub(crate) classified_startup_session: Option<ClassifiedStartupSession>,
     pub(crate) restored_tasks: Vec<StoredTask>,
 }
 
@@ -279,11 +324,11 @@ pub(crate) enum Message {
         window: window::Id,
         position: Point,
     },
-    CursorLeft(window::Id),
     ColumnBrowserCursorEntered(BrowserPaneId),
     ColumnBrowserCursorExited(BrowserPaneId),
     ColumnEntryBoundsMeasured(Vec<ColumnEntryBounds>),
     BreadcrumbDropTargetBoundsMeasured(u64, Vec<BreadcrumbDropTargetBounds>),
+    NativeDragBounds(u64, FileDragHitTestBounds),
     PaneCursorEntered(BrowserPaneId),
     PaneCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
@@ -361,8 +406,13 @@ pub(crate) enum Message {
     MaxPreviewFileMibInputCommitted,
     LanguageSettingSelected(UiLanguageSetting),
     StartupLocationPolicySelected(crate::config::StartupLocationPolicy),
+    StartupSessionClassified(ClassifiedStartupSession),
     StartupCustomDirectoryInputChanged(String),
     StartupCustomDirectoryCommitted,
+    StartupCustomDirectoryValidated(
+        StartupDirectoryValidationRequest,
+        StartupDirectoryAvailability,
+    ),
     BrowserSessionSaved(Result<(), String>),
     BrowserSessionSaveDelayElapsed,
     FileOperationVerificationSelected(FileOperationVerification),
@@ -427,6 +477,9 @@ pub(crate) enum Message {
     ClipboardFileCreated(Result<PathBuf, String>),
     WaylandDndWindowHandleLoaded(Result<Option<WaylandDndWindowHandle>, String>),
     WaylandFilesDropped(Result<WaylandDndFileDrop, String>),
+    WaylandFileDragSourceEvent(WaylandFileDragSourceEvent),
+    WaylandFileDragSelfTargetEvent(WaylandFileDragSelfTargetEvent),
+    WaylandDndRuntimeFailed(String),
     FileDropOperationSelected(FileClipboardOperation),
     FileDropCancelled,
     TransferConflictsChecked {

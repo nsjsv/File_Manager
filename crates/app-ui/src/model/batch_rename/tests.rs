@@ -1,4 +1,8 @@
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -10,7 +14,7 @@ fn state_for_names(names: &[&str]) -> BatchRenameState {
             .iter()
             .map(|name| BatchRenameSource {
                 path: PathBuf::from("/tmp").join(name),
-                name: (*name).to_owned(),
+                source_name_text: (*name).to_owned(),
                 modified: None,
             })
             .collect(),
@@ -20,7 +24,7 @@ fn state_for_names(names: &[&str]) -> BatchRenameState {
 fn source_with_modified(name: &str, modified_secs: u64) -> BatchRenameSource {
     BatchRenameSource {
         path: PathBuf::from("/tmp").join(name),
-        name: name.to_owned(),
+        source_name_text: name.to_owned(),
         modified: Some(UNIX_EPOCH + Duration::from_secs(modified_secs)),
     }
 }
@@ -45,6 +49,70 @@ fn preview_original_names(state: &BatchRenameState) -> Vec<&str> {
         .iter()
         .map(|row| row.original_name.as_str())
         .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_rename_source_rejects_lossy_name_collisions_with_distinct_paths() {
+    let first_path = PathBuf::from("/tmp").join(OsString::from_vec(b"entry-\x80".to_vec()));
+    let second_path = PathBuf::from("/tmp").join(OsString::from_vec(b"entry-\x81".to_vec()));
+    let first_entry = DirectoryEntry::new(
+        first_path.clone(),
+        file_core::FileKind::File,
+        file_core::EntryMetadata::default(),
+        false,
+        false,
+        false,
+    );
+    let second_entry = DirectoryEntry::new(
+        second_path.clone(),
+        file_core::FileKind::File,
+        file_core::EntryMetadata::default(),
+        false,
+        false,
+        false,
+    );
+    assert_eq!(
+        first_entry.name().to_string_lossy(),
+        second_entry.name().to_string_lossy()
+    );
+
+    let first_error = BatchRenameSource::try_from_entry(&first_entry).unwrap_err();
+    let second_error = BatchRenameSource::try_from_entry(&second_entry).unwrap_err();
+
+    assert_eq!(first_error.path, first_path);
+    assert_eq!(second_error.path, second_path);
+    assert_ne!(first_error.path, second_error.path);
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_rename_plan_preserves_non_utf8_parent_path() {
+    let parent = PathBuf::from("/tmp").join(OsString::from_vec(b"parent-\x80".to_vec()));
+    let mut state = state_for_sources(vec![
+        BatchRenameSource {
+            path: parent.join("first.txt"),
+            source_name_text: "first.txt".to_owned(),
+            modified: None,
+        },
+        BatchRenameSource {
+            path: parent.join("second.txt"),
+            source_name_text: "second.txt".to_owned(),
+            modified: None,
+        },
+    ]);
+    state.sequence.prefix = "renamed ".to_owned();
+    state.rebuild_preview();
+
+    let plan = state.plan().expect("valid batch rename plan");
+    assert!(state
+        .preview
+        .rows
+        .iter()
+        .all(|row| row.target.parent() == Some(parent.as_path())));
+    assert!(plan
+        .iter()
+        .all(|item| item.to.parent() == Some(parent.as_path())));
 }
 
 #[test]
@@ -266,6 +334,9 @@ fn batch_rename_preview_name_edit_overrides_single_target() {
     state.replace.replacement = "renamed".to_owned();
     state.rebuild_preview();
     assert_eq!(preview_names(&state), vec!["renamed.txt", "chosen.md"]);
+    let plan = state.plan().expect("manual edit should produce a plan");
+    assert_eq!(plan[1].from, source);
+    assert_eq!(plan[1].to, PathBuf::from("/tmp/chosen.md"));
 
     state.apply_update(BatchRenameMessage::PreviewNameEditCommitted);
     assert_eq!(state.editing_target_name_source(), None);
@@ -418,12 +489,12 @@ fn batch_rename_preview_marks_existing_unselected_target() {
         vec![
             BatchRenameSource {
                 path: PathBuf::from("/tmp/report.txt"),
-                name: "report.txt".to_owned(),
+                source_name_text: "report.txt".to_owned(),
                 modified: None,
             },
             BatchRenameSource {
                 path: PathBuf::from("/tmp/notes.txt"),
-                name: "notes.txt".to_owned(),
+                source_name_text: "notes.txt".to_owned(),
                 modified: None,
             },
         ],

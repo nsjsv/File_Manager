@@ -149,6 +149,7 @@ mod tests {
             target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::NotRequested,
+            wayland_target: None,
             column_directories_snapshot: Vec::new(),
         });
         browser.selection_marquee = Some(SelectionMarquee {

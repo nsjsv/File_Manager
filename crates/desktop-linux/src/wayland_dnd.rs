@@ -1,20 +1,34 @@
+mod drag_icon;
 mod handlers;
+mod payload;
+mod source_session;
+#[cfg(test)]
+mod tests;
+
+use payload::{drop_origin_for_mime, parse_drop_selection, DragPayload};
+use source_session::WaylandDndCommand;
+pub use source_session::{
+    WaylandDndCommandError, WaylandDndController, WaylandFileDragIcon, WaylandFileDragIconError,
+    WaylandFileDragSessionId, WaylandFileDragSourceEvent,
+};
 
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use smithay_client_toolkit::compositor::CompositorState;
 use smithay_client_toolkit::data_device_manager::{
     data_device::DataDevice, data_offer::DragOffer, data_source::DragSource, DataDeviceManagerState,
 };
+use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle, PostAction};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
+use smithay_client_toolkit::shm::{slot::SlotPool, Shm};
 use thiserror::Error;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use wayland_client::backend::{Backend, ObjectId};
@@ -25,10 +39,9 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Proxy, QueueHandle};
 
+use self::drag_icon::{WaylandDragIconSurface, INITIAL_DRAG_ICON_POOL_BYTES};
 use crate::file_clipboard::{
-    parse_file_uri_list, parse_gnome_copied_files, serialize_file_uri_list,
-    serialize_gnome_copied_files, FileClipboardOperation, FileClipboardPayloadError,
-    FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
+    FileClipboardPayloadError, FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
 };
 
 const SUPPORTED_MIME_TYPES: &[&str] = &[
@@ -41,7 +54,6 @@ const SUPPORTED_MIME_TYPES: &[&str] = &[
 ];
 const INTERNAL_FILE_DRAG_MIME: &str = "application/x-file-manager-internal-dnd";
 const DRAG_REQUEST_TTL: Duration = Duration::from_millis(750);
-static NEXT_CONTROLLER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WaylandDndWindowHandle {
@@ -61,7 +73,10 @@ impl WaylandDndWindowHandle {
 #[derive(Debug, Clone)]
 pub enum WaylandDndEvent {
     FilesDropped(WaylandDndFileDrop),
-    Failed(String),
+    FileDropFailed(String),
+    FileDragSource(WaylandFileDragSourceEvent),
+    FileDragSelfTarget(WaylandFileDragSelfTargetEvent),
+    RuntimeFailed(String),
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +89,7 @@ pub struct WaylandDndFileDrop {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaylandDndDropOrigin {
     External,
-    Internal,
+    Internal(WaylandFileDragSessionId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,47 +98,29 @@ pub struct WaylandDndDropPosition {
     pub y: f64,
 }
 
-#[derive(Debug)]
-pub enum WaylandDndCommand {
-    StartFileDrag(Vec<PathBuf>),
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WaylandFileDragSelfTargetEvent {
+    Entered {
+        session_id: WaylandFileDragSessionId,
+        position: WaylandDndDropPosition,
+    },
+    Moved {
+        session_id: WaylandFileDragSessionId,
+        position: WaylandDndDropPosition,
+    },
+    Left {
+        session_id: WaylandFileDragSessionId,
+    },
 }
 
-#[derive(Debug)]
-pub struct WaylandDndController {
-    id: u64,
-    command_sender: UnboundedSender<WaylandDndCommand>,
-    command_receiver: Mutex<Option<UnboundedReceiver<WaylandDndCommand>>>,
-}
-
-impl WaylandDndController {
-    pub fn new() -> Arc<Self> {
-        let (command_sender, command_receiver) = tokio::sync::mpsc::unbounded_channel();
-        Arc::new(Self {
-            id: NEXT_CONTROLLER_ID.fetch_add(1, Ordering::Relaxed),
-            command_sender,
-            command_receiver: Mutex::new(Some(command_receiver)),
-        })
+impl WaylandFileDragSelfTargetEvent {
+    pub fn session_id(self) -> WaylandFileDragSessionId {
+        match self {
+            Self::Entered { session_id, .. }
+            | Self::Moved { session_id, .. }
+            | Self::Left { session_id } => session_id,
+        }
     }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
-    pub fn start_file_drag(&self, paths: Vec<PathBuf>) -> Result<(), WaylandDndCommandError> {
-        self.command_sender
-            .send(WaylandDndCommand::StartFileDrag(paths))
-            .map_err(|_| WaylandDndCommandError::WorkerStopped)
-    }
-
-    fn take_command_receiver(&self) -> Option<UnboundedReceiver<WaylandDndCommand>> {
-        self.command_receiver.lock().ok()?.take()
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum WaylandDndCommandError {
-    #[error("Wayland drag-and-drop worker is not running")]
-    WorkerStopped,
 }
 
 #[derive(Debug, Error)]
@@ -150,6 +147,8 @@ pub enum WaylandDndError {
         #[source]
         source: FileClipboardPayloadError,
     },
+    #[error("Wayland internal drop has no matching source session")]
+    InternalDropSessionUnavailable,
 }
 
 pub fn spawn_wayland_file_dnd(
@@ -167,7 +166,7 @@ pub fn spawn_wayland_file_dnd(
                 event_sender.clone(),
                 shutdown_receiver,
             ) {
-                let _ = event_sender.send(WaylandDndEvent::Failed(error.to_string()));
+                let _ = event_sender.send(WaylandDndEvent::RuntimeFailed(error.to_string()));
             }
         })
         .map_err(|source| WaylandDndError::ThreadSpawn { source })
@@ -176,13 +175,18 @@ pub fn spawn_wayland_file_dnd(
 struct WaylandFileDnd {
     registry_state: RegistryState,
     seat_state: SeatState,
+    output_state: OutputState,
+    compositor_state: CompositorState,
+    shm_state: Shm,
     data_device_state: DataDeviceManagerState,
+    drag_icon_pool: SlotPool,
     surface: wl_surface::WlSurface,
     seat_objects: Vec<SeatObject>,
     drag_sources: Vec<DragSession>,
     drop_reads: Vec<DropRead>,
     drop_is_over_surface: bool,
     drop_position: Option<WaylandDndDropPosition>,
+    self_target_session_id: Option<WaylandFileDragSessionId>,
     loop_handle: LoopHandle<'static, WaylandFileDnd>,
     pending_file_drag: Option<PendingFileDrag>,
     active_left_press: Option<PointerPress>,
@@ -196,13 +200,17 @@ struct SeatObject {
 }
 
 struct DragSession {
+    session_id: WaylandFileDragSessionId,
     source: DragSource,
     payload: DragPayload,
     selected_action: DndAction,
+    _icon_surface: WaylandDragIconSurface,
 }
 
 struct PendingFileDrag {
+    session_id: WaylandFileDragSessionId,
     paths: Vec<PathBuf>,
+    icon: WaylandFileDragIcon,
     requested_at: Instant,
 }
 
@@ -216,6 +224,7 @@ struct PointerPress {
 struct DropRead {
     offer: DragOffer,
     mime_type: String,
+    origin: WaylandDndDropOrigin,
     data: Vec<u8>,
     position: Option<WaylandDndDropPosition>,
 }
@@ -240,16 +249,28 @@ fn run_wayland_file_dnd(
 
     let data_device_state = DataDeviceManagerState::bind(&globals, &qh)
         .map_err(|error| setup_error("data-device-manager", format!("{error:?}")))?;
+    let compositor_state = CompositorState::bind(&globals, &qh)
+        .map_err(|error| setup_error("compositor", format!("{error:?}")))?;
+    let output_state = OutputState::new(&globals, &qh);
+    let shm_state = Shm::bind(&globals, &qh)
+        .map_err(|error| setup_error("shared-memory", format!("{error:?}")))?;
+    let drag_icon_pool = SlotPool::new(INITIAL_DRAG_ICON_POOL_BYTES, &shm_state)
+        .map_err(|error| setup_error("drag-icon-pool", error))?;
     let mut dnd = WaylandFileDnd {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
+        output_state,
+        compositor_state,
+        shm_state,
         data_device_state,
+        drag_icon_pool,
         surface,
         seat_objects: Vec::new(),
         drag_sources: Vec::new(),
         drop_reads: Vec::new(),
         drop_is_over_surface: false,
         drop_position: None,
+        self_target_session_id: None,
         loop_handle: event_loop.handle(),
         pending_file_drag: None,
         active_left_press: None,
@@ -309,15 +330,28 @@ impl WaylandFileDnd {
     ) {
         while let Ok(command) = command_receiver.try_recv() {
             match command {
-                WaylandDndCommand::StartFileDrag(paths) => {
+                WaylandDndCommand::StartFileDrag {
+                    session_id,
+                    paths,
+                    icon,
+                } => {
                     tracing::debug!(
+                        %session_id,
                         path_count = paths.len(),
                         "Wayland file drag request received"
                     );
-                    self.pending_file_drag = Some(PendingFileDrag {
+                    let request = PendingFileDrag {
+                        session_id,
                         paths,
+                        icon,
                         requested_at: Instant::now(),
-                    });
+                    };
+                    if let Some(replaced) = self.pending_file_drag.replace(request) {
+                        self.reject_file_drag_request(
+                            replaced,
+                            "Wayland file drag request was replaced before it started",
+                        );
+                    }
                     self.start_pending_file_drag(qh);
                 }
             }
@@ -378,15 +412,26 @@ impl WaylandFileDnd {
         if press.surface != self.surface {
             return;
         }
+        if self
+            .pending_file_drag
+            .as_ref()
+            .is_some_and(|request| request.requested_at.elapsed() > DRAG_REQUEST_TTL)
+        {
+            let expired = self.pending_file_drag.take().expect("expired drag request");
+            self.reject_file_drag_request(
+                expired,
+                "Wayland file drag request expired before a usable pointer press was available",
+            );
+            return;
+        }
         let Some(request) = self.pending_file_drag.take() else {
             return;
         };
-        if request.paths.is_empty() {
-            tracing::debug!("Wayland file drag request ignored because it has no paths");
-            return;
-        }
-        if request.requested_at.elapsed() > DRAG_REQUEST_TTL {
-            tracing::debug!("Wayland file drag request expired before a usable press serial");
+        if let Some(active_session_id) = self.active_file_drag_session_id() {
+            self.reject_file_drag_request(
+                request,
+                format!("Wayland file drag source {active_session_id} is still active"),
+            );
             return;
         }
         let Some(seat_index) = self
@@ -394,10 +439,25 @@ impl WaylandFileDnd {
             .iter()
             .position(|seat_object| seat_object.pointer.as_ref() == Some(&press.pointer))
         else {
-            tracing::debug!("Wayland file drag request ignored because no seat owns the pointer");
+            self.reject_file_drag_request(
+                request,
+                "Wayland file drag could not identify the seat that owns the pointer",
+            );
             return;
         };
 
+        let icon_surface = match WaylandDragIconSurface::create(
+            &self.compositor_state,
+            &mut self.drag_icon_pool,
+            qh,
+            &request.icon,
+        ) {
+            Ok(icon_surface) => icon_surface,
+            Err(error) => {
+                self.reject_file_drag_request(request, error.to_string());
+                return;
+            }
+        };
         let payload = DragPayload::new(&request.paths);
         let source = self.data_device_state.create_drag_and_drop_source(
             qh,
@@ -407,39 +467,93 @@ impl WaylandFileDnd {
         source.start_drag(
             &self.seat_objects[seat_index].data_device,
             &press.surface,
-            None,
+            Some(icon_surface.wl_surface()),
             press.serial,
         );
         tracing::debug!(
+            %request.session_id,
             serial = press.serial,
             path_count = request.paths.len(),
             "Wayland file drag started"
         );
+        let session_id = request.session_id;
         self.drag_sources.push(DragSession {
+            session_id,
             source,
             payload,
             selected_action: DndAction::empty(),
+            _icon_surface: icon_surface,
         });
+        self.emit_file_drag_source_event(WaylandFileDragSourceEvent::Started(session_id));
     }
 
     fn expire_pending_file_drag(&mut self) {
-        if self
+        let request_is_fresh = self
             .pending_file_drag
             .as_ref()
-            .is_some_and(|request| request.requested_at.elapsed() > DRAG_REQUEST_TTL)
-        {
-            tracing::debug!("Wayland file drag request expired");
-            self.pending_file_drag = None;
+            .is_none_or(|request| request.requested_at.elapsed() <= DRAG_REQUEST_TTL);
+        if request_is_fresh {
+            return;
         }
+        let expired = self.pending_file_drag.take().expect("expired drag request");
+        self.reject_file_drag_request(
+            expired,
+            "Wayland file drag request expired before a usable pointer press was available",
+        );
+    }
+
+    fn reject_file_drag_request(&self, request: PendingFileDrag, details: impl Into<String>) {
+        let details = details.into();
+        tracing::warn!(
+            %request.session_id,
+            path_count = request.paths.len(),
+            %details,
+            "Wayland file drag request rejected"
+        );
+        self.emit_file_drag_source_event(WaylandFileDragSourceEvent::Rejected {
+            session_id: request.session_id,
+            details,
+        });
+    }
+
+    fn emit_file_drag_source_event(&self, event: WaylandFileDragSourceEvent) {
+        let _ = self
+            .event_sender
+            .send(WaylandDndEvent::FileDragSource(event));
+    }
+
+    fn active_file_drag_session_id(&self) -> Option<WaylandFileDragSessionId> {
+        self.drag_sources
+            .first()
+            .map(|drag_session| drag_session.session_id)
+    }
+
+    fn emit_file_drag_self_target_event(&self, event: WaylandFileDragSelfTargetEvent) {
+        let _ = self
+            .event_sender
+            .send(WaylandDndEvent::FileDragSelfTarget(event));
     }
 
     fn register_drop_read(&mut self, offer: DragOffer, mime_type: String) {
+        let origin = match drop_origin_for_mime(&mime_type, self.self_target_session_id) {
+            Ok(origin) => origin,
+            Err(error) => {
+                let _ = self
+                    .event_sender
+                    .send(WaylandDndEvent::FileDropFailed(error.to_string()));
+                offer.finish();
+                offer.destroy();
+                return;
+            }
+        };
         let read_pipe = match offer.receive(mime_type.clone()) {
             Ok(read_pipe) => read_pipe,
             Err(error) => {
-                let _ = self.event_sender.send(WaylandDndEvent::Failed(format!(
-                    "could not receive Wayland drag payload for {mime_type}: {error:?}"
-                )));
+                let _ = self
+                    .event_sender
+                    .send(WaylandDndEvent::FileDropFailed(format!(
+                        "could not receive Wayland drag payload for {mime_type}: {error:?}"
+                    )));
                 offer.finish();
                 offer.destroy();
                 return;
@@ -449,6 +563,7 @@ impl WaylandFileDnd {
         self.drop_reads.push(DropRead {
             offer: offer.clone(),
             mime_type,
+            origin,
             data: Vec::new(),
             position: self.drop_position,
         });
@@ -461,9 +576,11 @@ impl WaylandFileDnd {
             })
         {
             self.drop_reads.retain(|read| read.offer != offer);
-            let _ = self.event_sender.send(WaylandDndEvent::Failed(format!(
-                "could not register Wayland drag payload reader: {error}"
-            )));
+            let _ = self
+                .event_sender
+                .send(WaylandDndEvent::FileDropFailed(format!(
+                    "could not register Wayland drag payload reader: {error}"
+                )));
             offer.finish();
             offer.destroy();
         }
@@ -512,9 +629,11 @@ impl WaylandFileDnd {
                 PostAction::Remove
             }
             DropReadOutcome::Failed(error) => {
-                let _ = self.event_sender.send(WaylandDndEvent::Failed(format!(
-                    "could not read Wayland drag payload: {error}"
-                )));
+                let _ = self
+                    .event_sender
+                    .send(WaylandDndEvent::FileDropFailed(format!(
+                        "could not read Wayland drag payload: {error}"
+                    )));
                 drop_read.offer.finish();
                 drop_read.offer.destroy();
                 PostAction::Remove
@@ -529,26 +648,43 @@ impl WaylandFileDnd {
                     .event_sender
                     .send(WaylandDndEvent::FilesDropped(WaylandDndFileDrop {
                         selection: parsed_drop.selection,
-                        origin: parsed_drop.origin,
+                        origin: drop_read.origin,
                         position: drop_read.position,
                     }));
             }
             Err(error) => {
                 let _ = self
                     .event_sender
-                    .send(WaylandDndEvent::Failed(error.to_string()));
+                    .send(WaylandDndEvent::FileDropFailed(error.to_string()));
             }
         }
         drop_read.offer.finish();
         drop_read.offer.destroy();
     }
 
-    fn remove_drag_source(
+    fn file_drag_session_id_for_source(
+        &self,
+        source: &wayland_client::protocol::wl_data_source::WlDataSource,
+    ) -> Option<WaylandFileDragSessionId> {
+        self.drag_sources
+            .iter()
+            .find(|drag_session| drag_session.source.inner() == source)
+            .map(|drag_session| drag_session.session_id)
+    }
+
+    fn take_file_drag_session(
         &mut self,
         source: &wayland_client::protocol::wl_data_source::WlDataSource,
-    ) {
-        self.drag_sources
-            .retain(|drag_session| drag_session.source.inner() != source);
+    ) -> Option<DragSession> {
+        let position = self
+            .drag_sources
+            .iter()
+            .position(|drag_session| drag_session.source.inner() == source)?;
+        let drag_session = self.drag_sources.remove(position);
+        if self.self_target_session_id == Some(drag_session.session_id) {
+            self.self_target_session_id = None;
+        }
+        Some(drag_session)
     }
 }
 
@@ -564,150 +700,5 @@ impl DropReadOutcome {
             reader.consume(consumed);
         }
         self
-    }
-}
-
-struct DragPayload {
-    internal_file_drag: String,
-    text_uri_list: String,
-    gnome_copied_files: String,
-}
-
-impl DragPayload {
-    fn new(paths: &[PathBuf]) -> Self {
-        let uri_list = serialize_file_uri_list(paths);
-        let text_uri_list = if uri_list.is_empty() {
-            String::new()
-        } else {
-            format!("{}\r\n", uri_list.replace('\n', "\r\n"))
-        };
-        let selection = FileClipboardSelection::new(FileClipboardOperation::Move, paths.to_vec());
-        Self {
-            internal_file_drag: text_uri_list.clone(),
-            text_uri_list,
-            gnome_copied_files: serialize_gnome_copied_files(&selection),
-        }
-    }
-
-    fn for_mime(&self, mime: &str) -> Option<&str> {
-        match mime {
-            INTERNAL_FILE_DRAG_MIME => Some(&self.internal_file_drag),
-            URI_LIST_MIME => Some(&self.text_uri_list),
-            GNOME_COPIED_FILES_MIME => Some(&self.gnome_copied_files),
-            "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" => Some(&self.text_uri_list),
-            _ => None,
-        }
-    }
-}
-
-struct ParsedDropSelection {
-    selection: FileClipboardSelection,
-    origin: WaylandDndDropOrigin,
-}
-
-fn parse_drop_selection(
-    mime_type: &str,
-    data: &[u8],
-) -> Result<ParsedDropSelection, WaylandDndError> {
-    let payload = std::str::from_utf8(data).map_err(|source| WaylandDndError::PayloadUtf8 {
-        mime: mime_type.to_owned(),
-        source,
-    })?;
-    let (paths, origin) = match mime_type {
-        INTERNAL_FILE_DRAG_MIME => (
-            parse_file_uri_list(payload).map_err(|source| WaylandDndError::Payload {
-                mime: mime_type.to_owned(),
-                source,
-            })?,
-            WaylandDndDropOrigin::Internal,
-        ),
-        GNOME_COPIED_FILES_MIME => parse_gnome_copied_files(payload)
-            .map(|selection| selection.paths)
-            .map_err(|source| WaylandDndError::Payload {
-                mime: mime_type.to_owned(),
-                source,
-            })
-            .map(|paths| (paths, WaylandDndDropOrigin::External))?,
-        URI_LIST_MIME | "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" => {
-            parse_file_uri_list(payload)
-                .map_err(|source| WaylandDndError::Payload {
-                    mime: mime_type.to_owned(),
-                    source,
-                })
-                .map(|paths| (paths, WaylandDndDropOrigin::External))?
-        }
-        _ => (Vec::new(), WaylandDndDropOrigin::External),
-    };
-    Ok(ParsedDropSelection {
-        selection: FileClipboardSelection::new(FileClipboardOperation::Copy, paths),
-        origin,
-    })
-}
-
-fn pick_mime(mime_types: &[String]) -> Option<String> {
-    SUPPORTED_MIME_TYPES
-        .iter()
-        .find(|supported| mime_types.iter().any(|mime| mime == **supported))
-        .map(|mime| (*mime).to_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn drag_payload_uses_move_operation_and_uri_list_line_endings() {
-        let paths = vec![PathBuf::from("/tmp/a b"), PathBuf::from("/tmp/c")];
-
-        let payload = DragPayload::new(&paths);
-
-        assert_eq!(
-            payload.text_uri_list,
-            "file:///tmp/a%20b\r\nfile:///tmp/c\r\n"
-        );
-        assert_eq!(
-            payload.gnome_copied_files,
-            "cut\nfile:///tmp/a%20b\nfile:///tmp/c"
-        );
-    }
-
-    #[test]
-    fn drop_payload_forces_copy_even_if_gnome_payload_says_cut() {
-        let selection =
-            parse_drop_selection(GNOME_COPIED_FILES_MIME, b"cut\nfile:///tmp/source").unwrap();
-
-        assert_eq!(selection.selection.operation, FileClipboardOperation::Copy);
-        assert_eq!(
-            selection.selection.paths,
-            vec![PathBuf::from("/tmp/source")]
-        );
-        assert_eq!(selection.origin, WaylandDndDropOrigin::External);
-    }
-
-    #[test]
-    fn internal_drag_payload_marks_drop_origin_internal() {
-        let selection =
-            parse_drop_selection(INTERNAL_FILE_DRAG_MIME, b"file:///tmp/source\r\n").unwrap();
-
-        assert_eq!(selection.selection.operation, FileClipboardOperation::Copy);
-        assert_eq!(
-            selection.selection.paths,
-            vec![PathBuf::from("/tmp/source")]
-        );
-        assert_eq!(selection.origin, WaylandDndDropOrigin::Internal);
-    }
-
-    #[test]
-    fn controller_sends_file_drag_command_to_worker_receiver() {
-        let controller = WaylandDndController::new();
-        let path = PathBuf::from("/tmp/source");
-
-        controller.start_file_drag(vec![path.clone()]).unwrap();
-
-        let mut command_receiver = controller.take_command_receiver().unwrap();
-        let command = command_receiver.try_recv().unwrap();
-        match command {
-            WaylandDndCommand::StartFileDrag(paths) => assert_eq!(paths, vec![path]),
-        }
     }
 }

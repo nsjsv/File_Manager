@@ -33,6 +33,8 @@ mod column_entry_bounds;
 mod commands;
 mod config;
 mod directory_summary;
+mod file_drag_hit_test_bounds;
+mod file_drag_hit_test_marker;
 mod file_entry_presentation;
 mod file_entry_view;
 mod floating_surface;
@@ -70,6 +72,7 @@ mod video_preview;
 mod view;
 mod virtual_range;
 mod visible_entries;
+mod wayland_drag_icon;
 
 fn main() -> iced::Result {
     runtime_logging::init();

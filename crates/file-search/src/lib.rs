@@ -8,6 +8,7 @@ mod fallback;
 mod filesystem;
 mod logging;
 mod model;
+mod path_encoding;
 mod protocol;
 mod runtime_identity;
 mod service_runtime;

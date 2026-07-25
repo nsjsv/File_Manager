@@ -1,11 +1,12 @@
-use std::any::Any;
 use std::path::PathBuf;
 
-use iced::advanced::widget::operation::Outcome;
 use iced::advanced::{layout, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
 use iced::{mouse, Element, Event, Length, Rectangle, Size, Task, Vector};
 
-use crate::model::{BrowserPaneId, ColumnEntryBounds, Message};
+use crate::file_drag_hit_test_bounds::{
+    file_drag_hit_test_bounds_command, FileDragHitTestBoundsRequest, FileDragHitTestMarker,
+};
+use crate::model::{BrowserPaneId, Message};
 
 pub(crate) fn track_column_entry_bounds<'a>(
     content: impl Into<Element<'a, Message>>,
@@ -20,39 +21,7 @@ pub(crate) fn track_column_entry_bounds<'a>(
 }
 
 pub(crate) fn column_entry_bounds_command() -> Task<Message> {
-    widget::operate(ColumnEntryBoundsOperation::default())
-}
-
-#[derive(Debug, Clone)]
-struct ColumnEntryBoundsMarker {
-    pane_id: BrowserPaneId,
-    path: PathBuf,
-}
-
-#[derive(Debug, Default)]
-struct ColumnEntryBoundsOperation {
-    bounds: Vec<ColumnEntryBounds>,
-}
-
-impl widget::Operation<Message> for ColumnEntryBoundsOperation {
-    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation<Message>)) {
-        operate(self);
-    }
-
-    fn custom(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, state: &mut dyn Any) {
-        let Some(marker) = state.downcast_ref::<ColumnEntryBoundsMarker>() else {
-            return;
-        };
-        self.bounds.push(ColumnEntryBounds {
-            pane_id: marker.pane_id,
-            path: marker.path.clone(),
-            bounds,
-        });
-    }
-
-    fn finish(&self) -> Outcome<Message> {
-        Outcome::Some(Message::ColumnEntryBoundsMeasured(self.bounds.clone()))
-    }
+    file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::SelectionMarquee)
 }
 
 struct ColumnEntryBoundsTracker<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
@@ -105,7 +74,7 @@ where
         renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
-        let mut marker = ColumnEntryBoundsMarker {
+        let mut marker = FileDragHitTestMarker::ColumnEntry {
             pane_id: self.pane_id,
             path: self.path.clone(),
         };

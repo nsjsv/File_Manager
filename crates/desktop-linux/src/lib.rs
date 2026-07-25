@@ -47,5 +47,6 @@ pub use storage_devices::{
 pub use wayland_dnd::{
     spawn_wayland_file_dnd, WaylandDndCommandError, WaylandDndController, WaylandDndDropOrigin,
     WaylandDndDropPosition, WaylandDndError, WaylandDndEvent, WaylandDndFileDrop,
-    WaylandDndWindowHandle,
+    WaylandDndWindowHandle, WaylandFileDragIcon, WaylandFileDragIconError,
+    WaylandFileDragSelfTargetEvent, WaylandFileDragSessionId, WaylandFileDragSourceEvent,
 };

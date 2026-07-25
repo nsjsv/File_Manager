@@ -5,53 +5,42 @@ use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::load_directory_command;
-use crate::config::StartupLocationPolicy;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-    BrowserTabSession, ColumnBrowserViewport, Message,
+    BrowserTabSession, ClassifiedStartupSession, ColumnBrowserViewport, Message,
+    StartupSessionPlan, StartupSessionPlanRequest, StartupSessionSource,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
 impl FileBrowser {
-    pub(super) fn startup_session_plan(
-        &self,
-        home: &Path,
-        session: Option<BrowserSessionSnapshot>,
-    ) -> StartupSessionPlan {
-        match self.user_config.startup_location_policy {
-            StartupLocationPolicy::Home => StartupSessionPlan::Directory {
-                directory: home.to_path_buf(),
-                error: None,
-            },
-            StartupLocationPolicy::CustomDirectory => {
-                self.startup_directory_plan(&self.user_config.startup_custom_directory, home)
+    pub(super) fn startup_session_plan_request(&self, home: &Path) -> StartupSessionPlanRequest {
+        let source = match self.user_config.startup_location_policy {
+            crate::config::StartupLocationPolicy::Home => StartupSessionSource::Home,
+            crate::config::StartupLocationPolicy::CustomDirectory => {
+                StartupSessionSource::CustomDirectory(
+                    self.user_config.startup_custom_directory.clone(),
+                )
             }
-            StartupLocationPolicy::PreviousSession => match session {
-                Some(session) => StartupSessionPlan::Session(session),
-                None => StartupSessionPlan::Directory {
-                    directory: home.to_path_buf(),
-                    error: Some(
-                        "No saved view state was found; opening the home directory.".to_owned(),
-                    ),
-                },
-            },
+            crate::config::StartupLocationPolicy::PreviousSession => {
+                StartupSessionSource::PreviousSession
+            }
+        };
+        StartupSessionPlanRequest {
+            home: home.to_path_buf(),
+            source,
         }
     }
 
-    fn startup_directory_plan(&self, candidate: &Path, home: &Path) -> StartupSessionPlan {
-        if directory_is_usable(candidate) {
-            return StartupSessionPlan::Directory {
-                directory: candidate.to_path_buf(),
-                error: None,
-            };
+    pub(super) fn accept_startup_plan(
+        &mut self,
+        classified: ClassifiedStartupSession,
+    ) -> Task<Message> {
+        let current_request = self.startup_session_plan_request(&self.home_dir);
+        if classified.request != current_request {
+            return Task::none();
         }
-        StartupSessionPlan::Directory {
-            directory: home.to_path_buf(),
-            error: Some(format!(
-                "Could not open startup directory {}; opening the home directory.",
-                candidate.to_string_lossy()
-            )),
-        }
+        let home = self.home_dir.clone();
+        self.apply_startup_session_plan(classified.plan, &home)
     }
 
     pub(super) fn apply_startup_session_plan(
@@ -156,20 +145,8 @@ impl FileBrowser {
     }
 }
 
-pub(super) enum StartupSessionPlan {
-    Directory {
-        directory: PathBuf,
-        error: Option<String>,
-    },
-    Session(BrowserSessionSnapshot),
-}
-
 fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
-    let restored_tabs = pane
-        .tabs
-        .into_iter()
-        .filter(|tab| tab.is_trash_view || directory_is_usable(&tab.directory))
-        .collect::<Vec<_>>();
+    let restored_tabs = pane.tabs;
     if restored_tabs.is_empty() {
         return None;
     }
@@ -251,8 +228,4 @@ fn sanitize_layout(layout: BrowserPaneLayout, panes: &[BrowserPane]) -> BrowserP
             active: panes[0].id,
         },
     }
-}
-
-fn directory_is_usable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }

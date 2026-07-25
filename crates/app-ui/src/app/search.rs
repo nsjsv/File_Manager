@@ -186,6 +186,10 @@ impl FileBrowser {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
     use std::path::PathBuf;
 
     use desktop_linux::{
@@ -253,6 +257,20 @@ mod tests {
             PathBuf::from("/workspace/report-1.txt")
         );
         assert!(!browser.search.is_loading);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn activating_non_utf8_directory_hit_preserves_the_native_path() {
+        let mut browser = browser_for_search_tests();
+        let path = PathBuf::from(OsString::from_vec(b"/workspace/\x80".to_vec()));
+        let mut hit = search_hit("/workspace/placeholder");
+        hit.path = path.clone();
+        hit.kind = SearchFileKind::Directory;
+
+        drop(browser.activate_search_hit(hit));
+
+        assert_eq!(browser.current_dir, path);
     }
 
     #[test]

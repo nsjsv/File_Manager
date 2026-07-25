@@ -13,6 +13,8 @@ use crate::appearance::{
     column_resize_divider_style,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
+use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
+use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::file_entry_view::{
     entry_thumbnail_or_icon, themed_icon, FileEntryIconDensity, FileEntryVisualState,
@@ -257,25 +259,19 @@ fn directory_column<'a>(
         .height(Length::Fill)
         .style(column_panel_style);
 
-    mouse_area(column)
-        .on_enter(Message::DropTargetHovered(pane.id, directory.to_path_buf()))
-        .on_exit(Message::DropTargetHoverCleared(
-            pane.id,
-            directory.to_path_buf(),
-        ))
-        .on_press(Message::ColumnBlankClicked(
-            pane.id,
-            directory.to_path_buf(),
-        ))
-        .on_release(Message::DropTargetReleased(
-            pane.id,
-            directory.to_path_buf(),
-        ))
-        .on_right_press(Message::BlankAreaRightClicked(
-            pane.id,
-            directory.to_path_buf(),
-        ))
-        .into()
+    let directory = directory.to_path_buf();
+    track_file_drag_hit_test_marker(
+        mouse_area(column)
+            .on_enter(Message::DropTargetHovered(pane.id, directory.clone()))
+            .on_exit(Message::DropTargetHoverCleared(pane.id, directory.clone()))
+            .on_press(Message::ColumnBlankClicked(pane.id, directory.clone()))
+            .on_release(Message::DropTargetReleased(pane.id, directory.clone()))
+            .on_right_press(Message::BlankAreaRightClicked(pane.id, directory.clone())),
+        FileDragHitTestMarker::DirectoryTarget {
+            pane_id: pane.id,
+            directory,
+        },
+    )
 }
 
 fn empty_column(
@@ -283,19 +279,27 @@ fn empty_column(
     fallback_directory: PathBuf,
     width: f32,
 ) -> Element<'static, Message> {
-    mouse_area(
-        container(Space::new().height(Length::Fill))
-            .width(Length::Fixed(width))
-            .height(Length::Fill)
-            .style(column_panel_style),
+    track_file_drag_hit_test_marker(
+        mouse_area(
+            container(Space::new().height(Length::Fill))
+                .width(Length::Fixed(width))
+                .height(Length::Fill)
+                .style(column_panel_style),
+        )
+        .on_press(Message::ColumnPlaceholderPressed(pane_id))
+        .on_release(Message::DropTargetReleased(
+            pane_id,
+            fallback_directory.clone(),
+        ))
+        .on_right_press(Message::BlankAreaRightClicked(
+            pane_id,
+            fallback_directory.clone(),
+        )),
+        FileDragHitTestMarker::DirectoryTarget {
+            pane_id,
+            directory: fallback_directory,
+        },
     )
-    .on_press(Message::ColumnPlaceholderPressed(pane_id))
-    .on_release(Message::DropTargetReleased(
-        pane_id,
-        fallback_directory.clone(),
-    ))
-    .on_right_press(Message::BlankAreaRightClicked(pane_id, fallback_directory))
-    .into()
 }
 
 fn end_scroll_spacer(width: f32) -> Element<'static, Message> {
@@ -483,7 +487,7 @@ pub(crate) fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<Path
     }
 
     if let Some(drag) = pane.file_drag {
-        if drag.is_dragging() && !drag.column_directories_snapshot.is_empty() {
+        if !drag.column_directories_snapshot.is_empty() {
             return drag.column_directories_snapshot.clone();
         }
     }

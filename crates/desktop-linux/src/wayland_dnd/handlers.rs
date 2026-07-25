@@ -1,26 +1,36 @@
 use std::io::Write;
 
+use smithay_client_toolkit::compositor::CompositorHandler;
 use smithay_client_toolkit::data_device_manager::{
     data_device::DataDeviceHandler, data_offer::DataOfferHandler, data_source::DataSourceHandler,
     WritePipe,
 };
+use smithay_client_toolkit::delegate_compositor;
 use smithay_client_toolkit::delegate_data_device;
+use smithay_client_toolkit::delegate_output;
 use smithay_client_toolkit::delegate_pointer;
 use smithay_client_toolkit::delegate_registry;
 use smithay_client_toolkit::delegate_seat;
+use smithay_client_toolkit::delegate_shm;
+use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::registry_handlers;
 use smithay_client_toolkit::seat::{
     pointer::{PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT},
     Capability, SeatHandler,
 };
+use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use wayland_client::protocol::{
     wl_data_device::WlDataDevice, wl_data_device_manager::DndAction, wl_data_source::WlDataSource,
-    wl_pointer::WlPointer, wl_seat::WlSeat, wl_surface,
+    wl_output, wl_pointer::WlPointer, wl_seat::WlSeat, wl_surface,
 };
 use wayland_client::{Connection, QueueHandle};
 
-use super::{pick_mime, WaylandFileDnd};
+use super::payload::{negotiated_drop_action, pick_mime};
+use super::{
+    WaylandFileDnd, WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
+    INTERNAL_FILE_DRAG_MIME,
+};
 use crate::wayland_dnd::WaylandDndDropPosition;
 
 impl SeatHandler for WaylandFileDnd {
@@ -124,9 +134,27 @@ impl DataDeviceHandler for WaylandFileDnd {
             return;
         };
         self.drop_is_over_surface = surface == &self.surface;
-        self.drop_position = self
-            .drop_is_over_surface
-            .then_some(WaylandDndDropPosition { x, y });
+        let position = WaylandDndDropPosition { x, y };
+        self.drop_position = self.drop_is_over_surface.then_some(position);
+        if let Some(previous_session_id) = self.self_target_session_id.take() {
+            self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Left {
+                session_id: previous_session_id,
+            });
+        }
+        let offer_is_from_current_process = offer.with_mime_types(|mime_types| {
+            mime_types
+                .iter()
+                .any(|mime| mime == INTERNAL_FILE_DRAG_MIME)
+        });
+        if self.drop_is_over_surface && offer_is_from_current_process {
+            if let Some(session_id) = self.active_file_drag_session_id() {
+                self.self_target_session_id = Some(session_id);
+                self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Entered {
+                    session_id,
+                    position,
+                });
+            }
+        }
         if !self.drop_is_over_surface {
             offer.accept_mime_type(offer.serial, None);
             offer.set_actions(DndAction::empty(), DndAction::empty());
@@ -134,8 +162,9 @@ impl DataDeviceHandler for WaylandFileDnd {
         }
 
         if let Some(mime_type) = offer.with_mime_types(pick_mime) {
+            let action = negotiated_drop_action(&mime_type);
             offer.accept_mime_type(offer.serial, Some(mime_type));
-            offer.set_actions(DndAction::Copy, DndAction::Copy);
+            offer.set_actions(action, action);
         } else {
             offer.accept_mime_type(offer.serial, None);
             offer.set_actions(DndAction::empty(), DndAction::empty());
@@ -145,6 +174,11 @@ impl DataDeviceHandler for WaylandFileDnd {
     fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
         self.drop_is_over_surface = false;
         self.drop_position = None;
+        if let Some(session_id) = self.self_target_session_id.take() {
+            self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Left {
+                session_id,
+            });
+        }
     }
 
     fn motion(
@@ -156,7 +190,14 @@ impl DataDeviceHandler for WaylandFileDnd {
         y: f64,
     ) {
         if self.drop_is_over_surface {
-            self.drop_position = Some(WaylandDndDropPosition { x, y });
+            let position = WaylandDndDropPosition { x, y };
+            self.drop_position = Some(position);
+            if let Some(session_id) = self.self_target_session_id {
+                self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Moved {
+                    session_id,
+                    position,
+                });
+            }
         }
     }
 
@@ -191,8 +232,9 @@ impl DataDeviceHandler for WaylandFileDnd {
             return;
         };
 
+        let action = negotiated_drop_action(&mime_type);
         offer.accept_mime_type(offer.serial, Some(mime_type.clone()));
-        offer.set_actions(DndAction::Copy, DndAction::Copy);
+        offer.set_actions(action, action);
         self.register_drop_read(offer, mime_type);
     }
 }
@@ -205,7 +247,12 @@ impl DataOfferHandler for WaylandFileDnd {
         offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
         _actions: DndAction,
     ) {
-        offer.set_actions(DndAction::Copy, DndAction::Copy);
+        let action = offer
+            .with_mime_types(pick_mime)
+            .map_or(DndAction::empty(), |mime_type| {
+                negotiated_drop_action(&mime_type)
+            });
+        offer.set_actions(action, action);
     }
 
     fn selected_action(
@@ -251,17 +298,37 @@ impl DataSourceHandler for WaylandFileDnd {
     }
 
     fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
-        tracing::debug!("Wayland file drag source cancelled");
-        self.remove_drag_source(source);
+        let Some(drag_session) = self.take_file_drag_session(source) else {
+            return;
+        };
+        tracing::debug!(
+            session_id = %drag_session.session_id,
+            "Wayland file drag source cancelled"
+        );
+        self.emit_file_drag_source_event(WaylandFileDragSourceEvent::Cancelled(
+            drag_session.session_id,
+        ));
     }
 
-    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
-        tracing::debug!("Wayland file drag source dropped");
+    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
+        let Some(session_id) = self.file_drag_session_id_for_source(source) else {
+            return;
+        };
+        tracing::debug!(%session_id, "Wayland file drag source dropped");
+        self.emit_file_drag_source_event(WaylandFileDragSourceEvent::Dropped(session_id));
     }
 
     fn dnd_finished(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
-        tracing::debug!("Wayland file drag source finished");
-        self.remove_drag_source(source);
+        let Some(drag_session) = self.take_file_drag_session(source) else {
+            return;
+        };
+        tracing::debug!(
+            session_id = %drag_session.session_id,
+            "Wayland file drag source finished"
+        );
+        self.emit_file_drag_source_event(WaylandFileDragSourceEvent::Finished(
+            drag_session.session_id,
+        ));
     }
 
     fn action(
@@ -281,14 +348,100 @@ impl DataSourceHandler for WaylandFileDnd {
     }
 }
 
+impl CompositorHandler for WaylandFileDnd {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for WaylandFileDnd {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl ShmHandler for WaylandFileDnd {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
+    }
+}
+
 impl ProvidesRegistryState for WaylandFileDnd {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
 
-    registry_handlers![smithay_client_toolkit::seat::SeatState];
+    registry_handlers![OutputState, smithay_client_toolkit::seat::SeatState];
 }
 
+delegate_compositor!(WaylandFileDnd);
+delegate_output!(WaylandFileDnd);
+delegate_shm!(WaylandFileDnd);
 delegate_seat!(WaylandFileDnd);
 delegate_pointer!(WaylandFileDnd);
 delegate_data_device!(WaylandFileDnd);

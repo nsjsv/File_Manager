@@ -30,7 +30,7 @@ impl SearchQuery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchScope {
     Global,
-    Directory(PathBuf),
+    Directory(#[serde(with = "crate::path_encoding::serde_path")] PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -63,6 +63,7 @@ pub struct SearchResultBatch {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
+    #[serde(with = "crate::path_encoding::serde_path")]
     pub path: PathBuf,
     pub display_name: String,
     pub kind: SearchFileKind,
@@ -128,6 +129,7 @@ pub enum IndexPhase {
     },
     Crawling {
         scanned_entries: u64,
+        #[serde(with = "crate::path_encoding::serde_path")]
         current_scope: PathBuf,
     },
     Applying {
@@ -188,7 +190,7 @@ pub enum SearchProviderFailure {
 }
 
 /// 协议 payload 含义变化时提升版本，让新客户端能退休仍在运行的旧 daemon。
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// app 更新后用构建标识识别遗留 daemon；本任务保留现有包版本策略。
 pub fn daemon_build_id() -> String {

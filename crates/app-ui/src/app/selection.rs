@@ -21,6 +21,8 @@ mod drag;
 mod keyboard_navigation;
 #[cfg(test)]
 mod tests;
+mod wayland_drop;
+mod wayland_target;
 
 #[cfg(test)]
 use drag::resolve_file_drag_target;

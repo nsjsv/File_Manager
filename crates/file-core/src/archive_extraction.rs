@@ -417,9 +417,15 @@ async fn run_seven_zip_extract(
 
 fn seven_zip_extract_command(command_name: &str, request: &ArchiveExtractionRequest) -> Command {
     let mut command = seven_zip_command(command_name, "x", request);
-    command.arg(format!("-o{}", request.destination.to_string_lossy()));
+    command.arg(seven_zip_output_directory_switch(&request.destination));
     append_seven_zip_archive_operand(&mut command, &request.archive);
     command
+}
+
+fn seven_zip_output_directory_switch(destination: &Path) -> OsString {
+    let mut output_switch = OsString::from("-o");
+    output_switch.push(destination.as_os_str());
+    output_switch
 }
 
 fn seven_zip_command(
@@ -608,6 +614,8 @@ enum TarCompression {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::os::unix::process::ExitStatusExt;
 
     use super::*;
@@ -633,7 +641,7 @@ mod tests {
             .get_args()
             .map(OsStr::to_os_string)
             .collect::<Vec<_>>();
-        let output_switch = OsString::from(format!("-o{}", request.destination.to_string_lossy()));
+        let output_switch = seven_zip_output_directory_switch(&request.destination);
         let output_index = arguments
             .iter()
             .position(|argument| argument == &output_switch)
@@ -648,6 +656,29 @@ mod tests {
             arguments.get(archive_separator_index + 1),
             Some(&request.archive.as_os_str().to_os_string())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seven_zip_extract_output_switch_preserves_destination_bytes() {
+        let destination_bytes = b"/tmp/archive-parent-\x80/output".to_vec();
+        let mut expected_bytes = b"-o".to_vec();
+        expected_bytes.extend_from_slice(&destination_bytes);
+
+        for extension in ["7z", "rar"] {
+            let mut request = seven_zip_test_request(None);
+            request.archive = PathBuf::from(format!("/tmp/locked.{extension}"));
+            request.destination = PathBuf::from(OsString::from_vec(destination_bytes.clone()));
+
+            let command = seven_zip_extract_command("7z", &request);
+            let output_switch = command
+                .as_std()
+                .get_args()
+                .find(|argument| argument.as_bytes().starts_with(b"-o"))
+                .expect("output directory switch");
+
+            assert_eq!(output_switch.as_bytes(), expected_bytes);
+        }
     }
 
     #[test]

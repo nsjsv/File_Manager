@@ -673,6 +673,10 @@ async fn write_frame<T: Serialize>(
     Ok(())
 }
 
+#[cfg(all(test, unix))]
+#[path = "protocol_path_tests.rs"]
+mod path_tests;
+
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;

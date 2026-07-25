@@ -11,9 +11,10 @@ use crate::extractor::ExtractionStatus;
 use crate::model::{MatchSource, SearchFileKind, SearchQuery, SearchScope, TimeRange};
 
 use super::{
-    DirectorySignature, DirectorySnapshot, EntryObservationState, EntryStageProgress,
-    FileSignature, IndexedEntryStageState, IndexedFile, ObservedFile, SearchDatabase,
-    READER_PAGE_CACHE_KIB, WAL_AUTOCHECKPOINT_PAGES, WRITER_PAGE_CACHE_KIB,
+    path_from_storage_bytes, path_to_storage, DirectorySignature, DirectorySnapshot,
+    EntryObservationState, EntryStageProgress, FileSignature, IndexedEntryStageState, IndexedFile,
+    ObservedFile, SearchDatabase, READER_PAGE_CACHE_KIB, WAL_AUTOCHECKPOINT_PAGES,
+    WRITER_PAGE_CACHE_KIB,
 };
 
 #[test]
@@ -53,9 +54,9 @@ fn explicit_bm25_preserves_default_rank_results_across_pages() {
             .unwrap();
         statement
             .query_map(["\"needle\""], |row| {
-                let path: String = row.get(0)?;
+                let path: Vec<u8> = row.get(0)?;
                 let score: f64 = row.get(1)?;
-                Ok((Path::new(&path).to_path_buf(), (-score).to_bits()))
+                Ok((path_from_storage_bytes(path), (-score).to_bits()))
             })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
@@ -684,8 +685,8 @@ fn inaccessible_subtree_is_hidden_without_removing_known_rows() {
     let private_state: String = database
         .connection
         .query_row(
-            "SELECT observation_state FROM files WHERE path = '/tmp/private/note.txt'",
-            [],
+            "SELECT observation_state FROM files WHERE path = ?1",
+            params![path_to_storage(Path::new("/tmp/private/note.txt"))],
             |row| row.get(0),
         )
         .unwrap();
@@ -787,6 +788,13 @@ fn migration_backfills_stage_state_for_legacy_rows() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     assert_eq!(schema_version, super::SCHEMA_VERSION);
+    let migrated_path_type: String = database
+        .connection
+        .query_row("SELECT typeof(path) FROM files LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(migrated_path_type, "blob");
     assert!(database.column_exists("files", "scan_generation").unwrap());
     assert!(database.column_exists("files", "device").unwrap());
     let legacy_scan_tables: i64 = database
@@ -827,6 +835,16 @@ fn fts_rowid_migration_preserves_content_and_uses_files_row_identity() {
         .execute("DELETE FROM file_search_fts", [])
         .unwrap();
     connection
+        .execute_batch(
+            "UPDATE files SET path = CAST(path AS TEXT), parent_path = CAST(parent_path AS TEXT);
+             UPDATE file_stage_state SET path = CAST(path AS TEXT);
+             UPDATE directory_snapshots SET
+                path = CAST(path AS TEXT),
+                parent_path = CAST(parent_path AS TEXT),
+                root_path = CAST(root_path AS TEXT);",
+        )
+        .unwrap();
+    connection
         .execute(
             "INSERT INTO file_search_fts(rowid, path, name, content) VALUES (1001, ?1, ?2, ?3)",
             params![path, name, content],
@@ -840,7 +858,7 @@ fn fts_rowid_migration_preserves_content_and_uses_files_row_identity() {
         .connection
         .query_row(
             "SELECT f.rowid, x.rowid
-             FROM files AS f JOIN file_search_fts AS x ON x.path = f.path",
+             FROM files AS f JOIN file_search_fts AS x ON x.rowid = f.rowid",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1054,8 +1072,8 @@ fn policy_exclusion_deletes_a_previously_inaccessible_scope() {
     let retained_file_rows: i64 = database
         .connection
         .query_row(
-            "SELECT COUNT(*) FROM files WHERE path = '/tmp/private/blocked.txt'",
-            [],
+            "SELECT COUNT(*) FROM files WHERE path = ?1",
+            params![path_to_storage(Path::new("/tmp/private/blocked.txt"))],
             |row| row.get(0),
         )
         .unwrap();

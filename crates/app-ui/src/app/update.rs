@@ -1,9 +1,7 @@
-use iced::Task;
-
 use super::FileBrowser;
 use crate::commands::search_service_status_command;
 use crate::model::{Message, NavigationMode, OperationQueuePanelMode, ScrollbarRegion as Region};
-
+use iced::Task;
 impl FileBrowser {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -421,13 +419,6 @@ impl FileBrowser {
             Message::CursorMoved { window, position } => {
                 self.update_pointer_motion(window, position)
             }
-            Message::CursorLeft(window) => {
-                if window == self.main_window {
-                    self.request_file_drag_wayland_dnd_on_window_exit()
-                } else {
-                    Task::none()
-                }
-            }
             Message::ColumnBrowserCursorEntered(pane_id) => {
                 if self.file_drag.is_none() {
                     self.activate_pane(pane_id);
@@ -449,6 +440,7 @@ impl FileBrowser {
             Message::BreadcrumbDropTargetBoundsMeasured(generation, bounds) => {
                 self.accept_breadcrumb_drop_target_bounds(generation, bounds)
             }
+            Message::NativeDragBounds(id, bounds) => self.accept_native_bounds(id, bounds),
             Message::PaneCursorEntered(pane_id) => {
                 self.hovered_pane_id = Some(pane_id);
                 Task::none()
@@ -599,11 +591,15 @@ impl FileBrowser {
             Message::StartupLocationPolicySelected(policy) => {
                 self.select_startup_location_policy(policy)
             }
+            Message::StartupSessionClassified(classified) => self.accept_startup_plan(classified),
             Message::StartupCustomDirectoryInputChanged(value) => {
                 self.update_startup_custom_directory_input(value)
             }
             Message::StartupCustomDirectoryCommitted => {
                 self.commit_startup_custom_directory_input()
+            }
+            Message::StartupCustomDirectoryValidated(request, availability) => {
+                self.accept_startup_directory_validation(request, availability)
             }
             Message::FileOperationVerificationSelected(verification) => {
                 self.user_config.file_operation_verification = verification;
@@ -776,6 +772,15 @@ impl FileBrowser {
             Message::ClipboardFileCreated(result) => self.accept_clipboard_file_created(result),
             Message::WaylandDndWindowHandleLoaded(handle) => self.accept_wayland_dnd_handle(handle),
             Message::WaylandFilesDropped(result) => self.accept_wayland_file_drop(result),
+            Message::WaylandFileDragSourceEvent(event) => {
+                self.accept_wayland_file_drag_source_event(event)
+            }
+            Message::WaylandFileDragSelfTargetEvent(event) => {
+                self.accept_wayland_file_drag_self_target_event(event)
+            }
+            Message::WaylandDndRuntimeFailed(error) => {
+                self.accept_wayland_dnd_runtime_failure(error)
+            }
             Message::FileDropOperationSelected(operation) => {
                 self.apply_file_drop_operation(operation)
             }

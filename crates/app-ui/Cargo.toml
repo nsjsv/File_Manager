@@ -17,6 +17,7 @@ iced.workspace = true
 image.workspace = true
 pulldown-cmark = "0.13.4"
 regex = "1.12.3"
+resvg.workspace = true
 rodio = "0.22.2"
 serde_json.workspace = true
 thumbnails = { path = "../thumbnails" }
