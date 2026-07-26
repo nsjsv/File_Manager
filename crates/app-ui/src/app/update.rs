@@ -661,9 +661,6 @@ impl FileBrowser {
             ]),
             Message::SidebarScrolled => self.show_scrollbars_temporarily(Region::Sidebar),
             Message::SettingsScrolled => self.show_scrollbars_temporarily(Region::Settings),
-            Message::ShortcutSettingsScrolled => {
-                self.show_scrollbars_temporarily(Region::ShortcutSettings)
-            }
             Message::PropertiesScrolled => self.show_scrollbars_temporarily(Region::Properties),
             Message::OpenWithApplicationsScrolled => {
                 self.show_scrollbars_temporarily(Region::OpenWithApplications)

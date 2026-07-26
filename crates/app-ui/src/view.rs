@@ -14,6 +14,7 @@ mod preview_panel;
 mod properties_window;
 mod rendering_settings;
 mod search_panel;
+mod settings_group;
 mod settings_window;
 mod shortcut_settings;
 mod sidebar_panel;

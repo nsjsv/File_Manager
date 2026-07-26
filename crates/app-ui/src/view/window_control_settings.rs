@@ -13,6 +13,7 @@ use crate::model::{
 use crate::typography::readable_text;
 
 use super::option_controls::{secondary_action_button, segmented_choice_row, SegmentedChoice};
+use super::settings_group::{info_setting_row, muted_setting_text};
 use super::toggle_switch::switch_control;
 use super::{themed_icon, IconTone};
 
@@ -27,18 +28,19 @@ enum WindowControlVisibilityControl {
     AlwaysVisible,
 }
 
-pub(super) fn window_control_settings_section(browser: &FileBrowser) -> Element<'_, Message> {
-    column![
-        readable_text("Window controls").size(13),
-        readable_text("Main window layout").size(12),
-        main_window_layout_selector(browser),
-        side_control_group(browser, WindowControlSide::Left),
-        side_control_group(browser, WindowControlSide::Right),
-        secondary_action_button("Restore defaults", Message::WindowControlsReset),
-    ]
-    .spacing(8)
-    .width(Length::Fill)
-    .into()
+pub(super) fn window_control_settings_row(browser: &FileBrowser) -> Element<'_, Message> {
+    info_setting_row(
+        column![
+            muted_setting_text("Main window layout", 12),
+            main_window_layout_selector(browser),
+            side_control_group(browser, WindowControlSide::Left),
+            side_control_group(browser, WindowControlSide::Right),
+            secondary_action_button("Restore defaults", Message::WindowControlsReset),
+        ]
+        .spacing(8)
+        .width(Length::Fill)
+        .into(),
+    )
 }
 
 fn main_window_layout_selector(browser: &FileBrowser) -> Element<'static, Message> {
@@ -61,13 +63,16 @@ fn side_control_group(browser: &FileBrowser, side: WindowControlSide) -> Element
         .window_controls
         .placements_on(side)
         .collect::<Vec<_>>();
-    let mut controls = Column::new().spacing(5).width(Length::Fill).push(
-        readable_text(match side {
-            WindowControlSide::Left => "Left side",
-            WindowControlSide::Right => "Right side",
-        })
-        .size(12),
-    );
+    let mut controls = Column::new()
+        .spacing(5)
+        .width(Length::Fill)
+        .push(muted_setting_text(
+            match side {
+                WindowControlSide::Left => "Left side",
+                WindowControlSide::Right => "Right side",
+            },
+            12,
+        ));
 
     if placements.is_empty() {
         controls = controls.push(

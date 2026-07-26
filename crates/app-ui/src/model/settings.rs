@@ -1,34 +1,31 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsCategory {
     General,
-    Logs,
-    Network,
-    FileOperations,
+    Appearance,
+    Files,
     Search,
-    Rendering,
     Shortcuts,
+    Logs,
 }
 
 impl SettingsCategory {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::General,
-        Self::Logs,
-        Self::Network,
-        Self::FileOperations,
+        Self::Appearance,
+        Self::Files,
         Self::Search,
-        Self::Rendering,
         Self::Shortcuts,
+        Self::Logs,
     ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::General => "General",
-            Self::Logs => "Logs",
-            Self::Network => "Network",
-            Self::FileOperations => "File Operations",
+            Self::Appearance => "Appearance",
+            Self::Files => "Files",
             Self::Search => "Search",
-            Self::Rendering => "Rendering",
             Self::Shortcuts => "Shortcuts",
+            Self::Logs => "Logs",
         }
     }
 }

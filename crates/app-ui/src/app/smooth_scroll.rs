@@ -289,7 +289,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SmoothScrollArea<'_> {
     ) {
         let cursor_over_area = cursor.is_over(layout.bounds());
 
-        // 嵌套滚动区必须让内层先认领 wheel；否则 Settings 会吞掉 ShortcutSettings。
+        // 嵌套滚动区必须让内层先认领 wheel，外层再兜底处理。
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
@@ -394,7 +394,6 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
             path_hash(directory)
         )),
         ScrollbarRegion::Settings => iced::widget::Id::new("settings"),
-        ScrollbarRegion::ShortcutSettings => iced::widget::Id::new("shortcut-settings"),
         ScrollbarRegion::Properties => iced::widget::Id::new("properties"),
         ScrollbarRegion::OpenWithApplications => iced::widget::Id::new("open-with-applications"),
         ScrollbarRegion::OperationQueue => iced::widget::Id::new("operation-queue"),

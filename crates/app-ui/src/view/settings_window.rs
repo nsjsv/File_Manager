@@ -1,11 +1,12 @@
 use std::fmt;
 
 use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
-use iced::widget::{button, column, container, pick_list, row, text_input, Button, Column, Space};
+use iced::widget::{button, column, container, pick_list, row, text_input, Button, Column};
 use iced::{Alignment, Element, Length};
 
 use crate::app::FileBrowser;
 use crate::appearance::context_menu_button_style;
+use crate::config::{StartupLocationPolicy, UiLanguageSetting};
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
 use crate::typography::{localized_text, readable_text};
 
@@ -14,14 +15,17 @@ use super::auxiliary_window_layout::{
     auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
-use super::network_settings::network_settings_content;
-use super::option_controls::{
-    action_choice_button, destructive_confirmation_button_style, selectable_choice_row,
+use super::network_settings::{max_preview_file_size_row, network_thumbnails_row};
+use super::option_controls::destructive_confirmation_button_style;
+use super::rendering_settings::rendering_gpu_preference_row;
+use super::settings_group::{
+    action_setting_row, info_setting_row, labeled_setting_row, settings_card, settings_group,
+    toggle_setting_row, SETTINGS_GROUP_SPACING,
 };
-use super::rendering_settings::rendering_gpu_preference_button;
 use super::shortcut_settings::shortcut_settings_section;
-use super::toggle_switch::switch_control;
-use super::window_control_settings::window_control_settings_section;
+use super::window_control_settings::window_control_settings_row;
+
+const SETTINGS_DROPDOWN_WIDTH: f32 = 220.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerminalEmulatorPickOption(TerminalEmulator);
@@ -29,6 +33,28 @@ struct TerminalEmulatorPickOption(TerminalEmulator);
 impl fmt::Display for TerminalEmulatorPickOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&crate::localization::translate_current(self.0.label()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LanguageSettingPickOption(UiLanguageSetting);
+
+impl fmt::Display for LanguageSettingPickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&crate::localization::translate_current(
+            language_setting_label(self.0),
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartupLocationPickOption(StartupLocationPolicy);
+
+impl fmt::Display for StartupLocationPickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&crate::localization::translate_current(
+            startup_location_label(self.0),
+        ))
     }
 }
 
@@ -40,11 +66,7 @@ pub(crate) fn view_settings_window(browser: &FileBrowser) -> Element<'_, Message
 }
 
 fn settings_category_sidebar(selected: SettingsCategory) -> Element<'static, Message> {
-    let mut categories = Column::new()
-        .spacing(6)
-        .push(readable_text("Settings").size(18))
-        .push(Space::new().height(Length::Fixed(6.0)));
-
+    let mut categories = Column::new().spacing(4);
     for category in SettingsCategory::ALL {
         categories = categories.push(settings_category_button(category, selected));
     }
@@ -67,14 +89,11 @@ fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
     let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::Settings);
     match browser.selected_settings_category {
         SettingsCategory::General => general_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Logs => application_logs_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Network => network_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::FileOperations => {
-            file_operation_settings_detail(browser, scrollbar_visibility)
-        }
+        SettingsCategory::Appearance => appearance_settings_detail(browser, scrollbar_visibility),
+        SettingsCategory::Files => files_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::Search => search_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Rendering => rendering_settings_detail(browser, scrollbar_visibility),
         SettingsCategory::Shortcuts => shortcut_settings_detail(browser, scrollbar_visibility),
+        SettingsCategory::Logs => application_logs_settings_detail(browser, scrollbar_visibility),
     }
 }
 
@@ -82,77 +101,90 @@ fn general_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
-    let show_custom_directory = browser.user_config().startup_location_policy
-        == crate::config::StartupLocationPolicy::CustomDirectory;
-    let content = if show_custom_directory {
-        column![
-            readable_text("General").size(20),
-            readable_text("Language").size(13),
-            language_setting_options(browser),
-            readable_text("File display").size(13),
-            hidden_files_visibility_button(browser),
-            list_directory_size_display_mode_button(browser),
-            window_control_settings_section(browser),
-            readable_text("Startup").size(13),
-            startup_location_options(browser),
-            startup_custom_directory_input(browser),
-            readable_text("Terminal").size(13),
-            terminal_emulator_options(browser.terminal_emulator),
-        ]
-    } else {
-        column![
-            readable_text("General").size(20),
-            readable_text("Language").size(13),
-            language_setting_options(browser),
-            readable_text("File display").size(13),
-            hidden_files_visibility_button(browser),
-            list_directory_size_display_mode_button(browser),
-            window_control_settings_section(browser),
-            readable_text("Startup").size(13),
-            startup_location_options(browser),
-            readable_text("Terminal").size(13),
-            terminal_emulator_options(browser.terminal_emulator),
-        ]
+    let mut rows = vec![
+        labeled_setting_row("Language", language_setting_dropdown(browser)),
+        labeled_setting_row("Startup location", startup_location_dropdown(browser)),
+    ];
+    if browser.user_config().startup_location_policy == StartupLocationPolicy::CustomDirectory {
+        rows.push(startup_custom_directory_row(browser));
     }
-    .spacing(10)
-    .width(Length::Fill);
+    rows.push(labeled_setting_row(
+        "Terminal",
+        terminal_emulator_dropdown(browser.terminal_emulator),
+    ));
 
-    settings_detail_scroller(content, scrollbar_visibility)
+    settings_detail_scroller(
+        column![settings_card(rows)]
+            .spacing(SETTINGS_GROUP_SPACING)
+            .width(Length::Fill),
+        scrollbar_visibility,
+    )
 }
 
-fn network_settings_detail(
-    browser: &FileBrowser,
-    scrollbar_visibility: ScrollbarVisibility,
-) -> Element<'_, Message> {
-    settings_detail_scroller(network_settings_content(browser), scrollbar_visibility)
-}
-
-fn file_operation_settings_detail(
+fn appearance_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
-            readable_text("File Operations").size(20),
-            readable_text("Verification").size(13),
-            file_operation_verification_options(browser.file_operation_verification()),
+            settings_group(
+                "Window controls",
+                vec![window_control_settings_row(browser)]
+            ),
+            settings_group(
+                "Rendering",
+                vec![rendering_gpu_preference_row(
+                    browser.rendering_gpu_preference
+                )],
+            ),
         ]
-        .spacing(10)
+        .spacing(SETTINGS_GROUP_SPACING)
         .width(Length::Fill),
         scrollbar_visibility,
     )
 }
 
-fn rendering_settings_detail(
+fn files_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
-            readable_text("Rendering").size(20),
-            rendering_gpu_preference_button(browser.rendering_gpu_preference),
+            settings_group(
+                "File display",
+                vec![
+                    toggle_setting_row(
+                        "Show Hidden Files",
+                        None,
+                        browser.options.include_hidden,
+                        Message::ShowHiddenFilesToggled,
+                    ),
+                    toggle_setting_row(
+                        "Show Recursive Folder Size In List View",
+                        None,
+                        browser
+                            .user_config()
+                            .list_directory_size_display_mode
+                            .uses_recursive_total_size(),
+                        Message::ListDirectorySizeDisplayModeToggled,
+                    ),
+                ],
+            ),
+            settings_group(
+                "Verification",
+                vec![file_operation_verification_options(
+                    browser.file_operation_verification(),
+                )],
+            ),
+            settings_group(
+                "Network",
+                vec![
+                    network_thumbnails_row(browser),
+                    max_preview_file_size_row(browser),
+                ],
+            ),
         ]
-        .spacing(10)
+        .spacing(SETTINGS_GROUP_SPACING)
         .width(Length::Fill),
         scrollbar_visibility,
     )
@@ -162,65 +194,93 @@ fn search_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
+    let mut service_rows = vec![search_service_status_rows(browser)];
+    service_rows.extend(search_service_recovery_rows(browser));
+
     settings_detail_scroller(
         column![
-            readable_text("Search").size(20),
-            search_content_indexing_button(browser),
-            localized_text(format!(
-                "Maximum content extraction: {}",
-                crate::formatting::format_file_size(browser.user_config().search_max_extract_bytes)
-            ))
-            .size(12),
-            readable_text("Service and Index").size(13),
-            search_service_status_rows(browser),
-            search_service_recovery_controls(browser),
+            settings_card(vec![
+                toggle_setting_row(
+                    "Index File Contents",
+                    None,
+                    browser.user_config().search_content_indexing_enabled,
+                    Message::SearchContentIndexingToggled,
+                ),
+                info_setting_row(
+                    localized_text(format!(
+                        "Maximum content extraction: {}",
+                        crate::formatting::format_file_size(
+                            browser.user_config().search_max_extract_bytes
+                        )
+                    ))
+                    .size(12)
+                    .into(),
+                ),
+            ]),
+            settings_group("Service and Index", service_rows),
         ]
-        .spacing(10)
+        .spacing(SETTINGS_GROUP_SPACING)
         .width(Length::Fill),
         scrollbar_visibility,
     )
 }
 
-fn search_service_recovery_controls(browser: &FileBrowser) -> Element<'static, Message> {
+fn shortcut_settings_detail(
+    browser: &FileBrowser,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
+    settings_detail_scroller(
+        column![shortcut_settings_section(browser)]
+            .spacing(SETTINGS_GROUP_SPACING)
+            .width(Length::Fill),
+        scrollbar_visibility,
+    )
+}
+
+fn search_service_recovery_rows(browser: &FileBrowser) -> Vec<Element<'static, Message>> {
     use crate::model::search::SearchServiceRecoveryState;
 
     let recovery_is_running = browser.search.recovery.is_running();
-    let restart_button = action_choice_button(
+    let restart_row = action_setting_row(
         "Restart Index Service",
         "Gracefully stop and restart the managed service.",
     );
-    let restart_button = if recovery_is_running {
-        restart_button
+    let restart_row = if recovery_is_running {
+        restart_row
     } else {
-        restart_button.on_press(Message::SearchServiceRestartRequested)
+        restart_row.on_press(Message::SearchServiceRestartRequested)
     };
 
-    let force_restart_button =
+    let force_restart_row =
         if browser.search.recovery == SearchServiceRecoveryState::ConfirmingForceRestart {
-            action_choice_button(
+            action_setting_row(
                 "Click Again to Force Restart",
                 "Current indexing work will stop. Index data and settings will be kept.",
             )
             .style(destructive_confirmation_button_style())
         } else {
-            action_choice_button(
+            action_setting_row(
                 "Force Restart",
                 "Use only when the managed service is unresponsive.",
             )
         };
-    let force_restart_button = if recovery_is_running {
-        force_restart_button
+    let force_restart_row = if recovery_is_running {
+        force_restart_row
     } else {
-        force_restart_button.on_press(Message::SearchServiceForceRestartPressed)
+        force_restart_row.on_press(Message::SearchServiceForceRestartPressed)
     };
 
-    let mut controls = column![restart_button, force_restart_button]
-        .spacing(6)
-        .width(Length::Fill);
+    let mut rows: Vec<Element<'static, Message>> =
+        vec![restart_row.into(), force_restart_row.into()];
     if let Some(status_text) = search_service_recovery_status_text(&browser.search.recovery) {
-        controls = controls.push(localized_text(status_text).size(12).width(Length::Fill));
+        rows.push(info_setting_row(
+            localized_text(status_text)
+                .size(12)
+                .width(Length::Fill)
+                .into(),
+        ));
     }
-    controls.into()
+    rows
 }
 
 fn search_service_recovery_status_text(
@@ -305,10 +365,7 @@ fn search_service_status_rows(browser: &FileBrowser) -> Element<'_, Message> {
             }
             SearchEndpointState::Connected(_) => unreachable!(),
         };
-        return container(localized_text(endpoint_message).size(12))
-            .padding([5, 8])
-            .width(Length::Fill)
-            .into();
+        return info_setting_row(localized_text(endpoint_message).size(12).into());
     };
 
     let phase_message = match &status.phase {
@@ -340,10 +397,7 @@ fn search_service_status_rows(browser: &FileBrowser) -> Element<'_, Message> {
             status_content.push(localized_text(line).size(if line_index == 0 { 13 } else { 12 }));
     }
 
-    container(status_content)
-        .padding([5, 8])
-        .width(Length::Fill)
-        .into()
+    info_setting_row(status_content.into())
 }
 
 fn index_status_lines(status: &file_search::IndexStatus) -> Vec<String> {
@@ -542,37 +596,6 @@ fn format_count(value: u64) -> String {
     grouped
 }
 
-fn search_content_indexing_button(browser: &FileBrowser) -> Button<'static, Message> {
-    let label = row![
-        readable_text("Index File Contents")
-            .size(12)
-            .width(Length::Fill),
-        switch_control(browser.user_config().search_content_indexing_enabled),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::SearchContentIndexingToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn shortcut_settings_detail(
-    browser: &FileBrowser,
-    scrollbar_visibility: ScrollbarVisibility,
-) -> Element<'_, Message> {
-    settings_detail_scroller(
-        column![
-            readable_text("Shortcuts").size(20),
-            shortcut_settings_section(browser),
-        ]
-        .spacing(10)
-        .width(Length::Fill),
-        scrollbar_visibility,
-    )
-}
-
 fn settings_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
@@ -585,7 +608,69 @@ fn settings_detail_scroller<'a>(
     )
 }
 
-fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Message> {
+fn language_setting_label(setting: UiLanguageSetting) -> &'static str {
+    match setting {
+        UiLanguageSetting::System => "Auto",
+        UiLanguageSetting::English => "English",
+        UiLanguageSetting::Chinese => "中文",
+    }
+}
+
+fn startup_location_label(policy: StartupLocationPolicy) -> &'static str {
+    match policy {
+        StartupLocationPolicy::Home => "Home directory",
+        StartupLocationPolicy::CustomDirectory => "Custom directory",
+        StartupLocationPolicy::PreviousSession => "Previous state",
+    }
+}
+
+fn language_setting_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
+    let options = [
+        UiLanguageSetting::System,
+        UiLanguageSetting::English,
+        UiLanguageSetting::Chinese,
+    ]
+    .into_iter()
+    .map(LanguageSettingPickOption)
+    .collect::<Vec<_>>();
+
+    pick_list(
+        options,
+        Some(LanguageSettingPickOption(
+            browser.user_config().language_setting,
+        )),
+        |selected| Message::LanguageSettingSelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
+}
+
+fn startup_location_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
+    let options = [
+        StartupLocationPolicy::Home,
+        StartupLocationPolicy::CustomDirectory,
+        StartupLocationPolicy::PreviousSession,
+    ]
+    .into_iter()
+    .map(StartupLocationPickOption)
+    .collect::<Vec<_>>();
+
+    pick_list(
+        options,
+        Some(StartupLocationPickOption(
+            browser.user_config().startup_location_policy,
+        )),
+        |selected| Message::StartupLocationPolicySelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
+}
+
+fn terminal_emulator_dropdown(selected: TerminalEmulator) -> Element<'static, Message> {
     let options = TERMINAL_EMULATOR_OPTIONS
         .iter()
         .copied()
@@ -597,105 +682,13 @@ fn terminal_emulator_options(selected: TerminalEmulator) -> Element<'static, Mes
         Some(TerminalEmulatorPickOption(selected)),
         |selected| Message::TerminalEmulatorSelected(selected.0),
     )
-    .width(Length::Fill)
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
     .text_size(12)
     .padding([5, 8])
     .into()
 }
 
-fn hidden_files_visibility_button(browser: &FileBrowser) -> Button<'static, Message> {
-    let label = row![
-        readable_text("Show Hidden Files")
-            .size(12)
-            .width(Length::Fill),
-        switch_control(browser.options.include_hidden),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::ShowHiddenFilesToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn list_directory_size_display_mode_button(browser: &FileBrowser) -> Button<'static, Message> {
-    let uses_recursive_total_size = browser
-        .user_config()
-        .list_directory_size_display_mode
-        .uses_recursive_total_size();
-    let label = row![
-        readable_text("Show Recursive Folder Size In List View")
-            .size(12)
-            .width(Length::Fill),
-        switch_control(uses_recursive_total_size),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::ListDirectorySizeDisplayModeToggled)
-        .width(Length::Fill)
-        .style(context_menu_button_style())
-}
-
-fn startup_location_options(browser: &FileBrowser) -> Element<'_, Message> {
-    let policy = browser.user_config().startup_location_policy;
-    column![
-        selectable_choice_row(
-            "Home directory",
-            "Open your home directory on startup.",
-            policy == crate::config::StartupLocationPolicy::Home,
-            Message::StartupLocationPolicySelected(crate::config::StartupLocationPolicy::Home),
-        ),
-        selectable_choice_row(
-            "Custom directory",
-            "Open the configured directory on startup.",
-            policy == crate::config::StartupLocationPolicy::CustomDirectory,
-            Message::StartupLocationPolicySelected(
-                crate::config::StartupLocationPolicy::CustomDirectory,
-            ),
-        ),
-        selectable_choice_row(
-            "Previous state",
-            "Start in the state from the last close, preserving views and directories.",
-            policy == crate::config::StartupLocationPolicy::PreviousSession,
-            Message::StartupLocationPolicySelected(
-                crate::config::StartupLocationPolicy::PreviousSession,
-            ),
-        ),
-    ]
-    .spacing(6)
-    .into()
-}
-
-fn language_setting_options(browser: &FileBrowser) -> Element<'_, Message> {
-    let setting = browser.user_config().language_setting;
-    column![
-        selectable_choice_row(
-            "Auto",
-            "Use the detected system language.",
-            setting == crate::config::UiLanguageSetting::System,
-            Message::LanguageSettingSelected(crate::config::UiLanguageSetting::System),
-        ),
-        selectable_choice_row(
-            "English",
-            "Always show the interface in English.",
-            setting == crate::config::UiLanguageSetting::English,
-            Message::LanguageSettingSelected(crate::config::UiLanguageSetting::English),
-        ),
-        selectable_choice_row(
-            "中文",
-            "Always show the interface in Chinese.",
-            setting == crate::config::UiLanguageSetting::Chinese,
-            Message::LanguageSettingSelected(crate::config::UiLanguageSetting::Chinese),
-        ),
-    ]
-    .spacing(6)
-    .into()
-}
-
-fn startup_custom_directory_input(browser: &FileBrowser) -> Element<'_, Message> {
+fn startup_custom_directory_row(browser: &FileBrowser) -> Element<'_, Message> {
     let input = text_input(
         &crate::localization::translate_current("Directory"),
         &browser.startup_custom_directory_input,
@@ -721,8 +714,5 @@ fn startup_custom_directory_input(browser: &FileBrowser) -> Element<'_, Message>
     if let Some(error) = &browser.startup_custom_directory_error {
         content = content.push(localized_text(error).size(11).width(Length::Fill));
     }
-    container(content)
-        .padding([5, 8])
-        .width(Length::Fill)
-        .into()
+    info_setting_row(content.into())
 }

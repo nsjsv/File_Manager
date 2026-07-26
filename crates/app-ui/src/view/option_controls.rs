@@ -27,29 +27,6 @@ pub(super) fn segmented_choice_row(choices: Vec<SegmentedChoice>) -> Element<'st
         .into()
 }
 
-pub(super) fn selectable_choice_row(
-    title: &'static str,
-    description: &'static str,
-    selected: bool,
-    message: Message,
-) -> Element<'static, Message> {
-    let labels = Column::new()
-        .spacing(2)
-        .push(readable_text(title).size(12).width(Length::Fill))
-        .push(readable_text(description).size(11).width(Length::Fill));
-    let button = button(labels)
-        .padding([7, 10])
-        .width(Length::Fill)
-        .height(Length::Fixed(ACTION_CHOICE_HEIGHT))
-        .style(selectable_choice_button_style(selected));
-
-    if selected {
-        button.into()
-    } else {
-        button.on_press(message).into()
-    }
-}
-
 pub(super) fn action_choice_row(
     title: &'static str,
     description: &'static str,
@@ -336,7 +313,7 @@ fn accent_border_color(theme: &Theme) -> Color {
     }
 }
 
-fn selected_background_color(theme: &Theme) -> Color {
+pub(super) fn selected_background_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(49, 70, 104)
     } else {
@@ -344,7 +321,7 @@ fn selected_background_color(theme: &Theme) -> Color {
     }
 }
 
-fn selected_hover_background_color(theme: &Theme) -> Color {
+pub(super) fn selected_hover_background_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(56, 80, 118)
     } else {
@@ -352,7 +329,7 @@ fn selected_hover_background_color(theme: &Theme) -> Color {
     }
 }
 
-fn selected_pressed_background_color(theme: &Theme) -> Color {
+pub(super) fn selected_pressed_background_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(45, 64, 96)
     } else {
@@ -360,7 +337,7 @@ fn selected_pressed_background_color(theme: &Theme) -> Color {
     }
 }
 
-fn selected_text_color(theme: &Theme) -> Color {
+pub(super) fn selected_text_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(236, 244, 255)
     } else {
@@ -368,7 +345,7 @@ fn selected_text_color(theme: &Theme) -> Color {
     }
 }
 
-fn panel_background_color(theme: &Theme) -> Color {
+pub(super) fn panel_background_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(31, 40, 54)
     } else {
@@ -376,7 +353,7 @@ fn panel_background_color(theme: &Theme) -> Color {
     }
 }
 
-fn hover_background_color(theme: &Theme) -> Color {
+pub(super) fn hover_background_color(theme: &Theme) -> Color {
     if is_dark_theme(theme) {
         Color::from_rgb8(35, 47, 65)
     } else {

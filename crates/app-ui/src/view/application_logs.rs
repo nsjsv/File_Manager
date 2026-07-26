@@ -1,4 +1,4 @@
-use iced::widget::{column, container};
+use iced::widget::{column, container, Column};
 use iced::{Element, Length};
 
 use crate::app::FileBrowser;
@@ -8,27 +8,30 @@ use crate::typography::readable_text;
 
 use super::auxiliary_window_layout::auxiliary_detail_scroller;
 use super::option_controls::{segmented_choice_row, SegmentedChoice};
+use super::settings_group::{info_setting_row, settings_group, SETTINGS_GROUP_SPACING};
 
 pub(super) fn application_logs_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
-    let mut content = column![
-        readable_text("Logs").size(20),
-        readable_text("Display level").size(13),
-        log_threshold_choices(browser.application_logs.threshold),
-    ]
-    .spacing(10)
+    let mut content = column![settings_group(
+        "Display level",
+        vec![info_setting_row(log_threshold_choices(
+            browser.application_logs.threshold,
+        ))],
+    )]
+    .spacing(SETTINGS_GROUP_SPACING)
     .width(Length::Fill);
 
+    let mut entries = Column::new().spacing(4).width(Length::Fill);
     if let Some(warning) = browser.application_logs.journald_warning.as_ref() {
-        content = content.push(readable_text(warning).size(12).width(Length::Fill));
+        entries = entries.push(readable_text(warning).size(12).width(Length::Fill));
     }
     if let Some(error) = browser.application_logs.load_error.as_ref() {
-        content = content.push(readable_text(error).size(12).width(Length::Fill));
+        entries = entries.push(readable_text(error).size(12).width(Length::Fill));
     }
     if browser.application_logs.is_loading() {
-        content = content.push(readable_text("Loading logs...").size(12));
+        entries = entries.push(readable_text("Loading logs...").size(12));
     }
 
     let mut visible_count = 0;
@@ -46,14 +49,15 @@ pub(super) fn application_logs_settings_detail(
         ]
         .spacing(2)
         .width(Length::Fill);
-        content = content.push(container(log_entry).padding([6, 0]).width(Length::Fill));
+        entries = entries.push(container(log_entry).padding([6, 0]).width(Length::Fill));
     }
     if visible_count == 0
         && !browser.application_logs.is_loading()
         && browser.application_logs.load_error.is_none()
     {
-        content = content.push(readable_text("No logs for this level.").size(13));
+        entries = entries.push(readable_text("No logs for this level.").size(13));
     }
+    content = content.push(entries);
 
     auxiliary_detail_scroller(
         content,

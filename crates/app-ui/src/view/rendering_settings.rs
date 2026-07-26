@@ -1,37 +1,27 @@
-use iced::widget::{button, column, container, row, Button, Space};
+use iced::widget::{column, container, row, Space};
 use iced::{Alignment, Element, Length};
 
-use crate::appearance::{context_menu_button_style, context_menu_style};
+use crate::appearance::context_menu_style;
 use crate::config::RenderingGpuPreference;
 use crate::icons::IconSymbol;
 use crate::model::Message;
 use crate::typography::readable_text;
 
 use super::option_controls::{primary_action_button, secondary_action_button};
-use super::toggle_switch::switch_control;
+use super::settings_group::toggle_setting_row;
 use super::{themed_icon, IconTone, MENU_ICON_SIZE};
 
 const RENDERER_RESTART_NOTICE_WIDTH: f32 = 420.0;
 
-pub(super) fn rendering_gpu_preference_button(
+pub(super) fn rendering_gpu_preference_row(
     preference: RenderingGpuPreference,
-) -> Button<'static, Message> {
-    let label = row![
-        readable_text("Discrete GPU").size(12).width(Length::Fill),
-        switch_control(matches!(
-            preference,
-            RenderingGpuPreference::HighPerformanceGpu
-        )),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    button(container(label).padding([5, 8]).width(Length::Fill))
-        .on_press(Message::RenderingGpuPreferenceSelected(
-            next_rendering_gpu_preference(preference),
-        ))
-        .width(Length::Fill)
-        .style(context_menu_button_style())
+) -> Element<'static, Message> {
+    toggle_setting_row(
+        "Discrete GPU",
+        None,
+        matches!(preference, RenderingGpuPreference::HighPerformanceGpu),
+        Message::RenderingGpuPreferenceSelected(next_rendering_gpu_preference(preference)),
+    )
 }
 
 pub(super) fn renderer_restart_notice_panel() -> Element<'static, Message> {
