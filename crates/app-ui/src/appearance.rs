@@ -1,11 +1,18 @@
 use iced::widget::{button, scrollable, svg};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
+mod navigation_input;
 mod container {
     pub use iced::widget::container::*;
     pub type Appearance = Style;
 }
 mod list_header;
+mod window_chrome;
+
+pub(crate) use navigation_input::{address_bar_style, navigation_text_input_style};
+pub(crate) use window_chrome::{
+    window_close_button_style, window_control_button_style, window_title_bar_style,
+};
 
 pub(crate) use list_header::{
     list_header_cell_style, list_header_reorder_indicator_style, list_header_style,

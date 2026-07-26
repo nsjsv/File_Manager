@@ -480,7 +480,17 @@ impl FileBrowser {
             Message::DestructiveActionCanceled => self.cancel_destructive_action(),
             Message::AuxiliaryWindowCloseRequested(window) => self.close_auxiliary_window(window),
             Message::AuxiliaryWindowResized(window, width, height) => {
-                self.handle_auxiliary_window_resized(window, width, height)
+                let resize_command = self.handle_auxiliary_window_resized(window, width, height);
+                Task::batch([resize_command, self.observe_window_maximized(window)])
+            }
+            Message::WindowMinimizeRequested(window) => self.minimize_window(window),
+            Message::WindowMaximizeToggled(window) => self.toggle_window_maximized(window),
+            Message::WindowMaximizedObserved(window, frame_state) => {
+                self.accept_window_maximized_observation(window, frame_state)
+            }
+            Message::WindowDragRequested(window) => self.start_window_drag(window),
+            Message::WindowResizeRequested(window, direction) => {
+                self.start_window_resize(window, direction)
             }
             Message::WindowFocused(window) => self.handle_window_focused(window),
             Message::WindowUnfocused(window) => self.handle_window_unfocused(window),
@@ -566,6 +576,24 @@ impl FileBrowser {
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::SettingsOpened => self.open_settings(),
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
+            Message::MainWindowChromeLayoutSelected(layout) => {
+                self.select_main_window_chrome_layout(layout)
+            }
+            Message::WindowControlVisibilityToggled(kind) => {
+                self.toggle_window_control_visibility(kind)
+            }
+            Message::WindowControlSideSelected(kind, side) => {
+                self.select_window_control_side(kind, side)
+            }
+            Message::WindowControlReorderStarted(kind) => self.start_window_control_reorder(kind),
+            Message::WindowControlReorderTargetEntered(kind) => {
+                self.enter_window_control_reorder_target(kind)
+            }
+            Message::WindowControlReorderTargetExited(kind) => {
+                self.exit_window_control_reorder_target(kind)
+            }
+            Message::WindowControlReorderFinished => self.finish_window_control_reorder(),
+            Message::WindowControlsReset => self.reset_window_controls(),
             Message::ApplicationLogsRefreshRequested => self.refresh_application_logs(),
             Message::ApplicationLogsLoaded(request, outcome) => {
                 self.accept_application_logs(request, outcome)

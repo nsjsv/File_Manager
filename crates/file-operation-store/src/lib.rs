@@ -22,7 +22,7 @@ pub use browser_session::{
 mod user_preferences;
 pub use user_preferences::{
     StoredListViewColumn, StoredNetworkConnection, StoredShortcutBinding, StoredSidebarFavorite,
-    StoredUserPreferences,
+    StoredUserPreferences, StoredWindowControlPlacement,
 };
 
 #[cfg(test)]

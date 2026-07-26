@@ -4,7 +4,7 @@ use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, Ter
 use file_core::FileOperationVerification;
 use file_operation_store::{
     StoreResult, StoredListViewColumn, StoredNetworkConnection, StoredPath, StoredShortcutBinding,
-    StoredSidebarFavorite, StoredUserPreferences, TaskQueueStore,
+    StoredSidebarFavorite, StoredUserPreferences, StoredWindowControlPlacement, TaskQueueStore,
 };
 
 use super::app_config::AppConfig;
@@ -22,6 +22,8 @@ use super::{
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
     ListColumnConfig, ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences,
+    MainWindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
+    WindowControlVisibility, WindowControlsConfig,
 };
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
@@ -38,6 +40,7 @@ pub(crate) struct UserPreferences {
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) window_controls: WindowControlsConfig,
     pub(crate) icon_grid_size: u32,
     pub(crate) list_view_preferences: ListViewPreferences,
     pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
@@ -61,6 +64,7 @@ impl UserPreferences {
             terminal_emulator: config.terminal_emulator,
             file_operation_verification: config.file_operation_verification,
             browser_view_mode: config.browser_view_mode,
+            window_controls: config.window_controls.clone(),
             icon_grid_size: normalize_icon_grid_size(config.icon_grid_size),
             list_view_preferences: config.list_view_preferences.clone(),
             list_directory_size_display_mode: config.list_directory_size_display_mode,
@@ -83,6 +87,7 @@ impl UserPreferences {
         config.terminal_emulator = self.terminal_emulator;
         config.file_operation_verification = self.file_operation_verification;
         config.browser_view_mode = self.browser_view_mode;
+        config.window_controls = self.window_controls.clone();
         config.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
         config.list_view_preferences = self.list_view_preferences.clone();
         config.list_directory_size_display_mode = self.list_directory_size_display_mode;
@@ -111,6 +116,8 @@ impl UserPreferences {
             file_operation_verification_config_value(self.file_operation_verification).to_owned();
         stored.browser_view_mode =
             browser_view_mode_config_value(self.browser_view_mode).to_owned();
+        stored.window_chrome_layout = self.window_controls.main_layout().config_value().to_owned();
+        stored.window_controls = stored_window_controls(&self.window_controls);
         stored.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
         stored.list_view_columns = stored_list_view_columns(&self.list_view_preferences);
         stored.list_sort_field =
@@ -134,6 +141,7 @@ impl UserPreferences {
                 .unwrap_or(default_preferences.startup_location_policy);
         let list_view_preferences =
             list_view_preferences_from_stored(&stored, &default_preferences);
+        let window_controls = window_controls_from_stored(&stored, &default_preferences);
         Self {
             network_list_thumbnail_downloads_enabled: stored
                 .network_list_thumbnail_downloads_enabled,
@@ -154,6 +162,7 @@ impl UserPreferences {
             .unwrap_or(default_preferences.file_operation_verification),
             browser_view_mode: browser_view_mode_from_config_value(&stored.browser_view_mode)
                 .unwrap_or(default_preferences.browser_view_mode),
+            window_controls,
             icon_grid_size: normalize_icon_grid_size(stored.icon_grid_size),
             list_view_preferences,
             list_directory_size_display_mode: list_directory_size_display_mode_from_config_value(
@@ -323,6 +332,43 @@ fn list_view_preferences_from_stored(
             .unwrap_or(default.list_view_preferences.sort().direction),
     };
     ListViewPreferences::new(columns, sort)
+}
+
+fn window_controls_from_stored(
+    stored: &StoredUserPreferences,
+    default: &UserPreferences,
+) -> WindowControlsConfig {
+    let main_layout = MainWindowChromeLayout::from_config_value(&stored.window_chrome_layout)
+        .unwrap_or(default.window_controls.main_layout());
+    let placements = stored
+        .window_controls
+        .iter()
+        .filter_map(|placement| {
+            let kind = WindowControlKind::from_config_value(&placement.kind)?;
+            let side = WindowControlSide::from_config_value(&placement.side)
+                .unwrap_or_else(|| default.window_controls.placement(kind).side());
+            Some(WindowControlPlacement::new(
+                kind,
+                side,
+                WindowControlVisibility::from(placement.visible),
+            ))
+        })
+        .collect();
+    WindowControlsConfig::from_partial_placements(main_layout, placements)
+}
+
+fn stored_window_controls(
+    window_controls: &WindowControlsConfig,
+) -> Vec<StoredWindowControlPlacement> {
+    window_controls
+        .placements()
+        .iter()
+        .map(|placement| StoredWindowControlPlacement {
+            kind: placement.kind().config_value().to_owned(),
+            side: placement.side().config_value().to_owned(),
+            visible: placement.visibility().is_visible(),
+        })
+        .collect()
 }
 
 fn stored_shortcuts(shortcuts: &ShortcutConfig) -> Vec<StoredShortcutBinding> {

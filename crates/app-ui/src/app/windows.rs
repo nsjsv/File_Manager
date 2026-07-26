@@ -3,7 +3,9 @@ use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
 use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
-use crate::model::{Message, PreviewSize, PreviewWindowProfile, SettingsCategory};
+use crate::model::{
+    Message, PreviewSize, PreviewWindowProfile, SettingsCategory, WINDOW_TITLE_BAR_HEIGHT,
+};
 use crate::view::{address_input_id, rename_input_id};
 
 const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
@@ -46,6 +48,7 @@ const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
 pub(super) fn main_window_settings() -> window::Settings {
     let mut settings = window::Settings {
         size: Size::new(MAIN_WINDOW_INITIAL_WIDTH, MAIN_WINDOW_INITIAL_HEIGHT),
+        decorations: false,
         exit_on_close_request: false,
         ..window::Settings::default()
     };
@@ -55,8 +58,15 @@ pub(super) fn main_window_settings() -> window::Settings {
 
 fn settings_window_settings() -> window::Settings {
     let mut settings = window::Settings {
-        size: Size::new(DEFAULT_SETTINGS_WIDTH, DEFAULT_SETTINGS_HEIGHT),
-        min_size: Some(Size::new(MIN_SETTINGS_WIDTH, MIN_SETTINGS_HEIGHT)),
+        size: Size::new(
+            DEFAULT_SETTINGS_WIDTH,
+            DEFAULT_SETTINGS_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+        ),
+        min_size: Some(Size::new(
+            MIN_SETTINGS_WIDTH,
+            MIN_SETTINGS_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+        )),
+        decorations: false,
         exit_on_close_request: false,
         ..window::Settings::default()
     };
@@ -66,8 +76,15 @@ fn settings_window_settings() -> window::Settings {
 
 fn properties_window_settings() -> window::Settings {
     let mut settings = window::Settings {
-        size: Size::new(DEFAULT_PROPERTIES_WIDTH, DEFAULT_PROPERTIES_HEIGHT),
-        min_size: Some(Size::new(MIN_PROPERTIES_WIDTH, MIN_PROPERTIES_HEIGHT)),
+        size: Size::new(
+            DEFAULT_PROPERTIES_WIDTH,
+            DEFAULT_PROPERTIES_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+        ),
+        min_size: Some(Size::new(
+            MIN_PROPERTIES_WIDTH,
+            MIN_PROPERTIES_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+        )),
+        decorations: false,
         exit_on_close_request: false,
         ..window::Settings::default()
     };
@@ -79,13 +96,38 @@ fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> 
     let size = clamp_preview_size_to_minimum(profile, size);
     let min_size = preview_min_size(profile);
     let mut settings = window::Settings {
-        size: Size::new(size.width, size.height),
-        min_size: Some(min_size),
+        size: preview_window_size_for_content(size),
+        min_size: Some(preview_window_size_for_content(PreviewSize {
+            width: min_size.width,
+            height: min_size.height,
+        })),
+        decorations: false,
         exit_on_close_request: false,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = PREVIEW_WINDOW_APP_ID.to_owned();
     settings
+}
+
+fn preview_window_size_for_content(content_size: PreviewSize) -> Size {
+    Size::new(
+        content_size.width,
+        content_size.height + WINDOW_TITLE_BAR_HEIGHT,
+    )
+}
+
+fn preview_content_size_from_window(
+    profile: PreviewWindowProfile,
+    width: f32,
+    height: f32,
+) -> PreviewSize {
+    clamp_preview_size_to_minimum(
+        profile,
+        PreviewSize {
+            width,
+            height: (height - WINDOW_TITLE_BAR_HEIGHT).max(1.0),
+        },
+    )
 }
 
 pub(super) fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize {
@@ -237,7 +279,7 @@ fn preview_size_matches(actual: PreviewSize, expected: PreviewSize) -> bool {
 }
 
 impl FileBrowser {
-    pub(super) fn window_title(&self, window: window::Id) -> String {
+    pub(crate) fn window_title(&self, window: window::Id) -> String {
         if self.settings_window == Some(window) {
             crate::localization::translate_current("Settings - File Manager")
         } else if self.properties_window == Some(window) {
@@ -252,6 +294,7 @@ impl FileBrowser {
     }
 
     pub(super) fn open_settings(&mut self) -> Task<Message> {
+        self.cancel_window_control_reorder();
         self.context_menu = None;
         self.open_with = None;
         self.archive_creation = None;
@@ -277,6 +320,7 @@ impl FileBrowser {
     }
 
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
+        self.cancel_window_control_reorder();
         self.shortcut_capture = None;
         self.search.cancel_force_restart_confirmation();
         if category != SettingsCategory::General {
@@ -303,6 +347,7 @@ impl FileBrowser {
     }
 
     pub(super) fn close_settings_window(&mut self) -> Task<Message> {
+        self.cancel_window_control_reorder();
         self.shortcut_capture = None;
         self.search.cancel_force_restart_confirmation();
         self.invalidate_startup_directory_validation();
@@ -342,7 +387,7 @@ impl FileBrowser {
         if let Some(window) = self.preview_window {
             self.focused_window = window;
             return Task::batch([
-                window::resize(window, Size::new(size.width, size.height)),
+                window::resize(window, preview_window_size_for_content(size)),
                 window::gain_focus(window),
             ]);
         }
@@ -430,6 +475,7 @@ impl FileBrowser {
     }
 
     fn clear_closed_window_focus(&mut self, window: window::Id) {
+        self.maximized_windows.remove(&window);
         if self.focused_window == window {
             self.focused_window = self.main_window;
         }
@@ -595,6 +641,7 @@ impl FileBrowser {
     fn close_all_windows(&mut self) -> Task<Message> {
         self.is_shutting_down = true;
         self.system_focused_window = None;
+        self.maximized_windows.clear();
         self.search.abandon_and_clear_input();
         self.invalidate_startup_directory_validation();
         let _ = self.operation_queue.cancel_all();
@@ -642,10 +689,8 @@ impl FileBrowser {
         }
 
         if self.preview_window == Some(window) {
-            let resized_size = clamp_preview_size_to_minimum(
-                self.preview_window_profile,
-                PreviewSize { width, height },
-            );
+            let resized_size =
+                preview_content_size_from_window(self.preview_window_profile, width, height);
             if let Some(pending_size) = self.pending_preview_resize {
                 if preview_size_matches(resized_size, pending_size) {
                     self.pending_preview_resize = None;
@@ -660,10 +705,7 @@ impl FileBrowser {
                         pending_height = pending_size.height,
                         "preview resize still pending"
                     );
-                    return window::resize(
-                        window,
-                        Size::new(pending_size.width, pending_size.height),
-                    );
+                    return window::resize(window, preview_window_size_for_content(pending_size));
                 }
             } else {
                 self.preview_size = resized_size;

@@ -22,6 +22,14 @@ mod text_preview_panel;
 mod toggle_switch;
 mod toolbar_controls;
 mod transfer_conflict;
+mod window_chrome;
+mod window_control_settings;
+mod window_drag_region;
+
+pub(crate) use window_chrome::{
+    main_pane_window_chrome_role, separate_window_content, window_resize_frame,
+    MainPaneWindowChromeRole,
+};
 
 pub(crate) use address_bar::address_input_id;
 pub(crate) use preview_panel::view_preview_window;
@@ -54,8 +62,8 @@ use crate::icon_grid_view::icon_grid_view;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::list_view::list_browser_view;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, Message, OperationQueuePanelMode,
-    ScrollbarRegion, SplitAxis, TRASH_LOCATION_LABEL,
+    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, MainWindowChromeLayout, Message,
+    OperationQueuePanelMode, ScrollbarRegion, SplitAxis, WindowControlSide, TRASH_LOCATION_LABEL,
 };
 use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
@@ -79,6 +87,8 @@ use search_panel::{search_input_panel, search_results_view};
 use sidebar_panel::sidebar_view;
 use toolbar_controls::{navigation_button_group, view_mode_button_group};
 use transfer_conflict::transfer_conflict_panel;
+use window_chrome::{pane_navigation_layout, window_control_group, PaneNavigationLayout};
+use window_drag_region::window_drag_region;
 
 const TOOLBAR_ICON_SIZE: f32 = 16.0;
 const VIEW_MODE_ICON_SIZE: f32 = 16.0;
@@ -320,7 +330,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    match floating_input {
+    let browser_surface = match floating_input {
         BrowserFloatingInput::Plain => floating_surface(content, floating),
         BrowserFloatingInput::Modal => modal_floating_surface(content, floating),
         BrowserFloatingInput::DismissibleBlocking => {
@@ -329,7 +339,20 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         BrowserFloatingInput::DismissiblePassThrough => {
             pass_through_dismissable_floating_surface(content, floating, Message::DismissFloating)
         }
-    }
+    };
+    let main_window = browser.main_window_id();
+    let frame_state = browser.window_frame_state(main_window);
+    let window_content = match browser.user_config().window_controls.main_layout() {
+        MainWindowChromeLayout::IntegratedNavigation => browser_surface,
+        MainWindowChromeLayout::SeparateTitleBar => separate_window_content(
+            browser.window_title(main_window),
+            browser_surface,
+            &browser.user_config().window_controls,
+            main_window,
+            frame_state,
+        ),
+    };
+    window_resize_frame(window_content, main_window, frame_state)
 }
 
 fn panes_view(browser: &FileBrowser) -> Element<'_, Message> {
@@ -363,17 +386,23 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
     let Some(pane) = browser.pane_view(pane_id) else {
         return Space::new().width(Length::Fill).height(Length::Fill).into();
     };
-
-    let navigation_bar = row![
-        navigation_button_group(pane_id),
-        address_bar(browser, pane),
-        search_input_panel(browser),
-        view_mode_button_group(pane),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-
-    let header_content = container(navigation_bar).padding(18).width(Length::Fill);
+    let chrome_role = match browser.user_config().window_controls.main_layout() {
+        MainWindowChromeLayout::IntegratedNavigation => {
+            main_pane_window_chrome_role(browser.pane_layout, pane_id)
+        }
+        MainWindowChromeLayout::SeparateTitleBar => MainPaneWindowChromeRole::NoChrome,
+    };
+    let main_window = browser.main_window_id();
+    let navigation_content = pane_navigation_content(browser, pane, chrome_role);
+    let header_content: Element<'_, Message> = container(navigation_content)
+        .padding(18)
+        .width(Length::Fill)
+        .into();
+    let header_content = if chrome_role.owns_window_drag_region() {
+        window_drag_region(header_content, main_window)
+    } else {
+        header_content
+    };
     let mut main_content = Column::new().spacing(0).push(header_content);
     if pane.tab_bar_should_occupy_layout() {
         main_content = main_content.push(tab_bar(pane));
@@ -388,6 +417,92 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         .on_enter(Message::PaneCursorEntered(pane_id))
         .on_exit(Message::PaneCursorExited(pane_id))
         .into()
+}
+
+fn pane_navigation_content<'a>(
+    browser: &'a FileBrowser,
+    pane: BrowserPaneView<'a>,
+    chrome_role: MainPaneWindowChromeRole,
+) -> Element<'a, Message> {
+    match pane_navigation_layout(
+        browser.main_window_width,
+        browser.sidebar_width,
+        browser.pane_layout,
+    ) {
+        PaneNavigationLayout::SingleRow => {
+            let navigation = Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .width(Length::Fill);
+            let navigation = push_pane_window_controls(
+                navigation,
+                browser,
+                chrome_role,
+                WindowControlSide::Left,
+            )
+            .push(navigation_button_group(pane.id))
+            .push(address_bar(browser, pane))
+            .push(search_input_panel(browser))
+            .push(view_mode_button_group(pane));
+            push_pane_window_controls(navigation, browser, chrome_role, WindowControlSide::Right)
+                .into()
+        }
+        PaneNavigationLayout::StackedRows => {
+            let control_row = Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .width(Length::Fill);
+            let control_row = push_pane_window_controls(
+                control_row,
+                browser,
+                chrome_role,
+                WindowControlSide::Left,
+            )
+            .push(navigation_button_group(pane.id))
+            .push(Space::new().width(Length::Fill));
+            let control_row = push_pane_window_controls(
+                control_row,
+                browser,
+                chrome_role,
+                WindowControlSide::Right,
+            );
+            let location_row = Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(address_bar(browser, pane))
+                .push(search_input_panel(browser))
+                .push(view_mode_button_group(pane))
+                .width(Length::Fill);
+            Column::new()
+                .spacing(8)
+                .push(control_row)
+                .push(location_row)
+                .width(Length::Fill)
+                .into()
+        }
+    }
+}
+
+fn push_pane_window_controls<'a>(
+    navigation: Row<'a, Message>,
+    browser: &FileBrowser,
+    chrome_role: MainPaneWindowChromeRole,
+    side: WindowControlSide,
+) -> Row<'a, Message> {
+    let shows_controls = match side {
+        WindowControlSide::Left => chrome_role.shows_left_controls(),
+        WindowControlSide::Right => chrome_role.shows_right_controls(),
+    };
+    if !shows_controls {
+        return navigation;
+    }
+    let main_window = browser.main_window_id();
+    navigation.push(window_control_group(
+        &browser.user_config().window_controls,
+        side,
+        main_window,
+        browser.window_frame_state(main_window),
+    ))
 }
 
 fn browser_content_view<'a>(

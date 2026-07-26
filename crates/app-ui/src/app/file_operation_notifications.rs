@@ -29,7 +29,7 @@ impl FileBrowser {
         terminal_status: FileOperationTerminalStatus,
         completion: &FileOperationCompletion,
     ) -> Task<Message> {
-        if self.system_focused_window.is_none() {
+        if self.system_focused_window.is_some() {
             return Task::none();
         }
 
@@ -350,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_command_requires_real_window_focus_and_terminal_status() {
+    fn notification_command_requires_application_to_be_unfocused_and_terminal_status() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let operation = copy_operation(&[("/tmp/report.txt", "/var/tmp/report.txt")]);
         let completion = FileOperationCompletion::Succeeded(FileOperationOutcome::NoHistory);
@@ -360,15 +360,19 @@ mod tests {
             FileOperationTerminalStatus::Completed,
             &completion,
         ))
-        .is_none());
-
-        browser.system_focused_window = Some(window::Id::unique());
-        assert!(into_stream(browser.file_operation_notification_command(
-            &operation,
-            FileOperationTerminalStatus::Completed,
-            &completion,
-        ))
         .is_some());
+
+        for focused_window in [browser.main_window, window::Id::unique()] {
+            browser.system_focused_window = Some(focused_window);
+            assert!(into_stream(browser.file_operation_notification_command(
+                &operation,
+                FileOperationTerminalStatus::Completed,
+                &completion,
+            ))
+            .is_none());
+        }
+
+        browser.system_focused_window = None;
         assert!(into_stream(browser.file_operation_notification_command(
             &operation,
             FileOperationTerminalStatus::Canceled,

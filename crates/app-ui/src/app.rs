@@ -46,6 +46,8 @@ mod thumbnailing;
 mod update;
 mod view_modes;
 mod wayland_dnd;
+mod window_chrome;
+mod window_control_settings;
 mod windows;
 
 pub(crate) use runtime::run;
@@ -109,7 +111,8 @@ use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
 use crate::view::{
-    view_browser, view_preview_window, view_properties_window, view_settings_window,
+    separate_window_content, view_browser, view_preview_window, view_properties_window,
+    view_settings_window, window_resize_frame,
 };
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
@@ -148,6 +151,7 @@ pub(crate) struct FileBrowser {
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
     main_window: window::Id,
+    maximized_windows: HashSet<window::Id>,
     wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
@@ -240,6 +244,8 @@ pub(crate) struct FileBrowser {
     column_resize_drag: Option<ColumnResizeDrag>,
     list_column_resize_drag: Option<crate::app::list_view_settings::ListColumnResizeDrag>,
     list_column_reorder_drag: Option<crate::app::list_view_settings::ListColumnReorderDrag>,
+    window_control_reorder_drag:
+        Option<crate::app::window_control_settings::WindowControlReorderDrag>,
     last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
     operation_history: FileOperationHistory,
@@ -379,6 +385,7 @@ impl FileBrowser {
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
             main_window,
+            maximized_windows: HashSet::new(),
             wayland_dnd: None,
             preview_window: None,
             focused_window: main_window,
@@ -480,6 +487,7 @@ impl FileBrowser {
             column_resize_drag: None,
             list_column_resize_drag: None,
             list_column_reorder_drag: None,
+            window_control_reorder_drag: None,
             last_activation_click: None,
             operation_queue: FileOperationQueue::new(),
             operation_history: FileOperationHistory::new(),
@@ -616,16 +624,33 @@ impl FileBrowser {
         self.theme.clone()
     }
 
+    fn view_with_separate_window_chrome<'a>(
+        &'a self,
+        window: window::Id,
+        content: Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        let frame_state = self.window_frame_state(window);
+        let content = separate_window_content(
+            self.window_title(window),
+            content,
+            &self.user_config.window_controls,
+            window,
+            frame_state,
+        );
+        window_resize_frame(content, window, frame_state)
+    }
+
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.settings_window == Some(window) {
-            view_settings_window(self)
+            self.view_with_separate_window_chrome(window, view_settings_window(self))
         } else if self.properties_window == Some(window) {
-            view_properties_window(
+            let content = view_properties_window(
                 self.properties.as_ref(),
                 self.scrollbar_visibility_for(&ScrollbarRegion::Properties),
-            )
+            );
+            self.view_with_separate_window_chrome(window, content)
         } else if self.preview_window == Some(window) {
-            view_preview_window(
+            let content = view_preview_window(
                 self.preview.as_ref(),
                 self.text_preview_document.as_ref(),
                 self.preview_size,
@@ -634,7 +659,8 @@ impl FileBrowser {
                 self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDirectory),
                 self.scrollbar_visibility_for(&ScrollbarRegion::PreviewArchive),
                 self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
-            )
+            );
+            self.view_with_separate_window_chrome(window, content)
         } else if window == self.main_window {
             startup_trace::mark_once("first_main_window_view");
             if !self.is_loading {

@@ -4,16 +4,16 @@ use iced::advanced::{layout, renderer, widget, Clipboard, Layout, Shell, Widget}
 use iced::widget::{
     button, container, mouse_area, opaque, responsive, scrollable, stack, text_input, Column,
 };
-use iced::{mouse, Background, Element, Event, Length, Point, Rectangle, Size, Theme};
+use iced::{mouse, Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
 
 use crate::anchored_popup::anchored_popup;
 use crate::app::panes::BrowserPaneView;
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
-    path_suggestion_item_style, path_suggestions_style, selected_path_suggestion_item_style,
-    transparent_button_style,
+    address_bar_style, auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
+    navigation_text_input_style, path_suggestion_item_style, path_suggestions_style,
+    selected_path_suggestion_item_style, transparent_button_style,
 };
 use crate::breadcrumb_drop_target_bounds::{
     track_breadcrumb_drop_target, track_breadcrumb_viewport,
@@ -50,7 +50,7 @@ pub(crate) fn address_bar<'a>(
     pane: BrowserPaneView<'a>,
 ) -> Element<'a, Message> {
     if pane.is_trash_view {
-        return container(
+        let content = container(
             iced::widget::row![
                 themed_icon(IconSymbol::Trash, IconTone::Normal, BREADCRUMB_ICON_SIZE),
                 readable_text(TRASH_LOCATION_LABEL).size(16),
@@ -60,8 +60,9 @@ pub(crate) fn address_bar<'a>(
         )
         .padding([7, 10])
         .width(Length::Fill)
-        .height(Length::Fixed(ADDRESS_BAR_HEIGHT))
-        .into();
+        .height(Length::Fixed(ADDRESS_BAR_HEIGHT));
+
+        return address_bar_surface(content.into(), pane.id);
     }
 
     let editing_fraction = pane.address_transition_fraction.clamp(0.0, 1.0);
@@ -104,10 +105,22 @@ pub(crate) fn address_bar<'a>(
         (!session.suggestions.is_empty()).then(|| path_suggestions_panel(pane.id, session))
     });
 
-    container(anchored_popup(anchor, popup))
-        .width(Length::Fill)
-        .height(Length::Fixed(ADDRESS_BAR_HEIGHT))
-        .into()
+    address_bar_surface(anchored_popup(anchor, popup), pane.id)
+}
+
+fn address_bar_surface<'a>(
+    content: Element<'a, Message>,
+    pane_id: BrowserPaneId,
+) -> Element<'a, Message> {
+    mouse_area(
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fixed(ADDRESS_BAR_HEIGHT))
+            .style(address_bar_style),
+    )
+    .on_press(Message::AddressEditingRequested(pane_id))
+    .interaction(mouse::Interaction::Text)
+    .into()
 }
 
 fn breadcrumb_layer<'a>(
@@ -179,9 +192,7 @@ fn breadcrumb_scrollable<'a>(
         scroller.into()
     };
 
-    mouse_area(scroller)
-        .on_press(Message::AddressEditingRequested(pane_id))
-        .into()
+    scroller
 }
 
 fn elastic_breadcrumbs<'a>(
@@ -348,9 +359,9 @@ fn faded_text_input_style(
     status: iced::widget::text_input::Status,
     opacity: f32,
 ) -> iced::widget::text_input::Style {
-    let mut style = iced::widget::text_input::default(theme, status);
-    style.background = scale_background_alpha(style.background, opacity);
-    style.border.color = scale_color_alpha(style.border.color, opacity);
+    let mut style = navigation_text_input_style(theme, status);
+    style.border.width = 0.0;
+    style.border.color = Color::TRANSPARENT;
     style.icon = scale_color_alpha(style.icon, opacity);
     style.placeholder = scale_color_alpha(style.placeholder, opacity);
     style.value = scale_color_alpha(style.value, opacity);
@@ -571,6 +582,25 @@ impl Widget<Message, Theme, iced::Renderer> for ElasticBreadcrumbs<'_> {
                 cursor,
                 viewport,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address_input_overlay_masks_breadcrumbs_without_drawing_a_second_border() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let frame_style = address_bar_style(&theme);
+            let input_style =
+                faded_text_input_style(&theme, iced::widget::text_input::Status::Active, 1.0);
+
+            assert_eq!(Some(input_style.background), frame_style.background);
+            assert_eq!(input_style.border.radius, frame_style.border.radius);
+            assert_eq!(input_style.border.width, 0.0);
+            assert_eq!(input_style.border.color, Color::TRANSPARENT);
         }
     }
 }

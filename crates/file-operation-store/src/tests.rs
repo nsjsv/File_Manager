@@ -299,6 +299,24 @@ fn user_preferences_roundtrip_replace() {
         list_sort_field: "size".to_owned(),
         list_sort_direction: "descending".to_owned(),
         list_directory_size_display_mode: "recursive_total_size".to_owned(),
+        window_chrome_layout: "separate_title_bar".to_owned(),
+        window_controls: vec![
+            StoredWindowControlPlacement {
+                kind: "close".to_owned(),
+                side: "left".to_owned(),
+                visible: true,
+            },
+            StoredWindowControlPlacement {
+                kind: "minimize".to_owned(),
+                side: "right".to_owned(),
+                visible: false,
+            },
+            StoredWindowControlPlacement {
+                kind: "maximize_restore".to_owned(),
+                side: "right".to_owned(),
+                visible: true,
+            },
+        ],
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -351,6 +369,8 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("list_sort_direction");
     object.remove("list_directory_size_display_mode");
     object.remove("icon_grid_size");
+    object.remove("window_chrome_layout");
+    object.remove("window_controls");
     let payload_json = serde_json::to_string(&payload).unwrap();
     let connection = Connection::open(store.db_path()).unwrap();
     connection
@@ -376,6 +396,13 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.list_directory_size_display_mode, "item_count");
     assert_eq!(preferences.language_setting, "system");
     assert_eq!(preferences.icon_grid_size, 96);
+    assert_eq!(preferences.window_chrome_layout, "integrated_navigation");
+    assert_eq!(preferences.window_controls.len(), 3);
+    assert_eq!(preferences.window_controls[0].kind, "minimize");
+    assert_eq!(preferences.window_controls[0].side, "right");
+    assert!(preferences.window_controls[0].visible);
+    assert_eq!(preferences.window_controls[2].kind, "close");
+    assert!(preferences.window_controls[2].visible);
     let _ = fs::remove_dir_all(root);
 }
 

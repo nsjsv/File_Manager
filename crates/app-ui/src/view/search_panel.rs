@@ -5,7 +5,7 @@ use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, list_panel_style,
-    list_row_style, navigation_icon_button_style,
+    list_row_style, navigation_icon_button_style, navigation_text_input_style,
 };
 use crate::formatting::format_file_size;
 use crate::icons::IconSymbol;
@@ -13,6 +13,12 @@ use crate::model::{Message, ScrollbarRegion};
 use crate::typography::{localized_text, readable_text};
 
 use super::{themed_icon, IconTone};
+
+const SEARCH_INPUT_WIDTH: f32 = 140.0;
+
+fn search_input_width() -> Length {
+    Length::Fixed(SEARCH_INPUT_WIDTH)
+}
 
 pub(super) fn search_input_panel(browser: &FileBrowser) -> Element<'_, Message> {
     let input = iced::widget::text_input(
@@ -23,7 +29,8 @@ pub(super) fn search_input_panel(browser: &FileBrowser) -> Element<'_, Message> 
     .on_submit(Message::SearchSubmitted)
     .padding([8, 10])
     .size(15)
-    .width(Length::Fixed(220.0));
+    .style(navigation_text_input_style)
+    .width(Length::Fill);
     let content = if browser.search.input.is_empty() {
         row![input].spacing(4).align_y(Alignment::Center)
     } else {
@@ -37,7 +44,9 @@ pub(super) fn search_input_panel(browser: &FileBrowser) -> Element<'_, Message> 
         .spacing(4)
         .align_y(Alignment::Center)
     };
-    container(content).width(Length::Shrink).into()
+    container(content.width(Length::Fill))
+        .width(search_input_width())
+        .into()
 }
 
 pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message> {
@@ -117,4 +126,17 @@ fn search_result_row(hit: file_search::SearchHit, row_index: usize) -> Element<'
     )
     .on_press(Message::SearchResultPressed(hit))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_search_input_uses_compact_fixed_width() {
+        let Length::Fixed(width) = search_input_width() else {
+            panic!("navigation search input must not participate in Fill layout");
+        };
+        assert_eq!(width, 140.0);
+    }
 }

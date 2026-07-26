@@ -83,6 +83,11 @@ pub(crate) use preview::{
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
+mod window_controls;
+pub(crate) use window_controls::{
+    MainWindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
+    WindowControlVisibility, WindowControlsConfig, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
+};
 mod application_logs;
 pub(crate) use application_logs::{
     bounded_application_log_message, sanitized_application_log_detail, ApplicationLogEntry,
@@ -351,6 +356,11 @@ pub(crate) enum Message {
     DestructiveActionCanceled,
     AuxiliaryWindowCloseRequested(window::Id),
     AuxiliaryWindowResized(window::Id, f32, f32),
+    WindowMinimizeRequested(window::Id),
+    WindowMaximizeToggled(window::Id),
+    WindowMaximizedObserved(window::Id, WindowFrameState),
+    WindowDragRequested(window::Id),
+    WindowResizeRequested(window::Id, window::Direction),
     WindowFocused(window::Id),
     WindowUnfocused(window::Id),
     WindowPointerPressed {
@@ -392,6 +402,14 @@ pub(crate) enum Message {
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
+    MainWindowChromeLayoutSelected(MainWindowChromeLayout),
+    WindowControlVisibilityToggled(WindowControlKind),
+    WindowControlSideSelected(WindowControlKind, WindowControlSide),
+    WindowControlReorderStarted(WindowControlKind),
+    WindowControlReorderTargetEntered(WindowControlKind),
+    WindowControlReorderTargetExited(WindowControlKind),
+    WindowControlReorderFinished,
+    WindowControlsReset,
     ApplicationLogsRefreshRequested,
     ApplicationLogsLoaded(
         ApplicationLogRequest,

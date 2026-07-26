@@ -33,6 +33,10 @@ pub struct StoredUserPreferences {
     pub list_sort_direction: String,
     #[serde(default = "default_list_directory_size_display_mode")]
     pub list_directory_size_display_mode: String,
+    #[serde(default = "default_window_chrome_layout")]
+    pub window_chrome_layout: String,
+    #[serde(default = "default_stored_window_controls")]
+    pub window_controls: Vec<StoredWindowControlPlacement>,
 }
 
 impl Default for StoredUserPreferences {
@@ -57,8 +61,17 @@ impl Default for StoredUserPreferences {
             list_sort_field: default_list_sort_field(),
             list_sort_direction: default_list_sort_direction(),
             list_directory_size_display_mode: default_list_directory_size_display_mode(),
+            window_chrome_layout: default_window_chrome_layout(),
+            window_controls: default_stored_window_controls(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredWindowControlPlacement {
+    pub kind: String,
+    pub side: String,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,6 +141,21 @@ fn default_language_setting() -> String {
 
 fn default_icon_grid_size() -> u32 {
     96
+}
+
+fn default_window_chrome_layout() -> String {
+    "integrated_navigation".to_owned()
+}
+
+fn default_stored_window_controls() -> Vec<StoredWindowControlPlacement> {
+    ["minimize", "maximize_restore", "close"]
+        .into_iter()
+        .map(|kind| StoredWindowControlPlacement {
+            kind: kind.to_owned(),
+            side: "right".to_owned(),
+            visible: true,
+        })
+        .collect()
 }
 
 impl TaskQueueStore {

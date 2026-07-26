@@ -6,9 +6,12 @@ use desktop_linux::{
     NetworkProtocol, TerminalEmulator,
 };
 use file_core::{FileOperationVerification, SortDirection, SortField};
-use file_operation_store::{StoredNetworkConnection, TaskQueueStore};
+use file_operation_store::{StoredNetworkConnection, StoredWindowControlPlacement, TaskQueueStore};
 
-use crate::model::{BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode};
+use crate::model::{
+    BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode, MainWindowChromeLayout,
+    WindowControlKind, WindowControlSide, WindowControlVisibility,
+};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutBindingId;
 
@@ -198,6 +201,15 @@ fn user_preferences_round_trip_through_sqlite() {
     config.startup_custom_directory = PathBuf::from("/workspace");
     config.save_view_state = config.startup_location_policy.saves_view_state();
     config.browser_view_mode = BrowserViewMode::List;
+    config
+        .window_controls
+        .select_main_layout(MainWindowChromeLayout::SeparateTitleBar);
+    config
+        .window_controls
+        .set_visibility(WindowControlKind::Minimize, WindowControlVisibility::Hidden);
+    config
+        .window_controls
+        .move_to_side(WindowControlKind::Close, WindowControlSide::Left);
     config.icon_grid_size = 160;
     config
         .list_view_preferences
@@ -257,6 +269,7 @@ fn user_preferences_round_trip_through_sqlite() {
     assert_eq!(loaded.startup_custom_directory, PathBuf::from("/workspace"));
     assert!(loaded.save_view_state);
     assert_eq!(loaded.browser_view_mode, BrowserViewMode::List);
+    assert_eq!(loaded.window_controls, config.window_controls);
     assert_eq!(loaded.icon_grid_size, 160);
     let loaded_columns = loaded
         .list_view_preferences
@@ -298,6 +311,60 @@ fn user_preferences_round_trip_through_sqlite() {
             .binding(ShortcutBindingId::FocusPathInput)
             .config_value(),
         "Ctrl+Alt+L"
+    );
+}
+
+#[test]
+fn stored_window_controls_are_normalized_at_config_boundary() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.window_chrome_layout = "future-layout".to_owned();
+    stored.window_controls = vec![
+        StoredWindowControlPlacement {
+            kind: "close".to_owned(),
+            side: "left".to_owned(),
+            visible: false,
+        },
+        StoredWindowControlPlacement {
+            kind: "close".to_owned(),
+            side: "right".to_owned(),
+            visible: true,
+        },
+        StoredWindowControlPlacement {
+            kind: "minimize".to_owned(),
+            side: "invalid".to_owned(),
+            visible: false,
+        },
+        StoredWindowControlPlacement {
+            kind: "future-control".to_owned(),
+            side: "left".to_owned(),
+            visible: true,
+        },
+    ];
+
+    let preferences = UserPreferences::from_stored(stored, &default);
+
+    assert_eq!(
+        preferences.window_controls.main_layout(),
+        MainWindowChromeLayout::IntegratedNavigation
+    );
+    assert_eq!(preferences.window_controls.placements().len(), 3);
+    let close = preferences
+        .window_controls
+        .placement(WindowControlKind::Close);
+    assert_eq!(close.side(), WindowControlSide::Left);
+    assert!(close.visibility().is_visible());
+    let minimize = preferences
+        .window_controls
+        .placement(WindowControlKind::Minimize);
+    assert_eq!(minimize.side(), WindowControlSide::Right);
+    assert_eq!(minimize.visibility(), WindowControlVisibility::Hidden);
+    assert_eq!(
+        preferences
+            .window_controls
+            .placement(WindowControlKind::MaximizeRestore)
+            .side(),
+        WindowControlSide::Right
     );
 }
 
