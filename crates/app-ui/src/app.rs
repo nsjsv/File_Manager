@@ -6,6 +6,7 @@ mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
+mod directory_recovery;
 mod events;
 mod file_operation_notifications;
 mod file_operations;

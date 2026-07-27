@@ -9,9 +9,9 @@ use crate::commands::{
     load_trash_command,
 };
 use crate::model::{
-    trash_location_path, BrowserPaneId, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
-    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, Message,
-    NavigationMode,
+    trash_location_path, BrowserPaneId, DirectoryLoadFailure, DirectoryLoadRequest,
+    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, ExpandedDirectoryLoadRequest,
+    ExpandedDirectoryStatus, Message, NavigationMode,
 };
 use crate::startup_trace;
 impl FileBrowser {
@@ -57,7 +57,7 @@ impl FileBrowser {
             .unwrap_or_else(CancellationToken::new)
     }
 
-    fn next_inactive_directory_load_request(
+    pub(super) fn next_inactive_directory_load_request(
         pane: &mut crate::model::BrowserPane,
         path: PathBuf,
     ) -> (DirectoryLoadRequest, CancellationToken) {
@@ -589,10 +589,10 @@ impl FileBrowser {
     pub(super) fn accept_expanded_directory(
         &mut self,
         request: ExpandedDirectoryLoadRequest,
-        scan: Result<DirectoryScan, String>,
+        scan: Result<DirectoryScan, DirectoryLoadFailure>,
     ) -> Task<Message> {
         if request.pane_id != self.active_pane_id() {
-            let (pending_error, loaded_child_count) = {
+            let (pending_failure, loaded_child_count) = {
                 let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
                     return Task::none();
                 };
@@ -604,7 +604,7 @@ impl FileBrowser {
                 }
 
                 expanded.load_cancel = None;
-                let mut pending_error = None;
+                let mut pending_failure = None;
                 let mut loaded_child_count = None;
                 match scan {
                     Ok(scan) => {
@@ -612,50 +612,60 @@ impl FileBrowser {
                         expanded.status = ExpandedDirectoryStatus::Loaded;
                         loaded_child_count = Some(expanded.entries.len());
                     }
-                    Err(error) => {
+                    Err(failure) => {
                         expanded.entries.clear();
                         expanded.status = ExpandedDirectoryStatus::Error;
-                        pending_error = Some(error);
+                        pending_failure = Some(failure);
                     }
                 }
                 pane.sync_active_tab_state();
-                (pending_error, loaded_child_count)
+                (pending_failure, loaded_child_count)
             };
             self.resort_size_sorted_list_panes();
             if let Some(loaded_child_count) = loaded_child_count {
                 self.remember_loaded_list_directory_children(&request.path, loaded_child_count);
             }
-            if let Some(error) = pending_error {
-                self.show_global_error(error);
+            if let Some(failure) = pending_failure {
+                self.accept_expanded_directory_load_failure(
+                    request.pane_id,
+                    &request.path,
+                    failure,
+                );
             }
             return self.schedule_visible_list_directory_summaries_for_pane(request.pane_id);
         }
 
         let loaded_path = request.path.clone();
         let mut loaded_child_count = None;
-        let Some(expanded) = self.expanded_directories.get_mut(&request.path) else {
-            return Task::none();
-        };
-        if !expanded_load_request_matches_directory(&request, expanded) {
-            return Task::none();
-        }
-        expanded.load_cancel = None;
+        let pending_failure = {
+            let Some(expanded) = self.expanded_directories.get_mut(&request.path) else {
+                return Task::none();
+            };
+            if !expanded_load_request_matches_directory(&request, expanded) {
+                return Task::none();
+            }
+            expanded.load_cancel = None;
 
-        match scan {
-            Ok(scan) => {
-                expanded.entries = scan.entries;
-                expanded.status = ExpandedDirectoryStatus::Loaded;
-                loaded_child_count = Some(expanded.entries.len());
+            match scan {
+                Ok(scan) => {
+                    expanded.entries = scan.entries;
+                    expanded.status = ExpandedDirectoryStatus::Loaded;
+                    loaded_child_count = Some(expanded.entries.len());
+                    None
+                }
+                Err(failure) => {
+                    expanded.entries.clear();
+                    expanded.status = ExpandedDirectoryStatus::Error;
+                    Some(failure)
+                }
             }
-            Err(error) => {
-                expanded.entries.clear();
-                expanded.status = ExpandedDirectoryStatus::Error;
-                self.show_global_error(error);
-            }
-        }
+        };
 
         if let Some(loaded_child_count) = loaded_child_count {
             self.remember_loaded_list_directory_children(&request.path, loaded_child_count);
+        }
+        if let Some(failure) = pending_failure {
+            self.accept_expanded_directory_load_failure(request.pane_id, &request.path, failure);
         }
         let pending_keyboard_focus = self.complete_pending_keyboard_column_focus(&loaded_path);
         let command = self.focus_created_entry_for_rename();

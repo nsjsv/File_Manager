@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use file_core::{DirectoryEntry, TrashEntry};
 use tokio_util::sync::CancellationToken;
@@ -33,6 +33,12 @@ pub(crate) struct ExpandedDirectoryLoadRequest {
     pub(crate) pane_id: BrowserPaneId,
     pub(crate) path: PathBuf,
     pub(crate) generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirectoryLoadFailure {
+    DirectoryUnavailable { message: String },
+    ReadFailed { message: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +214,63 @@ impl BrowserPane {
         for tab in &mut self.tabs {
             tab.migrate_completed_paths(migrations);
         }
+    }
+
+    pub(crate) fn recover_from_unavailable_directory(
+        &mut self,
+        unavailable_directory: &Path,
+        parent_directory: PathBuf,
+    ) {
+        self.current_dir = parent_directory;
+        self.is_trash_view = false;
+        self.trash_entries.clear();
+        self.invalidate_cached_directory_tree();
+        self.back_stack
+            .retain(|path| !path.starts_with(unavailable_directory));
+        while self
+            .back_stack
+            .last()
+            .is_some_and(|path| path == &self.current_dir)
+        {
+            self.back_stack.pop();
+        }
+        self.forward_stack
+            .retain(|path| !path.starts_with(unavailable_directory));
+        self.is_loading = true;
+        self.sync_active_tab_state();
+    }
+
+    pub(crate) fn discard_unavailable_directory_subtree(&mut self, unavailable_directory: &Path) {
+        self.entries
+            .retain(|entry| !entry.path.starts_with(unavailable_directory));
+        self.directory_loading_placeholder_entries
+            .retain(|placeholder| !placeholder.entry.path.starts_with(unavailable_directory));
+        retain_optional_path_outside_subtree(&mut self.selected, unavailable_directory);
+        self.selected_paths
+            .retain(|path| !path.starts_with(unavailable_directory));
+        retain_optional_path_outside_subtree(&mut self.selection_anchor, unavailable_directory);
+        retain_optional_path_outside_subtree(
+            &mut self.deepest_open_column_directory,
+            unavailable_directory,
+        );
+        for expanded_directory in self.expanded_directories.values_mut() {
+            expanded_directory
+                .entries
+                .retain(|entry| !entry.path.starts_with(unavailable_directory));
+        }
+        self.expanded_directories
+            .retain(|path, expanded_directory| {
+                let directory_remains_available = !path.starts_with(unavailable_directory);
+                if !directory_remains_available {
+                    if let Some(cancellation) = expanded_directory.load_cancel.take() {
+                        cancellation.cancel();
+                    }
+                }
+                directory_remains_available
+            });
+        self.column_viewports
+            .retain(|path, _| !path.starts_with(unavailable_directory));
+        self.sync_active_tab_state();
     }
 
     fn cancel_current_directory_load(&mut self) {
@@ -405,6 +468,15 @@ fn migrate_directory_entry(entry: &mut DirectoryEntry, migrations: &[CompletedPa
 fn migrate_optional_path(path: &mut Option<PathBuf>, migrations: &[CompletedPathMigration]) {
     if let Some(path) = path {
         *path = path_after_completed_migrations(path, migrations);
+    }
+}
+
+fn retain_optional_path_outside_subtree(path: &mut Option<PathBuf>, subtree: &Path) {
+    if path
+        .as_ref()
+        .is_some_and(|candidate| candidate.starts_with(subtree))
+    {
+        *path = None;
     }
 }
 

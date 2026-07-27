@@ -47,9 +47,9 @@ pub(crate) use address_bar::{
 mod browser_panes;
 pub(crate) use browser_panes::{
     retain_direct_entry_selection, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    BrowserViewMode, ColumnBrowserViewport, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
-    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridViewport,
-    SplitAxis, SplitRegion,
+    BrowserViewMode, ColumnBrowserViewport, DirectoryLoadFailure, DirectoryLoadRequest,
+    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, ExpandedDirectoryLoadRequest,
+    ExpandedDirectoryStatus, IconGridViewport, SplitAxis, SplitRegion,
 };
 mod list_view_preferences;
 pub(crate) use list_view_preferences::{
@@ -206,7 +206,10 @@ pub(crate) enum Message {
     NetworkConnection(NetworkConnectionMessage),
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
     DirectoryLoadBatch(DirectoryLoadRequest, DirectoryScanBatch),
-    Loaded(DirectoryLoadRequest, Result<DirectoryScan, String>),
+    Loaded(
+        DirectoryLoadRequest,
+        Result<DirectoryScan, DirectoryLoadFailure>,
+    ),
     TrashLoaded(BrowserPaneId, Result<TrashScan, String>),
     OpenFileFinished(PathBuf, Result<(), String>),
     OpenWithRequested(PathBuf),
@@ -399,7 +402,10 @@ pub(crate) enum Message {
     AppConfigSaved(Result<(), String>),
     ColumnWidthOverrideSaved(Result<(), String>),
     ExpandedDirectoryLoadBatch(ExpandedDirectoryLoadRequest, DirectoryScanBatch),
-    ExpandedDirectoryLoaded(ExpandedDirectoryLoadRequest, Result<DirectoryScan, String>),
+    ExpandedDirectoryLoaded(
+        ExpandedDirectoryLoadRequest,
+        Result<DirectoryScan, DirectoryLoadFailure>,
+    ),
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),

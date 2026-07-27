@@ -17,6 +17,16 @@ fn record_global_error(log_error: &str) {
     RECORDED_GLOBAL_ERRORS.with(|count| count.set(count.get() + 1));
 }
 
+#[cfg(test)]
+pub(super) fn reset_recorded_global_errors() {
+    RECORDED_GLOBAL_ERRORS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn recorded_global_error_count() -> usize {
+    RECORDED_GLOBAL_ERRORS.with(std::cell::Cell::get)
+}
+
 impl FileBrowser {
     pub(crate) fn current_error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -48,7 +58,7 @@ mod tests {
 
     #[test]
     fn global_error_keeps_only_the_current_toast_and_records_once() {
-        RECORDED_GLOBAL_ERRORS.with(|count| count.set(0));
+        reset_recorded_global_errors();
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
 
         browser.show_global_error("smb://alice:secret@example.test/share");
@@ -56,7 +66,7 @@ mod tests {
             browser.current_error(),
             Some("smb://alice:secret@example.test/share")
         );
-        RECORDED_GLOBAL_ERRORS.with(|count| assert_eq!(count.get(), 1));
+        assert_eq!(recorded_global_error_count(), 1);
 
         browser.clear_global_error();
         assert_eq!(browser.current_error(), None);

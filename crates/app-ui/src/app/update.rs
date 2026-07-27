@@ -34,28 +34,8 @@ impl FileBrowser {
                 self.accept_directory_scan_batch(request, batch)
             }
             Message::Loaded(request, Ok(scan)) => self.accept_directory_scan(request, scan),
-            Message::Loaded(request, Err(error)) => {
-                if request.pane_id == self.active_pane_id() {
-                    if request.generation != self.directory_load_generation
-                        || request.path != self.current_dir
-                    {
-                        return Task::none();
-                    }
-                    self.is_loading = false;
-                    self.directory_loading_placeholder_entries.clear();
-                    self.directory_load_cancel = None;
-                } else if let Some(pane) = self.pane_by_id_mut(request.pane_id) {
-                    if request.generation != pane.directory_load_generation
-                        || request.path != pane.current_dir
-                    {
-                        return Task::none();
-                    }
-                    pane.is_loading = false;
-                    pane.directory_loading_placeholder_entries.clear();
-                    pane.directory_load_cancel = None;
-                }
-                self.show_global_error(error);
-                Task::none()
+            Message::Loaded(request, Err(failure)) => {
+                self.accept_directory_load_failure(request, failure)
             }
             Message::TrashLoaded(pane_id, Ok(scan)) => self.accept_trash_scan(pane_id, scan),
             Message::TrashLoaded(pane_id, Err(error)) => {
