@@ -1,8 +1,12 @@
+use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
+use std::thread;
 
 use gio::glib::MainContext;
 use gio::prelude::{DriveExt, FileExt, MountExt, VolumeExt, VolumeMonitorExt};
 use thiserror::Error;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::gvfs_paths::{default_gvfs_fuse_root, resolve_gvfs_mount_path, GvfsMountPathError};
 use crate::storage_devices::{
@@ -11,9 +15,19 @@ use crate::storage_devices::{
 };
 
 #[derive(Debug, Error)]
+pub enum GvfsDeviceRuntimeStartError {
+    #[error("could not start the GVfs device thread: {0}")]
+    Thread(#[source] io::Error),
+    #[error("the GVfs device thread stopped during initialization")]
+    InitializationStopped,
+}
+
+#[derive(Debug, Error)]
 pub enum GvfsDeviceError {
-    #[error("could not run GVfs operation on its GLib context: {0}")]
-    Context(#[source] gio::glib::BoolError),
+    #[error("could not start the GVfs device runtime: {0}")]
+    RuntimeStart(#[source] Arc<GvfsDeviceRuntimeStartError>),
+    #[error("the GVfs device runtime stopped before replying")]
+    RuntimeStopped,
     #[error("GVfs volume {identity:?} is no longer available")]
     VolumeUnavailable { identity: String },
     #[error("GVfs device action is unavailable: {0}")]
@@ -35,176 +49,302 @@ pub enum GvfsDeviceError {
         #[source]
         source: GvfsMountPathError,
     },
-    #[error("GVfs blocking task failed: {0}")]
-    BlockingTask(#[from] tokio::task::JoinError),
 }
+
+struct GvfsDeviceRuntime {
+    request_sender: mpsc::UnboundedSender<GvfsDeviceRequest>,
+}
+
+enum GvfsDeviceRequest {
+    Load {
+        response: oneshot::Sender<Result<Vec<StorageDevice>, GvfsDeviceError>>,
+    },
+    Mount {
+        identity: String,
+        response: oneshot::Sender<Result<PathBuf, GvfsDeviceError>>,
+    },
+    Unmount {
+        identity: String,
+        response: oneshot::Sender<Result<(), GvfsDeviceError>>,
+    },
+    Remove {
+        identity: String,
+        response: oneshot::Sender<Result<(), GvfsDeviceError>>,
+    },
+    #[cfg(test)]
+    InspectContext {
+        response: oneshot::Sender<GvfsRuntimeProbe>,
+    },
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct GvfsRuntimeProbe {
+    thread_id: thread::ThreadId,
+    has_thread_default_context: bool,
+}
+
+static GVFS_DEVICE_RUNTIME: LazyLock<Result<GvfsDeviceRuntime, Arc<GvfsDeviceRuntimeStartError>>> =
+    LazyLock::new(|| GvfsDeviceRuntime::start().map_err(Arc::new));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GvfsVolumeFacts {
     identity: String,
     label: String,
     class: Option<String>,
-    unix_device: Option<String>,
+    activation_root_is_native: Option<bool>,
+}
+
+impl GvfsDeviceRuntime {
+    fn start() -> Result<Self, GvfsDeviceRuntimeStartError> {
+        let (request_sender, request_receiver) = mpsc::unbounded_channel();
+        let (startup_sender, startup_receiver) = std::sync::mpsc::sync_channel(1);
+        thread::Builder::new()
+            .name("file-manager-gvfs-devices".to_owned())
+            .spawn(move || {
+                let context = MainContext::new();
+                context.block_on(async move {
+                    let monitor = gio::VolumeMonitor::get();
+                    if startup_sender.send(()).is_err() {
+                        return;
+                    }
+                    run_gvfs_device_requests(monitor, request_receiver).await;
+                });
+            })
+            .map_err(GvfsDeviceRuntimeStartError::Thread)?;
+        startup_receiver
+            .recv()
+            .map_err(|_| GvfsDeviceRuntimeStartError::InitializationStopped)?;
+        Ok(Self { request_sender })
+    }
+}
+
+fn gvfs_device_runtime() -> Result<&'static GvfsDeviceRuntime, GvfsDeviceError> {
+    match &*GVFS_DEVICE_RUNTIME {
+        Ok(runtime) => Ok(runtime),
+        Err(source) => Err(GvfsDeviceError::RuntimeStart(source.clone())),
+    }
+}
+
+async fn request_gvfs_device<T>(
+    build_request: impl FnOnce(oneshot::Sender<Result<T, GvfsDeviceError>>) -> GvfsDeviceRequest,
+) -> Result<T, GvfsDeviceError> {
+    let runtime = gvfs_device_runtime()?;
+    let (response_sender, response_receiver) = oneshot::channel();
+    runtime
+        .request_sender
+        .send(build_request(response_sender))
+        .map_err(|_| GvfsDeviceError::RuntimeStopped)?;
+    response_receiver
+        .await
+        .map_err(|_| GvfsDeviceError::RuntimeStopped)?
 }
 
 pub(super) async fn load_gvfs_storage_devices() -> Result<Vec<StorageDevice>, GvfsDeviceError> {
-    tokio::task::spawn_blocking(load_gvfs_storage_devices_blocking).await?
-}
-
-fn load_gvfs_storage_devices_blocking() -> Result<Vec<StorageDevice>, GvfsDeviceError> {
-    run_on_gio_context(|context| {
-        let monitor = gio::VolumeMonitor::get();
-        monitor
-            .volumes()
-            .into_iter()
-            .filter_map(|volume| {
-                let facts = volume_facts(&volume)?;
-                if !is_portable_volume(facts.class.as_deref(), facts.unix_device.as_deref()) {
-                    return None;
-                }
-                Some(storage_device_from_volume(&volume, facts))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|mut devices| {
-                devices.sort_by(|left, right| {
-                    left.label
-                        .to_lowercase()
-                        .cmp(&right.label.to_lowercase())
-                        .then_with(|| left.id.cmp(&right.id))
-                });
-                let _ = context;
-                devices
-            })
-    })
+    request_gvfs_device(|response| GvfsDeviceRequest::Load { response }).await
 }
 
 pub(super) async fn mount_gvfs_storage_device(
     identity: String,
 ) -> Result<PathBuf, GvfsDeviceError> {
-    tokio::task::spawn_blocking(move || {
-        run_on_gio_context(|context| {
-            let volume = find_volume(&identity)?;
-            if let Some(mount) = volume.get_mount() {
-                return mounted_path(&identity, &mount);
-            }
-            if !volume.can_mount() {
-                return Err(GvfsDeviceError::ActionUnavailable(
-                    "portable device cannot be mounted",
-                ));
-            }
-            context
-                .block_on(
-                    volume.mount_future(gio::MountMountFlags::NONE, None::<&gio::MountOperation>),
-                )
-                .map_err(|error| gio_error(identity.clone(), error))?;
-            let mount = volume
-                .get_mount()
-                .ok_or(GvfsDeviceError::OperationIncomplete {
-                    identity: identity.clone(),
-                    message: "mount completed without a visible GMount",
-                })?;
-            mounted_path(&identity, &mount)
-        })
-    })
-    .await?
+    request_gvfs_device(|response| GvfsDeviceRequest::Mount { identity, response }).await
 }
 
 pub(super) async fn unmount_gvfs_storage_device(identity: String) -> Result<(), GvfsDeviceError> {
-    tokio::task::spawn_blocking(move || {
-        run_on_gio_context(|context| {
-            let volume = find_volume(&identity)?;
-            let mount = volume
-                .get_mount()
-                .ok_or(GvfsDeviceError::ActionUnavailable(
-                    "portable device is not mounted",
-                ))?;
-            if !mount.can_unmount() {
-                return Err(GvfsDeviceError::ActionUnavailable(
-                    "portable device cannot be unmounted",
-                ));
-            }
-            context
-                .block_on(mount.unmount_with_operation_future(
-                    gio::MountUnmountFlags::NONE,
-                    None::<&gio::MountOperation>,
-                ))
-                .map_err(|error| gio_error(identity, error))
-        })
-    })
-    .await?
+    request_gvfs_device(|response| GvfsDeviceRequest::Unmount { identity, response }).await
 }
 
 pub(super) async fn remove_gvfs_storage_device(identity: String) -> Result<(), GvfsDeviceError> {
-    tokio::task::spawn_blocking(move || {
-        run_on_gio_context(|context| {
-            let volume = find_volume(&identity)?;
-            if let Some(mount) = volume.get_mount().filter(|mount| mount.can_eject()) {
-                return context
-                    .block_on(mount.eject_with_operation_future(
-                        gio::MountUnmountFlags::NONE,
-                        None::<&gio::MountOperation>,
-                    ))
-                    .map_err(|error| gio_error(identity, error));
+    request_gvfs_device(|response| GvfsDeviceRequest::Remove { identity, response }).await
+}
+
+async fn run_gvfs_device_requests(
+    monitor: gio::VolumeMonitor,
+    mut request_receiver: mpsc::UnboundedReceiver<GvfsDeviceRequest>,
+) {
+    while let Some(request) = request_receiver.recv().await {
+        match request {
+            GvfsDeviceRequest::Load { response } => {
+                let _ = response.send(load_gvfs_storage_devices_on_context(&monitor));
             }
-            if volume.can_eject() {
-                return context
-                    .block_on(volume.eject_with_operation_future(
-                        gio::MountUnmountFlags::NONE,
-                        None::<&gio::MountOperation>,
-                    ))
-                    .map_err(|error| gio_error(identity, error));
+            GvfsDeviceRequest::Mount { identity, response } => {
+                let outcome = mount_gvfs_storage_device_on_context(&monitor, identity).await;
+                let _ = response.send(outcome);
             }
-            if let Some(drive) = volume.drive() {
-                if drive.can_eject() {
-                    return context
-                        .block_on(drive.eject_with_operation_future(
-                            gio::MountUnmountFlags::NONE,
-                            None::<&gio::MountOperation>,
-                        ))
-                        .map_err(|error| gio_error(identity, error));
-                }
-                if drive.can_stop() {
-                    return context
-                        .block_on(drive.stop_future(
-                            gio::MountUnmountFlags::NONE,
-                            None::<&gio::MountOperation>,
-                        ))
-                        .map_err(|error| gio_error(identity, error));
-                }
+            GvfsDeviceRequest::Unmount { identity, response } => {
+                let outcome = unmount_gvfs_storage_device_on_context(&monitor, identity).await;
+                let _ = response.send(outcome);
             }
-            Err(GvfsDeviceError::ActionUnavailable(
-                "portable device cannot be ejected or safely removed",
+            GvfsDeviceRequest::Remove { identity, response } => {
+                let outcome = remove_gvfs_storage_device_on_context(&monitor, identity).await;
+                let _ = response.send(outcome);
+            }
+            #[cfg(test)]
+            GvfsDeviceRequest::InspectContext { response } => {
+                let _ = response.send(GvfsRuntimeProbe {
+                    thread_id: thread::current().id(),
+                    has_thread_default_context: MainContext::thread_default().is_some(),
+                });
+            }
+        }
+    }
+}
+
+fn load_gvfs_storage_devices_on_context(
+    monitor: &gio::VolumeMonitor,
+) -> Result<Vec<StorageDevice>, GvfsDeviceError> {
+    let mounts = monitor.mounts();
+    let mut devices = monitor
+        .volumes()
+        .into_iter()
+        .filter_map(|volume| {
+            let facts = volume_facts(&volume)?;
+            if !is_portable_volume(facts.class.as_deref(), facts.activation_root_is_native) {
+                return None;
+            }
+            Some(storage_device_from_volume(
+                &volume,
+                facts,
+                gvfs_mount_for_volume(&volume, &mounts),
             ))
         })
-    })
-    .await?
+        .collect::<Result<Vec<_>, _>>()?;
+    devices.sort_by(|left, right| {
+        left.label
+            .to_lowercase()
+            .cmp(&right.label.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(devices)
 }
 
-fn run_on_gio_context<T>(
-    operation: impl FnOnce(&MainContext) -> Result<T, GvfsDeviceError>,
-) -> Result<T, GvfsDeviceError> {
-    let context = MainContext::new();
-    context
-        .with_thread_default(|| operation(&context))
-        .map_err(GvfsDeviceError::Context)?
+async fn mount_gvfs_storage_device_on_context(
+    monitor: &gio::VolumeMonitor,
+    identity: String,
+) -> Result<PathBuf, GvfsDeviceError> {
+    let (volume, current_mount) = find_current_volume(monitor, &identity)?;
+    if let Some(mount) = current_mount {
+        return mounted_path(&identity, &mount);
+    }
+    if !volume.can_mount() {
+        return Err(GvfsDeviceError::ActionUnavailable(
+            "portable device cannot be mounted",
+        ));
+    }
+    volume
+        .mount_future(gio::MountMountFlags::NONE, None::<&gio::MountOperation>)
+        .await
+        .map_err(|error| gio_error(identity.clone(), error))?;
+    let mounts = monitor.mounts();
+    if let Some(mount) = gvfs_mount_for_volume(&volume, &mounts) {
+        return mounted_path(&identity, &mount);
+    }
+    mounted_path_from_activation_root(&identity, &volume)
 }
 
-fn find_volume(identity: &str) -> Result<gio::Volume, GvfsDeviceError> {
-    let monitor = gio::VolumeMonitor::get();
-    monitor
+async fn unmount_gvfs_storage_device_on_context(
+    monitor: &gio::VolumeMonitor,
+    identity: String,
+) -> Result<(), GvfsDeviceError> {
+    let (_, mount) = find_current_volume(monitor, &identity)?;
+    let mount = mount.ok_or(GvfsDeviceError::ActionUnavailable(
+        "portable device is not mounted",
+    ))?;
+    if !mount.can_unmount() {
+        return Err(GvfsDeviceError::ActionUnavailable(
+            "portable device cannot be unmounted",
+        ));
+    }
+    mount
+        .unmount_with_operation_future(gio::MountUnmountFlags::NONE, None::<&gio::MountOperation>)
+        .await
+        .map_err(|error| gio_error(identity, error))
+}
+
+async fn remove_gvfs_storage_device_on_context(
+    monitor: &gio::VolumeMonitor,
+    identity: String,
+) -> Result<(), GvfsDeviceError> {
+    let (volume, mount) = find_current_volume(monitor, &identity)?;
+    if let Some(mount) = mount.filter(MountExt::can_eject) {
+        return mount
+            .eject_with_operation_future(gio::MountUnmountFlags::NONE, None::<&gio::MountOperation>)
+            .await
+            .map_err(|error| gio_error(identity, error));
+    }
+    if volume.can_eject() {
+        return volume
+            .eject_with_operation_future(gio::MountUnmountFlags::NONE, None::<&gio::MountOperation>)
+            .await
+            .map_err(|error| gio_error(identity, error));
+    }
+    if let Some(drive) = volume.drive() {
+        if drive.can_eject() {
+            return drive
+                .eject_with_operation_future(
+                    gio::MountUnmountFlags::NONE,
+                    None::<&gio::MountOperation>,
+                )
+                .await
+                .map_err(|error| gio_error(identity, error));
+        }
+        if drive.can_stop() {
+            return drive
+                .stop_future(gio::MountUnmountFlags::NONE, None::<&gio::MountOperation>)
+                .await
+                .map_err(|error| gio_error(identity, error));
+        }
+    }
+    Err(GvfsDeviceError::ActionUnavailable(
+        "portable device cannot be ejected or safely removed",
+    ))
+}
+
+fn find_current_volume(
+    monitor: &gio::VolumeMonitor,
+    identity: &str,
+) -> Result<(gio::Volume, Option<gio::Mount>), GvfsDeviceError> {
+    let mounts = monitor.mounts();
+    let volume = monitor
         .volumes()
         .into_iter()
         .find(|volume| volume_facts(volume).is_some_and(|facts| facts.identity == identity))
         .ok_or_else(|| GvfsDeviceError::VolumeUnavailable {
             identity: identity.to_owned(),
-        })
+        })?;
+    let mount = gvfs_mount_for_volume(&volume, &mounts);
+    Ok((volume, mount))
+}
+
+fn gvfs_mount_for_volume(volume: &gio::Volume, mounts: &[gio::Mount]) -> Option<gio::Mount> {
+    volume.get_mount().or_else(|| {
+        let activation_root = volume.activation_root()?;
+        mounts
+            .iter()
+            .find(|mount| {
+                mount_location_matches_activation_root(
+                    &activation_root,
+                    &mount.root(),
+                    &mount.default_location(),
+                )
+            })
+            .cloned()
+    })
+}
+
+fn mount_location_matches_activation_root(
+    activation_root: &gio::File,
+    mount_root: &gio::File,
+    mount_default_location: &gio::File,
+) -> bool {
+    activation_root.equal(mount_root) || activation_root.equal(mount_default_location)
 }
 
 fn storage_device_from_volume(
     volume: &gio::Volume,
     facts: GvfsVolumeFacts,
+    mount: Option<gio::Mount>,
 ) -> Result<StorageDevice, GvfsDeviceError> {
-    let mount = volume.get_mount();
     let mount_state = match mount.as_ref() {
         Some(mount) => {
             StorageDeviceMountState::Mounted(vec![mounted_path(&facts.identity, mount)?])
@@ -257,12 +397,36 @@ fn mounted_path(identity: &str, mount: &gio::Mount) -> Result<PathBuf, GvfsDevic
     })
 }
 
+fn mounted_path_from_activation_root(
+    identity: &str,
+    volume: &gio::Volume,
+) -> Result<PathBuf, GvfsDeviceError> {
+    let activation_root = volume
+        .activation_root()
+        .ok_or(GvfsDeviceError::OperationIncomplete {
+            identity: identity.to_owned(),
+            message: "mount completed without an activation root",
+        })?;
+    if let Some(path) = activation_root.path() {
+        return Ok(path);
+    }
+    let root_uri = activation_root.uri();
+    resolve_gvfs_mount_path(
+        root_uri.as_str(),
+        root_uri.as_str(),
+        &default_gvfs_fuse_root(),
+    )
+    .map_err(|source| GvfsDeviceError::MountPath {
+        identity: identity.to_owned(),
+        source,
+    })
+}
+
 fn volume_facts(volume: &gio::Volume) -> Option<GvfsVolumeFacts> {
     let class = volume.identifier("class").map(|value| value.to_string());
-    let unix_device = volume
-        .identifier("unix-device")
-        .map(|value| value.to_string());
-    let activation_root_uri = volume.activation_root().map(|file| file.uri().to_string());
+    let activation_root = volume.activation_root();
+    let activation_root_uri = activation_root.as_ref().map(|file| file.uri().to_string());
+    let activation_root_is_native = activation_root.as_ref().map(FileExt::is_native);
     let uuid = volume.uuid().map(|value| value.to_string());
     let identifiers = volume
         .enumerate_identifiers()
@@ -283,7 +447,7 @@ fn volume_facts(volume: &gio::Volume) -> Option<GvfsVolumeFacts> {
         identity,
         label: volume.name().to_string(),
         class,
-        unix_device,
+        activation_root_is_native,
     })
 }
 
@@ -308,8 +472,8 @@ fn gvfs_volume_identity(
         .or_else(|| mount.map(|mount| format!("mount:{}", mount.root().uri())))
 }
 
-fn is_portable_volume(class: Option<&str>, unix_device: Option<&str>) -> bool {
-    class == Some("device") && unix_device.is_none()
+fn is_portable_volume(class: Option<&str>, activation_root_is_native: Option<bool>) -> bool {
+    matches!(class, None | Some("device")) && activation_root_is_native == Some(false)
 }
 
 fn gio_error(identity: String, source: gio::glib::Error) -> GvfsDeviceError {
@@ -320,20 +484,81 @@ fn gio_error(identity: String, source: gio::glib::Error) -> GvfsDeviceError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn gio_operation_runs_with_owned_context_as_thread_default() {
-        run_on_gio_context(|context| {
-            assert_eq!(MainContext::thread_default().as_ref(), Some(context));
-            Ok(())
-        })
-        .expect("GIO context");
+    async fn inspect_gvfs_runtime() -> GvfsRuntimeProbe {
+        let runtime = gvfs_device_runtime().expect("GVfs runtime");
+        let (response_sender, response_receiver) = oneshot::channel();
+        runtime
+            .request_sender
+            .send(GvfsDeviceRequest::InspectContext {
+                response: response_sender,
+            })
+            .expect("send context inspection");
+        response_receiver.await.expect("context inspection")
+    }
+
+    #[tokio::test]
+    async fn gio_operations_reuse_one_thread_default_context() {
+        let first = inspect_gvfs_runtime().await;
+        let second = inspect_gvfs_runtime().await;
+
+        assert!(first.has_thread_default_context);
+        assert!(second.has_thread_default_context);
+        assert_eq!(first.thread_id, second.thread_id);
     }
 
     #[test]
-    fn portable_filter_keeps_non_native_device_classes() {
-        assert!(is_portable_volume(Some("device"), None));
-        assert!(!is_portable_volume(Some("device"), Some("/dev/sdb1")));
-        assert!(!is_portable_volume(Some("network"), None));
+    fn mount_location_matches_equal_root_or_default_location() {
+        let activation_root = gio::File::for_uri("mtp://phone/");
+        let matching_root = gio::File::for_uri("mtp://phone/");
+        let matching_default = gio::File::for_uri("mtp://phone/");
+        let other = gio::File::for_uri("mtp://other/");
+
+        assert!(mount_location_matches_activation_root(
+            &activation_root,
+            &matching_root,
+            &other,
+        ));
+        assert!(mount_location_matches_activation_root(
+            &activation_root,
+            &other,
+            &matching_default,
+        ));
+        assert!(!mount_location_matches_activation_root(
+            &activation_root,
+            &other,
+            &other,
+        ));
+    }
+
+    #[test]
+    fn portable_filter_accepts_upstream_portable_facts_without_class() {
+        for (activation_root_uri, identifiers) in [
+            (
+                "mtp://phone/",
+                vec![("unix-device".to_owned(), "/dev/bus/usb/008/002".to_owned())],
+            ),
+            (
+                "gphoto2://camera/",
+                vec![("unix-device".to_owned(), "/dev/bus/usb/001/004".to_owned())],
+            ),
+            (
+                "afc://phone/",
+                vec![("uuid".to_owned(), "phone-uuid".to_owned())],
+            ),
+        ] {
+            assert!(
+                gvfs_volume_identity(Some(activation_root_uri), None, None, identifiers,).is_some()
+            );
+            assert!(is_portable_volume(None, Some(false)));
+        }
+    }
+
+    #[test]
+    fn portable_filter_rejects_native_network_and_loop_volumes() {
+        assert!(is_portable_volume(Some("device"), Some(false)));
+        assert!(!is_portable_volume(Some("device"), Some(true)));
+        assert!(!is_portable_volume(Some("network"), Some(false)));
+        assert!(!is_portable_volume(Some("loop"), Some(false)));
         assert!(!is_portable_volume(None, None));
     }
 
@@ -373,7 +598,7 @@ mod tests {
             identity: "activation:mtp://phone/".to_owned(),
             label: "Phone".to_owned(),
             class: Some("device".to_owned()),
-            unix_device: None,
+            activation_root_is_native: Some(false),
         };
         let second = GvfsVolumeFacts {
             label: "Renamed Phone".to_owned(),
