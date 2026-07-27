@@ -56,6 +56,10 @@ File Manager 是一个面向 Linux 桌面的文件管理器，主要面向 Wayla
 
 - SFTP 和 WebDAV 连接需要 `gio` 及 GVfs backend；Arch Linux 由 `gvfs` 包提供
 - SMB 连接还需要 SMB GVfs backend；Arch Linux 由 `gvfs-smb` 包提供
+- MTP Android 和媒体播放器需要 MTP GVfs backend；Arch Linux 由 `gvfs-mtp` 包提供
+- 数码相机需要 GPhoto GVfs backend；Arch Linux 由 `gvfs-gphoto2` 包提供
+- Apple/AFC 设备需要 AFC GVfs backend；Arch Linux 由 `gvfs-afc` 包提供
+- 缺少对应 backend 时，便携设备不会显示为可用 Devices，已有 UDisks 和 Network 位置不受影响
 - 保存网络连接密码需要 `secret-tool`；Arch Linux 由 `libsecret` 包提供
 - 存储设备发现、挂载和安全移除需要 UDisks2 服务；Arch Linux 由 `udisks2` 包提供
 
@@ -94,7 +98,7 @@ sudo pacman -S --needed base-devel git rust cargo pkgconf \
 
 ```bash
 sudo pacman -S --needed 7zip ffmpeg ffmpegthumbnailer \
-  gvfs gvfs-smb libsecret udisks2
+  gvfs gvfs-afc gvfs-gphoto2 gvfs-mtp gvfs-smb libsecret udisks2
 ```
 
 克隆仓库并直接运行 App：

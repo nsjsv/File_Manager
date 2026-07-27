@@ -10,9 +10,9 @@ use super::settings_group::{info_setting_row, toggle_setting_row};
 
 pub(super) fn network_thumbnails_row(browser: &FileBrowser) -> Element<'static, Message> {
     toggle_setting_row(
-        "Network List Thumbnails",
-        Some("When enabled, images and videos on network locations may use more data."),
-        browser.network_list_thumbnail_downloads_enabled(),
+        "Remote List Thumbnails",
+        Some("When enabled, images and videos on remote locations may use more data."),
+        browser.remote_list_thumbnail_downloads_enabled(),
         Message::NetworkListThumbnailDownloadsToggled,
     )
 }

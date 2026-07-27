@@ -702,9 +702,9 @@ impl FileBrowser {
 
     fn file_delete_action_for_selection(&self) -> FileDeleteAction {
         let paths = self.selected_paths_for_operation();
-        let has_network_path = paths.iter().any(|path| self.path_is_mounted_network(path));
-        let has_local_path = paths.iter().any(|path| !self.path_is_mounted_network(path));
-        match (has_network_path, has_local_path) {
+        let has_remote_path = paths.iter().any(|path| self.path_is_remote_mount(path));
+        let has_local_path = paths.iter().any(|path| !self.path_is_remote_mount(path));
+        match (has_remote_path, has_local_path) {
             (true, false) => FileDeleteAction::DeletePermanently,
             (true, true) => FileDeleteAction::MixedSelection,
             _ => FileDeleteAction::MoveToTrash,

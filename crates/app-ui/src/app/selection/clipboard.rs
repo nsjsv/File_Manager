@@ -58,24 +58,24 @@ impl FileBrowser {
         if paths.is_empty() {
             return Task::none();
         }
-        let (network_paths, local_paths): (Vec<_>, Vec<_>) = paths
+        let (remote_paths, local_paths): (Vec<_>, Vec<_>) = paths
             .into_iter()
-            .partition(|path| self.path_is_mounted_network(path));
-        match (network_paths.is_empty(), local_paths.is_empty()) {
+            .partition(|path| self.path_is_remote_mount(path));
+        match (remote_paths.is_empty(), local_paths.is_empty()) {
             (true, false) => {
                 self.enqueue_file_operation(QueuedFileOperation::Trash { paths: local_paths })
             }
             (false, true) => {
                 self.request_destructive_action_confirmation(
                     DestructiveActionConfirmation::DeletePermanently {
-                        paths: network_paths,
+                        paths: remote_paths,
                     },
                 );
                 Task::none()
             }
             (false, false) => {
                 self.show_global_error(
-                    "Delete local and network items separately so local files can use Trash"
+                    "Delete local and remote items separately so local files can use Trash"
                         .to_owned(),
                 );
                 Task::none()
@@ -492,7 +492,7 @@ mod tests {
         assert!(browser.destructive_action_confirmation.is_none());
         assert_eq!(
             browser.error.as_deref(),
-            Some("Delete local and network items separately so local files can use Trash")
+            Some("Delete local and remote items separately so local files can use Trash")
         );
     }
 }

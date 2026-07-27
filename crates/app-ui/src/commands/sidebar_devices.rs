@@ -2,32 +2,30 @@ use std::path::PathBuf;
 
 use desktop_linux::{
     eject_or_power_off_storage_device, load_storage_devices, mount_storage_device,
-    unmount_storage_device, StorageDevice, StorageDeviceId,
+    unmount_storage_device, StorageDeviceId, StorageDeviceSnapshot,
 };
 use iced::Task;
 
 use crate::model::Message;
-use crate::sidebar_devices::SidebarDeviceAction;
+use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceActionRequest};
 
 pub(crate) fn sidebar_devices_command() -> Task<Message> {
     Task::perform(load_sidebar_devices(), Message::SidebarDevicesLoaded)
 }
 
 pub(crate) fn sidebar_device_action_command(
-    id: StorageDeviceId,
+    request: SidebarDeviceActionRequest,
     action: SidebarDeviceAction,
 ) -> Task<Message> {
-    let task_id = id.clone();
+    let task_request = request.clone();
     Task::perform(
-        perform_sidebar_device_action(task_id, action),
-        move |outcome| Message::SidebarDeviceActionFinished(id.clone(), action, outcome),
+        perform_sidebar_device_action(request.id.clone(), action),
+        move |outcome| Message::SidebarDeviceActionFinished(task_request, action, outcome),
     )
 }
 
-async fn load_sidebar_devices() -> Result<Vec<StorageDevice>, String> {
-    load_storage_devices()
-        .await
-        .map_err(|error| error.to_string())
+async fn load_sidebar_devices() -> StorageDeviceSnapshot {
+    load_storage_devices().await
 }
 
 async fn perform_sidebar_device_action(

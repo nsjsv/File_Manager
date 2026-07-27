@@ -600,11 +600,7 @@ async fn wait_for_gvfs_mount_path(
 }
 
 fn default_gvfs_fuse_root() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("UID").map(|uid| PathBuf::from("/run/user").join(uid)))
-        .unwrap_or_else(|| PathBuf::from("/run/user/0"))
-        .join("gvfs")
+    crate::gvfs_paths::default_gvfs_fuse_root()
 }
 
 fn gvfs_mount_directory_matches(

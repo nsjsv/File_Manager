@@ -36,6 +36,7 @@ jobs:
             alsa-lib \
             cargo \
             fontconfig \
+            glib2 \
             git \
             libxkbcommon \
             openssh \

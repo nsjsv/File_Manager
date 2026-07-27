@@ -566,7 +566,7 @@ impl FileBrowser {
     }
 
     fn thumbnail_load_policy_for_path(&self, path: &Path) -> ThumbnailLoadPolicy {
-        if self.path_is_mounted_network(path) && !self.network_list_thumbnail_downloads_enabled() {
+        if self.path_is_remote_mount(path) && !self.remote_list_thumbnail_downloads_enabled() {
             ThumbnailLoadPolicy::CacheOnly
         } else {
             ThumbnailLoadPolicy::LoadOrGenerate

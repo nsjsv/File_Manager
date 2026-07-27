@@ -16,7 +16,7 @@ use crate::model::{
 };
 
 mod animated_image;
-mod network_cache;
+mod remote_cache;
 mod text;
 mod tree;
 
@@ -514,7 +514,7 @@ impl FileBrowser {
     }
 
     pub(super) fn clear_preview(&mut self) {
-        self.cancel_network_preview_download();
+        self.cancel_remote_preview_download();
         self.text_preview_document = None;
         self.clear_audio_preview();
         self.clear_video_preview();

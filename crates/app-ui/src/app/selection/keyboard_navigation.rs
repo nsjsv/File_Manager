@@ -371,8 +371,8 @@ impl FileBrowser {
                 return command;
             }
         }
-        if kind == FileKind::File && self.path_is_mounted_network(&path) {
-            return self.start_network_preview_download(path);
+        if kind == FileKind::File && self.path_is_remote_mount(&path) {
+            return self.start_remote_preview_download(path);
         }
 
         self.open_preview_for_resolved_path(path, kind)

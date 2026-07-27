@@ -16,8 +16,8 @@ use crate::appearance::{
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, NetworkPreviewDownload,
-    PreviewContent, PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
+    PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, RemotePreviewDownload,
     ScrollbarRegion, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
     VideoPreviewPlaybackStatus,
 };
@@ -93,7 +93,7 @@ fn preview_panel<'a>(
     let scroll_height = preview_scroll_height(size);
     let panel = match preview {
         PreviewState::Loading(_) => column![readable_text("Loading preview...").size(14)],
-        PreviewState::DownloadingNetworkFile(download) => network_preview_download_panel(download),
+        PreviewState::DownloadingRemoteFile(download) => remote_preview_download_panel(download),
         PreviewState::Ready(PreviewContent::Directory { entries, .. }) => {
             directory_preview_panel(entries, scroll_height, directory_scrollbar_visibility)
         }
@@ -169,7 +169,7 @@ fn preview_scroll_height(size: PreviewSize) -> f32 {
     (size.height - PREVIEW_PANEL_PADDING_RESERVED_HEIGHT).max(PREVIEW_MIN_SCROLL_HEIGHT)
 }
 
-fn network_preview_download_panel(download: &NetworkPreviewDownload) -> Column<'static, Message> {
+fn remote_preview_download_panel(download: &RemotePreviewDownload) -> Column<'static, Message> {
     let name = download
         .source_path
         .file_name()

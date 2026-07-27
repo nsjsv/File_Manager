@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use desktop_linux::{
-    DesktopClipboardContent, FileClipboardOperation, OpenWithApplicationList, StorageDevice,
-    StorageDeviceId, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
+    DesktopClipboardContent, FileClipboardOperation, OpenWithApplicationList, StorageDeviceId,
+    StorageDeviceSnapshot, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
     WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
@@ -25,7 +25,9 @@ use crate::network_connections::{
 use crate::operation_history::FileOperationCompletion;
 use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
 use crate::shortcuts::{ShortcutAction, ShortcutBindingId};
-use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
+use crate::sidebar_devices::{
+    SidebarDeviceAction, SidebarDeviceActionRequest, SidebarDeviceContextMenuState,
+};
 use crate::startup_rendering::StartupRenderingEnvironmentStatus;
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
 use file_core::FileOperationVerification;
@@ -75,10 +77,10 @@ pub(crate) use properties::{
 };
 mod preview;
 pub(crate) use preview::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, NetworkPreviewCacheFinished,
-    NetworkPreviewCacheMessage, NetworkPreviewCacheProgress, NetworkPreviewDownload,
-    PreviewContent, PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry,
-    PreviewWindowProfile, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, PreviewContent, PreviewSize, PreviewState,
+    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowProfile,
+    RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
+    RemotePreviewDownload, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
     VideoPreviewSeekCompletion,
 };
 mod settings;
@@ -188,7 +190,7 @@ pub(crate) struct LoadedOperationStore {
 pub(crate) enum Message {
     StartupEnvironmentLoaded(StartupEnvironment),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
-    SidebarDevicesLoaded(Result<Vec<StorageDevice>, String>),
+    SidebarDevicesLoaded(StorageDeviceSnapshot),
     SidebarDevicesRefreshRequested,
     SidebarDeviceHovered(StorageDeviceId),
     SidebarDeviceHoverCleared(StorageDeviceId),
@@ -197,7 +199,7 @@ pub(crate) enum Message {
     SidebarDeviceRightClicked(StorageDeviceId),
     SidebarDeviceActionSelected(StorageDeviceId, SidebarDeviceAction),
     SidebarDeviceActionFinished(
-        StorageDeviceId,
+        SidebarDeviceActionRequest,
         SidebarDeviceAction,
         Result<Option<PathBuf>, String>,
     ),
@@ -214,7 +216,7 @@ pub(crate) enum Message {
     OpenWithApplicationFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
-    NetworkPreviewCache(NetworkPreviewCacheMessage),
+    RemotePreviewCache(RemotePreviewCacheMessage),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
     FilePropertiesLoaded(
         FilePropertiesRequest,

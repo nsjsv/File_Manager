@@ -162,7 +162,7 @@ impl FileBrowser {
             self.search.apply_indexed_failure(unavailable_message);
             return Task::none();
         };
-        if query.cursor.is_some() || self.path_is_mounted_network(directory) {
+        if query.cursor.is_some() || self.path_is_remote_mount(directory) {
             self.search.apply_indexed_failure(unavailable_message);
             return Task::none();
         }

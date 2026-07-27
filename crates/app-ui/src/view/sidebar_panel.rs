@@ -142,7 +142,7 @@ fn append_sidebar_devices<'a>(
     browser: &'a FileBrowser,
 ) -> Column<'a, Message> {
     if browser.sidebar_devices.devices.is_empty()
-        && browser.sidebar_devices.unavailable.is_none()
+        && browser.sidebar_devices.provider_failures.is_empty()
         && !browser.sidebar_devices.is_loading
     {
         return sidebar;
@@ -153,12 +153,12 @@ fn append_sidebar_devices<'a>(
         sidebar = sidebar.push(sidebar_device_item(browser, device));
     }
 
-    if browser.sidebar_devices.devices.is_empty() && browser.sidebar_devices.is_loading {
+    if let Some(message) =
+        sidebar_device_provider_failure_message(&browser.sidebar_devices.provider_failures)
+    {
+        sidebar = sidebar.push(sidebar_message_row(message));
+    } else if browser.sidebar_devices.devices.is_empty() && browser.sidebar_devices.is_loading {
         sidebar = sidebar.push(sidebar_message_row("Loading devices..."));
-    } else if browser.sidebar_devices.devices.is_empty() {
-        if browser.sidebar_devices.unavailable.is_some() {
-            sidebar = sidebar.push(sidebar_message_row("Devices unavailable"));
-        }
     }
 
     sidebar
@@ -350,6 +350,19 @@ enum SidebarBookmarkDropLineAlignment {
     Bottom,
 }
 
+fn sidebar_device_provider_failure_message(
+    failures: &[desktop_linux::StorageDeviceProviderFailure],
+) -> Option<&'static str> {
+    match failures {
+        [] => None,
+        [failure] => Some(match failure.provider {
+            desktop_linux::StorageDeviceProvider::Udisks => "UDisks devices unavailable",
+            desktop_linux::StorageDeviceProvider::Gvfs => "GVfs devices unavailable",
+        }),
+        _ => Some("Some device providers unavailable"),
+    }
+}
+
 fn sidebar_device_item<'a>(
     browser: &'a FileBrowser,
     device: &'a SidebarDeviceEntry,
@@ -360,7 +373,7 @@ fn sidebar_device_item<'a>(
     } else {
         IconTone::Normal
     };
-    let pending = browser.sidebar_devices.pending_action.as_ref() == Some(&device.id);
+    let pending = browser.sidebar_devices.is_action_pending(&device.id);
 
     let item_container = container(sidebar_device_label(
         device,

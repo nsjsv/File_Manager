@@ -11,20 +11,20 @@ use crate::text_preview::{TextPreviewFormat, TextPreviewLineLimitNotice};
 #[derive(Debug, Clone)]
 pub(crate) enum PreviewState {
     Loading(PathBuf),
-    DownloadingNetworkFile(NetworkPreviewDownload),
+    DownloadingRemoteFile(RemotePreviewDownload),
     Ready(PreviewContent),
     Error(String),
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct NetworkPreviewDownload {
+pub(crate) struct RemotePreviewDownload {
     pub(crate) source_path: PathBuf,
     pub(crate) generation: u64,
     pub(crate) bytes_done: u64,
     pub(crate) bytes_total: Option<u64>,
 }
 
-impl NetworkPreviewDownload {
+impl RemotePreviewDownload {
     pub(crate) fn new(source_path: PathBuf, generation: u64) -> Self {
         Self {
             source_path,
@@ -34,7 +34,7 @@ impl NetworkPreviewDownload {
         }
     }
 
-    pub(crate) fn accept_progress(&mut self, progress: &NetworkPreviewCacheProgress) {
+    pub(crate) fn accept_progress(&mut self, progress: &RemotePreviewCacheProgress) {
         self.bytes_done = progress.bytes_done;
         self.bytes_total = Some(progress.bytes_total);
     }
@@ -49,13 +49,13 @@ impl NetworkPreviewDownload {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum NetworkPreviewCacheMessage {
-    Progress(NetworkPreviewCacheProgress),
-    Finished(NetworkPreviewCacheFinished),
+pub(crate) enum RemotePreviewCacheMessage {
+    Progress(RemotePreviewCacheProgress),
+    Finished(RemotePreviewCacheFinished),
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct NetworkPreviewCacheProgress {
+pub(crate) struct RemotePreviewCacheProgress {
     pub(crate) source_path: PathBuf,
     pub(crate) generation: u64,
     pub(crate) bytes_done: u64,
@@ -63,7 +63,7 @@ pub(crate) struct NetworkPreviewCacheProgress {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct NetworkPreviewCacheFinished {
+pub(crate) struct RemotePreviewCacheFinished {
     pub(crate) source_path: PathBuf,
     pub(crate) generation: u64,
     pub(crate) outcome: Result<PathBuf, String>,

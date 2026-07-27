@@ -26,6 +26,7 @@ mod persistence_feedback;
 mod pointer_interactions;
 mod preview_state;
 mod properties;
+mod remote_mounts;
 mod rendering_settings;
 mod runtime;
 mod scrollbar;
@@ -138,10 +139,10 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_network_connection: Option<NetworkConnectionId>,
     cursor_paste_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
-    network_preview_download_cancel: Option<tokio_util::sync::CancellationToken>,
+    remote_preview_download_cancel: Option<tokio_util::sync::CancellationToken>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
     animated_image_preview_generation: u64,
-    network_preview_download_generation: u64,
+    remote_preview_download_generation: u64,
     text_preview_generation: u64,
     directory_load_generation: u64,
     directory_load_cancel: Option<tokio_util::sync::CancellationToken>,
@@ -301,7 +302,7 @@ impl FileBrowser {
         self.user_config.file_operation_verification
     }
 
-    pub(crate) fn network_list_thumbnail_downloads_enabled(&self) -> bool {
+    pub(crate) fn remote_list_thumbnail_downloads_enabled(&self) -> bool {
         self.user_config.network_list_thumbnail_downloads_enabled
     }
 
@@ -372,10 +373,10 @@ impl FileBrowser {
             hovered_network_connection: None,
             cursor_paste_directory: None,
             preview: None,
-            network_preview_download_cancel: None,
+            remote_preview_download_cancel: None,
             text_preview_document: None,
             animated_image_preview_generation: 0,
-            network_preview_download_generation: 0,
+            remote_preview_download_generation: 0,
             text_preview_generation: 0,
             directory_load_generation: 0,
             directory_load_cancel: None,

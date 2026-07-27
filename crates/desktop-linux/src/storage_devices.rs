@@ -5,6 +5,7 @@ use std::fmt;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
+use crate::gvfs_devices;
 use thiserror::Error;
 use udisks2::zbus::names::OwnedInterfaceName;
 use udisks2::zbus::zvariant::{OwnedObjectPath, OwnedValue};
@@ -13,22 +14,42 @@ use udisks2::{standard_options, Client};
 const FILESYSTEM_INTERFACE: &str = "org.freedesktop.UDisks2.Filesystem";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct StorageDeviceId(String);
+pub enum StorageDeviceId {
+    UdisksObject(String),
+    GvfsVolume(String),
+}
 
 impl StorageDeviceId {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self::UdisksObject(value.into())
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        match self {
+            Self::UdisksObject(value) | Self::GvfsVolume(value) => value,
+        }
     }
 }
 
 impl fmt::Display for StorageDeviceId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+        match self {
+            Self::UdisksObject(value) => write!(formatter, "udisks:{value}"),
+            Self::GvfsVolume(value) => write!(formatter, "gvfs:{value}"),
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageDeviceAccess {
+    LocalFilesystem,
+    RemoteFilesystem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageDeviceRemoval {
+    Eject,
+    SafelyRemove,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,10 +83,13 @@ pub struct StorageDevice {
     pub filesystem_type: String,
     pub size_bytes: u64,
     pub mount_state: StorageDeviceMountState,
+    pub access: StorageDeviceAccess,
     pub is_removable: bool,
+    pub can_mount: bool,
     pub can_unmount: bool,
     pub can_eject: bool,
     pub can_power_off: bool,
+    pub removal: Option<StorageDeviceRemoval>,
 }
 
 impl StorageDevice {
@@ -78,6 +102,24 @@ impl StorageDevice {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageDeviceProvider {
+    Udisks,
+    Gvfs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageDeviceProviderFailure {
+    pub provider: StorageDeviceProvider,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StorageDeviceSnapshot {
+    pub devices: Vec<StorageDevice>,
+    pub provider_failures: Vec<StorageDeviceProviderFailure>,
+}
+
 #[derive(Debug, Error)]
 pub enum StorageDeviceError {
     #[error("UDisks2 error: {0}")]
@@ -88,6 +130,8 @@ pub enum StorageDeviceError {
     Fdo(#[from] udisks2::zbus::fdo::Error),
     #[error("D-Bus object path error: {0}")]
     ObjectPath(#[from] udisks2::zbus::zvariant::Error),
+    #[error("GVfs error: {0}")]
+    Gvfs(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("storage device action is unavailable: {0}")]
     ActionUnavailable(&'static str),
 }
@@ -98,7 +142,50 @@ impl From<Infallible> for StorageDeviceError {
     }
 }
 
-pub async fn load_storage_devices() -> Result<Vec<StorageDevice>, StorageDeviceError> {
+pub async fn load_storage_devices() -> StorageDeviceSnapshot {
+    let (udisks_result, gvfs_result) = tokio::join!(
+        load_udisks_storage_devices(),
+        gvfs_devices::load_gvfs_storage_devices(),
+    );
+    merge_storage_device_results(
+        udisks_result.map_err(|error| error.to_string()),
+        gvfs_result.map_err(|error| error.to_string()),
+    )
+}
+
+fn merge_storage_device_results(
+    udisks_result: Result<Vec<StorageDevice>, String>,
+    gvfs_result: Result<Vec<StorageDevice>, String>,
+) -> StorageDeviceSnapshot {
+    let mut snapshot = StorageDeviceSnapshot::default();
+    match udisks_result {
+        Ok(devices) => snapshot.devices.extend(devices),
+        Err(error) => snapshot
+            .provider_failures
+            .push(StorageDeviceProviderFailure {
+                provider: StorageDeviceProvider::Udisks,
+                message: error,
+            }),
+    }
+    match gvfs_result {
+        Ok(devices) => snapshot.devices.extend(devices),
+        Err(error) => snapshot
+            .provider_failures
+            .push(StorageDeviceProviderFailure {
+                provider: StorageDeviceProvider::Gvfs,
+                message: error,
+            }),
+    }
+    snapshot.devices.sort_by(|left, right| {
+        left.label
+            .to_lowercase()
+            .cmp(&right.label.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    snapshot
+}
+
+async fn load_udisks_storage_devices() -> Result<Vec<StorageDevice>, StorageDeviceError> {
     let client = Client::new().await?;
     let managed_objects = client.object_manager().get_managed_objects().await?;
     let mut devices = Vec::new();
@@ -123,49 +210,72 @@ pub async fn load_storage_devices() -> Result<Vec<StorageDevice>, StorageDeviceE
 }
 
 pub async fn mount_storage_device(id: StorageDeviceId) -> Result<PathBuf, StorageDeviceError> {
-    let client = Client::new().await?;
-    let object = client.object(id.as_str())?;
-    let filesystem = object.filesystem().await?;
-    let mount_path = filesystem.mount(standard_options(false)).await?;
-    Ok(PathBuf::from(mount_path))
+    match id {
+        StorageDeviceId::GvfsVolume(identity) => gvfs_devices::mount_gvfs_storage_device(identity)
+            .await
+            .map_err(|error| StorageDeviceError::Gvfs(Box::new(error))),
+        StorageDeviceId::UdisksObject(object_path) => {
+            let client = Client::new().await?;
+            let object = client.object(object_path)?;
+            let filesystem = object.filesystem().await?;
+            let mount_path = filesystem.mount(standard_options(false)).await?;
+            Ok(PathBuf::from(mount_path))
+        }
+    }
 }
 
 pub async fn unmount_storage_device(id: StorageDeviceId) -> Result<(), StorageDeviceError> {
-    let client = Client::new().await?;
-    let object = client.object(id.as_str())?;
-    let filesystem = object.filesystem().await?;
-    filesystem.unmount(standard_options(false)).await?;
-    Ok(())
+    match id {
+        StorageDeviceId::GvfsVolume(identity) => {
+            gvfs_devices::unmount_gvfs_storage_device(identity)
+                .await
+                .map_err(|error| StorageDeviceError::Gvfs(Box::new(error)))
+        }
+        StorageDeviceId::UdisksObject(object_path) => {
+            let client = Client::new().await?;
+            let object = client.object(object_path)?;
+            let filesystem = object.filesystem().await?;
+            filesystem.unmount(standard_options(false)).await?;
+            Ok(())
+        }
+    }
 }
 
 pub async fn eject_or_power_off_storage_device(
     id: StorageDeviceId,
 ) -> Result<(), StorageDeviceError> {
-    let client = Client::new().await?;
-    let object = client.object(id.as_str())?;
-    let filesystem = object.filesystem().await?;
-    let block = object.block().await?;
-    let drive = client.drive_for_block(&block).await?;
+    match id {
+        StorageDeviceId::GvfsVolume(identity) => gvfs_devices::remove_gvfs_storage_device(identity)
+            .await
+            .map_err(|error| StorageDeviceError::Gvfs(Box::new(error))),
+        StorageDeviceId::UdisksObject(object_path) => {
+            let client = Client::new().await?;
+            let object = client.object(object_path)?;
+            let filesystem = object.filesystem().await?;
+            let block = object.block().await?;
+            let drive = client.drive_for_block(&block).await?;
 
-    if !filesystem.mount_points().await?.is_empty() {
-        match filesystem.unmount(standard_options(false)).await {
-            Ok(()) | Err(udisks2::Error::NotMounted) => {}
-            Err(error) => return Err(error.into()),
+            if !filesystem.mount_points().await?.is_empty() {
+                match filesystem.unmount(standard_options(false)).await {
+                    Ok(()) | Err(udisks2::Error::NotMounted) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+
+            if drive.can_power_off().await.unwrap_or(false) {
+                drive.power_off(standard_options(false)).await?;
+                return Ok(());
+            }
+            if drive.ejectable().await.unwrap_or(false) {
+                drive.eject(standard_options(false)).await?;
+                return Ok(());
+            }
+
+            Err(StorageDeviceError::ActionUnavailable(
+                "device cannot be ejected or safely removed",
+            ))
         }
     }
-
-    if drive.can_power_off().await.unwrap_or(false) {
-        drive.power_off(standard_options(false)).await?;
-        return Ok(());
-    }
-    if drive.ejectable().await.unwrap_or(false) {
-        drive.eject(standard_options(false)).await?;
-        return Ok(());
-    }
-
-    Err(StorageDeviceError::ActionUnavailable(
-        "device cannot be ejected or safely removed",
-    ))
 }
 
 async fn storage_device_from_object(
@@ -240,17 +350,27 @@ async fn storage_device_from_object(
         StorageDeviceMountState::Mounted(mount_points)
     };
 
+    let can_unmount = mount_state.is_mounted();
     Ok(Some(StorageDevice {
-        id: StorageDeviceId::new(object_path.to_string()),
+        id: StorageDeviceId::UdisksObject(object_path.to_string()),
         label,
         device_path,
         filesystem_type,
         size_bytes,
-        can_unmount: mount_state.is_mounted(),
         mount_state,
+        access: StorageDeviceAccess::LocalFilesystem,
         is_removable,
+        can_mount: true,
+        can_unmount,
         can_eject,
         can_power_off,
+        removal: if can_power_off {
+            Some(StorageDeviceRemoval::SafelyRemove)
+        } else if can_eject {
+            Some(StorageDeviceRemoval::Eject)
+        } else {
+            None
+        },
     }))
 }
 
@@ -401,5 +521,85 @@ mod tests {
             UdisksVisibilityHint::Ignored,
             &[]
         ));
+    }
+
+    #[test]
+    fn provider_merge_keeps_both_successful_sources() {
+        let local = StorageDevice {
+            id: StorageDeviceId::UdisksObject("disk".to_owned()),
+            label: "Disk".to_owned(),
+            device_path: Some(PathBuf::from("/dev/sdb1")),
+            filesystem_type: "vfat".to_owned(),
+            size_bytes: 1,
+            mount_state: StorageDeviceMountState::Unmounted,
+            access: StorageDeviceAccess::LocalFilesystem,
+            is_removable: true,
+            can_mount: true,
+            can_unmount: false,
+            can_eject: false,
+            can_power_off: false,
+            removal: None,
+        };
+        let portable = StorageDevice {
+            id: StorageDeviceId::GvfsVolume("activation:mtp://phone/".to_owned()),
+            label: "Phone".to_owned(),
+            device_path: None,
+            filesystem_type: "GVfs".to_owned(),
+            size_bytes: 0,
+            mount_state: StorageDeviceMountState::Unmounted,
+            access: StorageDeviceAccess::RemoteFilesystem,
+            is_removable: true,
+            can_mount: true,
+            can_unmount: false,
+            can_eject: true,
+            can_power_off: false,
+            removal: Some(StorageDeviceRemoval::Eject),
+        };
+
+        let snapshot = merge_storage_device_results(Ok(vec![local]), Ok(vec![portable]));
+
+        assert_eq!(snapshot.devices.len(), 2);
+        assert!(snapshot.provider_failures.is_empty());
+    }
+
+    #[test]
+    fn provider_merge_keeps_successful_devices_when_other_provider_fails() {
+        let device = StorageDevice {
+            id: StorageDeviceId::UdisksObject("disk".to_owned()),
+            label: "Disk".to_owned(),
+            device_path: Some(PathBuf::from("/dev/sdb1")),
+            filesystem_type: "vfat".to_owned(),
+            size_bytes: 1,
+            mount_state: StorageDeviceMountState::Unmounted,
+            access: StorageDeviceAccess::LocalFilesystem,
+            is_removable: true,
+            can_mount: true,
+            can_unmount: false,
+            can_eject: false,
+            can_power_off: false,
+            removal: None,
+        };
+        let snapshot = merge_storage_device_results(
+            Ok(vec![device]),
+            Err("GVfs backend unavailable".to_owned()),
+        );
+
+        assert_eq!(snapshot.devices.len(), 1);
+        assert_eq!(snapshot.provider_failures.len(), 1);
+        assert_eq!(
+            snapshot.provider_failures[0].provider,
+            StorageDeviceProvider::Gvfs
+        );
+    }
+
+    #[test]
+    fn provider_merge_keeps_both_provider_failures() {
+        let snapshot = merge_storage_device_results(
+            Err("UDisks unavailable".to_owned()),
+            Err("GVfs unavailable".to_owned()),
+        );
+
+        assert!(snapshot.devices.is_empty());
+        assert_eq!(snapshot.provider_failures.len(), 2);
     }
 }

@@ -23,10 +23,6 @@ impl FileBrowser {
             .is_some_and(|selected_id| selected_id == id)
     }
 
-    pub(crate) fn path_is_mounted_network(&self, path: &std::path::Path) -> bool {
-        self.network_connections.path_is_mounted_network(path)
-    }
-
     pub(super) fn refresh_network_mount_states(&mut self) -> Task<Message> {
         let connections = self.network_connections.connections();
         if connections.is_empty() {

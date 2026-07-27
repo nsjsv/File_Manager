@@ -17,14 +17,14 @@ use crate::formatting::format_file_size;
 const NETWORK_PREVIEW_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone)]
-pub(crate) struct NetworkPreviewCacheRequest {
+pub(crate) struct RemotePreviewCacheRequest {
     pub(crate) source_path: PathBuf,
     pub(crate) cache_dir: PathBuf,
     pub(crate) max_file_bytes: u64,
     pub(crate) cancel: CancellationToken,
 }
 
-impl NetworkPreviewCacheRequest {
+impl RemotePreviewCacheRequest {
     pub(crate) fn new(
         source_path: PathBuf,
         cache_dir: PathBuf,
@@ -40,7 +40,7 @@ impl NetworkPreviewCacheRequest {
     }
 }
 
-pub(crate) fn default_network_preview_cache_dir() -> PathBuf {
+pub(crate) fn default_remote_preview_cache_dir() -> PathBuf {
     let fallback_base = dirs::home_dir()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
@@ -50,31 +50,31 @@ pub(crate) fn default_network_preview_cache_dir() -> PathBuf {
         .join("network-preview")
 }
 
-pub(crate) async fn cache_network_preview_file(
-    request: NetworkPreviewCacheRequest,
+pub(crate) async fn cache_remote_preview_file(
+    request: RemotePreviewCacheRequest,
     progress: ProgressSender,
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(&request.cache_dir)
         .await
         .map_err(|error| {
             format!(
-                "could not create network preview cache {:?}: {error}",
+                "could not create remote preview cache {:?}: {error}",
                 request.cache_dir
             )
         })?;
 
     let now = SystemTime::now();
-    let _ = remove_expired_network_preview_files(&request.cache_dir, now).await;
+    let _ = remove_expired_remote_preview_files(&request.cache_dir, now).await;
 
     let source_metadata = fs::metadata(&request.source_path).await.map_err(|error| {
         format!(
-            "could not read network preview source {:?}: {error}",
+            "could not read remote preview source {:?}: {error}",
             request.source_path
         )
     })?;
     if !source_metadata.is_file() {
         return Err(format!(
-            "network preview source is not a regular file: {:?}",
+            "remote preview source is not a regular file: {:?}",
             request.source_path
         ));
     }
@@ -87,7 +87,7 @@ pub(crate) async fn cache_network_preview_file(
     }
 
     let cache_path =
-        network_preview_cache_path(&request.cache_dir, &request.source_path, &source_metadata);
+        remote_preview_cache_path(&request.cache_dir, &request.source_path, &source_metadata);
     if cached_file_is_fresh(&cache_path, now).await {
         return Ok(cache_path);
     }
@@ -98,16 +98,16 @@ pub(crate) async fn cache_network_preview_file(
         .with_verification(FileOperationVerification::BasicMetadata);
     copy_path_with_options(&request.source_path, &cache_path, transfer_options)
         .await
-        .map_err(|error| format!("could not download network preview file: {error}"))?;
+        .map_err(|error| format!("could not download remote preview file: {error}"))?;
     Ok(cache_path)
 }
 
-fn network_preview_cache_path(
+fn remote_preview_cache_path(
     cache_dir: &Path,
     source_path: &Path,
     source_metadata: &std::fs::Metadata,
 ) -> PathBuf {
-    let signature = network_preview_cache_signature(source_path, source_metadata);
+    let signature = remote_preview_cache_signature(source_path, source_metadata);
     let mut file_name = OsString::from(format!("network-preview-{signature}"));
     if let Some(extension) = source_path.extension() {
         file_name.push(".");
@@ -116,7 +116,7 @@ fn network_preview_cache_path(
     cache_dir.join(file_name)
 }
 
-fn network_preview_cache_signature(
+fn remote_preview_cache_signature(
     source_path: &Path,
     source_metadata: &std::fs::Metadata,
 ) -> String {
@@ -163,7 +163,7 @@ async fn cached_file_is_fresh(path: &Path, now: SystemTime) -> bool {
             .is_ok_and(|modified| !cache_entry_is_expired(modified, now))
 }
 
-async fn remove_expired_network_preview_files(cache_dir: &Path, now: SystemTime) -> io::Result<()> {
+async fn remove_expired_remote_preview_files(cache_dir: &Path, now: SystemTime) -> io::Result<()> {
     let mut entries = match fs::read_dir(cache_dir).await {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -215,7 +215,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn cache_network_preview_file_reuses_fresh_cached_file() {
+    async fn cache_remote_preview_file_reuses_fresh_cached_file() {
         let temp_dir = tempdir().expect("temp dir");
         let source = temp_dir.path().join("remote.txt");
         let cache_dir = temp_dir.path().join("cache");
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_network_preview_file_uses_new_path_when_source_size_changes() {
+    async fn cache_remote_preview_file_uses_new_path_when_source_size_changes() {
         let temp_dir = tempdir().expect("temp dir");
         let source = temp_dir.path().join("remote.txt");
         let cache_dir = temp_dir.path().join("cache");
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_expired_network_preview_files_clears_old_entries() {
+    async fn remove_expired_remote_preview_files_clears_old_entries() {
         let temp_dir = tempdir().expect("temp dir");
         let cache_dir = temp_dir.path().join("cache");
         tokio::fs::create_dir(&cache_dir)
@@ -270,7 +270,7 @@ mod tests {
         tokio::fs::write(&entry, b"old").await.expect("write old");
 
         let future_now = SystemTime::now() + Duration::from_secs(60 * 60);
-        remove_expired_network_preview_files(&cache_dir, future_now)
+        remove_expired_remote_preview_files(&cache_dir, future_now)
             .await
             .expect("cleanup");
 
@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_network_preview_file_rejects_source_over_limit_before_copy() {
+    async fn cache_remote_preview_file_rejects_source_over_limit_before_copy() {
         let temp_dir = tempdir().expect("temp dir");
         let source = temp_dir.path().join("remote.txt");
         let cache_dir = temp_dir.path().join("cache");
@@ -309,12 +309,12 @@ mod tests {
         max_file_bytes: u64,
     ) -> Result<PathBuf, String> {
         let (progress, _receiver) = mpsc::unbounded_channel();
-        let request = NetworkPreviewCacheRequest::new(
+        let request = RemotePreviewCacheRequest::new(
             source.to_path_buf(),
             cache_dir.to_path_buf(),
             max_file_bytes,
             CancellationToken::new(),
         );
-        cache_network_preview_file(request, progress).await
+        cache_remote_preview_file(request, progress).await
     }
 }

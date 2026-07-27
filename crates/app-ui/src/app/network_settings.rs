@@ -1,6 +1,7 @@
 use iced::Task;
 
 use super::FileBrowser;
+use crate::app::remote_mounts::path_is_remote_mount;
 use crate::config;
 use crate::model::Message;
 use crate::thumbnail_cache::{ThumbnailLoadPolicy, ThumbnailPurpose};
@@ -54,10 +55,15 @@ impl FileBrowser {
 
     fn remove_pending_network_thumbnail_generations(&mut self) {
         let network_connections = self.network_connections.clone();
+        let sidebar_devices = self.sidebar_devices.clone();
         self.thumbnail_cache.retain_queued_work(|work| {
             work.purpose == ThumbnailPurpose::Preview
                 || work.load_policy == ThumbnailLoadPolicy::CacheOnly
-                || !network_connections.path_is_mounted_network(&work.request.source)
+                || !path_is_remote_mount(
+                    &network_connections,
+                    &sidebar_devices,
+                    &work.request.source,
+                )
         });
     }
 }

@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
-use desktop_linux::{StorageDevice, StorageDeviceId};
+use desktop_linux::{StorageDeviceId, StorageDeviceSnapshot};
 use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::{sidebar_device_action_command, sidebar_devices_command};
 use crate::model::{BrowserPaneId, ContextMenuState, Message, NavigationMode};
-use crate::sidebar_devices::{SidebarDeviceAction, SidebarDeviceContextMenuState};
+use crate::sidebar_devices::{
+    SidebarDeviceAction, SidebarDeviceActionRequest, SidebarDeviceContextMenuState,
+};
 
 impl FileBrowser {
     pub(crate) fn sidebar_device_is_selected(&self, id: &StorageDeviceId) -> bool {
@@ -17,12 +19,9 @@ impl FileBrowser {
 
     pub(super) fn accept_sidebar_devices(
         &mut self,
-        result: Result<Vec<StorageDevice>, String>,
+        result: StorageDeviceSnapshot,
     ) -> Task<Message> {
-        match result {
-            Ok(devices) => self.sidebar_devices.accept_loaded(devices),
-            Err(error) => self.sidebar_devices.accept_unavailable(error),
-        }
+        self.sidebar_devices.accept_loaded(result);
         Task::none()
     }
 
@@ -62,11 +61,16 @@ impl FileBrowser {
                 self.navigate_to(path, NavigationMode::RecordHistory),
             ]);
         }
+        if !device.can_mount {
+            return rename_command;
+        }
 
-        self.sidebar_devices.pending_action = Some(id.clone());
+        let Some(request) = self.sidebar_devices.begin_action(id) else {
+            return rename_command;
+        };
         Task::batch([
             rename_command,
-            sidebar_device_action_command(id, SidebarDeviceAction::Mount),
+            sidebar_device_action_command(request, SidebarDeviceAction::Mount),
         ])
     }
 
@@ -119,26 +123,35 @@ impl FileBrowser {
         action: SidebarDeviceAction,
     ) -> Task<Message> {
         self.context_menu = None;
-        self.sidebar_devices.pending_action = Some(id.clone());
-        sidebar_device_action_command(id, action)
+        let Some(request) = self.sidebar_devices.begin_action(id) else {
+            return Task::none();
+        };
+        sidebar_device_action_command(request, action)
     }
 
     pub(super) fn accept_sidebar_device_action_finished(
         &mut self,
-        id: StorageDeviceId,
+        request: SidebarDeviceActionRequest,
         action: SidebarDeviceAction,
         result: Result<Option<PathBuf>, String>,
     ) -> Task<Message> {
-        if self.sidebar_devices.pending_action.as_ref() == Some(&id) {
-            self.sidebar_devices.pending_action = None;
+        let is_current = self.sidebar_devices.accept_action_finished(&request);
+        let refresh_command = self.refresh_sidebar_devices();
+        if !is_current {
+            return refresh_command;
         }
 
-        let refresh_command = self.refresh_sidebar_devices();
         match result {
-            Ok(Some(path)) if action == SidebarDeviceAction::Mount => Task::batch([
-                refresh_command,
-                self.navigate_to(path, NavigationMode::RecordHistory),
-            ]),
+            Ok(Some(path)) if action == SidebarDeviceAction::Mount => {
+                if self.sidebar_devices.device(&request.id).is_some() {
+                    Task::batch([
+                        refresh_command,
+                        self.navigate_to(path, NavigationMode::RecordHistory),
+                    ])
+                } else {
+                    refresh_command
+                }
+            }
             Ok(_) => refresh_command,
             Err(error) => {
                 self.show_global_error(format!(
@@ -150,11 +163,48 @@ impl FileBrowser {
         }
     }
 }
-
 fn sidebar_device_action_error_verb(action: SidebarDeviceAction) -> &'static str {
     match action {
         SidebarDeviceAction::Mount => "mount",
         SidebarDeviceAction::Unmount => "unmount",
         SidebarDeviceAction::Eject => "eject",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use desktop_linux::{StorageDevice, StorageDeviceAccess, StorageDeviceMountState};
+
+    #[test]
+    fn file_browser_remote_mount_includes_portable_device_path() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser
+            .sidebar_devices
+            .accept_loaded(StorageDeviceSnapshot {
+                devices: vec![StorageDevice {
+                    id: StorageDeviceId::GvfsVolume("activation:mtp://phone/".to_owned()),
+                    label: "Phone".to_owned(),
+                    device_path: None,
+                    filesystem_type: "GVfs".to_owned(),
+                    size_bytes: 0,
+                    mount_state: StorageDeviceMountState::Mounted(vec![PathBuf::from(
+                        "/run/user/1000/gvfs/mtp:host=phone",
+                    )]),
+                    access: StorageDeviceAccess::RemoteFilesystem,
+                    is_removable: true,
+                    can_mount: true,
+                    can_unmount: true,
+                    can_eject: true,
+                    can_power_off: false,
+                    removal: Some(desktop_linux::StorageDeviceRemoval::Eject),
+                }],
+                provider_failures: Vec::new(),
+            });
+
+        assert!(browser.path_is_remote_mount(Path::new("/run/user/1000/gvfs/mtp:host=phone/DCIM")));
+        assert!(!browser.path_is_remote_mount(Path::new("/home/user/DCIM")));
     }
 }

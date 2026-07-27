@@ -23,8 +23,8 @@ impl FileBrowser {
             Message::SidebarDeviceActionSelected(id, action) => {
                 self.perform_sidebar_device_action(id, action)
             }
-            Message::SidebarDeviceActionFinished(id, action, result) => {
-                self.accept_sidebar_device_action_finished(id, action, result)
+            Message::SidebarDeviceActionFinished(request, action, result) => {
+                self.accept_sidebar_device_action_finished(request, action, result)
             }
             Message::NetworkConnection(message) => self.handle_network_connection_message(message),
             Message::OperationStoreLoaded(operation_store) => {
@@ -100,8 +100,8 @@ impl FileBrowser {
             Message::PreviewLoaded(path, preview_outcome) => {
                 self.accept_preview(path, preview_outcome)
             }
-            Message::NetworkPreviewCache(message) => {
-                self.accept_network_preview_cache_message(message)
+            Message::RemotePreviewCache(message) => {
+                self.accept_remote_preview_cache_message(message)
             }
             Message::AnimatedImagePreviewLoaded(path, generation, preview_outcome) => {
                 self.accept_animated_image_preview_loaded(path, generation, preview_outcome)

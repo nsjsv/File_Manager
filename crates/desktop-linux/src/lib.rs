@@ -2,6 +2,8 @@ mod desktop_entries;
 mod desktop_notifications;
 pub mod display_renderer;
 pub mod file_clipboard;
+mod gvfs_devices;
+mod gvfs_paths;
 pub mod network_mounts;
 pub mod network_secrets;
 pub mod open;
@@ -41,8 +43,9 @@ pub use open_with::{
 };
 pub use storage_devices::{
     eject_or_power_off_storage_device, load_storage_devices, mount_storage_device,
-    unmount_storage_device, StorageDevice, StorageDeviceError, StorageDeviceId,
-    StorageDeviceMountState,
+    unmount_storage_device, StorageDevice, StorageDeviceAccess, StorageDeviceError,
+    StorageDeviceId, StorageDeviceMountState, StorageDeviceProvider, StorageDeviceProviderFailure,
+    StorageDeviceRemoval, StorageDeviceSnapshot,
 };
 pub use wayland_dnd::{
     spawn_wayland_file_dnd, WaylandDndCommandError, WaylandDndController, WaylandDndDropOrigin,

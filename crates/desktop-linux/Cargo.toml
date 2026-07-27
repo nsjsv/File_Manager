@@ -10,6 +10,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 udisks2 = "0.3.1"
+gio = "=0.22.8"
 wayland-client = { version = "0.31.14", features = ["system"] }
 
 [dev-dependencies]

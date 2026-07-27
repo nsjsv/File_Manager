@@ -629,7 +629,9 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Favorites" => Some("收藏夹"),
         "Devices" => Some("设备"),
         "Loading devices..." => Some("正在加载设备..."),
-        "Devices unavailable" => Some("设备不可用"),
+        "UDisks devices unavailable" => Some("UDisks 设备不可用"),
+        "GVfs devices unavailable" => Some("GVfs 设备不可用"),
+        "Some device providers unavailable" => Some("部分设备提供方不可用"),
         "No saved connections" => Some("没有已保存的连接"),
         "Network status unavailable" => Some("网络状态不可用"),
         "Network" => Some("网络"),
@@ -657,9 +659,9 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Checking archive..." => Some("正在检查归档..."),
         "Thumbnails" => Some("缩略图"),
         "File preview" => Some("文件预览"),
-        "Network List Thumbnails" => Some("网络列表缩略图"),
-        "When enabled, images and videos on network locations may use more data." => {
-            Some("启用后，网络位置中的图片和视频可能会使用更多流量。")
+        "Remote List Thumbnails" => Some("远程位置列表缩略图"),
+        "When enabled, images and videos on remote locations may use more data." => {
+            Some("启用后，远程位置中的图片和视频可能会使用更多流量。")
         }
         "Max File Preview" => Some("最大文件预览"),
         "MiB" => Some("MiB"),
@@ -683,8 +685,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Finish the current file operation prompt before dropping files" => {
             Some("请先完成当前文件操作提示，再拖放文件")
         }
-        "Delete local and network items separately so local files can use Trash" => {
-            Some("请分别删除本地和网络项目，以便本地文件可以移入回收站")
+        "Delete local and remote items separately so local files can use Trash" => {
+            Some("请分别删除本地和远程项目，以便本地文件可以移入回收站")
         }
         "Saved view state could not be restored; opening the home directory." => {
             Some("无法恢复已保存的视图状态；将打开主目录。")

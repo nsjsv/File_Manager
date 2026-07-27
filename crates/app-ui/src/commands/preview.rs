@@ -10,10 +10,10 @@ use tokio_util::sync::CancellationToken;
 use crate::animated_image_preview::load_animated_image_preview;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::model::{
-    Message, NetworkPreviewCacheFinished, NetworkPreviewCacheMessage, NetworkPreviewCacheProgress,
+    Message, RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
 };
-use crate::network_preview_cache::{cache_network_preview_file, NetworkPreviewCacheRequest};
 use crate::preview::{load_directory_preview_children, load_preview};
+use crate::remote_preview_cache::{cache_remote_preview_file, RemotePreviewCacheRequest};
 use crate::text_preview::TextPreviewChunkRequest;
 use crate::text_preview_loading::load_text_preview_chunk;
 use crate::video_preview::{inspect_video_preview_metadata, load_video_preview_frame};
@@ -34,7 +34,7 @@ pub(crate) fn preview_command(
     )
 }
 
-pub(crate) fn network_preview_cache_command(
+pub(crate) fn remote_preview_cache_command(
     source_path: PathBuf,
     generation: u64,
     cache_dir: PathBuf,
@@ -42,15 +42,15 @@ pub(crate) fn network_preview_cache_command(
     cancel: CancellationToken,
 ) -> Task<Message> {
     let request =
-        NetworkPreviewCacheRequest::new(source_path.clone(), cache_dir, max_file_bytes, cancel);
+        RemotePreviewCacheRequest::new(source_path.clone(), cache_dir, max_file_bytes, cancel);
     Task::stream(iced::stream::channel(
         NETWORK_PREVIEW_CACHE_CHANNEL_SIZE,
         async move |mut output| {
             let outcome =
-                download_network_preview_with_progress(request, generation, &mut output).await;
+                download_remote_preview_with_progress(request, generation, &mut output).await;
             let _ = output
-                .send(Message::NetworkPreviewCache(
-                    NetworkPreviewCacheMessage::Finished(NetworkPreviewCacheFinished {
+                .send(Message::RemotePreviewCache(
+                    RemotePreviewCacheMessage::Finished(RemotePreviewCacheFinished {
                         source_path,
                         generation,
                         outcome,
@@ -81,14 +81,14 @@ pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
     })
 }
 
-async fn download_network_preview_with_progress(
-    request: NetworkPreviewCacheRequest,
+async fn download_remote_preview_with_progress(
+    request: RemotePreviewCacheRequest,
     generation: u64,
     output: &mut IcedSender<Message>,
 ) -> Result<PathBuf, String> {
     let source_path = request.source_path.clone();
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let cache = cache_network_preview_file(request, progress_sender);
+    let cache = cache_remote_preview_file(request, progress_sender);
     tokio::pin!(cache);
     let mut latest_progress = None;
     let mut last_progress_sent_at = None;
@@ -99,9 +99,9 @@ async fn download_network_preview_with_progress(
                 if let Some(progress) = progress {
                     latest_progress = Some(progress);
                     let now = Instant::now();
-                    if should_send_network_preview_progress(last_progress_sent_at, now) {
+                    if should_send_remote_preview_progress(last_progress_sent_at, now) {
                         if let Some(progress) = latest_progress.take() {
-                            send_network_preview_progress(output, &source_path, generation, progress).await;
+                            send_remote_preview_progress(output, &source_path, generation, progress).await;
                             last_progress_sent_at = Some(now);
                         }
                     }
@@ -109,7 +109,7 @@ async fn download_network_preview_with_progress(
             }
             outcome = &mut cache => {
                 if let Some(progress) = latest_progress.take() {
-                    send_network_preview_progress(output, &source_path, generation, progress).await;
+                    send_remote_preview_progress(output, &source_path, generation, progress).await;
                 }
                 return outcome;
             }
@@ -117,7 +117,7 @@ async fn download_network_preview_with_progress(
     }
 }
 
-fn should_send_network_preview_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
+fn should_send_remote_preview_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
     match last_sent_at {
         Some(last_sent_at) => {
             now.duration_since(last_sent_at) >= NETWORK_PREVIEW_PROGRESS_UI_INTERVAL
@@ -126,15 +126,15 @@ fn should_send_network_preview_progress(last_sent_at: Option<Instant>, now: Inst
     }
 }
 
-async fn send_network_preview_progress(
+async fn send_remote_preview_progress(
     output: &mut IcedSender<Message>,
     source_path: &PathBuf,
     generation: u64,
     progress: CopyProgress,
 ) {
     let _ = output
-        .send(Message::NetworkPreviewCache(
-            NetworkPreviewCacheMessage::Progress(NetworkPreviewCacheProgress {
+        .send(Message::RemotePreviewCache(
+            RemotePreviewCacheMessage::Progress(RemotePreviewCacheProgress {
                 source_path: source_path.clone(),
                 generation,
                 bytes_done: progress.bytes_done,
