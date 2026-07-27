@@ -1,6 +1,11 @@
-use super::*;
+use std::io;
 
 use tempfile::tempdir;
+use tokio::fs;
+use tokio_util::sync::CancellationToken;
+
+use super::*;
+use crate::ops::copy::FileOperationControls;
 
 #[tokio::test]
 async fn strong_verification_rejects_matching_size_hash_mismatch() {
@@ -15,7 +20,7 @@ async fn strong_verification_rejects_matching_size_hash_mismatch() {
 
     let source_metadata = fs::metadata(&source_path).await.unwrap();
     let mut controls = FileOperationControls::running(CancellationToken::new());
-    let mut buffer = vec![0; COPY_BUFFER_SIZE];
+    let mut buffer = vec![0; 1024];
     let error = verify_copied_file(
         &source_path,
         &target,
@@ -23,7 +28,6 @@ async fn strong_verification_rejects_matching_size_hash_mismatch() {
         &mut controls,
         &mut buffer,
         Some(blake3::hash(source_contents)),
-        true,
     )
     .await
     .unwrap_err();
@@ -38,41 +42,23 @@ async fn strong_verification_rejects_matching_size_hash_mismatch() {
     }
 }
 
-#[test]
-fn operation_not_supported_permission_error_is_not_fatal() {
-    let unsupported = io::Error::from(io::ErrorKind::Unsupported);
-    let permission_denied = io::Error::from(io::ErrorKind::PermissionDenied);
-
-    assert!(copy_permission_unsupported(&unsupported));
-    assert!(!copy_permission_unsupported(&permission_denied));
-}
-
-#[cfg(unix)]
-#[test]
-fn os_error_95_permission_error_is_not_fatal() {
-    let unsupported = io::Error::from_raw_os_error(95);
-
-    assert!(copy_permission_unsupported(&unsupported));
-}
-
 #[tokio::test]
-async fn readonly_mismatch_is_skipped_only_when_permissions_were_not_preserved() {
+async fn basic_verification_does_not_treat_permission_metadata_as_content() {
     let directory = tempdir().unwrap();
     let source_path = directory.path().join("source.txt");
     let target = directory.path().join("target.txt");
 
     fs::write(&source_path, b"same").await.unwrap();
     fs::write(&target, b"same").await.unwrap();
-    let original_permissions = fs::metadata(&source_path).await.unwrap().permissions();
-    let mut source_permissions = original_permissions.clone();
+    let mut source_permissions = fs::metadata(&source_path).await.unwrap().permissions();
     source_permissions.set_readonly(true);
-    fs::set_permissions(&source_path, source_permissions.clone())
+    fs::set_permissions(&source_path, source_permissions)
         .await
         .unwrap();
 
     let source_metadata = fs::metadata(&source_path).await.unwrap();
     let mut controls = FileOperationControls::running(CancellationToken::new());
-    let mut buffer = vec![0; COPY_BUFFER_SIZE];
+    let mut buffer = vec![0; 1024];
 
     verify_copied_file(
         &source_path,
@@ -81,26 +67,7 @@ async fn readonly_mismatch_is_skipped_only_when_permissions_were_not_preserved()
         &mut controls,
         &mut buffer,
         None,
-        false,
     )
     .await
     .unwrap();
-    let error = verify_copied_file(
-        &source_path,
-        &target,
-        &source_metadata,
-        &mut controls,
-        &mut buffer,
-        None,
-        true,
-    )
-    .await
-    .unwrap_err();
-    fs::set_permissions(&source_path, original_permissions)
-        .await
-        .unwrap();
-
-    assert!(
-        matches!(error, FileError::Copy { source, .. } if source.kind() == io::ErrorKind::InvalidData)
-    );
 }

@@ -47,5 +47,7 @@ mod ops;
 mod scan;
 #[path = "core/sort.rs"]
 mod sort;
+#[path = "core/transfer_fidelity.rs"]
+mod transfer_fidelity;
 #[path = "core/watch.rs"]
 mod watch;

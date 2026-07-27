@@ -13,11 +13,16 @@ use crate::FileError;
 
 mod batch_rename;
 mod copy;
+mod copy_verification;
+mod transfer_metadata;
+mod transfer_object;
 pub use batch_rename::{batch_rename_paths, BatchRenameItem, CompletedBatchRename};
+use copy::copy_path_with_inspected_source;
 pub use copy::{
     copy_path, copy_path_with_options, CopyProgress, FileOperationControls, FileOperationRunState,
     FileOperationVerification, FileTransferOptions, ProgressSender, TransferConflictStrategy,
 };
+use transfer_object::{inspect_transfer_source, TransferSourceKind, TransferSourceObject};
 
 pub async fn rename_path(
     path: impl AsRef<Path>,
@@ -294,15 +299,15 @@ pub async fn move_path_with_options(
         return Ok(None);
     }
 
-    let source_metadata = fs::metadata(&from)
-        .await
-        .map_err(|source| FileError::Metadata {
-            path: from.clone(),
-            source,
-        })?;
+    let source_object = inspect_transfer_source(&from).await?;
+    let source_metadata = &source_object.metadata;
+    let progress = match &source_object.kind {
+        TransferSourceKind::SymbolicLink { .. } => None,
+        TransferSourceKind::RegularFile | TransferSourceKind::Directory => progress,
+    };
 
     let total = if progress.is_some() {
-        source_metadata.len()
+        source_object.progress_bytes_total()
     } else {
         0
     };
@@ -316,7 +321,7 @@ pub async fn move_path_with_options(
         })?;
 
     if conflict_strategy == TransferConflictStrategy::Merge
-        && source_metadata.is_dir()
+        && source_object.is_directory()
         && target_metadata
             .as_ref()
             .is_some_and(std::fs::Metadata::is_dir)
@@ -330,7 +335,7 @@ pub async fn move_path_with_options(
         if let Some(collapsed_target) = try_collapse_replace_move_into_empty_target_parent(
             &from,
             &to,
-            &source_metadata,
+            source_metadata,
             target_metadata.as_ref(),
         )
         .await?
@@ -350,7 +355,7 @@ pub async fn move_path_with_options(
     move_prepared_path(
         &from,
         &to,
-        &source_metadata,
+        &source_object,
         &mut controls,
         progress.clone(),
         verification,
@@ -416,7 +421,7 @@ async fn remove_move_target(
 async fn move_prepared_path(
     from: &Path,
     to: &Path,
-    source_metadata: &std::fs::Metadata,
+    source_object: &TransferSourceObject,
     controls: &mut FileOperationControls,
     progress: Option<ProgressSender>,
     verification: FileOperationVerification,
@@ -424,8 +429,7 @@ async fn move_prepared_path(
     match fs::rename(from, to).await {
         Ok(()) => Ok(()),
         Err(source) if is_cross_device_rename_error(&source) => {
-            copy_then_remove_source(from, to, source_metadata, controls, progress, verification)
-                .await
+            copy_then_remove_source(from, to, source_object, controls, progress, verification).await
         }
         Err(source) => Err(FileError::Move {
             from: from.to_path_buf(),
@@ -438,7 +442,7 @@ async fn move_prepared_path(
 async fn copy_then_remove_source(
     from: &Path,
     to: &Path,
-    source_metadata: &std::fs::Metadata,
+    source_object: &TransferSourceObject,
     controls: &mut FileOperationControls,
     progress: Option<ProgressSender>,
     verification: FileOperationVerification,
@@ -447,16 +451,16 @@ async fn copy_then_remove_source(
         .with_optional_progress(progress)
         .with_conflict_strategy(TransferConflictStrategy::Fail)
         .with_verification(verification);
-    copy_path_with_options(from, to, copy_options).await?;
-    remove_moved_source(from, to, source_metadata).await
+    copy_path_with_inspected_source(from, to, source_object, copy_options).await?;
+    remove_moved_source(from, to, source_object).await
 }
 
 async fn remove_moved_source(
     from: &Path,
     to: &Path,
-    source_metadata: &std::fs::Metadata,
+    source_object: &TransferSourceObject,
 ) -> Result<(), FileError> {
-    let result = if source_metadata.is_dir() {
+    let result = if source_object.is_directory() {
         fs::remove_dir_all(from).await
     } else {
         fs::remove_file(from).await
@@ -479,6 +483,11 @@ fn is_cross_device_rename_error(_error: &io::Error) -> bool {
     false
 }
 
+enum MoveDirectoryStep {
+    MoveChildren { source: PathBuf, target: PathBuf },
+    RemoveSourceDirectory { source: PathBuf, target: PathBuf },
+}
+
 async fn move_directory_merge(
     from: &Path,
     to: &Path,
@@ -492,15 +501,24 @@ async fn move_directory_merge(
         });
     }
 
-    let mut pending_directories = vec![(from.to_path_buf(), to.to_path_buf(), false)];
-    while let Some((source_directory, target_directory, cleanup)) = pending_directories.pop() {
+    let mut pending_steps = vec![MoveDirectoryStep::MoveChildren {
+        source: from.to_path_buf(),
+        target: to.to_path_buf(),
+    }];
+    while let Some(step) = pending_steps.pop() {
         controls.wait_until_running().await?;
-        if cleanup {
-            remove_empty_moved_directory(&source_directory, &target_directory).await?;
-            continue;
-        }
+        let (source_directory, target_directory) = match step {
+            MoveDirectoryStep::MoveChildren { source, target } => (source, target),
+            MoveDirectoryStep::RemoveSourceDirectory { source, target } => {
+                remove_empty_moved_directory(&source, &target).await?;
+                continue;
+            }
+        };
 
-        pending_directories.push((source_directory.clone(), target_directory.clone(), true));
+        pending_steps.push(MoveDirectoryStep::RemoveSourceDirectory {
+            source: source_directory.clone(),
+            target: target_directory.clone(),
+        });
         let mut entries =
             fs::read_dir(&source_directory)
                 .await
@@ -526,20 +544,7 @@ async fn move_directory_merge(
 
             let source_child = entry.path();
             let target_child = target_directory.join(entry.file_name());
-            let file_type = entry
-                .file_type()
-                .await
-                .map_err(|source| FileError::Metadata {
-                    path: source_child.clone(),
-                    source,
-                })?;
-            let source_metadata =
-                fs::metadata(&source_child)
-                    .await
-                    .map_err(|source| FileError::Metadata {
-                        path: source_child.clone(),
-                        source,
-                    })?;
+            let source_object = inspect_transfer_source(&source_child).await?;
             let target_metadata = transfer_target_metadata_if_exists(&target_child)
                 .await
                 .map_err(|source| FileError::Move {
@@ -549,8 +554,11 @@ async fn move_directory_merge(
                 })?;
 
             if let Some(target_metadata) = target_metadata {
-                if file_type.is_dir() && target_metadata.is_dir() {
-                    pending_directories.push((source_child, target_child, false));
+                if source_object.is_directory() && target_metadata.is_dir() {
+                    pending_steps.push(MoveDirectoryStep::MoveChildren {
+                        source: source_child,
+                        target: target_child,
+                    });
                 }
                 continue;
             }
@@ -558,7 +566,7 @@ async fn move_directory_merge(
             move_prepared_path(
                 &source_child,
                 &target_child,
-                &source_metadata,
+                &source_object,
                 controls,
                 None,
                 verification,
@@ -603,6 +611,9 @@ fn send_move_progress(progress: Option<ProgressSender>, from: PathBuf, to: PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     use tempfile::tempdir;
 
@@ -657,5 +668,64 @@ mod tests {
         assert_eq!(fs::read(&target).await.unwrap(), b"old");
         assert_eq!(fs::read(&target_copy1).await.unwrap(), b"old copy");
         assert_eq!(fs::read(&target_copy2).await.unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copy_then_remove_source_preserves_symbolic_link_identity() {
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("source-link");
+        let target = directory.path().join("target-link");
+        symlink("missing-target", &source).unwrap();
+        let source_object = inspect_transfer_source(&source).await.unwrap();
+        let mut controls = FileOperationControls::running(CancellationToken::new());
+
+        copy_then_remove_source(
+            &source,
+            &target,
+            &source_object,
+            &mut controls,
+            None,
+            FileOperationVerification::BasicMetadata,
+        )
+        .await
+        .unwrap();
+
+        assert!(fs::symlink_metadata(&source).await.is_err());
+        assert!(fs::symlink_metadata(&target)
+            .await
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(&target).await.unwrap(),
+            Path::new("missing-target")
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_then_remove_source_keeps_source_after_hard_copy_failure() {
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.txt");
+        fs::write(&source, b"source").await.unwrap();
+        fs::write(&target, b"target").await.unwrap();
+        let source_object = inspect_transfer_source(&source).await.unwrap();
+        let mut controls = FileOperationControls::running(CancellationToken::new());
+
+        let error = copy_then_remove_source(
+            &source,
+            &target,
+            &source_object,
+            &mut controls,
+            None,
+            FileOperationVerification::BasicMetadata,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, FileError::Copy { .. }));
+        assert_eq!(fs::read(&source).await.unwrap(), b"source");
+        assert_eq!(fs::read(&target).await.unwrap(), b"target");
     }
 }

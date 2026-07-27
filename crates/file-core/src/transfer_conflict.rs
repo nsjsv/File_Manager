@@ -105,7 +105,7 @@ pub async fn available_transfer_target_path(path: impl AsRef<Path>) -> Result<Pa
 pub(crate) async fn transfer_target_metadata_if_exists(
     path: &Path,
 ) -> io::Result<Option<std::fs::Metadata>> {
-    match fs::metadata(path).await {
+    match fs::symlink_metadata(path).await {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),

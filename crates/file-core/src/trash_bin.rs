@@ -257,7 +257,7 @@ async fn prepare_restore_target(
             }),
         TransferConflictStrategy::Merge => {
             let source_metadata =
-                fs::metadata(&entry.trash_path)
+                fs::symlink_metadata(&entry.trash_path)
                     .await
                     .map_err(|source| FileError::Metadata {
                         path: entry.trash_path.clone(),

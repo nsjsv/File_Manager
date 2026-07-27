@@ -1,4 +1,3 @@
-use std::io;
 use std::path::{Path, PathBuf};
 
 use tokio::fs;
@@ -11,6 +10,11 @@ use crate::transfer_conflict::{
 };
 use crate::FileError;
 
+use super::copy_verification::{
+    verify_copied_directory, verify_copied_file, verify_copied_symbolic_link,
+};
+use super::transfer_metadata::apply_transfer_metadata_best_effort;
+use super::transfer_object::{inspect_transfer_source, TransferSourceKind, TransferSourceObject};
 use super::{already_exists_error, ensure_replace_target_does_not_contain_source_path};
 
 const COPY_BUFFER_SIZE: usize = 1024 * 1024;
@@ -164,89 +168,75 @@ async fn copy_path_with_transfer_options(
 ) -> Result<Option<PathBuf>, FileError> {
     let from = from.as_ref().to_path_buf();
     let to = to.as_ref().to_path_buf();
+    let mut controls = transfer_options.controls.clone();
+    controls.wait_until_running().await?;
+    let source_object = inspect_transfer_source(&from).await?;
+
+    copy_path_with_inspected_source(&from, &to, &source_object, transfer_options).await
+}
+
+pub(super) async fn copy_path_with_inspected_source(
+    from: &Path,
+    to: &Path,
+    source_object: &TransferSourceObject,
+    transfer_options: FileTransferOptions,
+) -> Result<Option<PathBuf>, FileError> {
     let mut controls = transfer_options.controls;
     let progress = transfer_options.progress;
     let conflict_strategy = transfer_options.conflict_strategy;
     let verification = transfer_options.verification;
     controls.wait_until_running().await?;
 
-    let metadata = fs::metadata(&from)
-        .await
-        .map_err(|source| FileError::Metadata {
-            path: from.clone(),
-            source,
-        })?;
-
-    let Some(to) = prepare_copy_target(&from, &to, &metadata, conflict_strategy).await? else {
+    let Some(to) =
+        prepare_copy_target(from, to, &source_object.metadata, conflict_strategy).await?
+    else {
         return Ok(None);
     };
 
-    if metadata.is_dir() {
-        copy_directory(
-            &from,
-            &to,
-            &mut controls,
-            progress.as_ref(),
-            conflict_strategy,
-            verification,
-        )
-        .await?;
-        return Ok(Some(to));
+    match &source_object.kind {
+        TransferSourceKind::Directory => {
+            copy_directory(
+                from,
+                &to,
+                source_object,
+                &mut controls,
+                progress.as_ref(),
+                conflict_strategy,
+                verification,
+            )
+            .await?;
+        }
+        TransferSourceKind::RegularFile => {
+            let mut buffer = vec![0; COPY_BUFFER_SIZE];
+            copy_file_to_target(
+                from,
+                &to,
+                source_object,
+                &mut controls,
+                progress.as_ref(),
+                &mut buffer,
+                verification,
+            )
+            .await?;
+        }
+        TransferSourceKind::SymbolicLink { .. } => {
+            copy_symbolic_link_to_target(from, &to, source_object, &mut controls).await?;
+        }
     }
 
-    let mut buffer = vec![0; COPY_BUFFER_SIZE];
-    copy_file_to_target(
-        &from,
-        &to,
-        &metadata,
-        &mut controls,
-        progress.as_ref(),
-        &mut buffer,
-        verification,
-    )
-    .await?;
     Ok(Some(to))
-}
-
-async fn copy_file(
-    from: &Path,
-    to: &Path,
-    controls: &mut FileOperationControls,
-    progress: Option<&ProgressSender>,
-    conflict_strategy: TransferConflictStrategy,
-    buffer: &mut [u8],
-    verification: FileOperationVerification,
-) -> Result<(), FileError> {
-    let metadata = fs::metadata(from)
-        .await
-        .map_err(|source| FileError::Metadata {
-            path: from.to_path_buf(),
-            source,
-        })?;
-    let Some(to) = prepare_copy_target(from, to, &metadata, conflict_strategy).await? else {
-        return Ok(());
-    };
-    copy_file_to_target(
-        from,
-        &to,
-        &metadata,
-        controls,
-        progress,
-        buffer,
-        verification,
-    )
-    .await
 }
 
 async fn copy_file_to_target(
     from: &Path,
     to: &Path,
-    metadata: &std::fs::Metadata,
+    source_object: &TransferSourceObject,
     controls: &mut FileOperationControls,
     progress: Option<&ProgressSender>,
     buffer: &mut [u8],
     verification: FileOperationVerification,
 ) -> Result<(), FileError> {
+    let metadata = &source_object.metadata;
     let mut reader = fs::File::open(from)
         .await
         .map_err(|source| FileError::Copy {
@@ -331,31 +321,17 @@ async fn copy_file_to_target(
     }
     drop(writer);
 
-    let permissions_preserved = match fs::set_permissions(to, metadata.permissions()).await {
-        Ok(()) => true,
-        Err(source) if copy_permission_unsupported(&source) => false,
-        Err(source) => {
-            let _ = fs::remove_file(to).await;
-            return Err(FileError::Copy {
-                from: from.to_path_buf(),
-                to: to.to_path_buf(),
-                source,
-            });
-        }
-    };
     let source_content_hash =
         source_content_hasher.map(|source_content_hasher| source_content_hasher.finalize());
-    if let Err(error) = verify_copied_file(
-        from,
-        to,
-        metadata,
-        controls,
-        buffer,
-        source_content_hash,
-        permissions_preserved,
-    )
-    .await
+    if let Err(error) =
+        verify_copied_file(from, to, metadata, controls, buffer, source_content_hash).await
     {
+        let _ = fs::remove_file(to).await;
+        return Err(error);
+    }
+
+    apply_transfer_metadata_best_effort(from, to, source_object).await;
+    if let Err(error) = controls.wait_until_running().await {
         let _ = fs::remove_file(to).await;
         return Err(error);
     }
@@ -363,128 +339,70 @@ async fn copy_file_to_target(
     Ok(())
 }
 
-async fn verify_copied_file(
+#[cfg(unix)]
+async fn copy_symbolic_link_to_target(
     from: &Path,
     to: &Path,
-    source_metadata: &std::fs::Metadata,
+    source_object: &TransferSourceObject,
     controls: &mut FileOperationControls,
-    buffer: &mut [u8],
-    expected_content_hash: Option<blake3::Hash>,
-    permissions_preserved: bool,
 ) -> Result<(), FileError> {
-    controls.wait_until_running().await?;
-    let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
-        from: from.to_path_buf(),
-        to: to.to_path_buf(),
-        source,
-    })?;
-    if !target_metadata.is_file() {
-        return Err(copy_verification_error(
-            from,
-            to,
-            "target is not a regular file after copy",
-        ));
-    }
-    if target_metadata.len() != source_metadata.len() {
-        return Err(copy_verification_error(
-            from,
-            to,
-            "target file size differs from source after copy",
-        ));
-    }
-    if permissions_preserved
-        && target_metadata.permissions().readonly() != source_metadata.permissions().readonly()
-    {
-        return Err(copy_verification_error(
-            from,
-            to,
-            "target readonly flag differs from source after copy",
-        ));
-    }
-    if let Some(expected_content_hash) = expected_content_hash {
-        let target_content_hash = copied_file_content_hash(from, to, controls, buffer).await?;
-        if target_content_hash != expected_content_hash {
-            return Err(copy_verification_error(
-                from,
-                to,
-                "target file content hash differs from source after copy",
-            ));
-        }
-    }
-    Ok(())
-}
+    let TransferSourceKind::SymbolicLink {
+        target: link_target,
+    } = &source_object.kind
+    else {
+        unreachable!();
+    };
+    fs::symlink(link_target, to)
+        .await
+        .map_err(|source| FileError::Copy {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            source,
+        })?;
 
-fn copy_permission_unsupported(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::Unsupported || operation_not_supported_os_error(error)
-}
+    let completion = async {
+        verify_copied_symbolic_link(from, to, link_target).await?;
+        controls.wait_until_running().await?;
+        apply_transfer_metadata_best_effort(from, to, source_object).await;
+        controls.wait_until_running().await
+    }
+    .await;
 
-#[cfg(unix)]
-fn operation_not_supported_os_error(error: &io::Error) -> bool {
-    error.raw_os_error() == Some(95)
+    if completion.is_err() {
+        let _ = fs::remove_file(to).await;
+    }
+    completion
 }
 
 #[cfg(not(unix))]
-fn operation_not_supported_os_error(_error: &io::Error) -> bool {
-    false
-}
-
-async fn copied_file_content_hash(
+async fn copy_symbolic_link_to_target(
     from: &Path,
-    to: &Path,
-    controls: &mut FileOperationControls,
-    buffer: &mut [u8],
-) -> Result<blake3::Hash, FileError> {
-    let mut target = fs::File::open(to).await.map_err(|source| FileError::Copy {
-        from: from.to_path_buf(),
-        to: to.to_path_buf(),
-        source,
-    })?;
-    let mut target_content_hasher = blake3::Hasher::new();
-
-    loop {
-        controls.wait_until_running().await?;
-        let read = target
-            .read(buffer)
-            .await
-            .map_err(|source| FileError::Copy {
-                from: from.to_path_buf(),
-                to: to.to_path_buf(),
-                source,
-            })?;
-        if read == 0 {
-            return Ok(target_content_hasher.finalize());
-        }
-        target_content_hasher.update(&buffer[..read]);
-    }
+    _to: &Path,
+    _source_object: &TransferSourceObject,
+    _controls: &mut FileOperationControls,
+) -> Result<(), FileError> {
+    Err(FileError::InvalidInput {
+        path: from.to_path_buf(),
+        message: "cannot transfer symbolic links on this platform".to_owned(),
+    })
 }
 
-async fn verify_copied_directory(from: &Path, to: &Path) -> Result<(), FileError> {
-    let target_metadata = fs::metadata(to).await.map_err(|source| FileError::Copy {
-        from: from.to_path_buf(),
-        to: to.to_path_buf(),
-        source,
-    })?;
-    if !target_metadata.is_dir() {
-        return Err(copy_verification_error(
-            from,
-            to,
-            "target is not a directory after copy",
-        ));
-    }
-    Ok(())
-}
-
-fn copy_verification_error(from: &Path, to: &Path, message: &'static str) -> FileError {
-    FileError::Copy {
-        from: from.to_path_buf(),
-        to: to.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::InvalidData, message),
-    }
+enum DirectoryCopyStep {
+    CopyChildren {
+        source: PathBuf,
+        target: PathBuf,
+    },
+    PreserveMetadata {
+        source: PathBuf,
+        target: PathBuf,
+        source_object: TransferSourceObject,
+    },
 }
 
 async fn copy_directory(
     from: &Path,
     to: &Path,
+    source_object: &TransferSourceObject,
     controls: &mut FileOperationControls,
     progress: Option<&ProgressSender>,
     conflict_strategy: TransferConflictStrategy,
@@ -497,24 +415,62 @@ async fn copy_directory(
         });
     }
 
-    let created_root = ensure_copy_directory_target(from, to, conflict_strategy).await?;
-    if let Err(error) = verify_copied_directory(from, to).await {
-        if created_root {
-            let _ = fs::remove_dir_all(to).await;
-        }
-        return Err(error);
+    let created_root = ensure_copy_directory_target(from, to).await?;
+    let mut pending_steps = Vec::new();
+    if created_root {
+        pending_steps.push(DirectoryCopyStep::PreserveMetadata {
+            source: from.to_path_buf(),
+            target: to.to_path_buf(),
+            source_object: source_object.clone(),
+        });
     }
+    pending_steps.push(DirectoryCopyStep::CopyChildren {
+        source: from.to_path_buf(),
+        target: to.to_path_buf(),
+    });
 
+    let copy_outcome = async {
+        verify_copied_directory(from, to).await?;
+        copy_directory_contents(
+            pending_steps,
+            controls,
+            progress,
+            conflict_strategy,
+            verification,
+        )
+        .await
+    }
+    .await;
+
+    if copy_outcome.is_err() && created_root {
+        let _ = fs::remove_dir_all(to).await;
+    }
+    copy_outcome
+}
+
+async fn copy_directory_contents(
+    mut pending_steps: Vec<DirectoryCopyStep>,
+    controls: &mut FileOperationControls,
+    progress: Option<&ProgressSender>,
+    conflict_strategy: TransferConflictStrategy,
+    verification: FileOperationVerification,
+) -> Result<(), FileError> {
     let mut buffer = vec![0; COPY_BUFFER_SIZE];
-    let mut pending_directories = vec![(from.to_path_buf(), to.to_path_buf())];
-    while let Some((source_directory, target_directory)) = pending_directories.pop() {
-        if let Err(error) = controls.wait_until_running().await {
-            if created_root {
-                let _ = fs::remove_dir_all(to).await;
-            }
-            return Err(error);
-        }
 
+    while let Some(step) = pending_steps.pop() {
+        controls.wait_until_running().await?;
+        let (source_directory, target_directory) = match step {
+            DirectoryCopyStep::CopyChildren { source, target } => (source, target),
+            DirectoryCopyStep::PreserveMetadata {
+                source,
+                target,
+                source_object,
+            } => {
+                apply_transfer_metadata_best_effort(&source, &target, &source_object).await;
+                controls.wait_until_running().await?;
+                continue;
+            }
+        };
         let mut entries =
             fs::read_dir(&source_directory)
                 .await
@@ -525,13 +481,7 @@ async fn copy_directory(
                 })?;
 
         loop {
-            if let Err(error) = controls.wait_until_running().await {
-                if created_root {
-                    let _ = fs::remove_dir_all(to).await;
-                }
-                return Err(error);
-            }
-
+            controls.wait_until_running().await?;
             let Some(entry) = entries
                 .next_entry()
                 .await
@@ -546,66 +496,62 @@ async fn copy_directory(
 
             let source_child = entry.path();
             let target_child = target_directory.join(entry.file_name());
-            let file_type = entry
-                .file_type()
-                .await
-                .map_err(|source| FileError::Metadata {
-                    path: source_child.clone(),
-                    source,
-                })?;
-
-            if file_type.is_dir() {
-                let source_metadata =
-                    fs::metadata(&source_child)
-                        .await
-                        .map_err(|source| FileError::Metadata {
-                            path: source_child.clone(),
-                            source,
-                        })?;
-                if let Some(target_child) = prepare_copy_target(
-                    &source_child,
-                    &target_child,
-                    &source_metadata,
-                    conflict_strategy,
-                )
-                .await?
-                {
-                    if let Err(error) = ensure_copy_directory_target(
-                        &source_child,
-                        &target_child,
-                        conflict_strategy,
-                    )
-                    .await
-                    {
-                        if created_root {
-                            let _ = fs::remove_dir_all(to).await;
-                        }
-                        return Err(error);
-                    }
-                    if let Err(error) = verify_copied_directory(&source_child, &target_child).await
-                    {
-                        if created_root {
-                            let _ = fs::remove_dir_all(to).await;
-                        }
-                        return Err(error);
-                    }
-                    pending_directories.push((source_child, target_child));
+            let source_object = inspect_transfer_source(&source_child).await?;
+            let child_conflict_strategy = match &source_object.kind {
+                TransferSourceKind::Directory => conflict_strategy,
+                TransferSourceKind::RegularFile | TransferSourceKind::SymbolicLink { .. } => {
+                    nested_copy_conflict_strategy(conflict_strategy)
                 }
-            } else if let Err(error) = copy_file(
+            };
+            let Some(target_child) = prepare_copy_target(
                 &source_child,
                 &target_child,
-                controls,
-                progress,
-                nested_copy_conflict_strategy(conflict_strategy),
-                &mut buffer,
-                verification,
+                &source_object.metadata,
+                child_conflict_strategy,
             )
-            .await
-            {
-                if created_root {
-                    let _ = fs::remove_dir_all(to).await;
+            .await?
+            else {
+                continue;
+            };
+
+            match &source_object.kind {
+                TransferSourceKind::Directory => {
+                    let created_directory =
+                        ensure_copy_directory_target(&source_child, &target_child).await?;
+                    verify_copied_directory(&source_child, &target_child).await?;
+                    if created_directory {
+                        pending_steps.push(DirectoryCopyStep::PreserveMetadata {
+                            source: source_child.clone(),
+                            target: target_child.clone(),
+                            source_object: source_object.clone(),
+                        });
+                    }
+                    pending_steps.push(DirectoryCopyStep::CopyChildren {
+                        source: source_child,
+                        target: target_child,
+                    });
                 }
-                return Err(error);
+                TransferSourceKind::RegularFile => {
+                    copy_file_to_target(
+                        &source_child,
+                        &target_child,
+                        &source_object,
+                        controls,
+                        progress,
+                        &mut buffer,
+                        verification,
+                    )
+                    .await?;
+                }
+                TransferSourceKind::SymbolicLink { .. } => {
+                    copy_symbolic_link_to_target(
+                        &source_child,
+                        &target_child,
+                        &source_object,
+                        controls,
+                    )
+                    .await?;
+                }
             }
         }
     }
@@ -664,11 +610,7 @@ async fn prepare_copy_target(
     }
 }
 
-async fn ensure_copy_directory_target(
-    from: &Path,
-    to: &Path,
-    _conflict_strategy: TransferConflictStrategy,
-) -> Result<bool, FileError> {
+async fn ensure_copy_directory_target(from: &Path, to: &Path) -> Result<bool, FileError> {
     if transfer_target_metadata_if_exists(to)
         .await
         .map_err(|source| FileError::Copy {
@@ -717,6 +659,3 @@ async fn remove_copy_target(
         source,
     })
 }
-
-#[cfg(test)]
-mod tests;

@@ -39,12 +39,13 @@ File Manager 是一个面向 Linux 桌面的文件管理器，主要面向 Wayla
 
 ## 运行依赖
 
-核心桌面集成功能会调用以下系统命令：
+核心文件操作和桌面集成功能依赖以下系统库或命令：
 
 - 打开文件和查询默认应用需要 `xdg-open`、`xdg-mime`；Arch Linux 由 `xdg-utils` 包提供
 - Wayland 文件剪贴板需要 `wl-copy`、`wl-paste`；Arch Linux 由 `wl-clipboard` 包提供
 - “打开方式”需要 `gio`；Arch Linux 由 `glib2` 包提供
 - 文件任务桌面通知需要 `notify-send`；Arch Linux 由 `libnotify` 包提供
+- 复制和跨文件系统移动保留 POSIX ACL 需要 `libacl`；Arch Linux 由 `acl` 包提供
 
 可选预览和压缩包工具：
 
@@ -86,7 +87,7 @@ journalctl --user -u file-manager-search.service -f
 
 ```bash
 sudo pacman -S --needed base-devel git rust cargo pkgconf \
-  alsa-lib fontconfig glib2 libnotify libxkbcommon wayland wl-clipboard xdg-utils
+  acl alsa-lib fontconfig glib2 libnotify libxkbcommon wayland wl-clipboard xdg-utils
 ```
 
 按需安装可选预览、压缩包、网络位置、密码和存储设备支持：

@@ -6,6 +6,7 @@ arch=('x86_64')
 url='https://github.com/nsjsv/File_Manager'
 license=('GPL-3.0-or-later')
 depends=(
+    'acl'
     'alsa-lib'
     'fontconfig'
     'glib2'

@@ -32,6 +32,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
+            acl \
             alsa-lib \
             cargo \
             fontconfig \
