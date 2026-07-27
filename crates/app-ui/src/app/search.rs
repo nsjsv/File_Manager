@@ -11,7 +11,8 @@ use crate::commands::{
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
     DirectoryFallbackCompletion, IndexedSearchOutcome, Message, NavigationMode,
-    SearchServiceRecoveryAction,
+    SearchServiceDiagnostic, SearchServiceDiagnosticKind, SearchServiceRecoveryAction,
+    SearchServiceStatusRequest,
 };
 
 impl FileBrowser {
@@ -60,7 +61,9 @@ impl FileBrowser {
                 self.search.apply_indexed_batch(batch);
             }
             IndexedSearchOutcome::TransportUnavailable(message) => {
-                self.search.accept_endpoint_failure(message.clone());
+                self.search
+                    .service
+                    .observe_query_transport_failure(&message);
                 return self.switch_to_directory_fallback(message);
             }
             IndexedSearchOutcome::ProviderUnavailable(message) => {
@@ -125,17 +128,52 @@ impl FileBrowser {
     pub(super) fn accept_search_service_recovery(
         &mut self,
         action: SearchServiceRecoveryAction,
-        outcome: Result<file_search::SearchServiceStatus, String>,
+        outcome: Result<file_search::SearchServiceStatus, SearchServiceDiagnostic>,
     ) -> Task<Message> {
-        let completion = outcome.map(|_| ());
         if self
             .search
-            .accept_service_recovery_completion(action, completion)
+            .accept_service_recovery_completion(action, outcome)
         {
-            search_service_status_command()
+            Task::none()
         } else {
             Task::none()
         }
+    }
+
+    pub(super) fn refresh_search_service_status(&mut self) -> Task<Message> {
+        self.search
+            .service
+            .request_status_refresh()
+            .map(search_service_status_command)
+            .unwrap_or_else(Task::none)
+    }
+
+    pub(super) fn accept_search_service_status(
+        &mut self,
+        request: SearchServiceStatusRequest,
+        outcome: Result<file_search::SearchServiceStatus, SearchServiceDiagnostic>,
+    ) -> Task<Message> {
+        self.search.service.accept_status_request(request, outcome);
+        Task::none()
+    }
+
+    pub(super) fn toggle_search_service_incident_details(
+        &mut self,
+        kind: SearchServiceDiagnosticKind,
+    ) -> Task<Message> {
+        self.search.service.toggle_incident_technical_detail(kind);
+        Task::none()
+    }
+
+    pub(super) fn copy_search_service_incident_details(
+        &self,
+        kind: SearchServiceDiagnosticKind,
+    ) -> Task<Message> {
+        self.search
+            .service
+            .incident_technical_detail(kind)
+            .map(iced::clipboard::write)
+            .unwrap_or_else(Task::none)
     }
 
     pub(super) fn toggle_search_content_indexing(&mut self) -> Task<Message> {
@@ -201,11 +239,11 @@ mod tests {
 
     use super::FileBrowser;
     use crate::config;
-    use crate::model::search::{
-        SearchProvider, SearchServiceRecoveryAction, SearchServiceRecoveryState,
-        SEARCH_RESULT_WINDOW,
+    use crate::model::search::{SearchProvider, SEARCH_RESULT_WINDOW};
+    use crate::model::{
+        DirectoryFallbackCompletion, IndexedSearchOutcome, SearchServiceRecoveryAction,
+        SearchServiceRecoveryState, SettingsCategory,
     };
-    use crate::model::{DirectoryFallbackCompletion, IndexedSearchOutcome, SettingsCategory};
 
     fn browser_for_search_tests() -> FileBrowser {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
@@ -559,7 +597,10 @@ mod tests {
 
         drop(browser.handle_focused_window_escape_pressed());
 
-        assert_eq!(browser.search.recovery, SearchServiceRecoveryState::Idle);
+        assert_eq!(
+            browser.search.service.recovery,
+            SearchServiceRecoveryState::Idle
+        );
         assert!(browser.settings_window.is_some());
     }
 
@@ -571,7 +612,10 @@ mod tests {
 
         drop(browser.select_settings_category(SettingsCategory::General));
 
-        assert_eq!(browser.search.recovery, SearchServiceRecoveryState::Idle);
+        assert_eq!(
+            browser.search.service.recovery,
+            SearchServiceRecoveryState::Idle
+        );
         assert_eq!(
             browser.selected_settings_category,
             SettingsCategory::General
@@ -586,7 +630,10 @@ mod tests {
 
         drop(browser.close_settings_window());
 
-        assert_eq!(browser.search.recovery, SearchServiceRecoveryState::Idle);
+        assert_eq!(
+            browser.search.service.recovery,
+            SearchServiceRecoveryState::Idle
+        );
         assert!(browser.settings_window.is_none());
     }
 
@@ -602,7 +649,7 @@ mod tests {
         drop(browser.close_settings_window());
 
         assert_eq!(
-            browser.search.recovery,
+            browser.search.service.recovery,
             SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::Restart)
         );
         assert!(browser.settings_window.is_none());

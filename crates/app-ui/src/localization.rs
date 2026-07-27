@@ -6,6 +6,7 @@ use crate::config::UiLanguage;
 mod file_operation_notifications;
 mod index_status;
 mod search_service_recovery;
+mod search_service_status;
 
 static CURRENT_LANGUAGE: AtomicU8 = AtomicU8::new(UiLanguage::English.as_u8());
 
@@ -35,6 +36,10 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
     }
 
     if let Some(translated) = search_service_recovery::translate(text) {
+        return Cow::Owned(translated);
+    }
+
+    if let Some(translated) = search_service_status::translate(text) {
         return Cow::Owned(translated);
     }
 

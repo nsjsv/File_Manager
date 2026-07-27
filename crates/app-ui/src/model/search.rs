@@ -1,5 +1,7 @@
-use file_search::{SearchHit, SearchQuery, SearchResultBatch, SearchServiceStatus};
+use file_search::{SearchHit, SearchQuery, SearchResultBatch};
 use tokio_util::sync::CancellationToken;
+
+use super::{SearchServiceDiagnostic, SearchServiceRecoveryAction, SearchServiceState};
 
 pub(crate) const SEARCH_RESULT_WINDOW: usize = 100;
 
@@ -20,37 +22,6 @@ pub(crate) enum DirectoryFallbackCompletion {
     Failed(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SearchEndpointState {
-    Starting,
-    Connected(SearchServiceStatus),
-    Unavailable { message: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchServiceRecoveryAction {
-    Restart,
-    ForceRestart,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SearchServiceRecoveryState {
-    Idle,
-    ConfirmingForceRestart,
-    Running(SearchServiceRecoveryAction),
-    Succeeded(SearchServiceRecoveryAction),
-    Failed {
-        action: SearchServiceRecoveryAction,
-        message: String,
-    },
-}
-
-impl SearchServiceRecoveryState {
-    pub(crate) fn is_running(&self) -> bool {
-        matches!(self, Self::Running(_))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchProvider {
     Indexed,
@@ -66,8 +37,7 @@ pub(crate) struct SearchState {
     pub(crate) results: Vec<SearchHit>,
     pub(crate) is_loading: bool,
     pub(crate) indexed_batch_seen: bool,
-    pub(crate) endpoint: SearchEndpointState,
-    pub(crate) recovery: SearchServiceRecoveryState,
+    pub(crate) service: SearchServiceState,
     pub(crate) error: Option<String>,
     current_query_cancel: Option<CancellationToken>,
 }
@@ -82,8 +52,7 @@ impl SearchState {
             results: Vec::new(),
             is_loading: false,
             indexed_batch_seen: false,
-            endpoint: SearchEndpointState::Starting,
-            recovery: SearchServiceRecoveryState::Idle,
+            service: SearchServiceState::new(),
             error: None,
             current_query_cancel: None,
         }
@@ -184,60 +153,24 @@ impl SearchState {
         }
     }
 
-    pub(crate) fn accept_endpoint_status(&mut self, status: SearchServiceStatus) {
-        self.endpoint = SearchEndpointState::Connected(status);
-    }
-
-    pub(crate) fn accept_endpoint_failure(&mut self, message: String) {
-        self.endpoint = SearchEndpointState::Unavailable { message };
-    }
-
     pub(crate) fn begin_service_restart(&mut self) -> Option<SearchServiceRecoveryAction> {
-        if self.recovery.is_running() {
-            return None;
-        }
-        let action = SearchServiceRecoveryAction::Restart;
-        self.recovery = SearchServiceRecoveryState::Running(action);
-        Some(action)
+        self.service.begin_restart()
     }
 
     pub(crate) fn press_force_restart(&mut self) -> Option<SearchServiceRecoveryAction> {
-        match &self.recovery {
-            SearchServiceRecoveryState::Running(_) => None,
-            SearchServiceRecoveryState::ConfirmingForceRestart => {
-                let action = SearchServiceRecoveryAction::ForceRestart;
-                self.recovery = SearchServiceRecoveryState::Running(action);
-                Some(action)
-            }
-            _ => {
-                self.recovery = SearchServiceRecoveryState::ConfirmingForceRestart;
-                None
-            }
-        }
+        self.service.press_force_restart()
     }
 
     pub(crate) fn cancel_force_restart_confirmation(&mut self) -> bool {
-        if self.recovery == SearchServiceRecoveryState::ConfirmingForceRestart {
-            self.recovery = SearchServiceRecoveryState::Idle;
-            true
-        } else {
-            false
-        }
+        self.service.cancel_force_restart_confirmation()
     }
 
     pub(crate) fn accept_service_recovery_completion(
         &mut self,
         action: SearchServiceRecoveryAction,
-        outcome: Result<(), String>,
+        outcome: Result<file_search::SearchServiceStatus, SearchServiceDiagnostic>,
     ) -> bool {
-        if self.recovery != SearchServiceRecoveryState::Running(action) {
-            return false;
-        }
-        self.recovery = match outcome {
-            Ok(()) => SearchServiceRecoveryState::Succeeded(action),
-            Err(message) => SearchServiceRecoveryState::Failed { action, message },
-        };
-        true
+        self.service.accept_recovery_completion(action, outcome)
     }
 
     pub(crate) fn abandon_query(&mut self) {
@@ -279,9 +212,8 @@ mod tests {
 
     use file_search::{SearchQuery, SearchScope};
 
-    use super::{
-        SearchEndpointState, SearchServiceRecoveryAction, SearchServiceRecoveryState, SearchState,
-    };
+    use super::SearchState;
+    use crate::model::{SearchServiceRecoveryAction, SearchServiceRecoveryState};
 
     fn directory_query(query_id: u64) -> SearchQuery {
         SearchQuery {
@@ -296,9 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_failure_does_not_activate_search_results_view() {
+    fn service_diagnostic_does_not_activate_search_results_view() {
         let mut state = SearchState::new();
-        state.accept_endpoint_failure("daemon exited".to_owned());
+        state
+            .service
+            .observe_query_transport_failure("daemon exited");
 
         assert!(!state.is_active());
         assert!(state.error.is_none());
@@ -357,7 +291,7 @@ mod tests {
 
         assert_eq!(state.press_force_restart(), None);
         assert_eq!(
-            state.recovery,
+            state.service.recovery,
             SearchServiceRecoveryState::ConfirmingForceRestart
         );
         assert_eq!(
@@ -365,7 +299,7 @@ mod tests {
             Some(SearchServiceRecoveryAction::ForceRestart)
         );
         assert_eq!(
-            state.recovery,
+            state.service.recovery,
             SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::ForceRestart)
         );
     }
@@ -381,35 +315,9 @@ mod tests {
         assert_eq!(state.begin_service_restart(), None);
         assert_eq!(state.press_force_restart(), None);
         assert_eq!(
-            state.recovery,
+            state.service.recovery,
             SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::Restart)
         );
-    }
-
-    #[test]
-    fn recovery_failure_does_not_overwrite_endpoint_state() {
-        let mut state = SearchState::new();
-        state.accept_endpoint_failure("daemon currently unavailable".to_owned());
-        let endpoint_before_recovery = state.endpoint.clone();
-        let action = state.begin_service_restart().unwrap();
-
-        assert!(state.accept_service_recovery_completion(
-            action,
-            Err("systemctl restart failed".to_owned())
-        ));
-
-        assert_eq!(state.endpoint, endpoint_before_recovery);
-        assert_eq!(
-            state.recovery,
-            SearchServiceRecoveryState::Failed {
-                action,
-                message: "systemctl restart failed".to_owned(),
-            }
-        );
-        assert!(matches!(
-            state.endpoint,
-            SearchEndpointState::Unavailable { .. }
-        ));
     }
 
     #[test]
@@ -419,7 +327,7 @@ mod tests {
 
         assert!(state.cancel_force_restart_confirmation());
 
-        assert_eq!(state.recovery, SearchServiceRecoveryState::Idle);
+        assert_eq!(state.service.recovery, SearchServiceRecoveryState::Idle);
         assert!(!state.cancel_force_restart_confirmation());
     }
 }

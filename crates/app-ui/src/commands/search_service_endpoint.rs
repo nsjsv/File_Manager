@@ -12,6 +12,7 @@ const SEARCH_ENDPOINT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SearchEndpointProbeFailure {
+    TimedOut,
     TemporarilyUnavailable(String),
     RestartRequired(String),
     Incompatible {
@@ -23,6 +24,7 @@ pub(super) enum SearchEndpointProbeFailure {
 impl SearchEndpointProbeFailure {
     pub(super) fn into_message(self) -> String {
         match self {
+            Self::TimedOut => "search service endpoint inspection timed out".to_owned(),
             Self::TemporarilyUnavailable(message) | Self::RestartRequired(message) => message,
             Self::Incompatible {
                 actual_protocol,
@@ -45,11 +47,7 @@ pub(super) async fn inspect_search_endpoint(
         inspect_search_endpoint_without_timeout(socket_path, expected_main_pid),
     )
     .await
-    .map_err(|_| {
-        SearchEndpointProbeFailure::TemporarilyUnavailable(
-            "search service endpoint inspection timed out".to_owned(),
-        )
-    })?
+    .map_err(|_| SearchEndpointProbeFailure::TimedOut)?
 }
 
 async fn inspect_search_endpoint_without_timeout(

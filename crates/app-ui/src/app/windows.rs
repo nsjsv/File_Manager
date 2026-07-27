@@ -306,16 +306,18 @@ impl FileBrowser {
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
         let _ = self.cancel_address_editing();
-        let refresh_application_logs = if self.selected_settings_category == SettingsCategory::Logs
-        {
-            self.refresh_application_logs()
-        } else {
-            Task::none()
+        let refresh_selected_category = match self.selected_settings_category {
+            SettingsCategory::Search => self.refresh_search_service_status(),
+            SettingsCategory::Logs => self.refresh_application_logs(),
+            SettingsCategory::General
+            | SettingsCategory::Appearance
+            | SettingsCategory::Files
+            | SettingsCategory::Shortcuts => Task::none(),
         };
         Task::batch([
             self.commit_rename_if_active(),
             self.ensure_settings_window(),
-            refresh_application_logs,
+            refresh_selected_category,
         ])
     }
 
@@ -327,10 +329,13 @@ impl FileBrowser {
             self.invalidate_startup_directory_validation();
         }
         self.selected_settings_category = category;
-        if category == SettingsCategory::Logs {
-            self.refresh_application_logs()
-        } else {
-            Task::none()
+        match category {
+            SettingsCategory::Search => self.refresh_search_service_status(),
+            SettingsCategory::Logs => self.refresh_application_logs(),
+            SettingsCategory::General
+            | SettingsCategory::Appearance
+            | SettingsCategory::Files
+            | SettingsCategory::Shortcuts => Task::none(),
         }
     }
 

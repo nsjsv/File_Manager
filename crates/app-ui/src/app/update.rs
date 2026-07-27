@@ -1,5 +1,4 @@
 use super::FileBrowser;
-use crate::commands::search_service_status_command;
 use crate::model::{Message, NavigationMode, OperationQueuePanelMode, ScrollbarRegion as Region};
 use iced::Task;
 impl FileBrowser {
@@ -516,25 +515,23 @@ impl FileBrowser {
             Message::SearchResultsScrolled => {
                 self.show_scrollbars_temporarily(Region::SearchResults)
             }
-            Message::SearchServiceEnsured(outcome) => {
-                match outcome {
-                    Ok(status) => self.search.accept_endpoint_status(status),
-                    Err(error) => self.search.accept_endpoint_failure(error),
-                }
-                Task::none()
+            Message::SearchServiceEnsured(request, outcome) => {
+                self.accept_search_service_status(request, outcome)
             }
-            Message::SearchServiceStatusRefreshRequested => search_service_status_command(),
-            Message::SearchServiceStatusLoaded(outcome) => {
-                match outcome {
-                    Ok(status) => self.search.accept_endpoint_status(status),
-                    Err(error) => self.search.accept_endpoint_failure(error),
-                }
-                Task::none()
+            Message::SearchServiceStatusRefreshRequested => self.refresh_search_service_status(),
+            Message::SearchServiceStatusLoaded(request, outcome) => {
+                self.accept_search_service_status(request, outcome)
             }
             Message::SearchServiceRestartRequested => self.restart_search_service(),
             Message::SearchServiceForceRestartPressed => self.press_force_restart_search_service(),
             Message::SearchServiceRecoveryFinished(action, outcome) => {
                 self.accept_search_service_recovery(action, outcome)
+            }
+            Message::SearchServiceIncidentDetailsToggled(kind) => {
+                self.toggle_search_service_incident_details(kind)
+            }
+            Message::SearchServiceIncidentDetailsCopyRequested(kind) => {
+                self.copy_search_service_incident_details(kind)
             }
             Message::SystemThemeDetected(theme) => {
                 self.theme = theme;

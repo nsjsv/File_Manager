@@ -12,10 +12,10 @@ use tempfile::tempdir;
 use tokio::net::UnixListener;
 
 use super::{
-    inspect_search_endpoint, SearchUnitAction, SearchUnitController, SearchUnitSnapshot,
-    UnitActiveState,
+    inspect_search_endpoint, SearchEndpointProbeFailure, SearchUnitAction, SearchUnitController,
+    SearchUnitSnapshot, UnitActiveState, ValidatedSearchServiceFailure,
 };
-use crate::model::SearchServiceRecoveryAction;
+use crate::model::{SearchServiceDiagnosticKind, SearchServiceRecoveryAction};
 
 fn valid_snapshot_text() -> &'static str {
     "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\nFragmentPath=/home/test/.config/systemd/user/file-manager-search.service\nDropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/override.conf\nExecStart={ path=/home/test/.local/share/file-manager-dev/file-searchd ; argv[]=/home/test/.local/share/file-manager-dev/file-searchd ; }\n"
@@ -119,6 +119,27 @@ fn unit_snapshot_parses_properties_without_order_dependency() {
         .description()
         .contains("ExecStartPath=/home/test/.local/share/file-manager-dev/file-searchd"));
     assert!(snapshot.description().contains("recovery action:"));
+}
+
+#[test]
+fn endpoint_timeout_maps_to_a_stable_user_diagnostic_category() {
+    let diagnostic = ValidatedSearchServiceFailure::StableOwnerEndpoint {
+        main_pid: NonZeroU32::new(42).unwrap(),
+        endpoint_failure: SearchEndpointProbeFailure::TimedOut,
+        unit_description: "Unit=file-manager-search.service".to_owned(),
+    }
+    .into_diagnostic();
+
+    assert_eq!(
+        diagnostic.kind,
+        SearchServiceDiagnosticKind::EndpointTimedOut
+    );
+    assert!(diagnostic
+        .technical_detail
+        .contains("endpoint inspection timed out"));
+    assert!(diagnostic
+        .technical_detail
+        .contains("Unit=file-manager-search.service"));
 }
 
 #[test]
@@ -753,9 +774,12 @@ async fn force_recovery_stops_after_a_systemctl_kill_failure() {
     .await
     .unwrap_err();
 
-    assert!(error.contains("systemctl --user kill file-manager-search.service failed"));
-    assert!(error.contains("permission denied"));
-    assert!(error.contains("before recovery:"));
+    assert_eq!(error.kind, SearchServiceDiagnosticKind::RecoveryFailed);
+    assert!(error
+        .technical_detail
+        .contains("systemctl --user kill file-manager-search.service failed"));
+    assert!(error.technical_detail.contains("permission denied"));
+    assert!(error.technical_detail.contains("before recovery:"));
     let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
     assert_eq!(
         systemctl_log.lines().collect::<Vec<_>>(),
@@ -822,9 +846,23 @@ async fn recovery_immediately_reports_an_incompatible_replacement_endpoint() {
     .unwrap_err();
 
     endpoint_server.await.unwrap();
-    assert!(error.contains(&format!("expected_protocol={PROTOCOL_VERSION}")));
-    assert!(error.contains(&format!("actual_protocol={}", PROTOCOL_VERSION - 1)));
-    assert!(error.contains(&format!("expected_build={}", daemon_build_id())));
-    assert!(error.contains(&format!("actual_build={}", daemon_build_id())));
-    assert!(error.contains("reinstall the search service components"));
+    assert_eq!(
+        error.kind,
+        SearchServiceDiagnosticKind::ComponentIncompatible
+    );
+    assert!(error
+        .technical_detail
+        .contains(&format!("expected_protocol={PROTOCOL_VERSION}")));
+    assert!(error
+        .technical_detail
+        .contains(&format!("actual_protocol={}", PROTOCOL_VERSION - 1)));
+    assert!(error
+        .technical_detail
+        .contains(&format!("expected_build={}", daemon_build_id())));
+    assert!(error
+        .technical_detail
+        .contains(&format!("actual_build={}", daemon_build_id())));
+    assert!(error
+        .technical_detail
+        .contains("reinstall the search service components"));
 }

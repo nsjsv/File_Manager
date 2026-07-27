@@ -10,7 +10,9 @@ use super::search_service::{
     ValidatedSearchServiceFailure,
 };
 use super::search_service_endpoint::SearchEndpointProbeFailure;
-use crate::model::{Message, SearchServiceRecoveryAction};
+use crate::model::{
+    Message, SearchServiceDiagnostic, SearchServiceDiagnosticKind, SearchServiceRecoveryAction,
+};
 
 const SEARCH_SERVICE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 const SEARCH_SERVICE_RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -25,9 +27,13 @@ pub(crate) fn search_service_recovery_command(
 
 async fn recover_search_service(
     action: SearchServiceRecoveryAction,
-) -> Result<SearchServiceStatus, String> {
-    let runtime_identity =
-        SearchRuntimeIdentity::from_environment().map_err(|error| error.to_string())?;
+) -> Result<SearchServiceStatus, SearchServiceDiagnostic> {
+    let runtime_identity = SearchRuntimeIdentity::from_environment().map_err(|error| {
+        SearchServiceDiagnostic::new(
+            SearchServiceDiagnosticKind::RecoveryFailed,
+            error.to_string(),
+        )
+    })?;
     let unit_controller = SearchUnitController::system(runtime_identity);
     recover_search_service_with(&unit_controller, &runtime_identity.socket_path(), action).await
 }
@@ -36,15 +42,20 @@ pub(super) async fn recover_search_service_with(
     unit_controller: &SearchUnitController,
     socket_path: &Path,
     action: SearchServiceRecoveryAction,
-) -> Result<SearchServiceStatus, String> {
-    let initial_snapshot = unit_controller.show().await?;
+) -> Result<SearchServiceStatus, SearchServiceDiagnostic> {
+    let initial_snapshot = unit_controller.show().await.map_err(|error| {
+        SearchServiceDiagnostic::new(SearchServiceDiagnosticKind::RecoveryFailed, error)
+    })?;
     let previous_main_pid = initial_snapshot.main_pid();
     issue_recovery_actions(unit_controller, &initial_snapshot, action)
         .await
         .map_err(|error| {
-            format!(
-                "{error}; before recovery: {}",
-                initial_snapshot.description()
+            SearchServiceDiagnostic::new(
+                SearchServiceDiagnosticKind::RecoveryFailed,
+                format!(
+                    "{error}; before recovery: {}",
+                    initial_snapshot.description()
+                ),
             )
         })?;
 
@@ -68,18 +79,24 @@ pub(super) async fn recover_search_service_with(
                 endpoint_failure: incompatibility @ SearchEndpointProbeFailure::Incompatible { .. },
                 unit_description,
             }) if owner_was_replaced(previous_main_pid, main_pid) => {
-                return Err(format!(
+                return Err(SearchServiceDiagnostic::new(
+                    SearchServiceDiagnosticKind::ComponentIncompatible,
+                    format!(
                         "{}; {unit_description}; reinstall the search service components from the current File Manager bundle, then try again",
                         incompatibility.into_message()
-                    ));
+                    ),
+                ));
             }
             Err(failure) => failure.into_message(),
         };
 
         if Instant::now() >= readiness_deadline {
-            return Err(format!(
-                "search service recovery did not produce a verified replacement owner within {} seconds; last observation: {last_observation}",
-                SEARCH_SERVICE_RECOVERY_TIMEOUT.as_secs()
+            return Err(SearchServiceDiagnostic::new(
+                SearchServiceDiagnosticKind::RecoveryFailed,
+                format!(
+                    "search service recovery did not produce a verified replacement owner within {} seconds; last observation: {last_observation}",
+                    SEARCH_SERVICE_RECOVERY_TIMEOUT.as_secs()
+                ),
             ));
         }
         tokio::time::sleep(SEARCH_SERVICE_RECOVERY_POLL_INTERVAL).await;

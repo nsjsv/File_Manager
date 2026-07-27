@@ -334,6 +334,8 @@ impl FileBrowser {
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
         let initial_view_mode = user_config.browser_view_mode;
+        let mut search = SearchState::new();
+        let initial_search_service_request = search.service.begin_initial_status_request();
         let mut initial_tab = BrowserTab::directory(0, placeholder_dir.clone());
         initial_tab.view_mode = initial_view_mode;
         let initial_pane = BrowserPane {
@@ -462,7 +464,7 @@ impl FileBrowser {
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             selected_settings_category: SettingsCategory::General,
-            search: SearchState::new(),
+            search,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             view_mode: initial_view_mode,
@@ -515,7 +517,7 @@ impl FileBrowser {
             Task::batch([
                 startup_environment_command(),
                 system_theme_command(),
-                ensure_search_service_command(),
+                ensure_search_service_command(initial_search_service_request),
             ]),
         )
     }

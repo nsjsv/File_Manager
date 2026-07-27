@@ -97,8 +97,12 @@ pub(crate) use application_logs::{
     APPLICATION_LOG_ENTRY_LIMIT, APP_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_IDENTIFIER,
 };
 pub(crate) mod search;
-pub(crate) use search::{
-    DirectoryFallbackCompletion, IndexedSearchOutcome, SearchServiceRecoveryAction,
+pub(crate) use search::{DirectoryFallbackCompletion, IndexedSearchOutcome};
+mod search_service;
+pub(crate) use search_service::{
+    SearchEndpointState, SearchServiceDiagnostic, SearchServiceDiagnosticKind,
+    SearchServiceIncident, SearchServiceIncidentState, SearchServiceRecoveryAction,
+    SearchServiceRecoveryState, SearchServiceState, SearchServiceStatusRequest,
 };
 mod session;
 pub(crate) use session::{
@@ -388,15 +392,23 @@ pub(crate) enum Message {
     SearchResultPressed(SearchHit),
     SearchCleared,
     SearchResultsScrolled,
-    SearchServiceEnsured(Result<SearchServiceStatus, String>),
+    SearchServiceEnsured(
+        SearchServiceStatusRequest,
+        Result<SearchServiceStatus, SearchServiceDiagnostic>,
+    ),
     SearchServiceStatusRefreshRequested,
-    SearchServiceStatusLoaded(Result<SearchServiceStatus, String>),
+    SearchServiceStatusLoaded(
+        SearchServiceStatusRequest,
+        Result<SearchServiceStatus, SearchServiceDiagnostic>,
+    ),
     SearchServiceRestartRequested,
     SearchServiceForceRestartPressed,
     SearchServiceRecoveryFinished(
         SearchServiceRecoveryAction,
-        Result<SearchServiceStatus, String>,
+        Result<SearchServiceStatus, SearchServiceDiagnostic>,
     ),
+    SearchServiceIncidentDetailsToggled(SearchServiceDiagnosticKind),
+    SearchServiceIncidentDetailsCopyRequested(SearchServiceDiagnosticKind),
     SystemThemeDetected(Theme),
     UserPreferencesSaved(Result<(), String>),
     AppConfigSaved(Result<(), String>),

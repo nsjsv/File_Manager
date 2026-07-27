@@ -9,30 +9,41 @@ use super::search_service_endpoint::{inspect_search_endpoint, SearchEndpointProb
 pub(super) use super::search_service_systemd::{
     SearchUnitAction, SearchUnitController, SearchUnitSnapshot, UnitActiveState,
 };
-use crate::model::Message;
+use crate::model::{
+    Message, SearchServiceDiagnostic, SearchServiceDiagnosticKind, SearchServiceStatusRequest,
+};
 
 const SEARCH_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const SEARCH_SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-pub(crate) fn ensure_search_service_command() -> Task<Message> {
-    Task::perform(ensure_search_service(), Message::SearchServiceEnsured)
+pub(crate) fn ensure_search_service_command(request: SearchServiceStatusRequest) -> Task<Message> {
+    Task::perform(ensure_search_service(), move |outcome| {
+        Message::SearchServiceEnsured(request, outcome)
+    })
 }
 
-pub(crate) fn search_service_status_command() -> Task<Message> {
-    Task::perform(
-        read_search_service_status(),
-        Message::SearchServiceStatusLoaded,
-    )
+pub(crate) fn search_service_status_command(request: SearchServiceStatusRequest) -> Task<Message> {
+    Task::perform(read_search_service_status(), move |outcome| {
+        Message::SearchServiceStatusLoaded(request, outcome)
+    })
 }
 
-async fn ensure_search_service() -> Result<SearchServiceStatus, String> {
-    let runtime_identity = configured_runtime_identity()?;
+async fn ensure_search_service() -> Result<SearchServiceStatus, SearchServiceDiagnostic> {
+    let runtime_identity = configured_runtime_identity().map_err(|error| {
+        SearchServiceDiagnostic::new(SearchServiceDiagnosticKind::ServiceUnverified, error)
+    })?;
     let unit_controller = SearchUnitController::system(runtime_identity);
-    ensure_search_service_with(&unit_controller, &runtime_identity.socket_path()).await
+    ensure_search_service_with(&unit_controller, &runtime_identity.socket_path())
+        .await
+        .map_err(|error| {
+            SearchServiceDiagnostic::new(SearchServiceDiagnosticKind::ServiceUnverified, error)
+        })
 }
 
-async fn read_search_service_status() -> Result<SearchServiceStatus, String> {
-    let runtime_identity = configured_runtime_identity()?;
+async fn read_search_service_status() -> Result<SearchServiceStatus, SearchServiceDiagnostic> {
+    let runtime_identity = configured_runtime_identity().map_err(|error| {
+        SearchServiceDiagnostic::new(SearchServiceDiagnosticKind::ServiceUnverified, error)
+    })?;
     let unit_controller = SearchUnitController::system(runtime_identity);
     read_search_service_status_with(&unit_controller, &runtime_identity.socket_path()).await
 }
@@ -44,11 +55,11 @@ fn configured_runtime_identity() -> Result<SearchRuntimeIdentity, String> {
 async fn read_search_service_status_with(
     unit_controller: &SearchUnitController,
     socket_path: &Path,
-) -> Result<SearchServiceStatus, String> {
+) -> Result<SearchServiceStatus, SearchServiceDiagnostic> {
     Ok(
         read_validated_search_service_with(unit_controller, socket_path)
             .await
-            .map_err(ValidatedSearchServiceFailure::into_message)?
+            .map_err(ValidatedSearchServiceFailure::into_diagnostic)?
             .status,
     )
 }
@@ -61,6 +72,7 @@ pub(super) struct ValidatedSearchService {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ValidatedSearchServiceFailure {
     OwnerUnverified(String),
+    OwnerChanged(String),
     StableOwnerEndpoint {
         main_pid: NonZeroU32,
         endpoint_failure: SearchEndpointProbeFailure,
@@ -71,12 +83,48 @@ pub(super) enum ValidatedSearchServiceFailure {
 impl ValidatedSearchServiceFailure {
     pub(super) fn into_message(self) -> String {
         match self {
-            Self::OwnerUnverified(message) => message,
+            Self::OwnerUnverified(message) | Self::OwnerChanged(message) => message,
             Self::StableOwnerEndpoint {
                 endpoint_failure,
                 unit_description,
                 ..
             } => format!("{}; {unit_description}", endpoint_failure.into_message()),
+        }
+    }
+
+    pub(super) fn into_diagnostic(self) -> SearchServiceDiagnostic {
+        match self {
+            Self::OwnerUnverified(message) => SearchServiceDiagnostic::new(
+                SearchServiceDiagnosticKind::ServiceUnverified,
+                message,
+            ),
+            Self::OwnerChanged(message) => {
+                SearchServiceDiagnostic::new(SearchServiceDiagnosticKind::ServiceChanging, message)
+            }
+            Self::StableOwnerEndpoint {
+                endpoint_failure,
+                unit_description,
+                ..
+            } => {
+                let diagnostic_kind = match &endpoint_failure {
+                    SearchEndpointProbeFailure::TimedOut => {
+                        SearchServiceDiagnosticKind::EndpointTimedOut
+                    }
+                    SearchEndpointProbeFailure::TemporarilyUnavailable(_) => {
+                        SearchServiceDiagnosticKind::EndpointUnavailable
+                    }
+                    SearchEndpointProbeFailure::RestartRequired(_) => {
+                        SearchServiceDiagnosticKind::EndpointInvalid
+                    }
+                    SearchEndpointProbeFailure::Incompatible { .. } => {
+                        SearchServiceDiagnosticKind::ComponentIncompatible
+                    }
+                };
+                SearchServiceDiagnostic::new(
+                    diagnostic_kind,
+                    format!("{}; {unit_description}", endpoint_failure.into_message()),
+                )
+            }
         }
     }
 }
@@ -97,7 +145,7 @@ pub(super) async fn read_validated_search_service_with(
         .await?;
     let endpoint_observation = inspect_search_endpoint(socket_path, expected_main_pid).await;
     let confirmed_snapshot = unit_controller.show().await.map_err(|error| {
-        ValidatedSearchServiceFailure::OwnerUnverified(format!(
+        ValidatedSearchServiceFailure::OwnerChanged(format!(
             "search service changed while its endpoint was inspected: {error}"
         ))
     })?;
@@ -105,12 +153,12 @@ pub(super) async fn read_validated_search_service_with(
         .validated_main_pid(&confirmed_snapshot)
         .await
         .map_err(|error| {
-            ValidatedSearchServiceFailure::OwnerUnverified(format!(
+            ValidatedSearchServiceFailure::OwnerChanged(format!(
                 "search service changed while its endpoint was inspected: {error}"
             ))
         })?;
     if confirmed_main_pid != expected_main_pid {
-        return Err(ValidatedSearchServiceFailure::OwnerUnverified(format!(
+        return Err(ValidatedSearchServiceFailure::OwnerChanged(format!(
             "search service changed while its endpoint was inspected: {}",
             confirmed_snapshot.description()
         )));
