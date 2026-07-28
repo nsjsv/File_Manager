@@ -183,28 +183,33 @@ fn sort_controls(state: &BatchRenameState) -> Element<'_, Message> {
 }
 
 fn extension_controls(state: &BatchRenameState) -> Element<'_, Message> {
-    column![
-        section_title("Extension"),
-        row![
-            pick_list(
-                BatchRenameExtensionMode::options(),
-                Some(state.extension.mode),
-                |mode| Message::BatchRename(BatchRenameMessage::ExtensionModeSelected(mode)),
-            )
-            .width(Length::Fill)
-            .text_size(12)
-            .padding([5, 8]),
-            input_column(
-                "New extension",
-                &state.extension.replacement,
-                BatchRenameMessage::ExtensionReplacementChanged
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-    ]
-    .spacing(6)
-    .into()
+    let mode = pick_list(
+        BatchRenameExtensionMode::options(),
+        Some(state.extension.mode),
+        |mode| Message::BatchRename(BatchRenameMessage::ExtensionModeSelected(mode)),
+    )
+    .width(Length::Fill)
+    .text_size(12)
+    .padding([5, 8]);
+    let controls = column![section_title("Extension")];
+    let controls = if state.extension.mode == BatchRenameExtensionMode::Replace {
+        controls.push(
+            row![
+                mode,
+                input_column(
+                    "New extension",
+                    &state.extension.replacement,
+                    BatchRenameMessage::ExtensionReplacementChanged
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+    } else {
+        controls.push(mode)
+    };
+
+    controls.spacing(6).into()
 }
 
 fn sequence_controls(state: &BatchRenameState) -> Element<'_, Message> {
@@ -254,7 +259,7 @@ fn sequence_controls(state: &BatchRenameState) -> Element<'_, Message> {
 }
 
 fn replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
-    column![
+    let mut controls = column![
         section_title("Replace"),
         pick_list(
             BatchRenameReplaceScope::options(),
@@ -278,32 +283,65 @@ fn replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        row![
-            input_column(
-                "Range start",
-                &state.replace.range_start_input,
-                BatchRenameMessage::ReplaceRangeStartChanged
-            ),
-            input_column(
-                "Range length",
-                &state.replace.range_length_input,
-                BatchRenameMessage::ReplaceRangeLengthChanged
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        checkbox(state.replace.ignore_case)
-            .label(crate::localization::translate_current("Ignore case"))
-            .on_toggle(
-                |value| Message::BatchRename(BatchRenameMessage::ReplaceIgnoreCaseToggled(value))
-            ),
-    ]
-    .spacing(6)
-    .into()
+    ];
+    if state.replace.scope == BatchRenameReplaceScope::Range {
+        controls = controls.push(
+            row![
+                input_column(
+                    "Range start",
+                    &state.replace.range_start_input,
+                    BatchRenameMessage::ReplaceRangeStartChanged
+                ),
+                input_column(
+                    "Range length",
+                    &state.replace.range_length_input,
+                    BatchRenameMessage::ReplaceRangeLengthChanged
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+    }
+
+    controls
+        .push(
+            checkbox(state.replace.ignore_case)
+                .label(crate::localization::translate_current("Ignore case"))
+                .on_toggle(|value| {
+                    Message::BatchRename(BatchRenameMessage::ReplaceIgnoreCaseToggled(value))
+                }),
+        )
+        .spacing(6)
+        .into()
 }
 
 fn insert_controls(state: &BatchRenameState) -> Element<'_, Message> {
-    column![
+    let mut fields = row![input_column(
+        "Text",
+        &state.insert.text,
+        BatchRenameMessage::InsertTextChanged
+    )]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    match state.insert.mode {
+        BatchRenameInsertMode::Position => {
+            fields = fields.push(input_column(
+                "Position",
+                &state.insert.position_input,
+                BatchRenameMessage::InsertPositionChanged,
+            ));
+        }
+        BatchRenameInsertMode::AfterAnchor => {
+            fields = fields.push(input_column(
+                "After text",
+                &state.insert.anchor,
+                BatchRenameMessage::InsertAnchorChanged,
+            ));
+        }
+        BatchRenameInsertMode::Before | BatchRenameInsertMode::After => {}
+    }
+
+    let mut controls = column![
         section_title("Insert"),
         pick_list(
             BatchRenameInsertMode::options(),
@@ -313,36 +351,35 @@ fn insert_controls(state: &BatchRenameState) -> Element<'_, Message> {
         .width(Length::Fill)
         .text_size(12)
         .padding([5, 8]),
-        row![
-            input_column(
-                "Text",
-                &state.insert.text,
-                BatchRenameMessage::InsertTextChanged
-            ),
-            input_column(
-                "Position",
-                &state.insert.position_input,
-                BatchRenameMessage::InsertPositionChanged
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        input_column(
-            "After text",
-            &state.insert.anchor,
-            BatchRenameMessage::InsertAnchorChanged
-        ),
-        checkbox(state.insert.ignore_extension)
-            .label(crate::localization::translate_current("Ignore extension"))
-            .on_toggle(|value| Message::BatchRename(
-                BatchRenameMessage::InsertIgnoreExtensionToggled(value)
-            )),
-    ]
-    .spacing(6)
-    .into()
+        fields,
+    ];
+    if state.insert.mode != BatchRenameInsertMode::Before {
+        controls = controls.push(
+            checkbox(state.insert.ignore_extension)
+                .label(crate::localization::translate_current("Ignore extension"))
+                .on_toggle(|value| {
+                    Message::BatchRename(BatchRenameMessage::InsertIgnoreExtensionToggled(value))
+                }),
+        );
+    }
+
+    controls.spacing(6).into()
 }
 
 fn slice_controls(state: &BatchRenameState) -> Element<'_, Message> {
+    let location = match state.slice.mode {
+        BatchRenameSliceMode::Position => input_column(
+            "Start",
+            &state.slice.start_input,
+            BatchRenameMessage::SliceStartChanged,
+        ),
+        BatchRenameSliceMode::AfterAnchor => input_column(
+            "After text",
+            &state.slice.anchor,
+            BatchRenameMessage::SliceAnchorChanged,
+        ),
+    };
+
     column![
         section_title("Slice"),
         pick_list(
@@ -354,11 +391,7 @@ fn slice_controls(state: &BatchRenameState) -> Element<'_, Message> {
         .text_size(12)
         .padding([5, 8]),
         row![
-            input_column(
-                "Start",
-                &state.slice.start_input,
-                BatchRenameMessage::SliceStartChanged
-            ),
+            location,
             input_column(
                 "Length",
                 &state.slice.length_input,
@@ -367,11 +400,6 @@ fn slice_controls(state: &BatchRenameState) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        input_column(
-            "After text",
-            &state.slice.anchor,
-            BatchRenameMessage::SliceAnchorChanged
-        ),
     ]
     .spacing(6)
     .into()
@@ -408,6 +436,51 @@ fn random_controls(state: &BatchRenameState) -> Element<'_, Message> {
 }
 
 fn remove_controls(state: &BatchRenameState) -> Element<'_, Message> {
+    let mode_controls: Element<'_, Message> = match state.remove.mode {
+        BatchRenameRemoveMode::TextAndRange => column![
+            input_column(
+                "Text",
+                &state.remove.text,
+                BatchRenameMessage::RemoveTextChanged
+            ),
+            row![
+                input_column(
+                    "Start",
+                    &state.remove.start_input,
+                    BatchRenameMessage::RemoveStartChanged
+                ),
+                input_column(
+                    "Length",
+                    &state.remove.length_input,
+                    BatchRenameMessage::RemoveLengthChanged
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(6)
+        .into(),
+        BatchRenameRemoveMode::CharacterClasses => column![
+            row![
+                remove_class_toggle(state, BatchRenameRemoveClass::Lowercase),
+                remove_class_toggle(state, BatchRenameRemoveClass::Uppercase),
+                remove_class_toggle(state, BatchRenameRemoveClass::Digits),
+                remove_class_toggle(state, BatchRenameRemoveClass::Symbols),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            row![
+                remove_class_toggle(state, BatchRenameRemoveClass::Brackets),
+                remove_class_toggle(state, BatchRenameRemoveClass::Whitespace),
+                remove_class_toggle(state, BatchRenameRemoveClass::Hanzi),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(6)
+        .into(),
+    };
+
     column![
         section_title("Remove"),
         pick_list(
@@ -418,40 +491,7 @@ fn remove_controls(state: &BatchRenameState) -> Element<'_, Message> {
         .width(Length::Fill)
         .text_size(12)
         .padding([5, 8]),
-        input_column(
-            "Text",
-            &state.remove.text,
-            BatchRenameMessage::RemoveTextChanged
-        ),
-        row![
-            input_column(
-                "Start",
-                &state.remove.start_input,
-                BatchRenameMessage::RemoveStartChanged
-            ),
-            input_column(
-                "Length",
-                &state.remove.length_input,
-                BatchRenameMessage::RemoveLengthChanged
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        row![
-            remove_class_toggle(state, BatchRenameRemoveClass::Lowercase),
-            remove_class_toggle(state, BatchRenameRemoveClass::Uppercase),
-            remove_class_toggle(state, BatchRenameRemoveClass::Digits),
-            remove_class_toggle(state, BatchRenameRemoveClass::Symbols),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        row![
-            remove_class_toggle(state, BatchRenameRemoveClass::Brackets),
-            remove_class_toggle(state, BatchRenameRemoveClass::Whitespace),
-            remove_class_toggle(state, BatchRenameRemoveClass::Hanzi),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
+        mode_controls,
     ]
     .spacing(6)
     .into()
@@ -462,7 +502,7 @@ fn remove_class_toggle(
     class: BatchRenameRemoveClass,
 ) -> Element<'static, Message> {
     checkbox(state.remove.classes.contains(&class))
-        .label(class.label())
+        .label(class.to_string())
         .on_toggle(move |value| {
             Message::BatchRename(BatchRenameMessage::RemoveClassToggled(class, value))
         })

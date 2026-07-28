@@ -82,7 +82,13 @@ impl PreparedBatchRenameRules {
             );
         }
         if !state.insert.text.is_empty() {
-            stem = insert_text(&stem, state, insert_position);
+            if state.insert.ignore_extension {
+                stem = insert_text(&stem, state, insert_position);
+            } else {
+                let name = join_stem_extension(&stem, extension.as_deref());
+                let name = insert_text(&name, state, insert_position);
+                (stem, extension) = split_file_name(&name);
+            }
         }
         if slice_start.is_some() || slice_length.is_some() {
             stem = slice_text(&stem, state, slice_start.unwrap_or(0), slice_length);

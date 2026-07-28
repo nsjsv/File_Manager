@@ -194,8 +194,114 @@ fn batch_rename_insert_supports_after_anchor() {
 
     assert_eq!(
         preview_names(&state),
-        vec!["photo-2026_final.txt", "notes-2026.txt"]
+        vec!["photo-2026_final.txt", "notes.txt-2026"]
     );
+}
+
+#[test]
+fn batch_rename_insert_scope_controls_extension_inclusion() {
+    let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
+    state.insert.mode = BatchRenameInsertMode::Position;
+    state.insert.position_input = "7".to_owned();
+    state.insert.text = "-x".to_owned();
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state)[0], "photo.j-xpg");
+
+    state.insert.ignore_extension = true;
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state)[0], "photo-x.jpg");
+}
+
+#[test]
+fn batch_rename_insert_scope_applies_to_after_and_anchor_modes() {
+    let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
+    state.insert.mode = BatchRenameInsertMode::After;
+    state.insert.text = "-x".to_owned();
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state)[0], "photo.jpg-x");
+
+    state.insert.ignore_extension = true;
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state)[0], "photo-x.jpg");
+
+    state.insert.mode = BatchRenameInsertMode::AfterAnchor;
+    state.insert.anchor = "jpg".to_owned();
+    state.insert.ignore_extension = false;
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state)[0], "photo.jpg-x");
+
+    state.insert.ignore_extension = true;
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state)[0], "photo-x.jpg");
+}
+
+#[test]
+fn batch_rename_extension_rule_runs_after_full_name_insert() {
+    let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
+    state.insert.mode = BatchRenameInsertMode::Position;
+    state.insert.position_input = "7".to_owned();
+    state.insert.text = "-x".to_owned();
+    state.extension.mode = BatchRenameExtensionMode::Uppercase;
+    state.rebuild_preview();
+
+    assert_eq!(preview_names(&state)[0], "photo.J-XPG");
+}
+
+#[test]
+fn batch_rename_mode_switches_preserve_hidden_rule_inputs() {
+    let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
+    state.extension.replacement = "bak".to_owned();
+    state.replace.range_start_input = "2".to_owned();
+    state.replace.range_length_input = "3".to_owned();
+    state.insert.position_input = "4".to_owned();
+    state.insert.anchor = "oto".to_owned();
+    state.insert.ignore_extension = true;
+    state.slice.start_input = "1".to_owned();
+    state.slice.anchor = "pho".to_owned();
+    state.remove.text = "o".to_owned();
+    state.remove.classes = vec![BatchRenameRemoveClass::Digits];
+
+    state.apply_update(BatchRenameMessage::ExtensionModeSelected(
+        BatchRenameExtensionMode::Replace,
+    ));
+    state.apply_update(BatchRenameMessage::ExtensionModeSelected(
+        BatchRenameExtensionMode::Preserve,
+    ));
+    state.apply_update(BatchRenameMessage::ReplaceScopeSelected(
+        BatchRenameReplaceScope::Range,
+    ));
+    state.apply_update(BatchRenameMessage::ReplaceScopeSelected(
+        BatchRenameReplaceScope::All,
+    ));
+    state.apply_update(BatchRenameMessage::InsertModeSelected(
+        BatchRenameInsertMode::Position,
+    ));
+    state.apply_update(BatchRenameMessage::InsertModeSelected(
+        BatchRenameInsertMode::Before,
+    ));
+    state.apply_update(BatchRenameMessage::SliceModeSelected(
+        BatchRenameSliceMode::AfterAnchor,
+    ));
+    state.apply_update(BatchRenameMessage::SliceModeSelected(
+        BatchRenameSliceMode::Position,
+    ));
+    state.apply_update(BatchRenameMessage::RemoveModeSelected(
+        BatchRenameRemoveMode::CharacterClasses,
+    ));
+    state.apply_update(BatchRenameMessage::RemoveModeSelected(
+        BatchRenameRemoveMode::TextAndRange,
+    ));
+
+    assert_eq!(state.extension.replacement, "bak");
+    assert_eq!(state.replace.range_start_input, "2");
+    assert_eq!(state.replace.range_length_input, "3");
+    assert_eq!(state.insert.position_input, "4");
+    assert_eq!(state.insert.anchor, "oto");
+    assert!(state.insert.ignore_extension);
+    assert_eq!(state.slice.start_input, "1");
+    assert_eq!(state.slice.anchor, "pho");
+    assert_eq!(state.remove.text, "o");
+    assert_eq!(state.remove.classes, vec![BatchRenameRemoveClass::Digits]);
 }
 
 #[test]

@@ -179,6 +179,7 @@ mod tests {
     use crate::app::global_error::{recorded_global_error_count, reset_recorded_global_errors};
     use crate::config;
     use crate::model::{BrowserTab, ExpandedDirectory, ExpandedDirectoryStatus};
+    use crate::thumbnail_cache::ColumnViewport;
 
     #[test]
     fn unavailable_active_directory_recovers_to_parent_without_global_error() {
@@ -275,13 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_expanded_directory_discards_its_cached_subtree_without_global_error() {
+    fn unavailable_root_child_closes_its_column_chain_without_global_error() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let root_directory = PathBuf::from("/workspace");
         let unavailable_directory = root_directory.join("removed");
         let unavailable_child = unavailable_directory.join("child");
         let remaining_entry = root_directory.join("remaining.txt");
-        browser.current_dir = root_directory;
+        browser.current_dir = root_directory.clone();
+        browser.deepest_open_column_directory = Some(unavailable_child.clone());
         browser.entries = vec![
             test_entry(unavailable_directory.clone(), FileKind::Directory),
             test_entry(remaining_entry.clone(), FileKind::File),
@@ -315,6 +317,181 @@ mod tests {
             .expanded_directories
             .keys()
             .all(|path| !path.starts_with(&unavailable_directory)));
+        assert_eq!(browser.deepest_open_column_directory, None);
+        assert_eq!(
+            crate::three_column_view::column_directories(&browser),
+            vec![root_directory]
+        );
+        assert_eq!(browser.current_error(), None);
+        assert_eq!(recorded_global_error_count(), 0);
+    }
+
+    #[test]
+    fn unavailable_middle_column_preserves_ancestor_columns_and_cleans_descendants() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let root_directory = PathBuf::from("/workspace");
+        let ancestor_directory = root_directory.join("A");
+        let unavailable_directory = ancestor_directory.join("B");
+        let unavailable_child = unavailable_directory.join("C");
+        let remaining_selection = root_directory.join("remaining.txt");
+        browser.current_dir = root_directory.clone();
+        browser.deepest_open_column_directory = Some(unavailable_child.clone());
+        browser.selected = Some(unavailable_child.clone());
+        browser
+            .selected_paths
+            .extend([unavailable_child.clone(), remaining_selection.clone()]);
+        browser.selection_anchor = Some(unavailable_directory.clone());
+        browser
+            .expanded_directories
+            .insert(ancestor_directory.clone(), loading_expanded_directory(1));
+        browser
+            .expanded_directories
+            .insert(unavailable_directory.clone(), loading_expanded_directory(4));
+        browser
+            .expanded_directories
+            .insert(unavailable_child.clone(), loading_expanded_directory(2));
+        browser
+            .column_viewports
+            .insert(ancestor_directory.clone(), ColumnViewport::default());
+        browser
+            .column_viewports
+            .insert(unavailable_directory.clone(), ColumnViewport::default());
+        browser
+            .column_viewports
+            .insert(unavailable_child.clone(), ColumnViewport::default());
+        let descendant_cancellation = browser
+            .expanded_directories
+            .get(&unavailable_child)
+            .and_then(|directory| directory.load_cancel.clone())
+            .expect("descendant load cancellation");
+        reset_recorded_global_errors();
+
+        drop(browser.accept_expanded_directory(
+            crate::model::ExpandedDirectoryLoadRequest {
+                pane_id: BrowserPaneId::PRIMARY,
+                path: unavailable_directory.clone(),
+                generation: 4,
+            },
+            Err(unavailable_failure(&unavailable_directory)),
+        ));
+
+        assert_eq!(
+            crate::three_column_view::column_directories(&browser),
+            vec![root_directory, ancestor_directory.clone()]
+        );
+        assert_eq!(
+            browser.deepest_open_column_directory,
+            Some(ancestor_directory.clone())
+        );
+        assert_eq!(browser.selected, None);
+        assert_eq!(browser.selection_anchor, None);
+        assert_eq!(browser.selected_paths.len(), 1);
+        assert!(browser.selected_paths.contains(&remaining_selection));
+        assert_eq!(browser.expanded_directories.len(), 1);
+        assert!(browser
+            .expanded_directories
+            .contains_key(&ancestor_directory));
+        assert_eq!(browser.column_viewports.len(), 1);
+        assert!(browser.column_viewports.contains_key(&ancestor_directory));
+        assert!(descendant_cancellation.is_cancelled());
+        assert_eq!(browser.current_error(), None);
+        assert_eq!(recorded_global_error_count(), 0);
+    }
+
+    #[test]
+    fn unavailable_deepest_column_preserves_the_preceding_chain() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let root_directory = PathBuf::from("/workspace");
+        let first_directory = root_directory.join("A");
+        let second_directory = first_directory.join("B");
+        let unavailable_directory = second_directory.join("C");
+        browser.current_dir = root_directory.clone();
+        browser.deepest_open_column_directory = Some(unavailable_directory.clone());
+        browser
+            .expanded_directories
+            .insert(first_directory.clone(), loading_expanded_directory(1));
+        browser
+            .expanded_directories
+            .insert(second_directory.clone(), loading_expanded_directory(2));
+        browser
+            .expanded_directories
+            .insert(unavailable_directory.clone(), loading_expanded_directory(5));
+
+        drop(browser.accept_expanded_directory(
+            crate::model::ExpandedDirectoryLoadRequest {
+                pane_id: BrowserPaneId::PRIMARY,
+                path: unavailable_directory.clone(),
+                generation: 5,
+            },
+            Err(unavailable_failure(&unavailable_directory)),
+        ));
+
+        assert_eq!(
+            crate::three_column_view::column_directories(&browser),
+            vec![root_directory, first_directory, second_directory.clone()]
+        );
+        assert_eq!(
+            browser.deepest_open_column_directory,
+            Some(second_directory)
+        );
+        assert!(!browser
+            .expanded_directories
+            .contains_key(&unavailable_directory));
+    }
+
+    #[test]
+    fn unavailable_middle_column_truncates_an_inactive_pane_chain() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let inactive_pane_id = BrowserPaneId(9);
+        let root_directory = PathBuf::from("/workspace");
+        let ancestor_directory = root_directory.join("A");
+        let unavailable_directory = ancestor_directory.join("B");
+        let unavailable_child = unavailable_directory.join("C");
+        let mut inactive_pane = browser.capture_active_pane_snapshot();
+        inactive_pane.id = inactive_pane_id;
+        inactive_pane.current_dir = root_directory.clone();
+        inactive_pane.tabs = vec![BrowserTab::directory(0, root_directory.clone())];
+        inactive_pane.active_tab_id = 0;
+        inactive_pane.deepest_open_column_directory = Some(unavailable_child.clone());
+        inactive_pane
+            .expanded_directories
+            .insert(ancestor_directory.clone(), loading_expanded_directory(1));
+        inactive_pane
+            .expanded_directories
+            .insert(unavailable_directory.clone(), loading_expanded_directory(4));
+        inactive_pane
+            .expanded_directories
+            .insert(unavailable_child, loading_expanded_directory(2));
+        inactive_pane.sync_active_tab_state();
+        browser.panes.push(inactive_pane);
+        reset_recorded_global_errors();
+
+        drop(browser.accept_expanded_directory(
+            crate::model::ExpandedDirectoryLoadRequest {
+                pane_id: inactive_pane_id,
+                path: unavailable_directory.clone(),
+                generation: 4,
+            },
+            Err(unavailable_failure(&unavailable_directory)),
+        ));
+
+        let pane = browser.pane_by_id(inactive_pane_id).expect("inactive pane");
+        assert_eq!(
+            pane.deepest_open_column_directory,
+            Some(ancestor_directory.clone())
+        );
+        assert_eq!(
+            pane.tabs[0].deepest_open_column_directory,
+            Some(ancestor_directory.clone())
+        );
+        assert_eq!(
+            crate::three_column_view::column_directories_for_pane(
+                browser
+                    .pane_view(inactive_pane_id)
+                    .expect("inactive pane view")
+            ),
+            vec![root_directory, ancestor_directory]
+        );
         assert_eq!(browser.current_error(), None);
         assert_eq!(recorded_global_error_count(), 0);
     }

@@ -277,16 +277,26 @@ impl fmt::Display for BatchRenameRemoveMode {
 }
 
 impl BatchRenameRemoveClass {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Lowercase => "Lowercase",
-            Self::Uppercase => "Uppercase",
-            Self::Digits => "Digits",
-            Self::Symbols => "Symbols",
-            Self::Brackets => "Brackets",
-            Self::Whitespace => "Whitespace",
-            Self::Hanzi => "Hanzi",
-        }
+    fn localized_label(self, language: crate::config::UiLanguage) -> String {
+        crate::localization::translate(
+            language,
+            match self {
+                Self::Lowercase => "Lowercase",
+                Self::Uppercase => "Uppercase",
+                Self::Digits => "Digits",
+                Self::Symbols => "Symbols",
+                Self::Brackets => "Brackets",
+                Self::Whitespace => "Whitespace",
+                Self::Hanzi => "Hanzi",
+            },
+        )
+        .into_owned()
+    }
+}
+
+impl fmt::Display for BatchRenameRemoveClass {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output.write_str(&self.localized_label(crate::localization::current_language()))
     }
 }
 
@@ -348,5 +358,27 @@ impl BatchRenameCaseRule {
 impl fmt::Display for BatchRenameCaseRule {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         output.write_str(&crate::localization::translate_current(self.label()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatchRenameRemoveClass;
+    use crate::config::UiLanguage;
+
+    #[test]
+    fn batch_rename_remove_class_labels_are_localized() {
+        for (class, english, chinese) in [
+            (BatchRenameRemoveClass::Lowercase, "Lowercase", "小写字母"),
+            (BatchRenameRemoveClass::Uppercase, "Uppercase", "大写字母"),
+            (BatchRenameRemoveClass::Digits, "Digits", "数字"),
+            (BatchRenameRemoveClass::Symbols, "Symbols", "符号"),
+            (BatchRenameRemoveClass::Brackets, "Brackets", "括号"),
+            (BatchRenameRemoveClass::Whitespace, "Whitespace", "空白字符"),
+            (BatchRenameRemoveClass::Hanzi, "Hanzi", "汉字"),
+        ] {
+            assert_eq!(class.localized_label(UiLanguage::English), english);
+            assert_eq!(class.localized_label(UiLanguage::Chinese), chinese);
+        }
     }
 }

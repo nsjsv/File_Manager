@@ -249,10 +249,22 @@ impl BrowserPane {
         self.selected_paths
             .retain(|path| !path.starts_with(unavailable_directory));
         retain_optional_path_outside_subtree(&mut self.selection_anchor, unavailable_directory);
-        retain_optional_path_outside_subtree(
-            &mut self.deepest_open_column_directory,
-            unavailable_directory,
-        );
+        if self
+            .deepest_open_column_directory
+            .as_ref()
+            .is_some_and(|directory| directory.starts_with(unavailable_directory))
+        {
+            self.deepest_open_column_directory =
+                unavailable_directory.parent().and_then(|parent| {
+                    if parent == self.current_dir.as_path()
+                        || !parent.starts_with(&self.current_dir)
+                    {
+                        None
+                    } else {
+                        Some(parent.to_path_buf())
+                    }
+                });
+        }
         for expanded_directory in self.expanded_directories.values_mut() {
             expanded_directory
                 .entries
