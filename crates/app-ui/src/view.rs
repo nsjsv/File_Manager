@@ -57,7 +57,8 @@ use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::floating_surface::{
     dismissable_blocking_floating_surface, floating_surface, modal_floating_surface,
-    pass_through_dismissable_floating_surface, FloatingContent, FloatingPlacement,
+    pass_through_dismissable_floating_surface, replaceable_context_menu_floating_surface,
+    FloatingContent, FloatingPlacement,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icon_grid_view::icon_grid_view;
@@ -115,6 +116,7 @@ enum BrowserFloatingInput {
     Plain,
     Modal,
     DismissibleBlocking,
+    ContextMenuReplacement,
     DismissiblePassThrough,
 }
 
@@ -124,6 +126,9 @@ impl BrowserFloatingInput {
             (Self::Modal, _) | (_, Self::Modal) => Self::Modal,
             (Self::DismissibleBlocking, _) | (_, Self::DismissibleBlocking) => {
                 Self::DismissibleBlocking
+            }
+            (Self::ContextMenuReplacement, _) | (_, Self::ContextMenuReplacement) => {
+                Self::ContextMenuReplacement
             }
             (Self::DismissiblePassThrough, _) | (_, Self::DismissiblePassThrough) => {
                 Self::DismissiblePassThrough
@@ -229,7 +234,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             placement: FloatingPlacement::Center,
         });
     } else if let Some(context_menu) = &browser.context_menu {
-        floating_input = BrowserFloatingInput::DismissibleBlocking;
+        floating_input = BrowserFloatingInput::ContextMenuReplacement;
         floating.push(FloatingContent {
             element: context_menu_panel(
                 context_menu,
@@ -337,6 +342,9 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         BrowserFloatingInput::Modal => modal_floating_surface(content, floating),
         BrowserFloatingInput::DismissibleBlocking => {
             dismissable_blocking_floating_surface(content, floating, Message::DismissFloating)
+        }
+        BrowserFloatingInput::ContextMenuReplacement => {
+            replaceable_context_menu_floating_surface(content, floating, Message::DismissFloating)
         }
         BrowserFloatingInput::DismissiblePassThrough => {
             pass_through_dismissable_floating_surface(content, floating, Message::DismissFloating)

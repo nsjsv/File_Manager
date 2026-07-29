@@ -48,7 +48,26 @@ where
         background_input_policy: BackgroundInputPolicy::Blocked,
         outside_click_dismissal: Some(OutsideClickDismissal {
             message: dismiss_message,
-            clicked_event_flow: DismissedClickFlow::Capture,
+            policy: OutsideDismissalPolicy::CapturedPrimaryPress,
+        }),
+    })
+}
+
+pub(crate) fn replaceable_context_menu_floating_surface<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+    floating: Vec<FloatingContent<'a, Message>>,
+    dismiss_message: Message,
+) -> Element<'a, Message>
+where
+    Message: Clone + 'a,
+{
+    Element::new(FloatingSurface {
+        content: content.into(),
+        floating,
+        background_input_policy: BackgroundInputPolicy::Blocked,
+        outside_click_dismissal: Some(OutsideClickDismissal {
+            message: dismiss_message,
+            policy: OutsideDismissalPolicy::ContextMenuReplacement,
         }),
     })
 }
@@ -67,7 +86,7 @@ where
         background_input_policy: BackgroundInputPolicy::Interactive,
         outside_click_dismissal: Some(OutsideClickDismissal {
             message: dismiss_message,
-            clicked_event_flow: DismissedClickFlow::Continue,
+            policy: OutsideDismissalPolicy::PassedThroughPrimaryPress,
         }),
     })
 }
@@ -75,13 +94,59 @@ where
 #[derive(Clone)]
 struct OutsideClickDismissal<Message> {
     message: Message,
-    clicked_event_flow: DismissedClickFlow,
+    policy: OutsideDismissalPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutsideDismissalPolicy {
+    CapturedPrimaryPress,
+    PassedThroughPrimaryPress,
+    ContextMenuReplacement,
+}
+
+impl OutsideDismissalPolicy {
+    fn dismissed_click_flow(self, input_event: FloatingInputEvent) -> Option<DismissedClickFlow> {
+        match (self, input_event) {
+            (Self::CapturedPrimaryPress, FloatingInputEvent::PrimaryPress)
+            | (Self::ContextMenuReplacement, FloatingInputEvent::PrimaryPress) => {
+                Some(DismissedClickFlow::Capture)
+            }
+            (Self::PassedThroughPrimaryPress, FloatingInputEvent::PrimaryPress)
+            | (Self::ContextMenuReplacement, FloatingInputEvent::SecondaryPress) => {
+                Some(DismissedClickFlow::Continue)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DismissedClickFlow {
     Capture,
     Continue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FloatingInputEvent {
+    PrimaryPress,
+    SecondaryPress,
+    OtherMouse,
+    NonMouse,
+}
+
+impl FloatingInputEvent {
+    fn from_iced_event(event: &Event) -> Self {
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => Self::PrimaryPress,
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => Self::SecondaryPress,
+            Event::Mouse(_) => Self::OtherMouse,
+            _ => Self::NonMouse,
+        }
+    }
+
+    fn is_mouse(self) -> bool {
+        self != Self::NonMouse
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,8 +281,7 @@ where
             self.background_input_policy,
             self.outside_click_dismissal.as_ref(),
             floating_pointer_target,
-            is_mouse_event(event),
-            is_left_mouse_press(event),
+            FloatingInputEvent::from_iced_event(event),
         );
         if let Some(message) = input_decision.dismiss_message {
             shell.publish(message);
@@ -369,8 +433,7 @@ fn decide_floating_input<Message: Clone>(
     background_input_policy: BackgroundInputPolicy,
     outside_click_dismissal: Option<&OutsideClickDismissal<Message>>,
     pointer_target: FloatingPointerTarget,
-    is_mouse_event: bool,
-    is_left_mouse_press: bool,
+    input_event: FloatingInputEvent,
 ) -> FloatingInputDecision<Message> {
     if pointer_target == FloatingPointerTarget::FloatingBounds
         && (background_input_policy == BackgroundInputPolicy::Blocked
@@ -382,22 +445,24 @@ fn decide_floating_input<Message: Clone>(
         };
     }
 
-    if is_left_mouse_press && pointer_target == FloatingPointerTarget::Background {
+    if pointer_target == FloatingPointerTarget::Background {
         if let Some(dismissal) = outside_click_dismissal {
-            return FloatingInputDecision {
-                dismiss_message: Some(dismissal.message.clone()),
-                background_update: match dismissal.clicked_event_flow {
-                    DismissedClickFlow::Capture => BackgroundUpdateDecision::Capture,
-                    DismissedClickFlow::Continue => BackgroundUpdateDecision::Update,
-                },
-            };
+            if let Some(clicked_event_flow) = dismissal.policy.dismissed_click_flow(input_event) {
+                return FloatingInputDecision {
+                    dismiss_message: Some(dismissal.message.clone()),
+                    background_update: match clicked_event_flow {
+                        DismissedClickFlow::Capture => BackgroundUpdateDecision::Capture,
+                        DismissedClickFlow::Continue => BackgroundUpdateDecision::Update,
+                    },
+                };
+            }
         }
     }
 
     if background_input_policy == BackgroundInputPolicy::Blocked {
         return FloatingInputDecision {
             dismiss_message: None,
-            background_update: if is_mouse_event {
+            background_update: if input_event.is_mouse() {
                 BackgroundUpdateDecision::Capture
             } else {
                 BackgroundUpdateDecision::Stop
@@ -411,15 +476,8 @@ fn decide_floating_input<Message: Clone>(
     }
 }
 
-fn is_left_mouse_press(event: &Event) -> bool {
-    matches!(
-        event,
-        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-    )
-}
-
 fn is_mouse_event(event: &Event) -> bool {
-    matches!(event, Event::Mouse(_))
+    FloatingInputEvent::from_iced_event(event).is_mouse()
 }
 
 struct FloatingOverlay<'a, 'b, Message, Theme, Renderer>
@@ -576,138 +634,4 @@ fn floating_position(placement: FloatingPlacement, size: Size, surface: Size) ->
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum TestMessage {
-        Dismiss,
-    }
-
-    fn dismissal(clicked_event_flow: DismissedClickFlow) -> OutsideClickDismissal<TestMessage> {
-        OutsideClickDismissal {
-            message: TestMessage::Dismiss,
-            clicked_event_flow,
-        }
-    }
-
-    #[test]
-    fn modal_inside_floating_bounds_stops_background_without_dismissal() {
-        let decision = decide_floating_input::<TestMessage>(
-            BackgroundInputPolicy::Blocked,
-            None,
-            FloatingPointerTarget::FloatingBounds,
-            true,
-            true,
-        );
-
-        assert_eq!(
-            decision,
-            FloatingInputDecision {
-                dismiss_message: None,
-                background_update: BackgroundUpdateDecision::Stop
-            }
-        );
-    }
-
-    #[test]
-    fn dismissible_inside_floating_bounds_stops_background_without_dismissal() {
-        let dismissal = dismissal(DismissedClickFlow::Capture);
-
-        let decision = decide_floating_input(
-            BackgroundInputPolicy::Blocked,
-            Some(&dismissal),
-            FloatingPointerTarget::FloatingBounds,
-            true,
-            true,
-        );
-
-        assert_eq!(
-            decision,
-            FloatingInputDecision {
-                dismiss_message: None,
-                background_update: BackgroundUpdateDecision::Stop
-            }
-        );
-    }
-
-    #[test]
-    fn modal_outside_left_click_captures_without_dismissal() {
-        let decision = decide_floating_input::<TestMessage>(
-            BackgroundInputPolicy::Blocked,
-            None,
-            FloatingPointerTarget::Background,
-            true,
-            true,
-        );
-
-        assert_eq!(
-            decision,
-            FloatingInputDecision {
-                dismiss_message: None,
-                background_update: BackgroundUpdateDecision::Capture
-            }
-        );
-    }
-
-    #[test]
-    fn blocking_dismissible_outside_left_click_dismisses_and_captures() {
-        let dismissal = dismissal(DismissedClickFlow::Capture);
-
-        let decision = decide_floating_input(
-            BackgroundInputPolicy::Blocked,
-            Some(&dismissal),
-            FloatingPointerTarget::Background,
-            true,
-            true,
-        );
-
-        assert_eq!(
-            decision,
-            FloatingInputDecision {
-                dismiss_message: Some(TestMessage::Dismiss),
-                background_update: BackgroundUpdateDecision::Capture
-            }
-        );
-    }
-
-    #[test]
-    fn pass_through_dismissible_outside_left_click_dismisses_and_updates_background() {
-        let dismissal = dismissal(DismissedClickFlow::Continue);
-
-        let decision = decide_floating_input(
-            BackgroundInputPolicy::Interactive,
-            Some(&dismissal),
-            FloatingPointerTarget::Background,
-            true,
-            true,
-        );
-
-        assert_eq!(
-            decision,
-            FloatingInputDecision {
-                dismiss_message: Some(TestMessage::Dismiss),
-                background_update: BackgroundUpdateDecision::Update
-            }
-        );
-    }
-
-    #[test]
-    fn floating_overlay_captures_mouse_events_inside_bounds() {
-        let event = Event::Mouse(mouse::Event::WheelScrolled {
-            delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
-        });
-        let bounds = Rectangle::new(Point::new(10.0, 10.0), Size::new(100.0, 100.0));
-
-        assert!(should_capture_floating_overlay_event(
-            &event,
-            mouse::Cursor::Available(Point::new(20.0, 20.0)),
-            bounds,
-        ));
-        assert!(!should_capture_floating_overlay_event(
-            &event,
-            mouse::Cursor::Available(Point::new(200.0, 200.0)),
-            bounds,
-        ));
-    }
-}
+mod tests;
