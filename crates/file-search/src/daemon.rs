@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
@@ -18,23 +16,24 @@ use crate::{SearchIndexConfig, SearchIndexer};
 
 mod bounded_paths;
 mod memory;
+mod watch_budget_patrol;
 mod watch_coverage;
 mod watch_ingress;
+mod work_queue;
 
+#[cfg(test)]
 use self::bounded_paths::BoundedPathSet;
 use self::memory::release_allocator_idle_pages;
 use self::watch_coverage::WatchCoverageHealth;
 #[cfg(test)]
 use self::watch_ingress::changed_paths_from_watch_event;
 use self::watch_ingress::{DaemonWatchIngress, DaemonWatchIngressBootstrap};
-
-const DIRTY_ROOT_QUIET_WINDOW: Duration = Duration::from_secs(2);
-const DIRTY_ROOT_RETRY_BASE: Duration = Duration::from_secs(30);
-const DIRTY_ROOT_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
-const MAX_PENDING_LOCAL_PATHS: usize = 2_048;
-const MAX_PENDING_LOCAL_PATH_BYTES: usize = 1_048_576;
-const MAX_PENDING_COVERAGE_SCOPES: usize = 256;
-const MAX_PENDING_COVERAGE_SCOPE_BYTES: usize = 262_144;
+#[cfg(test)]
+use self::work_queue::{
+    dirty_root_retry_delay, PendingDaemonWork, DIRTY_ROOT_QUIET_WINDOW, DIRTY_ROOT_RETRY_BASE,
+    DIRTY_ROOT_RETRY_MAX,
+};
+use self::work_queue::{DaemonWorkQueue, DaemonWorkRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DaemonLifecyclePhase {
@@ -165,289 +164,20 @@ impl DaemonLifecycleSnapshot {
             };
         }
         match &self.watch_coverage_health {
-            WatchCoverageHealth::Healthy => match self.recovery_rebuild_message.as_ref() {
-                Some(message) => IndexHealth::Degraded {
-                    message: message.clone(),
-                },
-                None => IndexHealth::Healthy,
-            },
+            WatchCoverageHealth::Healthy | WatchCoverageHealth::HybridPatrol { .. } => {
+                match self.recovery_rebuild_message.as_ref() {
+                    Some(message) => IndexHealth::Degraded {
+                        message: message.clone(),
+                    },
+                    None => IndexHealth::Healthy,
+                }
+            }
             WatchCoverageHealth::Incomplete { message, .. } => IndexHealth::Degraded {
                 message: message.clone(),
             },
             WatchCoverageHealth::BackendUnavailable { message } => IndexHealth::Error {
                 message: message.clone(),
             },
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DaemonWorkRequest {
-    StartupCheck,
-    ChangedPaths { changed_paths: Vec<PathBuf> },
-    CoverageRepair { scopes: Vec<PathBuf> },
-    DirtyRootRecovery { roots: Vec<PathBuf> },
-    Shutdown,
-}
-
-#[derive(Debug, Clone)]
-struct DirtyRootRecoveryState {
-    ready_at: Instant,
-    retry_attempts: u32,
-    running: bool,
-    dirtied_while_running: bool,
-}
-
-#[derive(Debug)]
-struct PendingDaemonWork {
-    roots: Vec<PathBuf>,
-    startup_check_requested: bool,
-    changed_watch_paths: BoundedPathSet,
-    coverage_repair_scopes: BoundedPathSet,
-    dirty_roots: BTreeMap<PathBuf, DirtyRootRecoveryState>,
-    shutdown_requested: bool,
-}
-
-impl PendingDaemonWork {
-    fn new(roots: Vec<PathBuf>) -> Self {
-        Self {
-            roots,
-            startup_check_requested: false,
-            changed_watch_paths: BoundedPathSet::new(
-                MAX_PENDING_LOCAL_PATHS,
-                MAX_PENDING_LOCAL_PATH_BYTES,
-            ),
-            coverage_repair_scopes: BoundedPathSet::new(
-                MAX_PENDING_COVERAGE_SCOPES,
-                MAX_PENDING_COVERAGE_SCOPE_BYTES,
-            ),
-            dirty_roots: BTreeMap::new(),
-            shutdown_requested: false,
-        }
-    }
-
-    fn absorb_request(&mut self, work_request: DaemonWorkRequest, now: Instant) {
-        match work_request {
-            DaemonWorkRequest::StartupCheck => self.startup_check_requested = true,
-            DaemonWorkRequest::ChangedPaths { changed_paths } => {
-                self.absorb_paths(changed_paths, false, now)
-            }
-            DaemonWorkRequest::CoverageRepair { scopes } => self.absorb_paths(scopes, true, now),
-            DaemonWorkRequest::DirtyRootRecovery { roots } => self.request_dirty_roots(roots, now),
-            DaemonWorkRequest::Shutdown => self.shutdown_requested = true,
-        }
-    }
-
-    fn absorb_paths(&mut self, paths: Vec<PathBuf>, coverage_repair: bool, now: Instant) {
-        for path in paths {
-            let insertion = if coverage_repair {
-                self.coverage_repair_scopes.insert(path.clone())
-            } else {
-                self.changed_watch_paths.insert(path.clone())
-            };
-            if insertion.is_ok() {
-                continue;
-            }
-            let roots = self.containing_roots(&path);
-            for root in &roots {
-                self.changed_watch_paths
-                    .retain(|pending| !pending.starts_with(root));
-                self.coverage_repair_scopes
-                    .retain(|pending| !pending.starts_with(root));
-            }
-            self.request_dirty_roots(roots, now);
-        }
-    }
-
-    fn request_dirty_roots(&mut self, roots: Vec<PathBuf>, now: Instant) {
-        for root in roots {
-            let Some(state) = self.dirty_roots.get_mut(&root) else {
-                self.dirty_roots.insert(
-                    root,
-                    DirtyRootRecoveryState {
-                        ready_at: now + DIRTY_ROOT_QUIET_WINDOW,
-                        retry_attempts: 0,
-                        running: false,
-                        dirtied_while_running: false,
-                    },
-                );
-                continue;
-            };
-            if state.running {
-                state.dirtied_while_running = true;
-            } else {
-                state.ready_at = state.ready_at.max(now + DIRTY_ROOT_QUIET_WINDOW);
-            }
-        }
-    }
-
-    fn take_next_work(&mut self, now: Instant) -> Option<DaemonWorkRequest> {
-        if self.shutdown_requested {
-            self.shutdown_requested = false;
-            return Some(DaemonWorkRequest::Shutdown);
-        }
-        if self.startup_check_requested {
-            self.startup_check_requested = false;
-            return Some(DaemonWorkRequest::StartupCheck);
-        }
-
-        let changed_paths = self.changed_watch_paths.take_paths();
-        if !changed_paths.is_empty() {
-            return Some(DaemonWorkRequest::ChangedPaths { changed_paths });
-        }
-
-        let scopes = self.coverage_repair_scopes.take_paths();
-        if !scopes.is_empty() {
-            return Some(DaemonWorkRequest::CoverageRepair { scopes });
-        }
-
-        let ready_roots = self
-            .dirty_roots
-            .iter_mut()
-            .filter_map(|(root, state)| {
-                (!state.running && state.ready_at <= now).then(|| {
-                    state.running = true;
-                    state.dirtied_while_running = false;
-                    root.clone()
-                })
-            })
-            .collect::<Vec<_>>();
-        (!ready_roots.is_empty())
-            .then_some(DaemonWorkRequest::DirtyRootRecovery { roots: ready_roots })
-    }
-
-    fn finish_dirty_root_recovery(&mut self, roots: &[PathBuf], succeeded: bool, now: Instant) {
-        for root in roots {
-            let Some(state) = self.dirty_roots.get_mut(root) else {
-                continue;
-            };
-            if succeeded && !state.dirtied_while_running {
-                self.dirty_roots.remove(root);
-                continue;
-            }
-            state.running = false;
-            state.retry_attempts = state.retry_attempts.saturating_add(1);
-            state.ready_at = now + dirty_root_retry_delay(state.retry_attempts);
-        }
-    }
-
-    fn next_deadline(&self) -> Option<Instant> {
-        self.dirty_roots
-            .values()
-            .filter(|state| !state.running)
-            .map(|state| state.ready_at)
-            .min()
-    }
-
-    fn containing_roots(&self, path: &Path) -> Vec<PathBuf> {
-        let roots = self
-            .roots
-            .iter()
-            .filter(|root| path.starts_with(root))
-            .cloned()
-            .collect::<Vec<_>>();
-        if roots.is_empty() {
-            self.roots.clone()
-        } else {
-            roots
-        }
-    }
-}
-
-fn dirty_root_retry_delay(retry_attempts: u32) -> Duration {
-    let multiplier = 1_u32
-        .checked_shl(retry_attempts.saturating_sub(1).min(5))
-        .unwrap_or(32);
-    DIRTY_ROOT_RETRY_BASE
-        .checked_mul(multiplier)
-        .unwrap_or(DIRTY_ROOT_RETRY_MAX)
-        .min(DIRTY_ROOT_RETRY_MAX)
-}
-
-#[derive(Debug)]
-struct DaemonWorkQueueState {
-    accepting_new_work: bool,
-    pending_work: PendingDaemonWork,
-}
-
-#[derive(Debug)]
-struct DaemonWorkQueue {
-    state: Mutex<DaemonWorkQueueState>,
-    ready_signal: Condvar,
-}
-
-impl DaemonWorkQueue {
-    fn new(roots: Vec<PathBuf>) -> Self {
-        Self {
-            state: Mutex::new(DaemonWorkQueueState {
-                accepting_new_work: true,
-                pending_work: PendingDaemonWork::new(roots),
-            }),
-            ready_signal: Condvar::new(),
-        }
-    }
-
-    fn enqueue(&self, work_request: DaemonWorkRequest) -> SearchResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .expect("search daemon work queue mutex poisoned");
-        if !state.accepting_new_work {
-            return Err(daemon_core_stopped());
-        }
-        state
-            .pending_work
-            .absorb_request(work_request, Instant::now());
-        self.ready_signal.notify_one();
-        Ok(())
-    }
-
-    fn begin_shutdown(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("search daemon work queue mutex poisoned");
-        state.accepting_new_work = false;
-        state.pending_work.shutdown_requested = true;
-        self.ready_signal.notify_one();
-    }
-
-    fn finish_dirty_root_recovery(&self, roots: &[PathBuf], succeeded: bool) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("search daemon work queue mutex poisoned");
-        state
-            .pending_work
-            .finish_dirty_root_recovery(roots, succeeded, Instant::now());
-        self.ready_signal.notify_one();
-    }
-
-    fn wait_for_next_work(&self) -> DaemonWorkRequest {
-        let mut state = self
-            .state
-            .lock()
-            .expect("search daemon work queue mutex poisoned");
-        loop {
-            if let Some(work_request) = state.pending_work.take_next_work(Instant::now()) {
-                return work_request;
-            }
-            match state.pending_work.next_deadline() {
-                Some(deadline) => {
-                    let wait = deadline.saturating_duration_since(Instant::now());
-                    let (next_state, _) = self
-                        .ready_signal
-                        .wait_timeout(state, wait)
-                        .expect("search daemon work queue mutex poisoned");
-                    state = next_state;
-                }
-                None => {
-                    state = self
-                        .ready_signal
-                        .wait(state)
-                        .expect("search daemon work queue mutex poisoned");
-                }
-            }
         }
     }
 }
@@ -691,6 +421,8 @@ fn spawn_daemon_worker(
                     DaemonWorkRequest::DirtyRootRecovery { roots } => Some(roots.clone()),
                     _ => None,
                 };
+                let watch_budget_patrol =
+                    matches!(&work_request, DaemonWorkRequest::WatchBudgetPatrol { .. });
                 let succeeded = run_index_maintenance(
                     &runtime,
                     Arc::clone(&writer),
@@ -700,6 +432,9 @@ fn spawn_daemon_worker(
                     work_request,
                     &crawl_cancellation,
                 );
+                if watch_budget_patrol {
+                    work_queue.finish_watch_budget_patrol();
+                }
                 if let Some(roots) = dirty_roots {
                     work_queue.finish_dirty_root_recovery(&roots, succeeded);
                 }
@@ -721,8 +456,10 @@ fn run_index_maintenance(
     crawl_cancellation: &CancellationToken,
 ) -> bool {
     let work_label = work_request_label(&work_request);
-    let high_frequency_maintenance =
-        matches!(&work_request, DaemonWorkRequest::ChangedPaths { .. });
+    let high_frequency_maintenance = matches!(
+        &work_request,
+        DaemonWorkRequest::ChangedPaths { .. } | DaemonWorkRequest::WatchBudgetPatrol { .. }
+    );
     lifecycle_snapshot
         .lock()
         .expect("search daemon lifecycle mutex poisoned")
@@ -756,6 +493,15 @@ fn run_index_maintenance(
             DaemonWorkRequest::CoverageRepair { scopes } => {
                 indexer
                     .repair_scopes_with_progress_cancelled(scopes, crawl_cancellation, on_progress)
+                    .await?
+            }
+            DaemonWorkRequest::WatchBudgetPatrol { directories } => {
+                indexer
+                    .patrol_unwatched_directories_with_progress_cancelled(
+                        directories,
+                        crawl_cancellation,
+                        on_progress,
+                    )
                     .await?
             }
             DaemonWorkRequest::DirtyRootRecovery { roots } => {
@@ -839,6 +585,9 @@ fn work_request_label(work_request: &DaemonWorkRequest) -> String {
         }
         DaemonWorkRequest::CoverageRepair { scopes } => {
             format!("coverage repair ({})", scopes.len())
+        }
+        DaemonWorkRequest::WatchBudgetPatrol { directories } => {
+            format!("watch budget patrol ({})", directories.len())
         }
         DaemonWorkRequest::DirtyRootRecovery { roots } => {
             format!("dirty root recovery ({})", roots.len())

@@ -101,6 +101,14 @@ fn watch_degradation_does_not_replace_active_phase() {
 }
 
 #[test]
+fn hybrid_watch_budget_patrol_is_a_healthy_maintenance_mode() {
+    let mut snapshot = snapshot_for(DaemonLifecyclePhase::Complete);
+    snapshot.update_watch_coverage(WatchCoverageHealth::HybridPatrol { root_count: 1 });
+
+    assert_eq!(snapshot.to_index_status().health, IndexHealth::Healthy);
+}
+
+#[test]
 fn watch_event_paths_are_deduplicated_and_access_events_are_ignored() {
     let duplicate = PathBuf::from("/tmp/repeated");
     let changed = changed_paths_from_watch_event(
@@ -237,6 +245,36 @@ fn healthy_idle_queue_has_no_periodic_work_even_after_twenty_four_hours() {
         .take_next_work(now + Duration::from_secs(24 * 60 * 60))
         .is_none());
     assert!(pending.next_deadline().is_none());
+}
+
+#[test]
+fn watch_budget_patrol_queue_allows_only_one_pending_or_running_batch() {
+    let root = PathBuf::from("/root");
+    let first = root.join("first");
+    let second = root.join("second");
+    let queue = DaemonWorkQueue::new(vec![root]);
+
+    assert!(queue
+        .try_enqueue_watch_budget_patrol(std::slice::from_ref(&first))
+        .unwrap());
+    assert!(!queue
+        .try_enqueue_watch_budget_patrol(std::slice::from_ref(&second))
+        .unwrap());
+    assert_eq!(
+        queue.wait_for_next_work(),
+        DaemonWorkRequest::WatchBudgetPatrol {
+            directories: vec![first]
+        }
+    );
+    assert!(!queue
+        .try_enqueue_watch_budget_patrol(std::slice::from_ref(&second))
+        .unwrap());
+
+    queue.finish_watch_budget_patrol();
+
+    assert!(!queue
+        .try_enqueue_watch_budget_patrol(std::slice::from_ref(&second))
+        .unwrap());
 }
 
 #[test]

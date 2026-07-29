@@ -214,6 +214,28 @@ impl SearchDatabase {
         rows.map(|row| row.map_err(Into::into)).collect()
     }
 
+    pub(crate) fn observable_directory_paths_for_root_page(
+        &self,
+        root: &Path,
+        after_path: Option<&Path>,
+        limit: usize,
+    ) -> SearchResult<Vec<PathBuf>> {
+        validate_page_limit(limit)?;
+        let after_path = after_path.map(path_to_storage).unwrap_or_default();
+        let mut statement = self.connection.prepare_cached(
+            "SELECT path
+             FROM directory_snapshots
+             WHERE root_path = ?1 AND path > ?2 AND observation_state = 'observable'
+             ORDER BY path
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![path_to_storage(root), after_path, limit as i64],
+            |row| row.get::<_, Vec<u8>>(0).map(path_from_storage_bytes),
+        )?;
+        rows.map(|row| row.map_err(Into::into)).collect()
+    }
+
     pub(crate) fn directory_snapshot(
         &self,
         path: &Path,

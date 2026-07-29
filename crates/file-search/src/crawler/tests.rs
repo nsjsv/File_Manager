@@ -411,6 +411,45 @@ async fn coverage_repair_enumerates_only_the_scope_direct_children() {
 }
 
 #[tokio::test]
+async fn watch_budget_patrol_checks_parent_and_nested_directories_independently() {
+    let content = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let nested = content.path().join("nested");
+    let direct_file = content.path().join("direct.txt");
+    let nested_file = nested.join("deep.txt");
+    fs::create_dir(&nested).unwrap();
+    fs::write(&direct_file, "old direct").unwrap();
+    fs::write(&nested_file, "old deep").unwrap();
+
+    let writer = writer_in(&db_dir);
+    let indexer = SearchIndexer::new(Arc::clone(&writer), config_for(content.path()));
+    indexer.rebuild().await.unwrap();
+    fs::write(&direct_file, "fresh direct token").unwrap();
+    fs::write(&nested_file, "fresh nested token").unwrap();
+
+    let patrol = indexer
+        .patrol_unwatched_directories_with_progress_cancelled(
+            vec![content.path().to_path_buf(), nested],
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(patrol.directories_enumerated, 2);
+    assert_eq!(patrol.reindexed, 2);
+    let reader = SearchDatabase::open_read_only(&db_dir.path().join("search.sqlite")).unwrap();
+    assert_eq!(
+        reader
+            .search(&SearchQuery::global(1, "fresh"))
+            .unwrap()
+            .hits
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn rebuild_paths_tombstones_deleted_subtrees_without_a_full_rebuild() {
     let content = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

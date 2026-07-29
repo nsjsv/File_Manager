@@ -16,6 +16,7 @@ use crate::SearchIndexConfig;
 use super::bounded_paths::{estimated_path_bytes, BoundedPathSet};
 use super::memory::release_allocator_idle_pages;
 use super::watch_coverage::{RecommendedWatchCoverage, WatchCoverageRefresh};
+use super::work_queue::WATCH_BUDGET_PATROL_INTERVAL;
 use super::{DaemonLifecycleSnapshot, DaemonWorkQueue, DaemonWorkRequest};
 
 const WATCH_EVENT_COALESCE_WINDOW: Duration = Duration::from_millis(250);
@@ -119,6 +120,49 @@ pub(super) struct PendingWatchPathBatch {
     changed_paths: BoundedPathSet,
 }
 
+struct WatchBudgetPatrolSchedule {
+    next_submission: Instant,
+    deferred_directories: Option<Vec<PathBuf>>,
+}
+
+impl WatchBudgetPatrolSchedule {
+    fn new(now: Instant) -> Self {
+        Self {
+            next_submission: now + WATCH_BUDGET_PATROL_INTERVAL,
+            deferred_directories: None,
+        }
+    }
+
+    fn submit_due(
+        &mut self,
+        coverage: &mut RecommendedWatchCoverage,
+        work_queue: &DaemonWorkQueue,
+        now: Instant,
+    ) -> SearchResult<()> {
+        if self.deferred_directories.is_none() && now < self.next_submission {
+            return Ok(());
+        }
+        if self.deferred_directories.is_none() {
+            let directories = coverage.next_watch_budget_patrol()?;
+            if directories.is_empty() {
+                self.next_submission = now + WATCH_BUDGET_PATROL_INTERVAL;
+                return Ok(());
+            }
+            self.deferred_directories = Some(directories);
+        }
+
+        let directories = self
+            .deferred_directories
+            .as_deref()
+            .expect("watch budget patrol directories missing");
+        if work_queue.try_enqueue_watch_budget_patrol(directories)? {
+            self.deferred_directories = None;
+            self.next_submission = now + WATCH_BUDGET_PATROL_INTERVAL;
+        }
+        Ok(())
+    }
+}
+
 impl Default for PendingWatchPathBatch {
     fn default() -> Self {
         Self {
@@ -186,7 +230,7 @@ impl DaemonWatchIngressBootstrap {
         let dispatch_thread = thread::Builder::new()
             .name("file-search-watch-ingress".to_owned())
             .spawn(move || {
-                run_watch_ingress_loop(
+                WatchIngressLoop {
                     coverage,
                     initial_refresh,
                     event_receiver,
@@ -195,7 +239,8 @@ impl DaemonWatchIngressBootstrap {
                     stop_receiver,
                     work_queue,
                     lifecycle_snapshot,
-                )
+                }
+                .run()
             })
             .map_err(|error| {
                 SearchError::WorkerFailed(format!("could not spawn watch ingress: {error}"))
@@ -215,8 +260,8 @@ impl DaemonWatchIngress {
     }
 }
 
-fn run_watch_ingress_loop(
-    mut coverage: RecommendedWatchCoverage,
+struct WatchIngressLoop {
+    coverage: RecommendedWatchCoverage,
     initial_refresh: WatchCoverageRefresh,
     event_receiver: Receiver<notify::Result<Event>>,
     overflow_state: Arc<WatchOverflowState>,
@@ -224,126 +269,91 @@ fn run_watch_ingress_loop(
     stop_receiver: Receiver<()>,
     work_queue: Arc<DaemonWorkQueue>,
     lifecycle_snapshot: Arc<Mutex<DaemonLifecycleSnapshot>>,
-) {
-    if publish_watch_coverage_refresh(
-        &work_queue,
-        &lifecycle_snapshot,
-        Vec::new(),
-        initial_refresh,
-    )
-    .is_err()
-    {
-        return;
-    }
-    let mut next_coverage_retry = Instant::now() + WATCH_COVERAGE_RETRY_INTERVAL;
-    let mut observed_overflow_epoch = overflow_state.epoch();
-    let mut observed_snapshot_epoch = directory_snapshot_epoch.load(Ordering::Acquire);
+}
 
-    loop {
-        if ingress_should_stop(&stop_receiver) {
-            break;
+impl WatchIngressLoop {
+    fn run(self) {
+        let Self {
+            mut coverage,
+            initial_refresh,
+            event_receiver,
+            overflow_state,
+            directory_snapshot_epoch,
+            stop_receiver,
+            work_queue,
+            lifecycle_snapshot,
+        } = self;
+        if publish_watch_coverage_refresh(
+            &work_queue,
+            &lifecycle_snapshot,
+            Vec::new(),
+            initial_refresh,
+        )
+        .is_err()
+        {
+            return;
         }
+        let mut next_coverage_retry = Instant::now() + WATCH_COVERAGE_RETRY_INTERVAL;
+        let mut budget_patrol_schedule = WatchBudgetPatrolSchedule::new(Instant::now());
+        let mut observed_overflow_epoch = overflow_state.epoch();
+        let mut observed_snapshot_epoch = directory_snapshot_epoch.load(Ordering::Acquire);
 
-        let current_snapshot_epoch = directory_snapshot_epoch.load(Ordering::Acquire);
-        if current_snapshot_epoch != observed_snapshot_epoch {
-            observed_snapshot_epoch = current_snapshot_epoch;
-            match coverage.restore_snapshot_directories() {
-                Ok(refresh) => {
-                    release_allocator_idle_pages();
-                    if publish_watch_coverage_refresh(
-                        &work_queue,
-                        &lifecycle_snapshot,
-                        Vec::new(),
-                        refresh,
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    coverage.mark_backend_unavailable(error.to_string());
-                    record_watch_channel_failure(&mut coverage, &lifecycle_snapshot);
-                }
-            }
-        }
-
-        let current_overflow_epoch = overflow_state.epoch();
-        if current_overflow_epoch != observed_overflow_epoch {
-            observed_overflow_epoch = current_overflow_epoch;
-            let dirty_roots = overflow_state.take_dirty_roots();
-            if !dirty_roots.is_empty()
-                && work_queue
-                    .enqueue(DaemonWorkRequest::DirtyRootRecovery { roots: dirty_roots })
-                    .is_err()
-            {
+        loop {
+            if ingress_should_stop(&stop_receiver) {
                 break;
             }
-            continue;
-        }
-
-        let mut pending_watch_batch = PendingWatchPathBatch::default();
-        match event_receiver.recv_timeout(WATCH_EVENT_COALESCE_WINDOW) {
-            Ok(Ok(event)) => {
-                if let Err(paths) = pending_watch_batch.absorb_event(event) {
-                    overflow_state.record_paths(&paths);
-                    continue;
-                }
-            }
-            Ok(Err(error)) => {
-                overflow_state.record_paths(&error.paths);
-                if handle_watch_error(&mut coverage, &error, &work_queue, &lifecycle_snapshot)
-                    .is_err()
-                {
-                    break;
-                }
-                tracing::warn!(
-                    target: "file_search::watch",
-                    event = "watch_ingress_error",
-                    error = ?error.kind,
-                    path_count = error.paths.len(),
-                    "filesystem watch ingress degraded"
-                );
-                continue;
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                if Instant::now() >= next_coverage_retry {
-                    if publish_watch_coverage_refresh(
-                        &work_queue,
-                        &lifecycle_snapshot,
-                        Vec::new(),
-                        coverage.retry_gaps(),
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
-                    next_coverage_retry = Instant::now() + WATCH_COVERAGE_RETRY_INTERVAL;
-                }
-                continue;
-            }
-            Err(RecvTimeoutError::Disconnected) => {
+            if let Err(error) =
+                budget_patrol_schedule.submit_due(&mut coverage, &work_queue, Instant::now())
+            {
+                coverage.mark_backend_unavailable(error.to_string());
                 record_watch_channel_failure(&mut coverage, &lifecycle_snapshot);
                 break;
             }
-        }
 
-        let coalesce_deadline = Instant::now() + WATCH_EVENT_COALESCE_DEADLINE;
-        let mut coalesced_paths_overflowed = false;
-        loop {
-            if ingress_should_stop(&stop_receiver) {
-                return;
+            let current_snapshot_epoch = directory_snapshot_epoch.load(Ordering::Acquire);
+            if current_snapshot_epoch != observed_snapshot_epoch {
+                observed_snapshot_epoch = current_snapshot_epoch;
+                match coverage.restore_snapshot_directories() {
+                    Ok(refresh) => {
+                        release_allocator_idle_pages();
+                        if publish_watch_coverage_refresh(
+                            &work_queue,
+                            &lifecycle_snapshot,
+                            Vec::new(),
+                            refresh,
+                        )
+                        .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        coverage.mark_backend_unavailable(error.to_string());
+                        record_watch_channel_failure(&mut coverage, &lifecycle_snapshot);
+                    }
+                }
             }
-            let remaining = coalesce_deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
+
+            let current_overflow_epoch = overflow_state.epoch();
+            if current_overflow_epoch != observed_overflow_epoch {
+                observed_overflow_epoch = current_overflow_epoch;
+                let dirty_roots = overflow_state.take_dirty_roots();
+                if !dirty_roots.is_empty()
+                    && work_queue
+                        .enqueue(DaemonWorkRequest::DirtyRootRecovery { roots: dirty_roots })
+                        .is_err()
+                {
+                    break;
+                }
+                continue;
             }
-            match event_receiver.recv_timeout(WATCH_EVENT_COALESCE_WINDOW.min(remaining)) {
+
+            let mut pending_watch_batch = PendingWatchPathBatch::default();
+            match event_receiver.recv_timeout(WATCH_EVENT_COALESCE_WINDOW) {
                 Ok(Ok(event)) => {
                     if let Err(paths) = pending_watch_batch.absorb_event(event) {
                         overflow_state.record_paths(&paths);
-                        coalesced_paths_overflowed = true;
-                        break;
+                        continue;
                     }
                 }
                 Ok(Err(error)) => {
@@ -351,7 +361,7 @@ fn run_watch_ingress_loop(
                     if handle_watch_error(&mut coverage, &error, &work_queue, &lifecycle_snapshot)
                         .is_err()
                     {
-                        return;
+                        break;
                     }
                     tracing::warn!(
                         target: "file_search::watch",
@@ -360,42 +370,109 @@ fn run_watch_ingress_loop(
                         path_count = error.paths.len(),
                         "filesystem watch ingress degraded"
                     );
+                    continue;
                 }
-                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Timeout) => {
+                    if Instant::now() >= next_coverage_retry {
+                        if publish_watch_coverage_refresh(
+                            &work_queue,
+                            &lifecycle_snapshot,
+                            Vec::new(),
+                            coverage.retry_gaps(),
+                        )
+                        .is_err()
+                        {
+                            break;
+                        }
+                        next_coverage_retry = Instant::now() + WATCH_COVERAGE_RETRY_INTERVAL;
+                    }
+                    continue;
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     record_watch_channel_failure(&mut coverage, &lifecycle_snapshot);
-                    return;
+                    break;
                 }
             }
-        }
 
-        if coalesced_paths_overflowed || overflow_state.epoch() != observed_overflow_epoch {
-            continue;
-        }
+            let coalesce_deadline = Instant::now() + WATCH_EVENT_COALESCE_DEADLINE;
+            let mut coalesced_paths_overflowed = false;
+            loop {
+                if ingress_should_stop(&stop_receiver) {
+                    return;
+                }
+                let remaining = coalesce_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match event_receiver.recv_timeout(WATCH_EVENT_COALESCE_WINDOW.min(remaining)) {
+                    Ok(Ok(event)) => {
+                        if let Err(paths) = pending_watch_batch.absorb_event(event) {
+                            overflow_state.record_paths(&paths);
+                            coalesced_paths_overflowed = true;
+                            break;
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        overflow_state.record_paths(&error.paths);
+                        if handle_watch_error(
+                            &mut coverage,
+                            &error,
+                            &work_queue,
+                            &lifecycle_snapshot,
+                        )
+                        .is_err()
+                        {
+                            return;
+                        }
+                        tracing::warn!(
+                            target: "file_search::watch",
+                            event = "watch_ingress_error",
+                            error = ?error.kind,
+                            path_count = error.paths.len(),
+                            "filesystem watch ingress degraded"
+                        );
+                    }
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        record_watch_channel_failure(&mut coverage, &lifecycle_snapshot);
+                        return;
+                    }
+                }
+            }
 
-        let changed_paths = pending_watch_batch.into_changed_paths();
-        if changed_paths.is_empty() {
-            continue;
-        }
-        let refresh = coverage.refresh_changed_paths(&changed_paths);
-        if publish_watch_coverage_refresh(&work_queue, &lifecycle_snapshot, changed_paths, refresh)
-            .is_err()
-        {
-            break;
-        }
+            if coalesced_paths_overflowed || overflow_state.epoch() != observed_overflow_epoch {
+                continue;
+            }
 
-        if Instant::now() >= next_coverage_retry {
+            let changed_paths = pending_watch_batch.into_changed_paths();
+            if changed_paths.is_empty() {
+                continue;
+            }
+            let refresh = coverage.refresh_changed_paths(&changed_paths);
             if publish_watch_coverage_refresh(
                 &work_queue,
                 &lifecycle_snapshot,
-                Vec::new(),
-                coverage.retry_gaps(),
+                changed_paths,
+                refresh,
             )
             .is_err()
             {
                 break;
             }
-            next_coverage_retry = Instant::now() + WATCH_COVERAGE_RETRY_INTERVAL;
+
+            if Instant::now() >= next_coverage_retry {
+                if publish_watch_coverage_refresh(
+                    &work_queue,
+                    &lifecycle_snapshot,
+                    Vec::new(),
+                    coverage.retry_gaps(),
+                )
+                .is_err()
+                {
+                    break;
+                }
+                next_coverage_retry = Instant::now() + WATCH_COVERAGE_RETRY_INTERVAL;
+            }
         }
     }
 }

@@ -12,6 +12,7 @@ use crate::filesystem::{FilesystemObservation, LocalFilesystemBoundary};
 use crate::model::SearchFileKind;
 
 use super::bounded_paths::{estimated_path_bytes, BoundedPathSet};
+use super::watch_budget_patrol::WatchBudgetPatrol;
 use super::watch_ingress::{deliver_watch_event, WatchOverflowState};
 
 const TARGET_REGISTERED_DIRECTORIES: usize = 32_768;
@@ -24,6 +25,7 @@ const MAX_COVERAGE_MESSAGE_BYTES: usize = 512;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum WatchCoverageHealth {
     Healthy,
+    HybridPatrol { root_count: usize },
     Incomplete { gap_count: usize, message: String },
     BackendUnavailable { message: String },
 }
@@ -52,6 +54,7 @@ impl DirectoryWatchBackend for RecommendedWatcher {
 pub(super) struct RecommendedWatchCoverage {
     inner: DirectoryWatchCoverage<RecommendedWatcher>,
     database_path: PathBuf,
+    budget_patrol: WatchBudgetPatrol,
 }
 
 impl RecommendedWatchCoverage {
@@ -64,26 +67,41 @@ impl RecommendedWatchCoverage {
         let watcher = notify::recommended_watcher(move |event_result| {
             deliver_watch_event(&event_sender, &overflow_state, event_result);
         })?;
+        let budget_patrol = WatchBudgetPatrol::open(&database_path)?;
         Ok(Self {
             inner: DirectoryWatchCoverage::new(watcher, config),
             database_path,
+            budget_patrol,
         })
     }
 
     pub(super) fn initialize(&mut self) -> SearchResult<WatchCoverageRefresh> {
-        self.inner.register_roots();
         self.restore_snapshot_directories()
     }
 
     pub(super) fn restore_snapshot_directories(&mut self) -> SearchResult<WatchCoverageRefresh> {
         let previous_gaps = self.inner.current_gaps();
-        let database = SearchDatabase::open_read_only(&self.database_path)?;
+        let previous_gap_messages = self.inner.current_gap_messages();
+        self.inner.begin_snapshot_restore();
+        self.inner.register_roots();
+        let database = match SearchDatabase::open_read_only(&self.database_path) {
+            Ok(database) => database,
+            Err(error) => {
+                self.inner.restore_previous_gaps(&previous_gap_messages);
+                return Err(error);
+            }
+        };
         let mut after_path = None;
         loop {
-            let page = database.directory_snapshot_paths_page(
-                after_path.as_deref(),
-                MAX_KNOWN_ENTRY_PAGE_ENTRIES,
-            )?;
+            let page = match database
+                .directory_snapshot_paths_page(after_path.as_deref(), MAX_KNOWN_ENTRY_PAGE_ENTRIES)
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    self.inner.restore_previous_gaps(&previous_gap_messages);
+                    return Err(error);
+                }
+            };
             if page.is_empty() {
                 break;
             }
@@ -91,6 +109,13 @@ impl RecommendedWatchCoverage {
             self.inner.register_snapshot_directories(page);
         }
         Ok(self.inner.finish_refresh(previous_gaps))
+    }
+
+    pub(super) fn next_watch_budget_patrol(&mut self) -> SearchResult<Vec<PathBuf>> {
+        self.budget_patrol.next_directories(
+            &self.inner.watch_budget_overflow_roots,
+            &self.inner.registered_directories,
+        )
     }
 
     pub(super) fn refresh_changed_paths(
@@ -159,6 +184,11 @@ impl BoundedCoverageGaps {
         Ok(())
     }
 
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.estimated_bytes = 0;
+    }
+
     fn remove(&mut self, path: &Path) -> Option<String> {
         let message = self.entries.remove(path)?;
         self.estimated_bytes = self
@@ -210,7 +240,8 @@ struct DirectoryWatchCoverage<Backend> {
     rules: SearchExcludeRules,
     registered_directories: BoundedPathSet,
     coverage_gaps: BoundedCoverageGaps,
-    coverage_budget_exceeded_roots: BTreeSet<PathBuf>,
+    watch_budget_overflow_roots: BTreeMap<PathBuf, PathBuf>,
+    gap_budget_exceeded_roots: BTreeSet<PathBuf>,
     backend_failure: Option<String>,
 }
 
@@ -225,8 +256,23 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
                 MAX_REGISTERED_PATH_BYTES,
             ),
             coverage_gaps: BoundedCoverageGaps::new(MAX_COVERAGE_GAPS, MAX_COVERAGE_GAP_BYTES),
-            coverage_budget_exceeded_roots: BTreeSet::new(),
+            watch_budget_overflow_roots: BTreeMap::new(),
+            gap_budget_exceeded_roots: BTreeSet::new(),
             backend_failure: None,
+        }
+    }
+
+    fn begin_snapshot_restore(&mut self) {
+        self.watch_budget_overflow_roots.clear();
+        self.gap_budget_exceeded_roots.clear();
+        self.coverage_gaps.clear();
+    }
+
+    fn restore_previous_gaps(&mut self, previous_gaps: &BTreeMap<PathBuf, String>) {
+        for (gap, message) in previous_gaps {
+            if !self.coverage_gaps.entries.contains_key(gap) {
+                self.record_gap(gap.clone(), message.clone());
+            }
         }
     }
 
@@ -265,11 +311,14 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
         self.coverage_gaps.keys().cloned().collect()
     }
 
+    fn current_gap_messages(&self) -> BTreeMap<PathBuf, String> {
+        self.coverage_gaps.entries.clone()
+    }
+
     fn finish_refresh(&self, previous_gaps: BTreeSet<PathBuf>) -> WatchCoverageRefresh {
         let current_gaps = self.current_gaps();
         let repair_paths = previous_gaps.difference(&current_gaps).cloned().collect();
         let patrol_paths = current_gaps.into_iter().collect::<Vec<_>>();
-        // ponytail: 容量耗尽时只降级，不把整个 root 偷换成周期巡检；超过 32,768 个目录后需持久游标分片。
         WatchCoverageRefresh {
             repair_paths,
             patrol_paths,
@@ -340,7 +389,7 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
             .insert(directory.to_path_buf())
             .is_err()
         {
-            self.mark_root_coverage_budget_exceeded(directory);
+            self.record_watch_budget_overflow(directory);
             return WatchRegistration::CapacityReached;
         }
         match self.backend.watch_directory(directory) {
@@ -377,7 +426,7 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
             .insert(scope.clone(), message.into())
             .is_err()
         {
-            self.mark_root_coverage_budget_exceeded(&scope);
+            self.record_gap_budget_overflow(&scope);
         }
     }
 
@@ -397,43 +446,60 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
                 message: message.clone(),
             };
         }
-        if self.coverage_gaps.is_empty() && self.coverage_budget_exceeded_roots.is_empty() {
-            WatchCoverageHealth::Healthy
-        } else if !self.coverage_budget_exceeded_roots.is_empty() {
-            WatchCoverageHealth::Incomplete {
+        if !self.gap_budget_exceeded_roots.is_empty() {
+            return WatchCoverageHealth::Incomplete {
                 gap_count: self
                     .coverage_gaps
                     .len()
-                    .saturating_add(self.coverage_budget_exceeded_roots.len()),
+                    .saturating_add(self.gap_budget_exceeded_roots.len()),
                 message: format!(
-                    "{} search roots exceed the real-time watch budget; targeted patrol is active",
-                    self.coverage_budget_exceeded_roots.len()
+                    "search watch failures exceeded bounded diagnostics for {} roots",
+                    self.gap_budget_exceeded_roots.len()
                 ),
-            }
-        } else {
-            WatchCoverageHealth::Incomplete {
+            };
+        }
+        if !self.coverage_gaps.is_empty() {
+            return WatchCoverageHealth::Incomplete {
                 gap_count: self.coverage_gaps.len(),
                 message: format!(
                     "{} search directory watches are unavailable; retrying with targeted patrol",
                     self.coverage_gaps.len()
                 ),
-            }
+            };
+        }
+        if !self.watch_budget_overflow_roots.is_empty() {
+            return WatchCoverageHealth::HybridPatrol {
+                root_count: self.watch_budget_overflow_roots.len(),
+            };
+        }
+        WatchCoverageHealth::Healthy
+    }
+
+    fn record_watch_budget_overflow(&mut self, path: &Path) {
+        let Some(root) = self.containing_root(path) else {
+            return;
+        };
+        self.watch_budget_overflow_roots
+            .entry(root)
+            .or_insert_with(|| path.to_path_buf());
+    }
+
+    fn record_gap_budget_overflow(&mut self, path: &Path) {
+        if let Some(root) = self.containing_root(path) {
+            self.gap_budget_exceeded_roots.insert(root);
+        } else {
+            self.gap_budget_exceeded_roots
+                .extend(self.config.roots.iter().cloned());
         }
     }
 
-    fn mark_root_coverage_budget_exceeded(&mut self, path: &Path) {
-        if let Some(root) = self
-            .config
+    fn containing_root(&self, path: &Path) -> Option<PathBuf> {
+        self.config
             .roots
             .iter()
             .filter(|root| path == root.as_path() || path.starts_with(root))
             .max_by_key(|root| root.components().count())
-        {
-            self.coverage_budget_exceeded_roots.insert(root.clone());
-        } else {
-            self.coverage_budget_exceeded_roots
-                .extend(self.config.roots.iter().cloned());
-        }
+            .cloned()
     }
 }
 
@@ -523,6 +589,25 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_snapshot_restore_keeps_previous_gaps_retryable() {
+        let directory = tempdir().unwrap();
+        let missing = directory.path().join("missing");
+        let mut coverage =
+            DirectoryWatchCoverage::new(RecordingBackend::default(), config_for(directory.path()));
+        coverage.record_gap(missing.clone(), "backend unavailable");
+        let previous_gaps = coverage.current_gap_messages();
+
+        coverage.begin_snapshot_restore();
+        coverage.restore_previous_gaps(&previous_gaps);
+
+        assert_eq!(coverage.current_gaps(), BTreeSet::from([missing.clone()]));
+        assert_eq!(
+            coverage.coverage_gaps.entries[&missing],
+            "backend unavailable"
+        );
+    }
+
+    #[test]
     fn one_directory_watch_failure_does_not_discard_sibling_coverage() {
         let directory = tempdir().unwrap();
         let denied = directory.path().join("denied");
@@ -537,6 +622,7 @@ mod tests {
         coverage.register_snapshot_directories(vec![denied.clone(), healthy.clone()]);
 
         assert!(coverage.registered_directories.contains(&healthy));
+        assert!(!coverage.registered_directories.contains(&denied));
         assert!(coverage.coverage_gaps.contains_key(&denied));
     }
 
@@ -554,11 +640,50 @@ mod tests {
         let refresh = coverage.retry_gaps();
 
         assert_eq!(refresh.health, WatchCoverageHealth::Healthy);
-        assert_eq!(refresh.repair_paths, vec![denied]);
+        assert_eq!(refresh.repair_paths, vec![denied.clone()]);
+        assert!(coverage.registered_directories.contains(&denied));
     }
 
     #[test]
-    fn directory_registration_capacity_degrades_by_root_without_growing_paths() {
+    fn watch_failure_budget_stays_degraded_and_is_not_hybrid_patrol() {
+        let directory = tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let mut backend = RecordingBackend::default();
+        backend
+            .failing_paths
+            .extend([first.clone(), second.clone()]);
+        let mut coverage = DirectoryWatchCoverage::new(backend, config_for(directory.path()));
+        coverage.coverage_gaps = BoundedCoverageGaps::new(1, usize::MAX);
+
+        coverage.register_snapshot_directories(vec![first.clone(), second.clone()]);
+
+        assert!(coverage.watch_budget_overflow_roots.is_empty());
+        assert_eq!(
+            coverage.gap_budget_exceeded_roots,
+            BTreeSet::from([directory.path().to_path_buf()])
+        );
+        assert!(matches!(
+            coverage.health(),
+            WatchCoverageHealth::Incomplete { .. }
+        ));
+
+        coverage.backend.failing_paths.clear();
+        let previous_gaps = coverage.current_gaps();
+        coverage.begin_snapshot_restore();
+        coverage.register_roots();
+        coverage.register_snapshot_directories(vec![first.clone(), second]);
+        let refresh = coverage.finish_refresh(previous_gaps);
+
+        assert_eq!(refresh.health, WatchCoverageHealth::Healthy);
+        assert_eq!(refresh.repair_paths, vec![first]);
+        assert!(coverage.gap_budget_exceeded_roots.is_empty());
+    }
+
+    #[test]
+    fn directory_registration_capacity_uses_hybrid_patrol_without_growing_paths() {
         let directory = tempdir().unwrap();
         let child = directory.path().join("child");
         std::fs::create_dir_all(&child).unwrap();
@@ -567,19 +692,19 @@ mod tests {
         coverage.registered_directories = BoundedPathSet::new(1, usize::MAX);
 
         coverage.register_roots();
-        coverage.register_snapshot_directories(vec![child]);
+        coverage.register_snapshot_directories(vec![child.clone()]);
 
         assert_eq!(coverage.registered_directories.len(), 1);
         assert_eq!(
-            coverage.coverage_budget_exceeded_roots,
-            BTreeSet::from([directory.path().to_path_buf()])
+            coverage.watch_budget_overflow_roots,
+            BTreeMap::from([(directory.path().to_path_buf(), child)])
         );
         let refresh = coverage.finish_refresh(BTreeSet::new());
         assert!(refresh.patrol_paths.is_empty());
-        assert!(matches!(
+        assert_eq!(
             refresh.health,
-            WatchCoverageHealth::Incomplete { .. }
-        ));
+            WatchCoverageHealth::HybridPatrol { root_count: 1 }
+        );
     }
 
     #[test]

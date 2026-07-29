@@ -205,6 +205,27 @@ impl SearchIndexer {
         Ok(stats)
     }
 
+    pub(crate) async fn patrol_unwatched_directories_with_progress_cancelled(
+        &self,
+        directories: Vec<PathBuf>,
+        cancellation: &CancellationToken,
+        mut on_progress: impl FnMut(IndexMaintenanceProgress),
+    ) -> SearchResult<RebuildStats> {
+        ensure_not_cancelled(cancellation)?;
+        let mut stats = RebuildStats::default();
+        for directory in directories {
+            self.reconcile_changed_paths(
+                vec![directory],
+                &mut stats,
+                cancellation,
+                &mut on_progress,
+            )
+            .await?;
+        }
+        self.writer.flush()?;
+        Ok(stats)
+    }
+
     pub(crate) async fn recover_dirty_roots_with_progress_cancelled(
         &self,
         scopes: Vec<PathBuf>,
