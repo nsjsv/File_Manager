@@ -118,7 +118,7 @@ fn unit_snapshot_parses_properties_without_order_dependency() {
     assert!(snapshot
         .description()
         .contains("ExecStartPath=/home/test/.local/share/file-manager-dev/file-searchd"));
-    assert!(snapshot.description().contains("recovery action:"));
+    assert!(snapshot.description().contains("unit source guidance"));
 }
 
 #[test]

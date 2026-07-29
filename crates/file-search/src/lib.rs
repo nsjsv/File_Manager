@@ -7,6 +7,7 @@ mod extractor;
 mod fallback;
 mod filesystem;
 mod logging;
+mod managed_search_index;
 mod model;
 mod path_encoding;
 mod protocol;

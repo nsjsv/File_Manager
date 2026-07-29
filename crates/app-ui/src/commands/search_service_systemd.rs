@@ -20,6 +20,8 @@ const REQUIRED_MEMORY_MAX: u64 = 96_000_000;
 const REQUIRED_MEMORY_SWAP_MAX: u64 = 0;
 const REQUIRED_CPU_QUOTA_PERCENT: u64 = 5;
 const MAXIMUM_SUPPORTED_BASE_PAGE_BYTES: u64 = 65_536;
+const PACKAGED_RELEASE_FRAGMENT_PATH: &str = "/usr/lib/systemd/user/file-manager-search.service";
+const PACKAGED_RELEASE_EXEC_START_PATH: &str = "/usr/lib/file-manager/file-searchd";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SearchUnitAction {
@@ -359,6 +361,13 @@ impl fmt::Display for UnitActiveState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchUnitDefinitionSource {
+    Expected,
+    UserOverride,
+    Unexpected,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SearchUnitSnapshot {
     pub(super) runtime_identity: SearchRuntimeIdentity,
@@ -579,8 +588,8 @@ impl SearchUnitSnapshot {
         let fragment_path = display_optional_text(&self.fragment_path);
         let drop_in_paths = display_optional_text(&self.drop_in_paths);
         let exec_start_path = display_optional_text(&self.exec_start_path);
-        format!(
-            "Unit={}, ActiveState={}, SubState={}, MainPID={}, ControlGroup={}, MemoryHigh={}, MemoryMax={}, MemorySwapMax={}, Result={}, ExecMainStatus={}, NRestarts={}, FragmentPath={}, DropInPaths={}, ExecStartPath={}; recovery action: {}",
+        let facts = format!(
+            "Unit={}, ActiveState={}, SubState={}, MainPID={}, ControlGroup={}, MemoryHigh={}, MemoryMax={}, MemorySwapMax={}, Result={}, ExecMainStatus={}, NRestarts={}, FragmentPath={}, DropInPaths={}, ExecStartPath={}",
             self.runtime_identity.systemd_unit(),
             self.active_state,
             self.sub_state,
@@ -595,8 +604,49 @@ impl SearchUnitSnapshot {
             fragment_path,
             drop_in_paths,
             exec_start_path,
-            recovery_action(self.runtime_identity)
-        )
+        );
+        match self.definition_source() {
+            SearchUnitDefinitionSource::Expected => facts,
+            SearchUnitDefinitionSource::UserOverride => format!(
+                "{facts}; unit source guidance: a user unit definition or drop-in overrides the expected service; remove or migrate the FragmentPath/DropInPaths shown above, run systemctl --user daemon-reload, then retry"
+            ),
+            SearchUnitDefinitionSource::Unexpected => format!(
+                "{facts}; unit source guidance: FragmentPath/ExecStartPath do not match the current bundle; {}",
+                unexpected_definition_action(self.runtime_identity)
+            ),
+        }
+    }
+
+    fn definition_source(&self) -> SearchUnitDefinitionSource {
+        if !self.drop_in_paths.is_empty() {
+            return SearchUnitDefinitionSource::UserOverride;
+        }
+        if self.runtime_identity == SearchRuntimeIdentity::Release
+            && expected_user_fragment(SearchRuntimeIdentity::Release)
+                .is_some_and(|path| path == Path::new(&self.fragment_path))
+        {
+            return SearchUnitDefinitionSource::UserOverride;
+        }
+        if self.matches_expected_definition() {
+            SearchUnitDefinitionSource::Expected
+        } else {
+            SearchUnitDefinitionSource::Unexpected
+        }
+    }
+
+    fn matches_expected_definition(&self) -> bool {
+        match self.runtime_identity {
+            SearchRuntimeIdentity::Release => {
+                self.fragment_path == PACKAGED_RELEASE_FRAGMENT_PATH
+                    && self.exec_start_path == PACKAGED_RELEASE_EXEC_START_PATH
+            }
+            SearchRuntimeIdentity::Development => {
+                expected_user_fragment(SearchRuntimeIdentity::Development)
+                    .is_some_and(|path| path == Path::new(&self.fragment_path))
+                    && expected_development_exec_start()
+                        .is_some_and(|path| path == Path::new(&self.exec_start_path))
+            }
+        }
     }
 }
 
@@ -678,13 +728,31 @@ fn display_optional_text(value: &str) -> &str {
     }
 }
 
-fn recovery_action(runtime_identity: SearchRuntimeIdentity) -> &'static str {
+fn expected_user_fragment(runtime_identity: SearchRuntimeIdentity) -> Option<PathBuf> {
+    Some(
+        dirs::config_dir()?
+            .join("systemd/user")
+            .join(runtime_identity.systemd_unit()),
+    )
+}
+
+fn expected_development_exec_start() -> Option<PathBuf> {
+    let application_path = std::env::current_exe().ok()?;
+    let install_prefix = application_path.parent()?.parent()?;
+    Some(install_prefix.join("lib/file-manager/file-searchd"))
+}
+
+fn unexpected_definition_action(runtime_identity: SearchRuntimeIdentity) -> &'static str {
     match runtime_identity {
         SearchRuntimeIdentity::Release => {
-            "remove or migrate the conflicting user override shown above, run systemctl --user daemon-reload, then reinstall or restart the current File Manager package"
+            "reinstall the current File Manager package, run systemctl --user daemon-reload, then retry"
         }
         SearchRuntimeIdentity::Development => {
             "run scripts/install-file-manager-dev.sh install --yes to restore the managed development unit, then retry"
         }
     }
 }
+
+#[cfg(test)]
+#[path = "search_service_systemd_tests.rs"]
+mod tests;

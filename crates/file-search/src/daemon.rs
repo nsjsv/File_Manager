@@ -11,6 +11,7 @@ use crate::crawler::IndexMaintenanceProgress;
 use crate::database::SearchDatabase;
 use crate::error::{SearchError, SearchResult};
 use crate::logging::bounded_search_log_detail;
+use crate::managed_search_index::ManagedSearchIndex;
 use crate::model::{ExtractorCapability, IndexHealth, IndexPhase, IndexStatus};
 use crate::writer::IndexWriter;
 use crate::{SearchIndexConfig, SearchIndexer};
@@ -59,16 +60,18 @@ enum DaemonLifecyclePhase {
 struct DaemonLifecycleSnapshot {
     phase: DaemonLifecyclePhase,
     maintenance_backend_failure: Option<String>,
+    recovery_rebuild_message: Option<String>,
     watch_coverage_health: WatchCoverageHealth,
     visible_indexed_files: u64,
     capabilities: Vec<ExtractorCapability>,
 }
 
 impl DaemonLifecycleSnapshot {
-    fn starting(visible_indexed_files: u64) -> Self {
+    fn starting(visible_indexed_files: u64, recovery_rebuild_message: Option<String>) -> Self {
         Self {
             phase: DaemonLifecyclePhase::Starting,
             maintenance_backend_failure: None,
+            recovery_rebuild_message,
             watch_coverage_health: WatchCoverageHealth::Healthy,
             visible_indexed_files,
             capabilities: Vec::new(),
@@ -107,6 +110,7 @@ impl DaemonLifecycleSnapshot {
     fn finish_watch_cycle(&mut self, visible_indexed_files: u64) {
         self.phase = DaemonLifecyclePhase::Complete;
         self.visible_indexed_files = visible_indexed_files;
+        self.recovery_rebuild_message = None;
     }
 
     fn record_error(&mut self, message: String) {
@@ -161,7 +165,12 @@ impl DaemonLifecycleSnapshot {
             };
         }
         match &self.watch_coverage_health {
-            WatchCoverageHealth::Healthy => IndexHealth::Healthy,
+            WatchCoverageHealth::Healthy => match self.recovery_rebuild_message.as_ref() {
+                Some(message) => IndexHealth::Degraded {
+                    message: message.clone(),
+                },
+                None => IndexHealth::Healthy,
+            },
             WatchCoverageHealth::Incomplete { message, .. } => IndexHealth::Degraded {
                 message: message.clone(),
             },
@@ -482,12 +491,24 @@ impl SearchDaemonCore {
             })?;
         }
 
-        let writable_database = SearchDatabase::open(&database_path)?;
-        let writer = Arc::new(IndexWriter::spawn(writable_database));
-        writer.compact_search_database()?;
+        let managed_index_open = ManagedSearchIndex::new(database_path.clone()).open()?;
+        let recovery_rebuild_message = managed_index_open.recovery_notice.as_ref().map(|notice| {
+            let message = notice.message();
+            let log_message = bounded_search_log_detail(&message);
+            tracing::warn!(
+                target: "file_search::daemon",
+                event = "damaged_index_quarantined",
+                detail = %log_message,
+                "damaged search index quarantined; rebuilding from filesystem"
+            );
+            message
+        });
+        let writer = Arc::new(IndexWriter::spawn(managed_index_open.database));
         let known_count = writer.count()?;
-        let lifecycle_snapshot =
-            Arc::new(Mutex::new(DaemonLifecycleSnapshot::starting(known_count)));
+        let lifecycle_snapshot = Arc::new(Mutex::new(DaemonLifecycleSnapshot::starting(
+            known_count,
+            recovery_rebuild_message,
+        )));
         let work_queue = Arc::new(DaemonWorkQueue::new(config.roots.clone()));
         let directory_snapshot_epoch = Arc::new(AtomicU64::new(0));
         let crawl_cancellation = CancellationToken::new();
@@ -516,14 +537,18 @@ impl SearchDaemonCore {
     }
 
     pub fn start_index_maintenance(&self) -> SearchResult<()> {
-        let mut runtime_state = self
-            .runtime_state
-            .lock()
-            .expect("search daemon runtime mutex poisoned");
-        match runtime_state.phase {
-            DaemonRuntimePhase::Maintaining => return Ok(()),
-            DaemonRuntimePhase::Stopped => return Err(daemon_core_stopped()),
-            DaemonRuntimePhase::Created => {}
+        {
+            let mut runtime_state = self
+                .runtime_state
+                .lock()
+                .expect("search daemon runtime mutex poisoned");
+            match runtime_state.phase {
+                DaemonRuntimePhase::Maintaining => return Ok(()),
+                DaemonRuntimePhase::Stopped => return Err(daemon_core_stopped()),
+                DaemonRuntimePhase::Created => {
+                    runtime_state.phase = DaemonRuntimePhase::Maintaining;
+                }
+            }
         }
 
         let (watch_ingress, maintenance_failure) = match DaemonWatchIngressBootstrap::establish(
@@ -541,22 +566,32 @@ impl SearchDaemonCore {
             Err(error) => (None, Some(error)),
         };
 
-        if let Some(error) = maintenance_failure.as_ref() {
-            self.record_maintenance_failure(error.to_string());
+        let mut runtime_state = self
+            .runtime_state
+            .lock()
+            .expect("search daemon runtime mutex poisoned");
+        if matches!(runtime_state.phase, DaemonRuntimePhase::Stopped) {
+            drop(runtime_state);
+            if let Some(watch_ingress) = watch_ingress {
+                watch_ingress.shutdown();
+            }
+            return Err(daemon_core_stopped());
         }
-
         if let Err(error) = self.enqueue_work(DaemonWorkRequest::StartupCheck) {
+            drop(runtime_state);
             if let Some(watch_ingress) = watch_ingress {
                 watch_ingress.shutdown();
             }
             return Err(error);
         }
-
         runtime_state.watch_ingress = watch_ingress;
-        runtime_state.phase = DaemonRuntimePhase::Maintaining;
+        drop(runtime_state);
 
         match maintenance_failure {
-            Some(error) => Err(error),
+            Some(error) => {
+                self.record_maintenance_failure(error.to_string());
+                Err(error)
+            }
             None => Ok(()),
         }
     }
@@ -596,6 +631,7 @@ impl SearchDaemonCore {
             watch_ingress.shutdown();
         }
         self.crawl_cancellation.cancel();
+        self.writer.cancel_index_maintenance();
         self.work_queue.begin_shutdown();
         let worker_outcome = self.join_worker();
         let writer_outcome = self.writer.shutdown();
@@ -777,6 +813,7 @@ fn run_index_maintenance(
             snapshot.finish_watch_cycle(total);
             true
         }
+        Err(_) if crawl_cancellation.is_cancelled() => false,
         Err(SearchError::Cancelled) => false,
         Err(error) => {
             let error = error.to_string();

@@ -22,6 +22,26 @@ pub enum SearchError {
     Watch(#[from] notify::Error),
     #[error("search database error: {0}")]
     Database(#[from] rusqlite::Error),
+    #[error("search database schema {found} is newer than supported schema {supported}")]
+    UnsupportedDatabaseSchema { found: i64, supported: i64 },
+    #[error("managed search index member is not a regular file: {path:?}")]
+    InvalidManagedIndexMember { path: PathBuf },
+    #[error(
+        "could not quarantine damaged search index {database_path:?}; quarantine directory: {quarantine_directory:?}; {message}"
+    )]
+    ManagedIndexQuarantineFailed {
+        database_path: PathBuf,
+        quarantine_directory: Option<PathBuf>,
+        message: String,
+    },
+    #[error(
+        "damaged search index {database_path:?} was quarantined at {quarantine_directory:?}, but replacement database failed: {source}"
+    )]
+    ManagedIndexRebuildFailed {
+        database_path: PathBuf,
+        quarantine_directory: PathBuf,
+        source: Box<SearchError>,
+    },
     #[error("search protocol JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("search protocol I/O error: {0}")]

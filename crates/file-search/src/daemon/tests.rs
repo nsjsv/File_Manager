@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ fn snapshot_for(phase: DaemonLifecyclePhase) -> DaemonLifecycleSnapshot {
     DaemonLifecycleSnapshot {
         phase,
         maintenance_backend_failure: None,
+        recovery_rebuild_message: None,
         watch_coverage_health: WatchCoverageHealth::Healthy,
         visible_indexed_files: 41,
         capabilities: Vec::new(),
@@ -279,7 +281,34 @@ fn daemon_rejects_configuration_outside_the_service_budget_before_opening_databa
 }
 
 #[test]
-fn daemon_compacts_fragmented_full_text_storage_before_startup_returns() {
+fn corruption_recovery_stays_degraded_until_the_rebuild_cycle_finishes() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    fs::write(&database_path, b"not a sqlite database").unwrap();
+    let core = SearchDaemonCore::new(
+        database_path,
+        SearchIndexConfig {
+            roots: Vec::new(),
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+
+    assert!(matches!(
+        core.current_status().health,
+        IndexHealth::Degraded { ref message }
+            if message.contains("SQLITE_NOTADB") && message.contains("quarantine")
+    ));
+    core.lifecycle_snapshot
+        .lock()
+        .unwrap()
+        .finish_watch_cycle(0);
+    assert_eq!(core.current_status().health, IndexHealth::Healthy);
+    core.shutdown().unwrap();
+}
+
+#[test]
+fn daemon_defers_fragmented_full_text_compaction_to_startup_maintenance() {
     let directory = tempdir().unwrap();
     let database_path = directory.path().join("search.sqlite");
     drop(SearchDatabase::open(&database_path).unwrap());
@@ -318,6 +347,17 @@ fn daemon_compacts_fragmented_full_text_storage_before_startup_returns() {
         },
     )
     .unwrap();
+    assert!(segment_count() > 1);
+
+    core.start_index_maintenance().unwrap();
+    let completion_deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(core.current_status().phase, IndexPhase::Complete) {
+        assert!(
+            Instant::now() < completion_deadline,
+            "startup maintenance did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     assert_eq!(segment_count(), 1);
     core.shutdown().unwrap();

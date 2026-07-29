@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use file_search::version_via_socket;
+use file_search::{
+    status_via_socket, version_via_socket, IndexedQueryAvailability, SearchDatabase,
+    SearchServicePhase,
+};
 use tempfile::{tempdir, TempDir};
 use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
@@ -39,6 +42,64 @@ async fn sigterm_reuses_protocol_shutdown_completion_boundary() {
         !fixture.socket_path.exists(),
         "daemon socket survived shutdown"
     );
+}
+
+#[tokio::test]
+async fn sigterm_during_locked_database_maintenance_exits_without_waiting_for_sqlite() {
+    let fixture = DaemonProcessFixture::new();
+    let database_path = fixture.database_path();
+    std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+    drop(SearchDatabase::open(&database_path).unwrap());
+
+    let locking_connection = rusqlite::Connection::open(&database_path).unwrap();
+    locking_connection
+        .execute_batch("BEGIN; SELECT COUNT(*) FROM sqlite_master;")
+        .unwrap();
+    let wal_writer = rusqlite::Connection::open(&database_path).unwrap();
+    wal_writer
+        .execute_batch(
+            "CREATE TABLE shutdown_lock_fixture (value INTEGER NOT NULL);
+             INSERT INTO shutdown_lock_fixture VALUES (1);",
+        )
+        .unwrap();
+    drop(wal_writer);
+    assert!(
+        PathBuf::from(format!("{}-wal", database_path.display())).exists(),
+        "fixture did not create a WAL file"
+    );
+
+    let mut daemon_process = fixture.daemon_command().spawn().unwrap();
+    wait_for_endpoint(&mut daemon_process, &fixture.socket_path).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let status = status_via_socket(&fixture.socket_path).await.unwrap();
+    assert_eq!(
+        status.phase,
+        SearchServicePhase::Ready,
+        "database maintenance prevented the daemon from becoming Ready"
+    );
+    assert_eq!(
+        status.query_availability,
+        IndexedQueryAvailability::Available,
+        "database maintenance prevented indexed queries"
+    );
+
+    let daemon_process_id = daemon_process.id().unwrap();
+    let signal_status = unsafe { libc::kill(daemon_process_id as i32, libc::SIGTERM) };
+    assert_eq!(signal_status, 0, "failed to send SIGTERM to file-searchd");
+    let exit_status = tokio::time::timeout(Duration::from_secs(2), daemon_process.wait())
+        .await
+        .expect("file-searchd waited for locked SQLite maintenance")
+        .unwrap();
+
+    assert!(
+        exit_status.success(),
+        "file-searchd did not exit successfully after SIGTERM: {exit_status}"
+    );
+    assert!(
+        !fixture.socket_path.exists(),
+        "daemon socket survived shutdown during maintenance"
+    );
+    locking_connection.execute_batch("ROLLBACK;").unwrap();
 }
 
 #[tokio::test]
@@ -134,6 +195,10 @@ impl DaemonProcessFixture {
             config_directory,
             socket_path,
         }
+    }
+
+    fn database_path(&self) -> PathBuf {
+        self.data_directory.join("file-manager/search.sqlite")
     }
 
     fn daemon_command(&self) -> Command {

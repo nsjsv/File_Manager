@@ -1,6 +1,7 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crate::database::{
@@ -71,6 +72,8 @@ enum WriteCommand {
 /// and, under WAL, never block this writer.
 pub struct IndexWriter {
     sender: SyncSender<WriteCommand>,
+    interrupt: rusqlite::InterruptHandle,
+    maintenance_cancelled: Arc<AtomicBool>,
     join: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -80,12 +83,17 @@ impl IndexWriter {
     pub fn spawn(database: SearchDatabase) -> Self {
         // 零容量通道让 crawler 与唯一 writer 直接交接，正文不能在内存队列中累积。
         let (sender, receiver) = mpsc::sync_channel(0);
+        let interrupt = database.interrupt_handle();
+        let maintenance_cancelled = Arc::new(AtomicBool::new(false));
+        let writer_maintenance_cancelled = Arc::clone(&maintenance_cancelled);
         let join = thread::Builder::new()
             .name("file-search-writer".to_owned())
-            .spawn(move || writer_loop(database, receiver))
+            .spawn(move || writer_loop(database, receiver, writer_maintenance_cancelled))
             .expect("spawn search writer thread");
         Self {
             sender,
+            interrupt,
+            maintenance_cancelled,
             join: Mutex::new(Some(join)),
         }
     }
@@ -228,6 +236,11 @@ impl IndexWriter {
         outcome.recv().map_err(|_| writer_gone())?
     }
 
+    pub(crate) fn cancel_index_maintenance(&self) {
+        self.maintenance_cancelled.store(true, Ordering::Release);
+        self.interrupt.interrupt();
+    }
+
     /// 返回当前可查询的索引条目数，并阻塞等待 writer 回复。
     pub fn count(&self) -> SearchResult<u64> {
         let (tx, rx) = mpsc::channel();
@@ -286,17 +299,29 @@ impl Drop for IndexWriter {
     }
 }
 
-fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
+fn writer_loop(
+    database: SearchDatabase,
+    receiver: Receiver<WriteCommand>,
+    maintenance_cancelled: Arc<AtomicBool>,
+) {
     // The first write error since the last flush. Individual writes don't have a
     // caller waiting on them, so we stash the error and surface it at flush time.
     let mut pending_error: Option<SearchError> = None;
     while let Ok(command) = receiver.recv() {
         match command {
             WriteCommand::UpsertObservable(file) => {
-                record_error(&mut pending_error, database.upsert_file(&file));
+                record_first_write_error(
+                    &mut pending_error,
+                    database.upsert_file(&file),
+                    &maintenance_cancelled,
+                );
             }
             WriteCommand::UpsertInaccessible(file) => {
-                record_error(&mut pending_error, database.upsert_inaccessible_file(&file));
+                record_first_write_error(
+                    &mut pending_error,
+                    database.upsert_inaccessible_file(&file),
+                    &maintenance_cancelled,
+                );
             }
             WriteCommand::ClassifyObserved { files, reply } => {
                 let outcome = match pending_error.take() {
@@ -306,12 +331,17 @@ fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
                 let _ = reply.send(outcome);
             }
             WriteCommand::ApplyFileBatch(mutations) => {
-                record_error(&mut pending_error, database.apply_file_batch(&mutations));
+                record_first_write_error(
+                    &mut pending_error,
+                    database.apply_file_batch(&mutations),
+                    &maintenance_cancelled,
+                );
             }
             WriteCommand::UpsertDirectorySnapshot(snapshot) => {
-                record_error(
+                record_first_write_error(
                     &mut pending_error,
                     database.upsert_directory_snapshot(&snapshot),
+                    &maintenance_cancelled,
                 );
             }
             WriteCommand::DirectorySnapshot { path, reply } => {
@@ -365,11 +395,18 @@ fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
                 let _ = reply.send(outcome);
             }
             WriteCommand::DeleteScope(scope) => {
-                record_error(&mut pending_error, database.delete_scope(&scope));
+                record_first_write_error(
+                    &mut pending_error,
+                    database.delete_scope(&scope),
+                    &maintenance_cancelled,
+                );
             }
             WriteCommand::CompactSearchDatabase(reply) => {
                 let outcome = match pending_error.take() {
                     Some(error) => Err(error),
+                    None if maintenance_cancelled.load(Ordering::Acquire) => {
+                        Err(SearchError::Cancelled)
+                    }
                     None => database.compact_search_database(),
                 };
                 let _ = reply.send(outcome);
@@ -385,10 +422,16 @@ fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
             }
             WriteCommand::Shutdown(reply) => {
                 if let Some(reply) = reply {
-                    let _ = reply.send(match pending_error.take() {
-                        Some(error) => Err(error),
-                        None => Ok(()),
-                    });
+                    let shutdown_outcome = if maintenance_cancelled.load(Ordering::Acquire) {
+                        pending_error.take();
+                        Ok(())
+                    } else {
+                        match pending_error.take() {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        }
+                    };
+                    let _ = reply.send(shutdown_outcome);
                 }
                 break;
             }
@@ -396,9 +439,16 @@ fn writer_loop(database: SearchDatabase, receiver: Receiver<WriteCommand>) {
     }
 }
 
-fn record_error(slot: &mut Option<SearchError>, result: SearchResult<()>) {
+fn record_first_write_error(
+    slot: &mut Option<SearchError>,
+    write_outcome: SearchResult<()>,
+    maintenance_cancelled: &AtomicBool,
+) {
+    if maintenance_cancelled.load(Ordering::Acquire) {
+        return;
+    }
     if slot.is_none() {
-        let Err(error) = result else {
+        let Err(error) = write_outcome else {
             return;
         };
         let log_error = bounded_search_log_detail(&error.to_string());
@@ -516,14 +566,17 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(error_events.clone());
         let mut pending_error = None;
 
+        let maintenance_cancelled = AtomicBool::new(false);
         tracing::subscriber::with_default(subscriber, || {
-            record_error(
+            record_first_write_error(
                 &mut pending_error,
                 Err(SearchError::WorkerFailed("first".to_owned())),
+                &maintenance_cancelled,
             );
-            record_error(
+            record_first_write_error(
                 &mut pending_error,
                 Err(SearchError::WorkerFailed("second".to_owned())),
+                &maintenance_cancelled,
             );
         });
 
@@ -695,6 +748,41 @@ mod tests {
         let batch = reader.search(&SearchQuery::global(1, "needle")).unwrap();
         assert_eq!(batch.hits.len(), 1);
         assert_eq!(batch.hits[0].display_name, "note.txt");
+    }
+
+    #[test]
+    fn cancelled_index_maintenance_refuses_future_compaction_without_stopping_writer() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("search.sqlite");
+        let writer = IndexWriter::spawn(SearchDatabase::open(&db_path).unwrap());
+
+        writer.cancel_index_maintenance();
+
+        assert!(matches!(
+            writer.compact_search_database(),
+            Err(SearchError::Cancelled)
+        ));
+        assert_eq!(writer.count().unwrap(), 0);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn cancelled_index_maintenance_discards_write_failure_during_shutdown() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("search.sqlite");
+        let database = SearchDatabase::open(&db_path).unwrap();
+        rusqlite::Connection::open(&db_path)
+            .unwrap()
+            .execute_batch("DROP TABLE file_search_fts")
+            .unwrap();
+        let writer = IndexWriter::spawn(database);
+
+        writer.cancel_index_maintenance();
+        writer
+            .upsert(sample_file(&dir.path().join("note.txt"), 1, 1))
+            .unwrap();
+
+        writer.shutdown().unwrap();
     }
 
     #[test]

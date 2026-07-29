@@ -28,10 +28,12 @@ pub(crate) use scan::{
 };
 
 /// Bumped whenever the on-disk schema changes in a way that requires a migration.
-const SCHEMA_VERSION: i64 = 8;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 
 const WRITER_PAGE_CACHE_KIB: i64 = 2_048;
 const READER_PAGE_CACHE_KIB: i64 = 512;
+const NORMAL_BUSY_TIMEOUT_MILLIS: i64 = 5_000;
+const COMPACTION_BUSY_TIMEOUT_MILLIS: i64 = 250;
 const WAL_AUTOCHECKPOINT_PAGES: i64 = 128;
 const WAL_JOURNAL_LIMIT_BYTES: i64 = 1_000_000;
 
@@ -184,6 +186,7 @@ impl SearchDatabase {
     /// the way tracker-miner-fs funnels every store operation through one queue.
     pub fn open(path: &Path) -> SearchResult<Self> {
         let connection = Connection::open(path)?;
+        verify_supported_schema(&connection)?;
         configure_writer_connection(&connection)?;
         let database = Self {
             connection,
@@ -208,6 +211,7 @@ impl SearchDatabase {
 
     pub fn in_memory() -> SearchResult<Self> {
         let connection = Connection::open_in_memory()?;
+        verify_supported_schema(&connection)?;
         configure_writer_connection(&connection)?;
         let database = Self {
             connection,
@@ -284,6 +288,18 @@ impl SearchDatabase {
     }
 
     pub(crate) fn compact_search_database(&self) -> SearchResult<()> {
+        // Online compaction is joined during daemon shutdown, while sqlite3_interrupt
+        // cannot wake a busy handler that is waiting for a checkpoint lock.
+        self.connection
+            .pragma_update(None, "busy_timeout", COMPACTION_BUSY_TIMEOUT_MILLIS)?;
+        let compaction_outcome = self.compact_search_database_with_bounded_lock_wait();
+        let timeout_restore_outcome =
+            self.connection
+                .pragma_update(None, "busy_timeout", NORMAL_BUSY_TIMEOUT_MILLIS);
+        compaction_outcome.and(timeout_restore_outcome.map_err(Into::into))
+    }
+
+    fn compact_search_database_with_bounded_lock_wait(&self) -> SearchResult<()> {
         let segment_count = self.connection.query_row(
             "SELECT COUNT(*)
              FROM (
@@ -386,6 +402,9 @@ impl SearchDatabase {
                 observation_state TEXT NOT NULL DEFAULT 'observable'
                     CHECK (observation_state IN ('observable', 'inaccessible'))
             );
+            CREATE TABLE IF NOT EXISTS search_data_migrations (
+                name TEXT PRIMARY KEY
+            ) WITHOUT ROWID;
             CREATE VIRTUAL TABLE IF NOT EXISTS file_search_fts
                 USING fts5(path UNINDEXED, name, content);",
         )?;
@@ -403,14 +422,32 @@ impl SearchDatabase {
              CREATE INDEX IF NOT EXISTS directory_snapshots_parent_path
                 ON directory_snapshots(parent_path, path);",
         )?;
-        self.recover_legacy_tombstones()?;
         Ok(())
     }
 }
 
+pub(crate) fn inspect_existing_schema(path: &Path) -> SearchResult<()> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    verify_supported_schema(&connection)
+}
+
+fn verify_supported_schema(connection: &Connection) -> SearchResult<()> {
+    let found = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+    if found > SCHEMA_VERSION {
+        return Err(SearchError::UnsupportedDatabaseSchema {
+            found,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
+
 fn configure_writer_connection(connection: &Connection) -> SearchResult<()> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "busy_timeout", 5_000)?;
+    connection.pragma_update(None, "busy_timeout", NORMAL_BUSY_TIMEOUT_MILLIS)?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
     connection.pragma_update(None, "cache_size", -WRITER_PAGE_CACHE_KIB)?;
     connection.pragma_update(None, "mmap_size", 0_i64)?;
@@ -437,7 +474,7 @@ fn release_clean_file_pages(path: &Path) -> SearchResult<()> {
 }
 
 fn configure_read_only_connection(connection: &Connection) -> SearchResult<()> {
-    connection.pragma_update(None, "busy_timeout", 5_000)?;
+    connection.pragma_update(None, "busy_timeout", NORMAL_BUSY_TIMEOUT_MILLIS)?;
     connection.pragma_update(None, "cache_size", -READER_PAGE_CACHE_KIB)?;
     connection.pragma_update(None, "mmap_size", 0_i64)?;
     connection.pragma_update(None, "temp_store", "FILE")?;
@@ -640,6 +677,10 @@ mod migration_tests;
 #[cfg(all(test, unix))]
 #[path = "database/path_identity_tests.rs"]
 mod path_identity_tests;
+
+#[cfg(test)]
+#[path = "database/schema_tests.rs"]
+mod schema_tests;
 
 #[cfg(test)]
 #[path = "database/tests.rs"]

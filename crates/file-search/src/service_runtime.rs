@@ -57,28 +57,27 @@ impl SearchServiceRuntime {
     }
 
     pub fn shutdown(&self) -> SearchResult<()> {
-        let _lifecycle = self
-            .lifecycle_serialization
-            .lock()
-            .expect("search service lifecycle mutex poisoned");
-        {
+        let query_core = {
+            let _lifecycle = self
+                .lifecycle_serialization
+                .lock()
+                .expect("search service lifecycle mutex poisoned");
             let mut state = self
                 .state
                 .lock()
                 .expect("search service state mutex poisoned");
             state.phase = SearchServicePhase::ShuttingDown;
-        }
+            let query_core = state.query_core.take();
+            drop(state);
+            // SQLite 初始化没有取消契约；退出终态不能依赖该线程自然完成。
+            self.initializer_join
+                .lock()
+                .expect("search service initializer mutex poisoned")
+                .take();
+            query_core
+        };
 
-        let initializer_outcome = self.join_initializer();
-        let query_core = self
-            .state
-            .lock()
-            .expect("search service state mutex poisoned")
-            .query_core
-            .take();
-        let core_outcome = query_core.map_or(Ok(()), |core| core.shutdown());
-
-        initializer_outcome.and(core_outcome)
+        query_core.map_or(Ok(()), |core| core.shutdown())
     }
 
     fn spawn_initializer(self: &Arc<Self>, initialize: impl FnOnce(Arc<Self>) + Send + 'static) {
@@ -130,24 +129,40 @@ impl SearchServiceRuntime {
             }
         };
 
-        if !self.publish_query_core(Arc::clone(&daemon_core)) {
-            let _ = daemon_core.shutdown();
-            return;
-        }
-
-        let _ = daemon_core.start_index_maintenance();
+        self.finish_initialization(daemon_core);
     }
 
-    fn publish_query_core(&self, daemon_core: Arc<SearchDaemonCore>) -> bool {
+    fn finish_initialization(&self, daemon_core: Arc<SearchDaemonCore>) -> bool {
+        self.finish_initialization_with_maintenance_start(daemon_core, |daemon_core| {
+            daemon_core.start_index_maintenance()
+        })
+    }
+
+    fn finish_initialization_with_maintenance_start(
+        &self,
+        daemon_core: Arc<SearchDaemonCore>,
+        start_maintenance: impl FnOnce(&SearchDaemonCore) -> SearchResult<()>,
+    ) -> bool {
+        let lifecycle = self
+            .lifecycle_serialization
+            .lock()
+            .expect("search service lifecycle mutex poisoned");
         let mut state = self
             .state
             .lock()
             .expect("search service state mutex poisoned");
         if !matches!(state.phase, SearchServicePhase::Starting) {
+            drop(state);
+            let _ = daemon_core.shutdown();
             return false;
         }
-        state.query_core = Some(daemon_core);
+
+        state.query_core = Some(Arc::clone(&daemon_core));
         state.phase = SearchServicePhase::Ready;
+        drop(state);
+        drop(lifecycle);
+
+        let _ = start_maintenance(&daemon_core);
         true
     }
 
@@ -182,20 +197,6 @@ impl SearchServiceRuntime {
         self.record_initialization_failure(format!(
             "search service initializer panicked: {message}"
         ));
-    }
-
-    fn join_initializer(&self) -> SearchResult<()> {
-        let initializer_join = self
-            .initializer_join
-            .lock()
-            .expect("search service initializer mutex poisoned")
-            .take();
-        let Some(initializer_join) = initializer_join else {
-            return Ok(());
-        };
-        initializer_join.join().map_err(|_| {
-            SearchError::WorkerFailed("search service initializer thread panicked".to_owned())
-        })
     }
 
     fn status_snapshot(&self) -> SearchServiceStatus {
@@ -285,7 +286,7 @@ fn provider_failure(error: SearchError) -> SearchProviderFailure {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier};
     use std::time::Duration;
 
     use tempfile::tempdir;
@@ -352,6 +353,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn query_core_is_published_before_maintenance_start_returns() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("search.sqlite");
+        let file_path = directory.path().join("note.txt");
+        let database = SearchDatabase::open(&database_path).unwrap();
+        database.upsert_file(&indexed_file(file_path)).unwrap();
+        drop(database);
+
+        let runtime = Arc::new(SearchServiceRuntime::new());
+        let daemon_core =
+            Arc::new(SearchDaemonCore::new(database_path, empty_root_config()).unwrap());
+        let maintenance_entered = Arc::new(Barrier::new(2));
+        let maintenance_release = Arc::new(Barrier::new(2));
+        let finish_thread = {
+            let runtime = Arc::clone(&runtime);
+            let maintenance_entered = Arc::clone(&maintenance_entered);
+            let maintenance_release = Arc::clone(&maintenance_release);
+            std::thread::spawn(move || {
+                runtime.finish_initialization_with_maintenance_start(daemon_core, |daemon_core| {
+                    maintenance_entered.wait();
+                    maintenance_release.wait();
+                    daemon_core.start_index_maintenance()
+                })
+            })
+        };
+        maintenance_entered.wait();
+
+        let status = runtime.status();
+        assert_eq!(status.phase, SearchServicePhase::Ready);
+        assert_eq!(
+            status.query_availability,
+            IndexedQueryAvailability::Available
+        );
+        assert_eq!(
+            runtime
+                .open_query_reader()
+                .unwrap()
+                .search(&SearchQuery::global(6, "needle"))
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
+
+        runtime.shutdown().unwrap();
+        assert_eq!(runtime.status().phase, SearchServicePhase::ShuttingDown);
+        maintenance_release.wait();
+        assert!(finish_thread.join().unwrap());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bound_endpoint_stays_responsive_during_slow_initialization() {
         let directory = tempdir().unwrap();
@@ -361,6 +413,7 @@ mod tests {
         let runtime = Arc::new(SearchServiceRuntime::new());
         let initializer_entered = Arc::new(Barrier::new(2));
         let initializer_release = Arc::new(Barrier::new(2));
+        let (initializer_finished_tx, initializer_finished_rx) = mpsc::channel();
 
         runtime.spawn_initializer({
             let initializer_entered = Arc::clone(&initializer_entered);
@@ -369,6 +422,7 @@ mod tests {
                 initializer_entered.wait();
                 initializer_release.wait();
                 runtime.initialize_core(database_path, empty_root_config());
+                initializer_finished_tx.send(()).unwrap();
             }
         });
         initializer_entered.wait();
@@ -400,22 +454,18 @@ mod tests {
             SearchServicePhase::Starting
         );
 
-        let release_initializer = {
-            let runtime = Arc::clone(&runtime);
-            let initializer_release = Arc::clone(&initializer_release);
-            std::thread::spawn(move || {
-                while !matches!(runtime.status().phase, SearchServicePhase::ShuttingDown) {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                initializer_release.wait();
-            })
-        };
-        tokio::time::timeout(Duration::from_secs(2), shutdown_via_socket(&socket_path))
+        tokio::time::timeout(Duration::from_secs(1), shutdown_via_socket(&socket_path))
             .await
-            .expect("Shutdown should join the released initializer")
+            .expect("Shutdown should not wait for the blocked initializer")
             .unwrap();
-        release_initializer.join().unwrap();
         server.await.unwrap().unwrap();
+
+        assert_eq!(runtime.status().phase, SearchServicePhase::ShuttingDown);
+        initializer_release.wait();
+        initializer_finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("late initializer did not finish");
+        assert_eq!(runtime.status().phase, SearchServicePhase::ShuttingDown);
     }
 
     #[test]
@@ -446,7 +496,7 @@ mod tests {
         let runtime = Arc::new(SearchServiceRuntime::new());
         let daemon_core =
             Arc::new(SearchDaemonCore::new(database_path, empty_root_config()).unwrap());
-        assert!(runtime.publish_query_core(daemon_core));
+        assert!(runtime.finish_initialization(daemon_core));
 
         let status = runtime.status();
         assert_eq!(status.phase, SearchServicePhase::Ready);
@@ -473,7 +523,7 @@ mod tests {
             SearchDaemonCore::new(directory.path().join("search.sqlite"), empty_root_config())
                 .unwrap(),
         );
-        assert!(runtime.publish_query_core(Arc::clone(&daemon_core)));
+        assert!(runtime.finish_initialization(Arc::clone(&daemon_core)));
 
         daemon_core.record_maintenance_failure("watcher stopped".to_owned());
 
@@ -496,12 +546,13 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_joins_blocked_initializer_without_late_revival() {
+    fn shutdown_detaches_blocked_initializer_without_late_revival() {
         let directory = tempdir().unwrap();
         let database_path = directory.path().join("search.sqlite");
         let runtime = Arc::new(SearchServiceRuntime::new());
         let initializer_entered = Arc::new(Barrier::new(2));
         let initializer_release = Arc::new(Barrier::new(2));
+        let (initializer_finished_tx, initializer_finished_rx) = mpsc::channel();
 
         runtime.spawn_initializer({
             let initializer_entered = Arc::clone(&initializer_entered);
@@ -510,26 +561,24 @@ mod tests {
                 initializer_entered.wait();
                 initializer_release.wait();
                 runtime.initialize_core(database_path, empty_root_config());
+                initializer_finished_tx.send(()).unwrap();
             }
         });
         initializer_entered.wait();
 
-        let shutdown = {
+        let (shutdown_finished_tx, shutdown_finished_rx) = mpsc::channel();
+        let shutdown_thread = {
             let runtime = Arc::clone(&runtime);
-            std::thread::spawn(move || runtime.shutdown())
+            std::thread::spawn(move || {
+                shutdown_finished_tx.send(runtime.shutdown()).unwrap();
+            })
         };
-        let mut shutting_down_seen = false;
-        for _ in 0..100 {
-            if matches!(runtime.status().phase, SearchServicePhase::ShuttingDown) {
-                shutting_down_seen = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        initializer_release.wait();
-        shutdown.join().unwrap().unwrap();
+        shutdown_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("shutdown waited for the blocked initializer")
+            .unwrap();
+        shutdown_thread.join().unwrap();
 
-        assert!(shutting_down_seen);
         let status = runtime.status();
         assert_eq!(status.phase, SearchServicePhase::ShuttingDown);
         assert!(matches!(
@@ -537,5 +586,13 @@ mod tests {
             IndexedQueryAvailability::Unavailable { .. }
         ));
         assert!(status.index_status.is_none());
+
+        initializer_release.wait();
+        initializer_finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("late initializer did not finish");
+        let late_status = runtime.status();
+        assert_eq!(late_status.phase, SearchServicePhase::ShuttingDown);
+        assert!(late_status.index_status.is_none());
     }
 }

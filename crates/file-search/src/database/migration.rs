@@ -3,6 +3,8 @@ use crate::extractor::ExtractionStatus;
 
 use super::{IndexedEntryStageState, SearchDatabase, SCHEMA_VERSION};
 
+const LEGACY_TOMBSTONE_RECOVERY_MIGRATION: &str = "legacy_tombstone_recovery_v1";
+
 impl SearchDatabase {
     /// 按 `PRAGMA user_version` 只向前迁移，确保旧索引可以逐步收敛到当前 schema。
     pub(super) fn migrate(&self) -> SearchResult<()> {
@@ -87,6 +89,7 @@ impl SearchDatabase {
         if current < 8 {
             self.migrate_paths_to_blob()?;
         }
+        self.recover_legacy_tombstones_once()?;
         if current < SCHEMA_VERSION {
             self.connection
                 .pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -185,19 +188,39 @@ impl SearchDatabase {
         Ok(())
     }
 
-    pub(super) fn recover_legacy_tombstones(&self) -> SearchResult<()> {
+    fn recover_legacy_tombstones_once(&self) -> SearchResult<()> {
+        let migration_completed = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM search_data_migrations WHERE name = ?1)",
+            [LEGACY_TOMBSTONE_RECOVERY_MIGRATION],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if migration_completed {
+            return Ok(());
+        }
+
         let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
-            "DELETE FROM file_search_fts
-             WHERE rowid IN (SELECT rowid FROM files WHERE tombstoned <> 0)",
+        let tombstones_exist = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE tombstoned <> 0)",
             [],
+            |row| row.get::<_, bool>(0),
         )?;
+        if tombstones_exist {
+            transaction.execute(
+                "DELETE FROM file_search_fts
+                 WHERE rowid IN (SELECT rowid FROM files WHERE tombstoned <> 0)",
+                [],
+            )?;
+            transaction.execute(
+                "DELETE FROM file_stage_state
+                 WHERE path IN (SELECT path FROM files WHERE tombstoned <> 0)",
+                [],
+            )?;
+            transaction.execute("DELETE FROM files WHERE tombstoned <> 0", [])?;
+        }
         transaction.execute(
-            "DELETE FROM file_stage_state
-             WHERE path IN (SELECT path FROM files WHERE tombstoned <> 0)",
-            [],
+            "INSERT INTO search_data_migrations(name) VALUES(?1)",
+            [LEGACY_TOMBSTONE_RECOVERY_MIGRATION],
         )?;
-        transaction.execute("DELETE FROM files WHERE tombstoned <> 0", [])?;
         transaction.commit()?;
         Ok(())
     }

@@ -10,13 +10,11 @@ Type=exec
 SyslogIdentifier=file-manager-search
 ExecStartPre=/usr/lib/file-manager/file-searchd --shutdown-existing
 ExecStart=/usr/lib/file-manager/file-searchd
-ExecStop=/usr/lib/file-manager/file-searchd --shutdown-existing
 
 MemoryAccounting=yes
 MemoryHigh=80000000
 MemoryMax=96000000
 MemorySwapMax=0
-CPUAccounting=yes
 CPUQuota=5%
 
 OOMPolicy=kill

@@ -460,24 +460,31 @@ impl SearchServiceState {
 
 fn diagnostics_from_status(status: &SearchServiceStatus) -> Vec<SearchServiceDiagnostic> {
     let mut diagnostics = Vec::new();
-    match &status.phase {
-        SearchServicePhase::Degraded { message } => diagnostics.push(SearchServiceDiagnostic::new(
-            SearchServiceDiagnosticKind::ServiceDegraded,
-            format!("search service reported a degraded state: {message}"),
-        )),
-        SearchServicePhase::Failed { message } => diagnostics.push(SearchServiceDiagnostic::new(
-            SearchServiceDiagnosticKind::ServiceFailed,
-            format!("search service reported a failed state: {message}"),
-        )),
-        SearchServicePhase::Starting
-        | SearchServicePhase::Ready
-        | SearchServicePhase::ShuttingDown => {}
-    }
-    if let IndexedQueryAvailability::Unavailable { message } = &status.query_availability {
-        diagnostics.push(SearchServiceDiagnostic::new(
-            SearchServiceDiagnosticKind::IndexedQueriesUnavailable,
-            format!("indexed queries are unavailable: {message}"),
-        ));
+    match (&status.phase, &status.query_availability) {
+        (SearchServicePhase::Degraded { message }, _) => {
+            diagnostics.push(SearchServiceDiagnostic::new(
+                SearchServiceDiagnosticKind::ServiceDegraded,
+                format!("search service reported a degraded state: {message}"),
+            ));
+        }
+        (SearchServicePhase::Failed { message }, _) => {
+            diagnostics.push(SearchServiceDiagnostic::new(
+                SearchServiceDiagnosticKind::ServiceFailed,
+                format!("search service reported a failed state: {message}"),
+            ));
+        }
+        (SearchServicePhase::Ready, IndexedQueryAvailability::Unavailable { message }) => {
+            diagnostics.push(SearchServiceDiagnostic::new(
+                SearchServiceDiagnosticKind::IndexedQueriesUnavailable,
+                format!("indexed queries are unavailable: {message}"),
+            ))
+        }
+        (
+            SearchServicePhase::Starting
+            | SearchServicePhase::Ready
+            | SearchServicePhase::ShuttingDown,
+            _,
+        ) => {}
     }
     if let Some(index_status) = &status.index_status {
         if let IndexPhase::Failed { message } = &index_status.phase {
@@ -649,6 +656,48 @@ mod tests {
             state.recovery,
             SearchServiceRecoveryState::Failed { .. }
         ));
+    }
+
+    #[test]
+    fn service_phase_and_query_availability_create_only_contract_violations() {
+        let unavailable = IndexedQueryAvailability::Unavailable {
+            message: "not ready".to_owned(),
+        };
+        let cases = [
+            (SearchServicePhase::Starting, Vec::new()),
+            (SearchServicePhase::ShuttingDown, Vec::new()),
+            (
+                SearchServicePhase::Ready,
+                vec![SearchServiceDiagnosticKind::IndexedQueriesUnavailable],
+            ),
+            (
+                SearchServicePhase::Degraded {
+                    message: "degraded".to_owned(),
+                },
+                vec![SearchServiceDiagnosticKind::ServiceDegraded],
+            ),
+            (
+                SearchServicePhase::Failed {
+                    message: "failed".to_owned(),
+                },
+                vec![SearchServiceDiagnosticKind::ServiceFailed],
+            ),
+        ];
+
+        for (phase, expected_kinds) in cases {
+            let status = SearchServiceStatus {
+                phase,
+                query_availability: unavailable.clone(),
+                index_status: None,
+            };
+            assert_eq!(
+                diagnostics_from_status(&status)
+                    .into_iter()
+                    .map(|diagnostic| diagnostic.kind)
+                    .collect::<Vec<_>>(),
+                expected_kinds
+            );
+        }
     }
 
     #[test]

@@ -720,6 +720,83 @@ fn repeated_inaccessible_observation_does_not_rewrite_the_same_scope() {
 }
 
 #[test]
+fn legacy_tombstones_are_recovered_once_without_changing_schema_version() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let file_path = Path::new("/tmp/legacy-tombstone.txt");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    database
+        .upsert_file(&indexed_file(
+            file_path.to_str().unwrap(),
+            "legacy-tombstone.txt",
+            "legacy needle",
+        ))
+        .unwrap();
+    drop(database);
+
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute(
+            "DELETE FROM search_data_migrations WHERE name = 'legacy_tombstone_recovery_v1'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE files SET tombstoned = 1 WHERE path = ?1",
+            [path_to_storage(file_path)],
+        )
+        .unwrap();
+    drop(connection);
+
+    let migrated = SearchDatabase::open(&database_path).unwrap();
+    assert_eq!(
+        migrated
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        super::SCHEMA_VERSION
+    );
+    assert_eq!(
+        migrated
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM search_data_migrations
+                 WHERE name = 'legacy_tombstone_recovery_v1'",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        migrated
+            .connection
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get::<_, u64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        migrated
+            .connection
+            .query_row("SELECT COUNT(*) FROM file_stage_state", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        migrated
+            .connection
+            .query_row("SELECT COUNT(*) FROM file_search_fts", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn migration_backfills_stage_state_for_legacy_rows() {
     let dir = tempdir().unwrap();
     let database_path = dir.path().join("search.sqlite");
