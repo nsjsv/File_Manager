@@ -29,7 +29,8 @@ pub struct CopyProgress {
 
 pub type ProgressSender = mpsc::UnboundedSender<CopyProgress>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransferConflictStrategy {
     Fail,
     Replace,
@@ -38,7 +39,8 @@ pub enum TransferConflictStrategy {
     Merge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FileOperationVerification {
     #[default]
     BasicMetadata,

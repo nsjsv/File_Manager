@@ -28,7 +28,10 @@ fn insert_read_update_and_delete_task() {
         transfers: vec![StoredTransfer {
             source: StoredPath::from_path(Path::new("/tmp/source")),
             target: StoredPath::from_path(Path::new("/tmp/target")),
+            conflict_strategy: StoredTransferConflictStrategy::Fail,
         }],
+        verification: StoredFileOperationVerification::BasicMetadata,
+        recovery_version: None,
     };
 
     let id = store.insert_task(&operation).unwrap();

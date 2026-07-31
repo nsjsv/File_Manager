@@ -28,9 +28,18 @@ pub use media::{
 pub use ops::{
     batch_rename_paths, copy_path, copy_path_with_options, create_directory, create_empty_file,
     create_file_with_contents, delete_path_permanently, move_path, move_path_with_options,
-    rename_path, trash_path, trash_path_with_restore_entry, BatchRenameItem, CompletedBatchRename,
-    CopyProgress, FileOperationControls, FileOperationRunState, FileOperationVerification,
-    FileTransferOptions, ProgressSender, TransferConflictStrategy,
+    rename_path, run_recoverable_transfer, trash_path, trash_path_with_restore_entry,
+    ArtifactOwner, ArtifactToken, BatchRenameItem, CommitPayload, CommitTransfer,
+    CommittedTransfer, CompletedBatchRename, CompletedTarget, CopyProgress, FileIdentity,
+    FileObjectKind, FileOperationControls, FileOperationRunState, FileOperationVerification,
+    FileTransferOptions, MergeChildCompletion, MergeChildOutcome, MergeTransfer, ObjectFingerprint,
+    OwnedArtifact, OwnedArtifactKind, OwnedArtifactPlan, PreparedTransfer, ProgressSender,
+    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
+    RecoverableTransferRequest, RetiredSource, SourceDisposition, SourceManifest,
+    SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation, StagingTransfer,
+    TransferCheckpoint, TransferConflictStrategy, TransferExecutionKind, TransferJournal,
+    TransferJournalError, TransferJournalFuture, TransferJournalMutation, TransferJournalRecord,
+    TransferWorkKey,
 };
 pub use scan::{
     scan_directory, scan_directory_with_progress, DirectoryScan, DirectoryScanBatch, FileError,

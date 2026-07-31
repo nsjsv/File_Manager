@@ -6,7 +6,9 @@ use crate::model::{Message, OperationQueuePanelMode};
 use crate::operation_history::{
     path_after_completed_migrations, FileOperationCompletion, PendingHistoryOperation,
 };
-use crate::operation_queue::QueuedFileOperation;
+use crate::operation_queue::{
+    FileOperationEnqueueOutcome, FileOperationFinish, QueuedFileOperation,
+};
 use crate::view::rename_input_id;
 
 // ponytail: 重命名会话短且输入有限，完整字符串快照的内存上限随编辑次数和名称长度增长；若支持长文本或长期会话，再升级为合并编辑事务。
@@ -59,8 +61,17 @@ impl FileBrowser {
     ) -> Task<Message> {
         let completed_operation = self.operation_queue.operation(task_id).cloned();
         let queue_outcome = match &completion {
-            FileOperationCompletion::Succeeded(_) => Ok(()),
-            FileOperationCompletion::Failed { error, .. } => Err(error.clone()),
+            FileOperationCompletion::Succeeded(_) => FileOperationFinish::Succeeded,
+            FileOperationCompletion::Canceled(_) => FileOperationFinish::Canceled,
+            FileOperationCompletion::Failed { error, .. } => {
+                FileOperationFinish::Failed(error.clone())
+            }
+            FileOperationCompletion::RecoveryInterrupted(error, _) => {
+                FileOperationFinish::RecoveryInterrupted(error.clone())
+            }
+            FileOperationCompletion::RecoveryBlocked { error, .. } => {
+                FileOperationFinish::RecoveryBlocked(error.clone())
+            }
         };
         let (terminal_status, storage_error) = self.operation_queue.finish(task_id, queue_outcome);
         if let Some(error) = storage_error {
@@ -95,7 +106,13 @@ impl FileBrowser {
             FileOperationCompletion::Succeeded(outcome) => {
                 self.operation_history.accept_completed(task_id, outcome);
             }
-            FileOperationCompletion::Failed {
+            FileOperationCompletion::Canceled(completed_move_transfers)
+            | FileOperationCompletion::Failed {
+                completed_move_transfers,
+                ..
+            }
+            | FileOperationCompletion::RecoveryInterrupted(_, completed_move_transfers)
+            | FileOperationCompletion::RecoveryBlocked {
                 completed_move_transfers,
                 ..
             } => self
@@ -279,13 +296,25 @@ impl FileBrowser {
         pending_history: Option<PendingHistoryOperation>,
     ) -> Task<Message> {
         self.clear_global_error();
-        if let Some(error) = self.operation_queue.enqueue(operation) {
-            self.show_global_error(error);
-        }
-        if let Some(pending_history) = pending_history {
-            if let Some(task) = self.operation_queue.tasks().last() {
-                self.operation_history
-                    .track_pending(task.id, pending_history);
+        match self.operation_queue.enqueue(operation) {
+            FileOperationEnqueueOutcome::Queued { task_id } => {
+                if let Some(pending_history) = pending_history {
+                    self.operation_history
+                        .track_pending(task_id, pending_history);
+                }
+            }
+            FileOperationEnqueueOutcome::QueuedWithStorageWarning { task_id, error } => {
+                self.show_global_error(error);
+                if let Some(pending_history) = pending_history {
+                    self.operation_history
+                        .track_pending(task_id, pending_history);
+                }
+            }
+            FileOperationEnqueueOutcome::Rejected { error } => {
+                self.show_global_error(error);
+                if let Some(pending_history) = pending_history {
+                    self.operation_history.reject_pending(pending_history);
+                }
             }
         }
         self.show_operation_queue_temporarily()

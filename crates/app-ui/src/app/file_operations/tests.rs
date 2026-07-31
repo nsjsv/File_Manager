@@ -41,6 +41,7 @@ fn finish_queued_rename(browser: &mut FileBrowser, from: PathBuf, to: PathBuf) {
                 .to_string_lossy()
                 .into_owned(),
         })
+        .error()
         .is_none());
     let task_id = browser
         .operation_queue
@@ -138,6 +139,7 @@ fn completed_background_operation_preserves_active_rename_history() {
         .enqueue(QueuedFileOperation::DeletePermanently {
             paths: vec![PathBuf::from("/workspace/obsolete.txt")],
         })
+        .error()
         .is_none());
     let task_id = browser
         .operation_queue
@@ -168,6 +170,7 @@ fn duplicate_completion_is_rejected_before_history_side_effects() {
             path: source.clone(),
             new_name: "new.txt".to_owned(),
         })
+        .error()
         .is_none());
     let task_id = browser
         .operation_queue
@@ -431,19 +434,72 @@ fn undo_and_redo_reuse_success_completion_path_migration() {
 }
 
 #[test]
+fn rejected_recoverable_history_replay_returns_item_to_original_stack() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let source = PathBuf::from("/workspace/source");
+    let target = PathBuf::from("/workspace/target");
+    browser.operation_history.accept_completed(
+        1,
+        &FileOperationOutcome::Move {
+            transfers: vec![crate::operation_history::CompletedTransfer {
+                source: source.clone(),
+                target: target.clone(),
+            }],
+            history_eligibility:
+                crate::operation_history::FileOperationHistoryEligibility::Replayable,
+        },
+    );
+    let (operation, pending_history) = browser
+        .operation_history
+        .take_undo_operation()
+        .expect("move undo operation");
+
+    drop(browser.enqueue_file_operation_with_history(operation, Some(pending_history)));
+
+    let (restored_operation, _) = browser
+        .operation_history
+        .take_undo_operation()
+        .expect("rejected move returned to undo stack");
+    let QueuedFileOperation::Move {
+        transfers,
+        verification,
+    } = restored_operation
+    else {
+        panic!("expected restored move undo");
+    };
+    assert_eq!(transfers.len(), 1);
+    assert_eq!(transfers[0].source, target);
+    assert_eq!(transfers[0].target, source);
+    assert_eq!(
+        verification,
+        file_core::FileOperationVerification::default()
+    );
+    assert!(browser.operation_queue.tasks().is_empty());
+}
+
+#[test]
 fn failed_move_migrates_paths_for_completed_transfers_only() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let source = PathBuf::from("/workspace/old");
     let destination = PathBuf::from("/archive/old");
     browser.current_dir = source.join("nested");
     browser.sync_active_tab_state();
+    let operation_directory = tempfile::tempdir().unwrap();
+    browser.operation_queue.set_store(
+        file_operation_store::TaskQueueStore::new(operation_directory.path().join("state.sqlite"))
+            .unwrap(),
+    );
 
     assert!(browser
         .operation_queue
         .enqueue(QueuedFileOperation::Move {
-            transfers: Vec::new(),
+            transfers: vec![crate::operation_queue::QueuedTransfer::new(
+                source.clone(),
+                destination.clone(),
+            )],
             verification: file_core::FileOperationVerification::default(),
         })
+        .error()
         .is_none());
     let task_id = browser
         .operation_queue
@@ -494,6 +550,7 @@ fn finished_delete_operation_only_invalidates_affected_directory_chain() {
         .enqueue(QueuedFileOperation::DeletePermanently {
             paths: vec![deleted_child],
         })
+        .error()
         .is_none());
     let task_id = browser
         .operation_queue
@@ -544,6 +601,7 @@ fn finished_directory_delete_operation_clears_cached_descendant_summaries() {
         .enqueue(QueuedFileOperation::DeletePermanently {
             paths: vec![deleted_directory],
         })
+        .error()
         .is_none());
     let task_id = browser
         .operation_queue

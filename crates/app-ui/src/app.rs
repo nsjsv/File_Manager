@@ -83,6 +83,7 @@ use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
     MAIN_WINDOW_INITIAL_WIDTH,
 };
+use crate::command_line::ApplicationLaunchRequest;
 use crate::commands::{
     ensure_search_service_command, file_operation_subscription, startup_environment_command,
     wayland_dnd_window_handle_command,
@@ -203,6 +204,7 @@ pub(crate) struct FileBrowser {
     native_file_drag_target_measurement_generation: u64,
     pending_wayland_file_drop: Option<PendingWaylandFileDrop>,
     pub(crate) options: ScanOptions,
+    application_launch_request: ApplicationLaunchRequest,
     user_config: config::UserConfig,
     pub(crate) max_preview_file_mib_input: String,
     pub(crate) max_preview_file_mib_error: Option<String>,
@@ -311,10 +313,11 @@ impl FileBrowser {
         self.user_config.max_preview_file_bytes
     }
 
-    fn boot() -> (Self, Task<Message>) {
+    fn boot(application_launch_request: ApplicationLaunchRequest) -> (Self, Task<Message>) {
         let (main_window, open_main_window) = window::open(main_window_settings());
         let user_config = config::ui_thread_startup_config();
-        let (browser, initial_tasks) = Self::new_with_main_window(user_config, main_window);
+        let (browser, initial_tasks) =
+            Self::new_with_main_window(user_config, main_window, application_launch_request);
 
         let open_main_window = open_main_window.then(wayland_dnd_window_handle_command);
 
@@ -323,12 +326,25 @@ impl FileBrowser {
 
     #[cfg(test)]
     pub(crate) fn new(user_config: config::UserConfig) -> (Self, Task<Message>) {
-        Self::new_with_main_window(user_config, window::Id::unique())
+        Self::new_with_launch_request(user_config, ApplicationLaunchRequest::ConfiguredStartup)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_launch_request(
+        user_config: config::UserConfig,
+        application_launch_request: ApplicationLaunchRequest,
+    ) -> (Self, Task<Message>) {
+        Self::new_with_main_window(
+            user_config,
+            window::Id::unique(),
+            application_launch_request,
+        )
     }
 
     fn new_with_main_window(
         user_config: config::UserConfig,
         main_window: window::Id,
+        application_launch_request: ApplicationLaunchRequest,
     ) -> (Self, Task<Message>) {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
@@ -441,6 +457,7 @@ impl FileBrowser {
             native_file_drag_target_measurement_generation: 0,
             pending_wayland_file_drop: None,
             options: options.clone(),
+            application_launch_request,
             user_config: user_config.clone(),
             max_preview_file_mib_input: config::max_preview_file_mib(
                 user_config.max_preview_file_bytes,

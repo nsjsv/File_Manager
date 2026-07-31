@@ -85,6 +85,39 @@ journalctl --user -u file-manager-search.service -f
 
 环境不满足这些条件时，应用不会绕过 systemd 直接启动 daemon；索引和全局搜索会显示不可用原因，当前目录搜索 fallback 仍可使用。
 
+## 命令行启动
+
+安装后的命令名为 `file-manager`。不传路径时，应用继续使用设置中的 Home、自定义目录或上次会话启动策略：
+
+```bash
+file-manager
+```
+
+传入本地目录会按参数顺序在同一个窗格中打开多个标签；传入文件会打开其父目录并选中文件。同一父目录下的多个文件会合并到一个多选标签：
+
+```bash
+file-manager .
+file-manager ~/Downloads ~/Documents
+file-manager ~/Downloads/report.pdf ~/Downloads/notes.txt
+```
+
+路径可以是绝对路径或相对当前终端目录的路径。所有路径会在创建窗口前统一验证，任一路径不可用都会拒绝整次启动。当前 CLI 只接受本地文件系统路径，不接受 URI。
+
+查看帮助和版本：
+
+```bash
+file-manager --help
+file-manager --version
+```
+
+源码运行时参数语义相同；`--` 用于分隔 Cargo 和 App 参数：
+
+```bash
+cargo run --locked -p app-ui -- ~/Downloads ~/Documents
+cargo run --locked -p app-ui -- ~/Downloads/report.pdf
+./target/release/app-ui ~/Downloads
+```
+
 ## 编译运行
 
 需要先安装 Rust 工具链、系统构建依赖和核心运行命令。Arch Linux 可以使用：

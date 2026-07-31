@@ -6,7 +6,8 @@ use file_core::{
     TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
-    StoredOperation, StoredProgress, StoredTask, StoredTaskStatus, TaskQueueStore,
+    RecoverableTaskRunnerLease, StoredOperation, StoredProgress, StoredTask, StoredTaskStatus,
+    TaskQueueStore,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -139,6 +140,10 @@ impl QueuedFileOperation {
         )
     }
 
+    fn uses_recovery_journal(&self) -> bool {
+        matches!(self, Self::Copy { .. } | Self::Move { .. })
+    }
+
     fn to_stored(&self) -> StoredOperation {
         queued_operation_to_stored(self)
     }
@@ -265,6 +270,30 @@ pub(crate) enum FileOperationProgressUpdate {
     Indeterminate,
 }
 
+pub(crate) enum FileOperationFinish {
+    Succeeded,
+    Canceled,
+    Failed(String),
+    RecoveryInterrupted(String),
+    RecoveryBlocked(String),
+}
+
+pub(crate) enum FileOperationEnqueueOutcome {
+    Queued { task_id: u64 },
+    QueuedWithStorageWarning { task_id: u64, error: String },
+    Rejected { error: String },
+}
+
+impl FileOperationEnqueueOutcome {
+    #[cfg(test)]
+    pub(crate) fn error(&self) -> Option<&str> {
+        match self {
+            Self::Queued { .. } => None,
+            Self::QueuedWithStorageWarning { error, .. } | Self::Rejected { error } => Some(error),
+        }
+    }
+}
+
 pub(crate) struct FileOperationTask {
     pub(crate) id: u64,
     pub(crate) operation: QueuedFileOperation,
@@ -273,6 +302,7 @@ pub(crate) struct FileOperationTask {
     pub(crate) error: Option<String>,
     is_read: bool,
     cancel: CancellationToken,
+    _runner_lease: Option<RecoverableTaskRunnerLease>,
     run_state_sender: watch::Sender<FileOperationRunState>,
     run_state_receiver: watch::Receiver<FileOperationRunState>,
     is_persisted: bool,
@@ -282,6 +312,7 @@ pub(crate) struct RunningFileOperation {
     pub(crate) id: u64,
     pub(crate) operation: QueuedFileOperation,
     pub(crate) controls: FileOperationControls,
+    pub(crate) store: Option<TaskQueueStore>,
 }
 
 pub(crate) struct FileOperationQueue {
@@ -301,11 +332,25 @@ impl FileOperationQueue {
         }
     }
 
-    pub(crate) fn set_store_and_restore(
-        &mut self,
-        store: TaskQueueStore,
-        stored_tasks: Vec<StoredTask>,
-    ) -> Option<String> {
+    pub(crate) fn set_store_and_restore(&mut self, store: TaskQueueStore) -> Option<String> {
+        let restore_coordinator = match store.try_acquire_recoverable_restore_coordinator() {
+            Ok(Some(restore_coordinator)) => restore_coordinator,
+            Ok(None) => {
+                self.store = Some(store);
+                return None;
+            }
+            Err(error) => {
+                self.store = Some(store);
+                return Some(storage_error(error));
+            }
+        };
+        let stored_tasks = match store.read_tasks() {
+            Ok(stored_tasks) => stored_tasks,
+            Err(error) => {
+                self.store = Some(store);
+                return Some(storage_error(error));
+            }
+        };
         self.store = Some(store);
         let mut storage_error = None;
 
@@ -313,6 +358,7 @@ impl FileOperationQueue {
             storage_error =
                 combine_storage_errors(storage_error, self.restore_stored_task(stored_task));
         }
+        drop(restore_coordinator);
 
         combine_storage_errors(storage_error, self.start_next())
     }
@@ -322,7 +368,7 @@ impl FileOperationQueue {
     }
 
     #[cfg(test)]
-    fn set_store(&mut self, store: TaskQueueStore) {
+    pub(crate) fn set_store(&mut self, store: TaskQueueStore) {
         self.store = Some(store);
     }
 
@@ -353,13 +399,39 @@ impl FileOperationQueue {
             .any(|task| !task.is_read && task.status == FileOperationStatus::Failed)
     }
 
-    pub(crate) fn enqueue(&mut self, operation: QueuedFileOperation) -> Option<String> {
-        let (id, is_persisted, storage_error) = match &self.store {
-            Some(store) => match store.insert_task(&operation.to_stored()) {
-                Ok(id) => (id, true, None),
-                Err(error) => (self.allocate_local_id(), false, Some(storage_error(error))),
+    pub(crate) fn enqueue(
+        &mut self,
+        operation: QueuedFileOperation,
+    ) -> FileOperationEnqueueOutcome {
+        let stored_operation = operation.to_stored();
+        let requires_recovery_journal = operation.uses_recovery_journal();
+        let (id, is_persisted, storage_warning, runner_lease) = match &self.store {
+            Some(store) if requires_recovery_journal => {
+                match store.insert_claimed_recoverable_transfer_task(&stored_operation) {
+                    Ok(claimed) => (claimed.task_id, true, None, Some(claimed.runner_lease)),
+                    Err(error) => {
+                        return FileOperationEnqueueOutcome::Rejected {
+                            error: storage_error(error),
+                        };
+                    }
+                }
+            }
+            Some(store) => match store.insert_task(&stored_operation) {
+                Ok(id) => (id, true, None, None),
+                Err(error) => (
+                    self.allocate_local_id(),
+                    false,
+                    Some(storage_error(error)),
+                    None,
+                ),
             },
-            None => (self.allocate_local_id(), false, None),
+            None if requires_recovery_journal => {
+                return FileOperationEnqueueOutcome::Rejected {
+                    error: "File operation queue storage is unavailable; copy and move were not started"
+                        .to_owned(),
+                };
+            }
+            None => (self.allocate_local_id(), false, None, None),
         };
         let (run_state_sender, run_state_receiver) = watch::channel(FileOperationRunState::Running);
         self.tasks.push(FileOperationTask {
@@ -370,11 +442,18 @@ impl FileOperationQueue {
             error: None,
             is_read: false,
             cancel: CancellationToken::new(),
+            _runner_lease: runner_lease,
             run_state_sender,
             run_state_receiver,
             is_persisted,
         });
-        combine_storage_errors(storage_error, self.start_next())
+        let storage_warning = combine_storage_errors(storage_warning, self.start_next());
+        match storage_warning {
+            Some(error) => {
+                FileOperationEnqueueOutcome::QueuedWithStorageWarning { task_id: id, error }
+            }
+            None => FileOperationEnqueueOutcome::Queued { task_id: id },
+        }
     }
 
     pub(crate) fn active_subscription(&self) -> Option<RunningFileOperation> {
@@ -395,6 +474,7 @@ impl FileOperationQueue {
                     task.cancel.clone(),
                     task.run_state_receiver.clone(),
                 ),
+                store: self.store.clone(),
             })
     }
 
@@ -418,7 +498,7 @@ impl FileOperationQueue {
     pub(crate) fn finish(
         &mut self,
         id: u64,
-        outcome: Result<(), String>,
+        outcome: FileOperationFinish,
     ) -> (Option<FileOperationTerminalStatus>, Option<String>) {
         let Some(position) = self.tasks.iter().position(|task| task.id == id) else {
             return (None, None);
@@ -434,7 +514,7 @@ impl FileOperationQueue {
 
         let was_canceling = self.tasks[position].status == FileOperationStatus::Canceling;
         let mut storage_error = match outcome {
-            Ok(()) => {
+            FileOperationFinish::Succeeded => {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Completed;
                 task.progress = FileOperationProgress::complete();
@@ -442,7 +522,16 @@ impl FileOperationQueue {
                 task.is_read = self.is_panel_open;
                 self.persist_task_state(position)
             }
-            Err(error) if was_canceling => {
+            FileOperationFinish::Canceled => {
+                let task = &mut self.tasks[position];
+                task.status = FileOperationStatus::Canceled;
+                task.error = None;
+                task.is_read = self.is_panel_open;
+                self.persist_task_state(position)
+            }
+            FileOperationFinish::Failed(error)
+                if was_canceling && !self.tasks[position].operation.uses_recovery_journal() =>
+            {
                 let task = &mut self.tasks[position];
                 drop(error);
                 task.status = FileOperationStatus::Canceled;
@@ -450,7 +539,7 @@ impl FileOperationQueue {
                 task.is_read = self.is_panel_open;
                 self.persist_task_state(position)
             }
-            Err(error) => {
+            FileOperationFinish::Failed(error) => {
                 let task = &mut self.tasks[position];
                 let log_error = sanitized_application_log_detail(&error);
                 record_file_operation_failure(id, task.operation.title(), &log_error);
@@ -458,6 +547,24 @@ impl FileOperationQueue {
                 task.error = Some(error);
                 task.is_read = self.is_panel_open;
                 self.persist_task_state(position)
+            }
+            FileOperationFinish::RecoveryInterrupted(error) => {
+                let task = &mut self.tasks[position];
+                let log_error = sanitized_application_log_detail(&error);
+                record_file_operation_failure(id, task.operation.title(), &log_error);
+                task.status = FileOperationStatus::Failed;
+                task.error = Some(error);
+                task.is_read = self.is_panel_open;
+                self.persist_task_state_as(position, StoredTaskStatus::RecoveryPending)
+            }
+            FileOperationFinish::RecoveryBlocked(error) => {
+                let task = &mut self.tasks[position];
+                let log_error = sanitized_application_log_detail(&error);
+                record_file_operation_failure(id, task.operation.title(), &log_error);
+                task.status = FileOperationStatus::Failed;
+                task.error = Some(error);
+                task.is_read = self.is_panel_open;
+                self.persist_task_state_preserving_recovery(position)
             }
         };
         let terminal_status = match self.tasks[position].status {
@@ -472,6 +579,7 @@ impl FileOperationQueue {
             }
         };
 
+        self.tasks[position]._runner_lease = None;
         storage_error = combine_storage_errors(storage_error, self.start_next());
         (Some(terminal_status), storage_error)
     }
@@ -498,6 +606,17 @@ impl FileOperationQueue {
         let position = self.tasks.iter().position(|task| task.id == id)?;
 
         let mut storage_error = match self.tasks[position].status {
+            FileOperationStatus::Pending
+                if self.tasks[position].operation.uses_recovery_journal() =>
+            {
+                let task = &mut self.tasks[position];
+                task.cancel.cancel();
+                let _ = task.run_state_sender.send(FileOperationRunState::Running);
+                task.status = FileOperationStatus::Canceling;
+                task.error = None;
+                task.is_read = self.is_panel_open;
+                self.persist_task_status(position)
+            }
             FileOperationStatus::Pending => {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Canceled;
@@ -523,16 +642,40 @@ impl FileOperationQueue {
         storage_error
     }
 
-    pub(crate) fn cancel_all(&mut self) -> Option<String> {
+    pub(crate) fn prepare_for_shutdown(&mut self) -> Option<String> {
+        let mut combined_error = None;
         for task in &self.tasks {
+            let preserve_recovery = match self.store.as_ref() {
+                Some(store) if task.operation.uses_recovery_journal() && task.is_persisted => {
+                    match store.read_transfer_recovery(task.id) {
+                        Ok(snapshot) => !snapshot.journal_entries.is_empty(),
+                        Err(error) => {
+                            combined_error =
+                                combine_storage_errors(combined_error, Some(storage_error(error)));
+                            true
+                        }
+                    }
+                }
+                _ => false,
+            };
+            if preserve_recovery {
+                continue;
+            }
+
             task.cancel.cancel();
             let _ = task.run_state_sender.send(FileOperationRunState::Running);
+            if task.is_persisted {
+                if let Some(store) = self.store.as_ref() {
+                    combined_error = combine_storage_errors(
+                        combined_error,
+                        store.delete_task(task.id).err().map(storage_error),
+                    );
+                }
+            }
         }
         self.tasks.clear();
         self.is_panel_open = false;
-        self.store
-            .as_ref()
-            .and_then(|store| store.clear_tasks().err().map(storage_error))
+        combined_error
     }
 
     pub(crate) fn task_count(&self) -> usize {
@@ -569,124 +712,9 @@ impl FileOperationQueue {
             })
             .and_then(|task| task.progress.fraction())
     }
-
-    fn start_next(&mut self) -> Option<String> {
-        if self.active_subscription().is_some() {
-            return None;
-        }
-        if let Some(position) = self
-            .tasks
-            .iter()
-            .find(|task| task.status == FileOperationStatus::Pending)
-            .map(|task| task.id)
-            .and_then(|id| self.tasks.iter().position(|task| task.id == id))
-        {
-            let task = &mut self.tasks[position];
-            task.status = FileOperationStatus::Running;
-            task.progress = FileOperationProgress::pending();
-            task.error = None;
-            let _ = task.run_state_sender.send(FileOperationRunState::Running);
-            return self.persist_task_state(position);
-        }
-        None
-    }
-
-    fn restore_stored_task(&mut self, stored_task: StoredTask) -> Option<String> {
-        let StoredTask {
-            id,
-            operation,
-            status,
-            progress,
-            ..
-        } = stored_task;
-
-        if stored_status_is_terminal(status) {
-            return None;
-        }
-
-        let Some(operation) = QueuedFileOperation::from_resumable_stored(operation) else {
-            return self.mark_interrupted_non_resumable_task_failed(id, progress);
-        };
-
-        let (run_state_sender, run_state_receiver) = watch::channel(FileOperationRunState::Running);
-        self.tasks.push(FileOperationTask {
-            id,
-            operation,
-            status: FileOperationStatus::Pending,
-            progress: FileOperationProgress::pending(),
-            error: None,
-            is_read: false,
-            cancel: CancellationToken::new(),
-            run_state_sender,
-            run_state_receiver,
-            is_persisted: true,
-        });
-        let position = self.tasks.len().saturating_sub(1);
-        self.persist_task_state(position)
-    }
-
-    fn mark_interrupted_non_resumable_task_failed(
-        &self,
-        id: u64,
-        progress: StoredProgress,
-    ) -> Option<String> {
-        self.store
-            .as_ref()?
-            .update_task_state(
-                id,
-                StoredTaskStatus::Failed,
-                progress,
-                Some("Task was interrupted and cannot safely resume"),
-            )
-            .err()
-            .map(storage_error)
-    }
-
-    fn allocate_local_id(&mut self) -> u64 {
-        loop {
-            let id = self.next_local_id;
-            self.next_local_id = id.checked_add(1).unwrap_or(LOCAL_TASK_ID_START);
-            if !self.tasks.iter().any(|task| task.id == id) {
-                return id;
-            }
-        }
-    }
-
-    fn mark_all_read(&mut self) {
-        for task in &mut self.tasks {
-            task.is_read = true;
-        }
-    }
-
-    fn persist_task_status(&self, position: usize) -> Option<String> {
-        let task = &self.tasks[position];
-        if !task.is_persisted {
-            return None;
-        }
-        self.store
-            .as_ref()?
-            .update_status(task.id, task.status.to_stored())
-            .err()
-            .map(storage_error)
-    }
-
-    fn persist_task_state(&self, position: usize) -> Option<String> {
-        let task = &self.tasks[position];
-        if !task.is_persisted {
-            return None;
-        }
-        self.store
-            .as_ref()?
-            .update_task_state(
-                task.id,
-                task.status.to_stored(),
-                task.progress.to_stored(),
-                task.error.as_deref(),
-            )
-            .err()
-            .map(storage_error)
-    }
 }
+
+mod runtime;
 
 fn storage_error(error: impl std::fmt::Display) -> String {
     format!("File operation queue storage failed: {error}")

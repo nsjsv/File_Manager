@@ -8,7 +8,7 @@ use desktop_linux::{
     WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
 };
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
-use file_operation_store::{StoredTask, TaskQueueStore};
+use file_operation_store::TaskQueueStore;
 use file_search::{SearchHit, SearchServiceStatus};
 use iced::keyboard;
 use iced::widget::text_editor;
@@ -187,7 +187,6 @@ pub(crate) struct LoadedOperationStore {
     pub(crate) task_queue_store: TaskQueueStore,
     pub(crate) column_width_overrides: HashMap<usize, f32>,
     pub(crate) classified_startup_session: Option<ClassifiedStartupSession>,
-    pub(crate) restored_tasks: Vec<StoredTask>,
 }
 
 #[derive(Debug, Clone)]

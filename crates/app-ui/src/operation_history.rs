@@ -66,6 +66,12 @@ pub(crate) enum FileOperationCompletion {
         error: String,
         completed_move_transfers: Vec<CompletedTransfer>,
     },
+    Canceled(Vec<CompletedTransfer>),
+    RecoveryInterrupted(String, Vec<CompletedTransfer>),
+    RecoveryBlocked {
+        error: String,
+        completed_move_transfers: Vec<CompletedTransfer>,
+    },
 }
 
 impl FileOperationCompletion {
@@ -93,6 +99,12 @@ impl FileOperationCompletion {
         match self {
             Self::Succeeded(outcome) => outcome.completed_path_migrations(),
             Self::Failed {
+                completed_move_transfers,
+                ..
+            }
+            | Self::Canceled(completed_move_transfers)
+            | Self::RecoveryInterrupted(_, completed_move_transfers)
+            | Self::RecoveryBlocked {
                 completed_move_transfers,
                 ..
             } => completed_move_transfers
@@ -252,6 +264,10 @@ impl FileOperationHistory {
             return None;
         };
         Some((operation, PendingHistoryOperation::redo(item)))
+    }
+
+    pub(crate) fn reject_pending(&mut self, pending: PendingHistoryOperation) {
+        self.restore_item(pending.direction, pending.item);
     }
 
     pub(crate) fn track_pending(&mut self, task_id: u64, operation: PendingHistoryOperation) {

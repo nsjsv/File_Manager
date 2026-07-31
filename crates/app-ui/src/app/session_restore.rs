@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use iced::Task;
@@ -31,11 +31,35 @@ impl FileBrowser {
         }
     }
 
+    pub(super) fn configured_startup_session_plan_request(
+        &self,
+        home: &Path,
+    ) -> Option<StartupSessionPlanRequest> {
+        if !matches!(
+            self.application_launch_request,
+            crate::command_line::ApplicationLaunchRequest::ConfiguredStartup
+        ) {
+            return None;
+        }
+        Some(self.startup_session_plan_request(home))
+    }
+
+    pub(super) fn previous_session_plan_request(
+        &self,
+        home: &Path,
+    ) -> Option<StartupSessionPlanRequest> {
+        self.configured_startup_session_plan_request(home)
+            .filter(|request| matches!(request.source, StartupSessionSource::PreviousSession))
+    }
+
     pub(super) fn accept_startup_plan(
         &mut self,
         classified: ClassifiedStartupSession,
     ) -> Task<Message> {
-        let current_request = self.startup_session_plan_request(&self.home_dir);
+        let Some(current_request) = self.configured_startup_session_plan_request(&self.home_dir)
+        else {
+            return Task::none();
+        };
         if classified.request != current_request {
             return Task::none();
         }
@@ -122,6 +146,8 @@ impl FileBrowser {
                 ),
             );
         }
+        self.next_tab_id = next_tab_id_after_restore(&restored_panes);
+        self.next_pane_id = next_pane_id_after_restore(&restored_panes);
         self.panes = restored_panes.clone();
         self.icon_grid_viewports.clear();
         self.pane_layout = sanitize_layout(layout, &restored_panes);
@@ -142,6 +168,56 @@ impl FileBrowser {
             self.reload_visible_panes(),
             self.restore_visible_column_browser_viewports(),
         ])
+    }
+}
+
+fn next_tab_id_after_restore(panes: &[BrowserPane]) -> usize {
+    let occupied_ids = panes
+        .iter()
+        .flat_map(|pane| pane.tabs.iter().map(|tab| tab.id))
+        .collect::<HashSet<_>>();
+    let Some(highest_id) = occupied_ids.iter().copied().max() else {
+        return 0;
+    };
+    highest_id
+        .checked_add(1)
+        .unwrap_or_else(|| first_unoccupied_tab_id(&occupied_ids))
+}
+
+fn first_unoccupied_tab_id(occupied_ids: &HashSet<usize>) -> usize {
+    let mut candidate = 0usize;
+    loop {
+        if !occupied_ids.contains(&candidate) {
+            return candidate;
+        }
+        candidate = candidate
+            .checked_add(1)
+            .expect("the restored session cannot occupy every tab identifier");
+    }
+}
+
+fn next_pane_id_after_restore(panes: &[BrowserPane]) -> u64 {
+    let occupied_ids = panes
+        .iter()
+        .map(|pane| pane.id.key())
+        .collect::<HashSet<_>>();
+    let Some(highest_id) = occupied_ids.iter().copied().max() else {
+        return 0;
+    };
+    highest_id
+        .checked_add(1)
+        .unwrap_or_else(|| first_unoccupied_pane_id(&occupied_ids))
+}
+
+fn first_unoccupied_pane_id(occupied_ids: &HashSet<u64>) -> u64 {
+    let mut candidate = 0u64;
+    loop {
+        if !occupied_ids.contains(&candidate) {
+            return candidate;
+        }
+        candidate = candidate
+            .checked_add(1)
+            .expect("the restored session cannot occupy every pane identifier");
     }
 }
 

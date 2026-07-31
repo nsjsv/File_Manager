@@ -1,7 +1,11 @@
-use file_core::{ArchiveCompressionLevel, ArchiveFormat, BatchRenameItem, TrashRestoreEntry};
+use file_core::{
+    ArchiveCompressionLevel, ArchiveFormat, BatchRenameItem, FileOperationVerification,
+    TransferConflictStrategy, TrashRestoreEntry,
+};
 use file_operation_store::{
-    StoredArchiveCompressionLevel, StoredArchiveFormat, StoredBatchRenameItem, StoredOperation,
-    StoredPath, StoredTransfer, StoredTrashEntry,
+    StoredArchiveCompressionLevel, StoredArchiveFormat, StoredBatchRenameItem,
+    StoredFileOperationVerification, StoredOperation, StoredPath, StoredTransfer,
+    StoredTransferConflictStrategy, StoredTrashEntry, TRANSFER_JOURNAL_VERSION,
 };
 
 use super::{QueuedFileOperation, QueuedTransfer};
@@ -42,11 +46,21 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
                 .collect(),
         },
         QueuedFileOperation::EmptyTrash => StoredOperation::EmptyTrash,
-        QueuedFileOperation::Copy { transfers, .. } => StoredOperation::Copy {
+        QueuedFileOperation::Copy {
+            transfers,
+            verification,
+        } => StoredOperation::Copy {
             transfers: stored_transfers(transfers),
+            verification: stored_verification(*verification),
+            recovery_version: Some(TRANSFER_JOURNAL_VERSION),
         },
-        QueuedFileOperation::Move { transfers, .. } => StoredOperation::Move {
+        QueuedFileOperation::Move {
+            transfers,
+            verification,
+        } => StoredOperation::Move {
             transfers: stored_transfers(transfers),
+            verification: stored_verification(*verification),
+            recovery_version: Some(TRANSFER_JOURNAL_VERSION),
         },
         QueuedFileOperation::CreateArchive {
             sources,
@@ -73,9 +87,57 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
 }
 
 pub(super) fn queued_operation_from_stored(
-    _operation: StoredOperation,
+    operation: StoredOperation,
 ) -> Option<QueuedFileOperation> {
-    None
+    match operation {
+        StoredOperation::Copy {
+            transfers,
+            verification,
+            recovery_version: Some(TRANSFER_JOURNAL_VERSION),
+        } => Some(QueuedFileOperation::Copy {
+            transfers: queued_transfers(transfers),
+            verification: queued_verification(verification),
+        }),
+        StoredOperation::Move {
+            transfers,
+            verification,
+            recovery_version: Some(TRANSFER_JOURNAL_VERSION),
+        } => Some(QueuedFileOperation::Move {
+            transfers: queued_transfers(transfers),
+            verification: queued_verification(verification),
+        }),
+        _ => None,
+    }
+}
+
+fn queued_transfers(transfers: Vec<StoredTransfer>) -> Vec<QueuedTransfer> {
+    transfers
+        .into_iter()
+        .map(|transfer| QueuedTransfer {
+            source: transfer.source.to_path_buf(),
+            target: transfer.target.to_path_buf(),
+            conflict_strategy: queued_conflict_strategy(transfer.conflict_strategy),
+        })
+        .collect()
+}
+
+fn queued_conflict_strategy(
+    conflict_strategy: StoredTransferConflictStrategy,
+) -> TransferConflictStrategy {
+    match conflict_strategy {
+        StoredTransferConflictStrategy::Fail => TransferConflictStrategy::Fail,
+        StoredTransferConflictStrategy::Replace => TransferConflictStrategy::Replace,
+        StoredTransferConflictStrategy::Skip => TransferConflictStrategy::Skip,
+        StoredTransferConflictStrategy::KeepBoth => TransferConflictStrategy::KeepBoth,
+        StoredTransferConflictStrategy::Merge => TransferConflictStrategy::Merge,
+    }
+}
+
+fn queued_verification(verification: StoredFileOperationVerification) -> FileOperationVerification {
+    match verification {
+        StoredFileOperationVerification::BasicMetadata => FileOperationVerification::BasicMetadata,
+        StoredFileOperationVerification::Strong => FileOperationVerification::Strong,
+    }
 }
 
 fn stored_transfers(transfers: &[QueuedTransfer]) -> Vec<StoredTransfer> {
@@ -84,8 +146,32 @@ fn stored_transfers(transfers: &[QueuedTransfer]) -> Vec<StoredTransfer> {
         .map(|transfer| StoredTransfer {
             source: StoredPath::from_path(&transfer.source),
             target: StoredPath::from_path(&transfer.target),
+            conflict_strategy: stored_conflict_strategy(transfer.conflict_strategy),
         })
         .collect()
+}
+
+fn stored_conflict_strategy(
+    conflict_strategy: file_core::TransferConflictStrategy,
+) -> StoredTransferConflictStrategy {
+    match conflict_strategy {
+        file_core::TransferConflictStrategy::Fail => StoredTransferConflictStrategy::Fail,
+        file_core::TransferConflictStrategy::Replace => StoredTransferConflictStrategy::Replace,
+        file_core::TransferConflictStrategy::Skip => StoredTransferConflictStrategy::Skip,
+        file_core::TransferConflictStrategy::KeepBoth => StoredTransferConflictStrategy::KeepBoth,
+        file_core::TransferConflictStrategy::Merge => StoredTransferConflictStrategy::Merge,
+    }
+}
+
+fn stored_verification(
+    verification: file_core::FileOperationVerification,
+) -> StoredFileOperationVerification {
+    match verification {
+        file_core::FileOperationVerification::BasicMetadata => {
+            StoredFileOperationVerification::BasicMetadata
+        }
+        file_core::FileOperationVerification::Strong => StoredFileOperationVerification::Strong,
+    }
 }
 
 fn stored_batch_rename_items(items: &[BatchRenameItem]) -> Vec<StoredBatchRenameItem> {

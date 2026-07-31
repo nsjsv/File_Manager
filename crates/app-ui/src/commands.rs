@@ -346,7 +346,6 @@ async fn load_operation_store(
 
     let store_outcome = tokio::task::spawn_blocking(move || {
         let store = TaskQueueStore::new(path)?;
-        let restored_tasks = store.read_tasks()?;
         let browser_session = match store.read_browser_session() {
             Ok(session) => session.and_then(crate::model::snapshot_from_stored),
             Err(StoreError::Json(_)) => None,
@@ -365,7 +364,6 @@ async fn load_operation_store(
             task_queue_store: store,
             column_width_overrides,
             classified_startup_session,
-            restored_tasks,
         })
     })
     .await

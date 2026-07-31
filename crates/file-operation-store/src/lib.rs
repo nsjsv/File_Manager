@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -18,6 +18,14 @@ mod browser_session;
 pub use browser_session::{
     StoredBrowserPane, StoredBrowserPaneLayout, StoredBrowserSession, StoredBrowserTab,
     StoredBrowserViewMode, StoredColumnBrowserViewport, StoredColumnViewport, StoredSplitAxis,
+};
+mod recoverable_transfer;
+pub use recoverable_transfer::{
+    ClaimedRecoverableTask, RecoverableRestoreCoordinatorLease, RecoverableTaskRunnerLease,
+    StoredFileIdentity, StoredFileObjectKind, StoredFileOperationVerification, StoredManifestEntry,
+    StoredMergeChildCompletion, StoredTransferCheckpoint, StoredTransferCheckpointKind,
+    StoredTransferConflictStrategy, StoredTransferJournalEntry, StoredTransferOperation,
+    StoredTransferRecoverySnapshot, StoredTransferWorkKey, TRANSFER_JOURNAL_VERSION,
 };
 mod user_preferences;
 pub use user_preferences::{
@@ -68,6 +76,32 @@ pub enum StoreError {
     Json(serde_json::Error),
     InvalidStatus(String),
     InvalidTaskId(i64),
+    RecoverableTaskAlreadyRunning {
+        task_id: u64,
+    },
+    InvalidRecoverableOperation(&'static str),
+    InvalidTransferValue {
+        field: &'static str,
+        value: String,
+    },
+    StaleTransferRevision {
+        task_id: u64,
+        transfer_index: u64,
+        expected_revision: u64,
+    },
+}
+
+impl StoreError {
+    pub fn is_invalid_recovery_data(&self) -> bool {
+        matches!(
+            self,
+            Self::Json(_)
+                | Self::InvalidStatus(_)
+                | Self::InvalidTaskId(_)
+                | Self::InvalidRecoverableOperation(_)
+                | Self::InvalidTransferValue { .. }
+        )
+    }
 }
 
 impl fmt::Display for StoreError {
@@ -78,6 +112,23 @@ impl fmt::Display for StoreError {
             Self::Json(error) => write!(formatter, "JSON error: {error}"),
             Self::InvalidStatus(status) => write!(formatter, "invalid task status: {status}"),
             Self::InvalidTaskId(id) => write!(formatter, "invalid SQLite task id: {id}"),
+            Self::RecoverableTaskAlreadyRunning { task_id } => {
+                write!(formatter, "recoverable task {task_id} is already running")
+            }
+            Self::InvalidRecoverableOperation(message) => {
+                write!(formatter, "invalid recoverable operation: {message}")
+            }
+            Self::InvalidTransferValue { field, value } => {
+                write!(formatter, "invalid transfer {field}: {value}")
+            }
+            Self::StaleTransferRevision {
+                task_id,
+                transfer_index,
+                expected_revision,
+            } => write!(
+                formatter,
+                "stale transfer revision for task {task_id}, transfer {transfer_index}: expected {expected_revision}"
+            ),
         }
     }
 }
@@ -88,7 +139,12 @@ impl Error for StoreError {
             Self::Io(error) => Some(error),
             Self::Sqlite(error) => Some(error),
             Self::Json(error) => Some(error),
-            Self::InvalidStatus(_) | Self::InvalidTaskId(_) => None,
+            Self::InvalidStatus(_)
+            | Self::InvalidTaskId(_)
+            | Self::RecoverableTaskAlreadyRunning { .. }
+            | Self::InvalidRecoverableOperation(_)
+            | Self::InvalidTransferValue { .. }
+            | Self::StaleTransferRevision { .. } => None,
         }
     }
 }
@@ -168,6 +224,8 @@ impl StoredPath {
 pub struct StoredTransfer {
     pub source: StoredPath,
     pub target: StoredPath,
+    #[serde(default)]
+    pub conflict_strategy: StoredTransferConflictStrategy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,9 +289,17 @@ pub enum StoredOperation {
     EmptyTrash,
     Copy {
         transfers: Vec<StoredTransfer>,
+        #[serde(default)]
+        verification: StoredFileOperationVerification,
+        #[serde(default)]
+        recovery_version: Option<u32>,
     },
     Move {
         transfers: Vec<StoredTransfer>,
+        #[serde(default)]
+        verification: StoredFileOperationVerification,
+        #[serde(default)]
+        recovery_version: Option<u32>,
     },
     CreateArchive {
         sources: Vec<StoredPath>,
@@ -276,6 +342,7 @@ pub enum StoredTaskStatus {
     Running,
     Paused,
     Canceling,
+    RecoveryPending,
     Failed,
     Completed,
     Canceled,
@@ -288,6 +355,7 @@ impl StoredTaskStatus {
             Self::Running => "running",
             Self::Paused => "paused",
             Self::Canceling => "canceling",
+            Self::RecoveryPending => "recovery_pending",
             Self::Failed => "failed",
             Self::Completed => "completed",
             Self::Canceled => "canceled",
@@ -300,6 +368,7 @@ impl StoredTaskStatus {
             "running" => Ok(Self::Running),
             "paused" => Ok(Self::Paused),
             "canceling" => Ok(Self::Canceling),
+            "recovery_pending" => Ok(Self::RecoveryPending),
             "failed" => Ok(Self::Failed),
             "completed" => Ok(Self::Completed),
             "canceled" => Ok(Self::Canceled),
@@ -363,7 +432,9 @@ impl TaskQueueStore {
             fs::create_dir_all(parent)?;
         }
         let connection = self.connection()?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.execute_batch(SCHEMA_SQL)?;
+        connection.execute_batch(recoverable_transfer::SCHEMA_SQL)?;
         Ok(())
     }
 
@@ -532,7 +603,11 @@ impl TaskQueueStore {
         connection.execute(
             "UPDATE task_queue
              SET status = ?1, error = ?2, updated_at_ms = ?3
-             WHERE status IN (?4, ?5, ?6, ?7)",
+             WHERE status IN (?4, ?5, ?6, ?7)
+               AND NOT EXISTS (
+                   SELECT 1 FROM transfer_journal
+                   WHERE transfer_journal.task_id = task_queue.id
+               )",
             params![
                 StoredTaskStatus::Failed.as_str(),
                 error,
@@ -594,7 +669,11 @@ impl TaskQueueStore {
     }
 
     fn connection(&self) -> StoreResult<Connection> {
-        Ok(Connection::open(&self.db_path)?)
+        let connection = Connection::open(&self.db_path)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        Ok(connection)
     }
 }
 

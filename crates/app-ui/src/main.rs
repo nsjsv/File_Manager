@@ -30,6 +30,7 @@ mod appearance;
 mod audio_preview;
 mod breadcrumb_drop_target_bounds;
 mod column_entry_bounds;
+mod command_line;
 mod commands;
 mod config;
 mod directory_summary;
@@ -74,7 +75,28 @@ mod virtual_range;
 mod visible_entries;
 mod wayland_drag_icon;
 
-fn main() -> iced::Result {
+fn main() -> std::process::ExitCode {
+    let action = match command_line::parse_process_arguments() {
+        Ok(action) => action,
+        Err(error) => {
+            eprintln!("file-manager: {error}\nTry 'file-manager --help' for more information.");
+            return std::process::ExitCode::from(2);
+        }
+    };
+
+    let command_line::CommandLineAction::Launch(application_launch_request) = action else {
+        match action {
+            command_line::CommandLineAction::PrintHelp => {
+                print!("{}", command_line::HELP_TEXT);
+            }
+            command_line::CommandLineAction::PrintVersion => {
+                print!("{}", command_line::VERSION_TEXT);
+            }
+            command_line::CommandLineAction::Launch(_) => unreachable!(),
+        }
+        return std::process::ExitCode::SUCCESS;
+    };
+
     runtime_logging::init();
     tracing::info!(
         target: "app_ui::runtime",
@@ -84,5 +106,11 @@ fn main() -> iced::Result {
     startup_trace::init_from_env();
     startup_trace::mark("main_entered");
     startup_rendering::apply_fast_startup_environment();
-    app::run()
+    match app::run(application_launch_request) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("file-manager: application runtime failed: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }

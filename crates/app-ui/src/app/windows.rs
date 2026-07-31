@@ -649,7 +649,7 @@ impl FileBrowser {
         self.maximized_windows.clear();
         self.search.abandon_and_clear_input();
         self.invalidate_startup_directory_validation();
-        let _ = self.operation_queue.cancel_all();
+        let _ = self.operation_queue.prepare_for_shutdown();
         self.clear_file_properties_state();
         self.archive_creation = None;
         self.archive_extraction = None;

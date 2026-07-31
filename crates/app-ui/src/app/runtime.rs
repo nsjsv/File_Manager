@@ -10,6 +10,7 @@ use iced::{Subscription, Task, Theme};
 
 use super::events::system_theme;
 use super::FileBrowser;
+use crate::command_line::ApplicationLaunchRequest;
 use crate::model::Message;
 use crate::startup_trace;
 
@@ -19,12 +20,16 @@ const SIDEBAR_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
-pub(crate) fn run() -> iced::Result {
-    iced::daemon(FileBrowser::boot, FileBrowser::update, FileBrowser::view)
-        .subscription(FileBrowser::subscription)
-        .theme(FileBrowser::theme)
-        .title(FileBrowser::title)
-        .run()
+pub(crate) fn run(application_launch_request: ApplicationLaunchRequest) -> iced::Result {
+    iced::daemon(
+        move || FileBrowser::boot(application_launch_request.clone()),
+        FileBrowser::update,
+        FileBrowser::view,
+    )
+    .subscription(FileBrowser::subscription)
+    .theme(FileBrowser::theme)
+    .title(FileBrowser::title)
+    .run()
 }
 
 pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {

@@ -152,6 +152,7 @@ dependencies = [
  "iced",
  "iced_runtime",
  "image",
+ "lexopt",
  "pulldown-cmark",
  "regex",
  "resvg",
@@ -1481,8 +1482,12 @@ dependencies = [
  "exacl",
  "filetime",
  "flate2",
+ "getrandom 0.4.2",
  "libc",
  "notify",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
  "tar",
  "tempfile",
  "thiserror 1.0.69",
@@ -1498,8 +1503,10 @@ name = "file-operation-store"
 version = "0.1.5"
 dependencies = [
  "rusqlite",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2778,6 +2785,12 @@ name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
+
+[[package]]
+name = "lexopt"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ec87c9cfb29b9d2633f20cba1f488db3fd53f2158b1024cbefb47ba05d413"
 
 [[package]]
 name = "libbz2-rs-sys"

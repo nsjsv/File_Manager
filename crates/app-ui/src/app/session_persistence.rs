@@ -10,7 +10,9 @@ const SESSION_SAVE_INTERVAL: Duration = Duration::from_millis(500);
 
 impl FileBrowser {
     pub(super) fn should_save_browser_session(&self) -> bool {
-        self.user_config.startup_location_policy.saves_view_state()
+        self.application_launch_request
+            .allows_browser_session_persistence()
+            && self.user_config.startup_location_policy.saves_view_state()
     }
 
     pub(super) fn browser_session_snapshot(&mut self) -> BrowserSessionSnapshot {

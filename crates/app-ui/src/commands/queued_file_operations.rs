@@ -1,17 +1,22 @@
 use std::any::TypeId;
 use std::ffi::OsString;
+use std::future::Future;
 use std::hash::Hash;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use file_core::{
-    copy_path_with_options, create_archive_with_progress, create_directory, create_empty_file,
-    delete_path_permanently, delete_trash_entry, empty_trash, extract_archive,
-    move_path_with_options, rename_path, restore_trash_entry, trash_path_with_restore_entry,
-    ArchiveCreationProgress, ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress,
-    FileOperationControls, FileOperationVerification, FileTransferOptions,
-    TransferConflictStrategy, TrashRestoreEntry,
+    create_archive_with_progress, create_directory, create_empty_file, delete_path_permanently,
+    delete_trash_entry, empty_trash, extract_archive, rename_path, restore_trash_entry,
+    run_recoverable_transfer, trash_path_with_restore_entry, ArchiveCreationProgress,
+    ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileOperationControls,
+    FileOperationVerification, FileTransferOptions, RecoverableTransferError,
+    RecoverableTransferOperation, RecoverableTransferOutcome, TransferConflictStrategy,
+    TransferJournal, TransferJournalError, TransferJournalMutation, TransferJournalRecord,
+    TrashRestoreEntry,
 };
+use file_operation_store::TaskQueueStore;
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
 use iced::futures::channel::mpsc::Sender as IcedSender;
 use iced::futures::stream::BoxStream;
@@ -54,13 +59,15 @@ impl Recipe for FileOperationRecipe {
             id: task_id,
             operation,
             controls,
+            store,
         } = self.task;
 
         Box::pin(iced::stream::channel(
             FILE_OPERATION_CHANNEL_SIZE,
             async move |mut output| {
                 let result =
-                    run_queued_file_operation(operation, controls, task_id, &mut output).await;
+                    run_queued_file_operation(operation, controls, store, task_id, &mut output)
+                        .await;
                 let _ = output
                     .send(Message::FileOperationFinished(task_id, result))
                     .await;
@@ -73,6 +80,7 @@ impl Recipe for FileOperationRecipe {
 async fn run_queued_file_operation(
     operation: QueuedFileOperation,
     controls: FileOperationControls,
+    store: Option<TaskQueueStore>,
     task_id: u64,
     output: &mut IcedSender<Message>,
 ) -> FileOperationCompletion {
@@ -132,6 +140,7 @@ async fn run_queued_file_operation(
                     controls,
                     task_id,
                     output,
+                    store,
                     QueuedTransferMode::Copy,
                     verification,
                 )
@@ -148,6 +157,7 @@ async fn run_queued_file_operation(
                     controls,
                     task_id,
                     output,
+                    store,
                     QueuedTransferMode::Move,
                     verification,
                 )
@@ -498,208 +508,21 @@ async fn run_queued_empty_trash(
     Ok(FileOperationOutcome::NoHistory)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueuedTransferMode {
     Copy,
     Move,
 }
 
-async fn run_queued_transfers(
-    transfers: Vec<QueuedTransfer>,
-    controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-    mode: QueuedTransferMode,
-    verification: FileOperationVerification,
-) -> FileOperationCompletion {
-    let history_eligibility = if transfers.iter().all(history_safe_transfer) {
-        FileOperationHistoryEligibility::Replayable
-    } else {
-        FileOperationHistoryEligibility::NotReplayable
-    };
-    let total = transfers.len();
-    let mut completed = Vec::new();
-    for (index, transfer) in transfers.into_iter().enumerate() {
-        let transfer_outcome = run_queued_transfer(
-            transfer,
-            controls.clone(),
-            task_id,
-            output,
-            mode,
-            verification,
-            index,
-            total,
-        )
-        .await;
-        match transfer_outcome {
-            Ok(Some(completed_transfer)) => completed.push(completed_transfer),
-            Ok(None) => {}
-            Err(error) => {
-                return match mode {
-                    QueuedTransferMode::Copy => FileOperationCompletion::from_result(Err(error)),
-                    QueuedTransferMode::Move => {
-                        FileOperationCompletion::failed_after_completed_moves(error, completed)
-                    }
-                };
-            }
-        }
-        send_file_operation_progress(
-            output,
-            task_id,
-            FileOperationProgressUpdate::Items {
-                completed: index + 1,
-                total,
-            },
-        )
-        .await;
-    }
-
-    match mode {
-        QueuedTransferMode::Copy
-            if history_eligibility == FileOperationHistoryEligibility::Replayable =>
-        {
-            FileOperationCompletion::Succeeded(FileOperationOutcome::Copy {
-                transfers: completed,
-            })
-        }
-        QueuedTransferMode::Copy => {
-            FileOperationCompletion::Succeeded(FileOperationOutcome::NoHistory)
-        }
-        QueuedTransferMode::Move => {
-            FileOperationCompletion::Succeeded(FileOperationOutcome::Move {
-                transfers: completed,
-                history_eligibility,
-            })
+impl QueuedTransferMode {
+    fn operation(self) -> RecoverableTransferOperation {
+        match self {
+            Self::Copy => RecoverableTransferOperation::Copy,
+            Self::Move => RecoverableTransferOperation::Move,
         }
     }
 }
 
-async fn run_queued_transfer(
-    transfer: QueuedTransfer,
-    controls: FileOperationControls,
-    task_id: u64,
-    output: &mut IcedSender<Message>,
-    mode: QueuedTransferMode,
-    verification: FileOperationVerification,
-    completed_transfers: usize,
-    total_transfers: usize,
-) -> Result<Option<CompletedTransfer>, String> {
-    let source = transfer.source.clone();
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let transfer = async move {
-        let transfer_options = FileTransferOptions::new(controls)
-            .with_progress_sender(progress_sender)
-            .with_conflict_strategy(transfer.conflict_strategy)
-            .with_verification(verification);
-        match mode {
-            QueuedTransferMode::Copy => {
-                copy_path_with_options(transfer.source, transfer.target, transfer_options).await
-            }
-            QueuedTransferMode::Move => {
-                move_path_with_options(transfer.source, transfer.target, transfer_options).await
-            }
-        }
-    };
-    tokio::pin!(transfer);
-    let mut latest_copy_progress = None;
-    let mut last_copy_progress_sent_at = None;
+mod recoverable;
 
-    loop {
-        tokio::select! {
-            progress = progress_receiver.recv() => {
-                if let Some(progress) = progress {
-                    latest_copy_progress = Some(progress);
-                    let now = Instant::now();
-                    if should_send_copy_progress(last_copy_progress_sent_at, now) {
-                        if let Some(progress) = latest_copy_progress.take() {
-                            send_copy_progress(
-                                output,
-                                task_id,
-                                progress,
-                                completed_transfers,
-                                total_transfers,
-                            ).await;
-                            last_copy_progress_sent_at = Some(now);
-                        }
-                    }
-                }
-            }
-            transfer_outcome = &mut transfer => {
-                if let Some(progress) = latest_copy_progress.take() {
-                    send_copy_progress(
-                        output,
-                        task_id,
-                        progress,
-                        completed_transfers,
-                        total_transfers,
-                    ).await;
-                }
-                return transfer_outcome
-                    .map(|target| target.map(|target| CompletedTransfer { source, target }))
-                    .map_err(|error| error.to_string());
-            }
-        }
-    }
-}
-
-fn history_safe_transfer(transfer: &QueuedTransfer) -> bool {
-    matches!(
-        transfer.conflict_strategy,
-        TransferConflictStrategy::Fail
-            | TransferConflictStrategy::KeepBoth
-            | TransferConflictStrategy::Skip
-    )
-}
-
-fn should_send_copy_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
-    match last_sent_at {
-        Some(last_sent_at) => now.duration_since(last_sent_at) >= COPY_PROGRESS_UI_INTERVAL,
-        None => true,
-    }
-}
-
-async fn send_copy_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: CopyProgress,
-    completed_transfers: usize,
-    total_transfers: usize,
-) {
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Bytes {
-            bytes_done: progress.bytes_done,
-            bytes_total: progress.bytes_total,
-            completed_transfers,
-            total_transfers,
-        },
-    )
-    .await;
-}
-
-async fn send_archive_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: ArchiveCreationProgress,
-) {
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: progress.completed_entries,
-            total: progress.total_entries,
-        },
-    )
-    .await;
-}
-
-async fn send_file_operation_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: FileOperationProgressUpdate,
-) {
-    let _ = output
-        .send(Message::FileOperationProgressed(task_id, progress))
-        .await;
-}
+use recoverable::{run_queued_transfers, send_archive_progress, send_file_operation_progress};

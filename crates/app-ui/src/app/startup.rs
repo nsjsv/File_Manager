@@ -34,23 +34,31 @@ impl FileBrowser {
         self.renderer_restart_notice_visible = self.pending_renderer_restart_environment.is_some();
         let configured_favorites = self.user_config.sidebar_favorites.clone();
         self.sidebar_locations = vec![home_sidebar_location(&home)];
-        let startup_request = self.startup_session_plan_request(&home);
-        let startup_command = match self.user_config.startup_location_policy {
-            crate::config::StartupLocationPolicy::Home => self.apply_startup_session_plan(
-                StartupSessionPlan::Directory {
-                    directory: home.clone(),
-                    error: None,
-                },
-                &home,
-            ),
-            crate::config::StartupLocationPolicy::CustomDirectory => {
-                startup_session_plan_command(startup_request.clone())
+        let configured_startup_request = self.configured_startup_session_plan_request(&home);
+        let explicit_startup_session = self
+            .application_launch_request
+            .explicit_browser_session(self.view_mode);
+        let startup_command = if let Some(session) = explicit_startup_session {
+            self.apply_startup_session_plan(StartupSessionPlan::Session(session), &home)
+        } else {
+            let startup_request = configured_startup_request
+                .as_ref()
+                .expect("configured startup has a startup session request");
+            match &startup_request.source {
+                crate::model::StartupSessionSource::Home => self.apply_startup_session_plan(
+                    StartupSessionPlan::Directory {
+                        directory: home.clone(),
+                        error: None,
+                    },
+                    &home,
+                ),
+                crate::model::StartupSessionSource::CustomDirectory(_) => {
+                    startup_session_plan_command(startup_request.clone())
+                }
+                crate::model::StartupSessionSource::PreviousSession => Task::none(),
             }
-            crate::config::StartupLocationPolicy::PreviousSession => Task::none(),
         };
-        let operation_store_startup_request = (self.user_config.startup_location_policy
-            == crate::config::StartupLocationPolicy::PreviousSession)
-            .then_some(startup_request);
+        let operation_store_startup_request = self.previous_session_plan_request(&home);
 
         Task::batch([
             startup_command,
@@ -89,10 +97,10 @@ impl FileBrowser {
                 let persisted_column_width_overrides = loaded_store.column_width_overrides;
                 let classified_startup_session = loaded_store.classified_startup_session;
                 let previous_task_count = self.operation_queue.task_count();
-                if let Some(error) = self.operation_queue.set_store_and_restore(
-                    loaded_store.task_queue_store,
-                    loaded_store.restored_tasks,
-                ) {
+                if let Some(error) = self
+                    .operation_queue
+                    .set_store_and_restore(loaded_store.task_queue_store)
+                {
                     self.show_global_error(error);
                 }
                 let restored_queue_command =
@@ -104,15 +112,9 @@ impl FileBrowser {
                 if !persisted_column_width_overrides.is_empty() {
                     self.apply_column_width_overrides(persisted_column_width_overrides);
                 }
-                let session_command = if self.user_config.startup_location_policy
-                    == crate::config::StartupLocationPolicy::PreviousSession
-                {
-                    classified_startup_session
-                        .map(|classified| self.accept_startup_plan(classified))
-                        .unwrap_or_else(Task::none)
-                } else {
-                    Task::none()
-                };
+                let session_command = classified_startup_session
+                    .map(|classified| self.accept_startup_plan(classified))
+                    .unwrap_or_else(Task::none);
                 return Task::batch([
                     restored_queue_command,
                     session_command,
@@ -123,9 +125,7 @@ impl FileBrowser {
                 self.show_global_error(format!(
                     "Failed to initialize file operation queue storage: {error}"
                 ));
-                if self.user_config.startup_location_policy
-                    == crate::config::StartupLocationPolicy::PreviousSession
-                {
+                if self.previous_session_plan_request(&self.home_dir).is_some() {
                     let home_dir = self.home_dir.clone();
                     return self
                         .fallback_startup_directory_after_session_store_error(&home_dir, error);
@@ -185,6 +185,9 @@ impl FileBrowser {
 }
 
 #[cfg(test)]
+mod cli_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs;
@@ -240,7 +243,6 @@ mod tests {
                 .expect("create operation store"),
             column_width_overrides: HashMap::new(),
             classified_startup_session,
-            restored_tasks: Vec::new(),
         }
     }
 
@@ -520,6 +522,8 @@ mod tests {
             }
         ));
         assert_eq!(browser.panes.len(), 2);
+        assert_eq!(browser.next_tab_id, 4);
+        assert_eq!(browser.next_pane_id, 2);
         let left_pane = browser
             .pane_by_id(BrowserPaneId::PRIMARY)
             .expect("left pane restored");

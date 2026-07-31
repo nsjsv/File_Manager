@@ -38,8 +38,14 @@ impl FileBrowser {
                 FileOperationNotificationCompletion::Completed
             }
             FileOperationTerminalStatus::Failed => {
-                let FileOperationCompletion::Failed { error, .. } = completion else {
-                    unreachable!("failed queue status requires a failed operation completion");
+                let error = match completion {
+                    FileOperationCompletion::Failed { error, .. }
+                    | FileOperationCompletion::RecoveryInterrupted(error, _)
+                    | FileOperationCompletion::RecoveryBlocked { error, .. } => error,
+                    FileOperationCompletion::Succeeded(_)
+                    | FileOperationCompletion::Canceled(_) => {
+                        unreachable!("failed queue status requires a failed operation completion")
+                    }
                 };
                 FileOperationNotificationCompletion::Failed(error)
             }
