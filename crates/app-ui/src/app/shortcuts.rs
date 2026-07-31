@@ -3,7 +3,7 @@ use iced::{event, Task};
 
 use super::text_input_shortcuts;
 use super::FileBrowser;
-use crate::model::{Message, OperationQueuePanelMode, PathSuggestionDirection};
+use crate::model::{Message, PathSuggestionDirection};
 use crate::shortcuts::{
     KeyBinding, ShortcutAction, ShortcutBindingId, ShortcutCaptureState, ShortcutConfig,
     ShortcutRoutingContext,
@@ -89,11 +89,7 @@ impl FileBrowser {
             && self.preview_window != Some(self.focused_window)
             && self.renaming.is_none()
             && self.shortcut_capture.is_none()
-            && !(self.operation_queue.is_panel_open()
-                && matches!(
-                    self.operation_queue_panel_mode,
-                    OperationQueuePanelMode::InteractiveList
-                ))
+            && !self.operation_queue.is_panel_open()
     }
 
     pub(super) fn invoke_shortcut(&mut self, action: ShortcutAction) -> Task<Message> {

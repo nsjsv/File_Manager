@@ -17,7 +17,6 @@ use crate::startup_trace;
 const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
 const SIDEBAR_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
-const OPERATION_QUEUE_AUTO_HIDE_DURATION: Duration = Duration::from_secs(5);
 const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
 pub(crate) fn run(application_launch_request: ApplicationLaunchRequest) -> iced::Result {
@@ -164,16 +163,6 @@ pub(super) fn system_theme_command() -> Task<Message> {
             theme
         },
         Message::SystemThemeDetected,
-    )
-}
-
-pub(super) fn operation_queue_auto_hide_command(generation: u64) -> Task<Message> {
-    Task::perform(
-        async move {
-            tokio::time::sleep(OPERATION_QUEUE_AUTO_HIDE_DURATION).await;
-            generation
-        },
-        Message::FileOperationAutoHideElapsed,
     )
 }
 

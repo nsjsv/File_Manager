@@ -290,7 +290,6 @@ pub(crate) enum Message {
     FileOperationFinished(u64, FileOperationCompletion),
     DesktopNotificationPublished(Result<(), String>),
     FileOperationIndicatorPressed,
-    FileOperationAutoHideElapsed(u64),
     FileOperationPauseToggled(u64),
     FileOperationCancelRequested(u64),
     PreviewTreeDirectoryToggled(usize),
@@ -544,12 +543,6 @@ pub(crate) enum DestructiveActionConfirmation {
     DeleteTrashEntries { entries: Vec<TrashRestoreEntry> },
     DeletePermanently { paths: Vec<PathBuf> },
     EmptyTrash,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OperationQueuePanelMode {
-    PassivePreview,
-    InteractiveList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

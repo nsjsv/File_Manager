@@ -72,25 +72,6 @@ where
     })
 }
 
-pub(crate) fn pass_through_dismissable_floating_surface<'a, Message>(
-    content: impl Into<Element<'a, Message>>,
-    floating: Vec<FloatingContent<'a, Message>>,
-    dismiss_message: Message,
-) -> Element<'a, Message>
-where
-    Message: Clone + 'a,
-{
-    Element::new(FloatingSurface {
-        content: content.into(),
-        floating,
-        background_input_policy: BackgroundInputPolicy::Interactive,
-        outside_click_dismissal: Some(OutsideClickDismissal {
-            message: dismiss_message,
-            policy: OutsideDismissalPolicy::PassedThroughPrimaryPress,
-        }),
-    })
-}
-
 #[derive(Clone)]
 struct OutsideClickDismissal<Message> {
     message: Message,
@@ -100,7 +81,6 @@ struct OutsideClickDismissal<Message> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutsideDismissalPolicy {
     CapturedPrimaryPress,
-    PassedThroughPrimaryPress,
     ContextMenuReplacement,
 }
 
@@ -111,8 +91,7 @@ impl OutsideDismissalPolicy {
             | (Self::ContextMenuReplacement, FloatingInputEvent::PrimaryPress) => {
                 Some(DismissedClickFlow::Capture)
             }
-            (Self::PassedThroughPrimaryPress, FloatingInputEvent::PrimaryPress)
-            | (Self::ContextMenuReplacement, FloatingInputEvent::SecondaryPress) => {
+            (Self::ContextMenuReplacement, FloatingInputEvent::SecondaryPress) => {
                 Some(DismissedClickFlow::Continue)
             }
             _ => None,

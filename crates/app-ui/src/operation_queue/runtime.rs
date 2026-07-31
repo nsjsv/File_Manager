@@ -73,6 +73,7 @@ impl FileOperationQueue {
         };
         let (run_state_sender, run_state_receiver) = watch::channel(initial_run_state);
         let cancel = CancellationToken::new();
+        let is_read = self.is_panel_open;
         if cancel_on_restore {
             cancel.cancel();
         }
@@ -82,7 +83,7 @@ impl FileOperationQueue {
             status: task_status,
             progress: FileOperationProgress::pending(),
             error: None,
-            is_read: false,
+            is_read,
             cancel,
             _runner_lease: Some(runner_lease),
             run_state_sender,

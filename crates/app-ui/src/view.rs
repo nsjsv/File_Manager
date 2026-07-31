@@ -57,8 +57,7 @@ use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::floating_surface::{
     dismissable_blocking_floating_surface, floating_surface, modal_floating_surface,
-    pass_through_dismissable_floating_surface, replaceable_context_menu_floating_surface,
-    FloatingContent, FloatingPlacement,
+    replaceable_context_menu_floating_surface, FloatingContent, FloatingPlacement,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icon_grid_view::icon_grid_view;
@@ -66,7 +65,7 @@ use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::list_view::list_browser_view;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, BrowserViewMode, MainWindowChromeLayout, Message,
-    OperationQueuePanelMode, ScrollbarRegion, SplitAxis, WindowControlSide, TRASH_LOCATION_LABEL,
+    ScrollbarRegion, SplitAxis, WindowControlSide, TRASH_LOCATION_LABEL,
 };
 use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
@@ -117,7 +116,6 @@ enum BrowserFloatingInput {
     Modal,
     DismissibleBlocking,
     ContextMenuReplacement,
-    DismissiblePassThrough,
 }
 
 impl BrowserFloatingInput {
@@ -129,9 +127,6 @@ impl BrowserFloatingInput {
             }
             (Self::ContextMenuReplacement, _) | (_, Self::ContextMenuReplacement) => {
                 Self::ContextMenuReplacement
-            }
-            (Self::DismissiblePassThrough, _) | (_, Self::DismissiblePassThrough) => {
-                Self::DismissiblePassThrough
             }
             (Self::Plain, Self::Plain) => Self::Plain,
         }
@@ -309,11 +304,8 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     }
 
     if browser.operation_queue.is_panel_open() {
-        let queue_dismissal = match browser.operation_queue_panel_mode {
-            OperationQueuePanelMode::PassivePreview => BrowserFloatingInput::DismissiblePassThrough,
-            OperationQueuePanelMode::InteractiveList => BrowserFloatingInput::DismissibleBlocking,
-        };
-        floating_input = floating_input.with_additional_panel(queue_dismissal);
+        floating_input =
+            floating_input.with_additional_panel(BrowserFloatingInput::DismissibleBlocking);
         floating.push(FloatingContent {
             element: operation_queue_panel(
                 &browser.operation_queue,
@@ -345,9 +337,6 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         }
         BrowserFloatingInput::ContextMenuReplacement => {
             replaceable_context_menu_floating_surface(content, floating, Message::DismissFloating)
-        }
-        BrowserFloatingInput::DismissiblePassThrough => {
-            pass_through_dismissable_floating_surface(content, floating, Message::DismissFloating)
         }
     };
     let main_window = browser.main_window_id();

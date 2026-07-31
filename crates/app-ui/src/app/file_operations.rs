@@ -1,8 +1,8 @@
 use iced::Task;
 use std::path::PathBuf;
 
-use super::{operation_queue_auto_hide_command, FileBrowser};
-use crate::model::{Message, OperationQueuePanelMode};
+use super::FileBrowser;
+use crate::model::Message;
 use crate::operation_history::{
     path_after_completed_migrations, FileOperationCompletion, PendingHistoryOperation,
 };
@@ -317,15 +317,7 @@ impl FileBrowser {
                 }
             }
         }
-        self.show_operation_queue_temporarily()
-    }
-
-    pub(super) fn show_operation_queue_temporarily(&mut self) -> Task<Message> {
-        self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
-        self.operation_queue.open_panel();
-        self.operation_queue_auto_hide_generation =
-            self.operation_queue_auto_hide_generation.wrapping_add(1);
-        operation_queue_auto_hide_command(self.operation_queue_auto_hide_generation)
+        Task::none()
     }
 }
 

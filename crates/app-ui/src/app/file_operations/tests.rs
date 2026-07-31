@@ -79,6 +79,84 @@ fn directory_entry(path: &str) -> DirectoryEntry {
 }
 
 #[test]
+fn file_operation_events_preserve_queue_panel_visibility() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let operation_directory = tempfile::tempdir().expect("create operation directory");
+    browser.operation_queue.set_store(
+        file_operation_store::TaskQueueStore::new(operation_directory.path().join("state.sqlite"))
+            .expect("create operation store"),
+    );
+
+    drop(browser.enqueue_file_operation(QueuedFileOperation::Copy {
+        transfers: vec![crate::operation_queue::QueuedTransfer::new(
+            PathBuf::from("/workspace/copy-source"),
+            PathBuf::from("/workspace/copy-target"),
+        )],
+        verification: file_core::FileOperationVerification::default(),
+    }));
+    assert!(!browser.operation_queue.is_panel_open());
+    assert_eq!(browser.operation_queue.unread_count(), 1);
+
+    drop(browser.update(Message::FileOperationIndicatorPressed));
+    assert!(browser.operation_queue.is_panel_open());
+    assert_eq!(browser.operation_queue.unread_count(), 0);
+
+    drop(browser.enqueue_file_operation(QueuedFileOperation::Move {
+        transfers: vec![crate::operation_queue::QueuedTransfer::new(
+            PathBuf::from("/workspace/move-source"),
+            PathBuf::from("/workspace/move-target"),
+        )],
+        verification: file_core::FileOperationVerification::default(),
+    }));
+    assert!(browser.operation_queue.is_panel_open());
+    assert_eq!(browser.operation_queue.unread_count(), 0);
+
+    drop(browser.update(Message::FileOperationIndicatorPressed));
+    assert!(!browser.operation_queue.is_panel_open());
+
+    drop(
+        browser.enqueue_file_operation(QueuedFileOperation::CreateDirectory {
+            parent: PathBuf::from("/workspace"),
+        }),
+    );
+    assert!(!browser.operation_queue.is_panel_open());
+    assert_eq!(browser.operation_queue.unread_count(), 1);
+}
+
+#[test]
+fn progress_and_completion_keep_queue_panel_closed() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+    drop(
+        browser.enqueue_file_operation(QueuedFileOperation::CreateDirectory {
+            parent: PathBuf::from("/workspace"),
+        }),
+    );
+    let task_id = browser
+        .operation_queue
+        .tasks()
+        .last()
+        .expect("queued operation")
+        .id;
+    assert!(!browser.operation_queue.is_panel_open());
+
+    drop(browser.update(Message::FileOperationProgressed(
+        task_id,
+        crate::operation_queue::FileOperationProgressUpdate::Items {
+            completed: 1,
+            total: 2,
+        },
+    )));
+    assert!(!browser.operation_queue.is_panel_open());
+
+    drop(browser.update(Message::FileOperationFinished(
+        task_id,
+        FileOperationCompletion::Succeeded(FileOperationOutcome::NoHistory),
+    )));
+    assert!(!browser.operation_queue.is_panel_open());
+}
+
+#[test]
 fn rename_input_history_undoes_and_redoes_complete_snapshots() {
     let mut history = RenameInputHistory::default();
     let mut current_value = String::from("report.txt");

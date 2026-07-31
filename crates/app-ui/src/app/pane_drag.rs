@@ -7,8 +7,7 @@ use super::{FileBrowser, POINTER_DRAG_ACTIVATION_DISTANCE};
 use crate::app::panes::SplitOverlayBounds;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, FileDragNativeDndState, FileDragPhase,
-    OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PaneDropTarget,
-    SelectionMarqueePhase, SplitRegion,
+    PaneDragPointerPress, PaneDragState, PaneDropTarget, SelectionMarqueePhase, SplitRegion,
 };
 
 const PANE_DROP_CENTER_FRACTION: f32 = 0.28;
@@ -247,7 +246,6 @@ impl FileBrowser {
 
     fn operation_queue_interaction_is_open(&self) -> bool {
         self.operation_queue.is_panel_open()
-            && self.operation_queue_panel_mode == OperationQueuePanelMode::InteractiveList
     }
 
     fn pane_drop_target_at(

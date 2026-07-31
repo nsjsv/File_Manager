@@ -434,13 +434,14 @@ impl FileOperationQueue {
             None => (self.allocate_local_id(), false, None, None),
         };
         let (run_state_sender, run_state_receiver) = watch::channel(FileOperationRunState::Running);
+        let is_read = self.is_panel_open;
         self.tasks.push(FileOperationTask {
             id,
             operation,
             status: FileOperationStatus::Pending,
             progress: FileOperationProgress::pending(),
             error: None,
-            is_read: false,
+            is_read,
             cancel: CancellationToken::new(),
             _runner_lease: runner_lease,
             run_state_sender,

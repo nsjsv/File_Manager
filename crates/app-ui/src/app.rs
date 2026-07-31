@@ -71,8 +71,8 @@ use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
-    directory_watch_subscription, operation_queue_auto_hide_command,
-    sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
+    directory_watch_subscription, sidebar_device_refresh_subscription, system_theme_command,
+    wayland_file_dnd_subscription,
 };
 use crate::app::scrollbar::{ScrollbarState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
@@ -98,8 +98,8 @@ use crate::model::{
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     FileDragState, FileDropPrompt, FilePropertiesState, IconGridViewport, ListColumnKind, Message,
-    OperationQueuePanelMode, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
+    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
+    PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
     VideoPreviewPlayback,
@@ -253,8 +253,6 @@ pub(crate) struct FileBrowser {
     last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
     operation_history: FileOperationHistory,
-    pub(crate) operation_queue_panel_mode: OperationQueuePanelMode,
-    operation_queue_auto_hide_generation: u64,
     list_directory_summary_cache: crate::model::ListDirectorySummaryCache,
     pending_browser_session_save: bool,
     last_browser_session_save: Option<std::time::Instant>,
@@ -512,8 +510,6 @@ impl FileBrowser {
             last_activation_click: None,
             operation_queue: FileOperationQueue::new(),
             operation_history: FileOperationHistory::new(),
-            operation_queue_panel_mode: OperationQueuePanelMode::PassivePreview,
-            operation_queue_auto_hide_generation: 0,
             list_directory_summary_cache: crate::model::ListDirectorySummaryCache::default(),
             pending_browser_session_save: false,
             last_browser_session_save: None,

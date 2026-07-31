@@ -89,26 +89,6 @@ fn blocking_dismissible_outside_left_click_dismisses_and_captures() {
 }
 
 #[test]
-fn pass_through_dismissible_outside_left_click_dismisses_and_updates_background() {
-    let dismissal = dismissal(OutsideDismissalPolicy::PassedThroughPrimaryPress);
-
-    let decision = decide_floating_input(
-        BackgroundInputPolicy::Interactive,
-        Some(&dismissal),
-        FloatingPointerTarget::Background,
-        FloatingInputEvent::PrimaryPress,
-    );
-
-    assert_eq!(
-        decision,
-        FloatingInputDecision {
-            dismiss_message: Some(TestMessage::Dismiss),
-            background_update: BackgroundUpdateDecision::Update
-        }
-    );
-}
-
-#[test]
 fn blocking_dismissible_outside_right_click_stays_open_and_captures() {
     let dismissal = dismissal(OutsideDismissalPolicy::CapturedPrimaryPress);
 

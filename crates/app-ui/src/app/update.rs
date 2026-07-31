@@ -1,5 +1,5 @@
 use super::FileBrowser;
-use crate::model::{Message, NavigationMode, OperationQueuePanelMode, ScrollbarRegion as Region};
+use crate::model::{Message, NavigationMode, ScrollbarRegion as Region};
 use iced::Task;
 impl FileBrowser {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
@@ -197,23 +197,10 @@ impl FileBrowser {
             Message::FileOperationIndicatorPressed => {
                 self.context_menu = None;
                 self.open_with = None;
-                if self.operation_queue.is_panel_open()
-                    && self.operation_queue_panel_mode == OperationQueuePanelMode::InteractiveList
-                {
+                if self.operation_queue.is_panel_open() {
                     self.operation_queue.close_panel();
-                    self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
                 } else {
                     self.operation_queue.open_panel();
-                    self.operation_queue_panel_mode = OperationQueuePanelMode::InteractiveList;
-                }
-                self.operation_queue_auto_hide_generation =
-                    self.operation_queue_auto_hide_generation.wrapping_add(1);
-                Task::none()
-            }
-            Message::FileOperationAutoHideElapsed(generation) => {
-                if generation == self.operation_queue_auto_hide_generation {
-                    self.operation_queue.close_panel();
-                    self.operation_queue_panel_mode = OperationQueuePanelMode::PassivePreview;
                 }
                 Task::none()
             }

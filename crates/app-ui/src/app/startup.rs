@@ -96,19 +96,12 @@ impl FileBrowser {
             Ok(loaded_store) => {
                 let persisted_column_width_overrides = loaded_store.column_width_overrides;
                 let classified_startup_session = loaded_store.classified_startup_session;
-                let previous_task_count = self.operation_queue.task_count();
                 if let Some(error) = self
                     .operation_queue
                     .set_store_and_restore(loaded_store.task_queue_store)
                 {
                     self.show_global_error(error);
                 }
-                let restored_queue_command =
-                    if self.operation_queue.task_count() > previous_task_count {
-                        self.show_operation_queue_temporarily()
-                    } else {
-                        Task::none()
-                    };
                 if !persisted_column_width_overrides.is_empty() {
                     self.apply_column_width_overrides(persisted_column_width_overrides);
                 }
@@ -116,7 +109,6 @@ impl FileBrowser {
                     .map(|classified| self.accept_startup_plan(classified))
                     .unwrap_or_else(Task::none);
                 return Task::batch([
-                    restored_queue_command,
                     session_command,
                     self.maybe_flush_pending_browser_session_save(),
                 ]);
@@ -209,7 +201,10 @@ mod tests {
     use desktop_linux::{
         NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
     };
-    use file_operation_store::TaskQueueStore;
+    use file_operation_store::{
+        StoredFileOperationVerification, StoredOperation, StoredPath, StoredTransfer,
+        StoredTransferConflictStrategy, TaskQueueStore, TRANSFER_JOURNAL_VERSION,
+    };
     use tempfile::TempDir;
 
     fn startup_environment(
@@ -244,6 +239,34 @@ mod tests {
             column_width_overrides: HashMap::new(),
             classified_startup_session,
         }
+    }
+
+    #[test]
+    fn restoring_file_operations_keeps_queue_panel_closed() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let loaded_store = loaded_store(&temp_dir, None);
+        let claimed_task = loaded_store
+            .task_queue_store
+            .insert_claimed_recoverable_transfer_task(&StoredOperation::Copy {
+                transfers: vec![StoredTransfer {
+                    source: StoredPath::from_path(&temp_dir.path().join("source")),
+                    target: StoredPath::from_path(&temp_dir.path().join("target")),
+                    conflict_strategy: StoredTransferConflictStrategy::Fail,
+                }],
+                verification: StoredFileOperationVerification::BasicMetadata,
+                recovery_version: Some(TRANSFER_JOURNAL_VERSION),
+            })
+            .expect("persist recoverable task");
+        drop(claimed_task);
+
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        assert!(!browser.operation_queue.is_panel_open());
+
+        drop(browser.accept_operation_store(Ok(loaded_store)));
+
+        assert_eq!(browser.operation_queue.task_count(), 1);
+        assert!(!browser.operation_queue.is_panel_open());
+        assert_eq!(browser.operation_queue.unread_count(), 1);
     }
 
     fn classify_previous_session(
