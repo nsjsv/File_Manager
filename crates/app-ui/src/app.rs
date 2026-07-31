@@ -121,6 +121,7 @@ use crate::view::{
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+const OPERATION_PROGRESS_ANIMATION_INTERVAL: Duration = Duration::from_millis(80);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const SEARCH_SERVICE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -252,6 +253,7 @@ pub(crate) struct FileBrowser {
         Option<crate::app::window_control_settings::WindowControlReorderDrag>,
     last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
+    pub(crate) operation_progress_animation_frame: u8,
     operation_history: FileOperationHistory,
     list_directory_summary_cache: crate::model::ListDirectorySummaryCache,
     pending_browser_session_save: bool,
@@ -509,6 +511,7 @@ impl FileBrowser {
             window_control_reorder_drag: None,
             last_activation_click: None,
             operation_queue: FileOperationQueue::new(),
+            operation_progress_animation_frame: 0,
             operation_history: FileOperationHistory::new(),
             list_directory_summary_cache: crate::model::ListDirectorySummaryCache::default(),
             pending_browser_session_save: false,
@@ -593,6 +596,19 @@ impl FileBrowser {
             subscriptions.push(file_operation_subscription(operation));
         }
 
+        let remote_preview_progress_is_indeterminate = matches!(
+            self.preview.as_ref(),
+            Some(PreviewState::DownloadingRemoteFile(download)) if download.fraction().is_none()
+        );
+        if self.operation_queue.has_active_indeterminate_progress()
+            || remote_preview_progress_is_indeterminate
+        {
+            subscriptions.push(
+                time::every(OPERATION_PROGRESS_ANIMATION_INTERVAL)
+                    .map(|_| Message::OperationProgressAnimationTick),
+            );
+        }
+
         if self.preview_tree_animation_is_active() {
             subscriptions.push(
                 time::every(PREVIEW_TREE_ANIMATION_INTERVAL)
@@ -673,6 +689,7 @@ impl FileBrowser {
                 self.preview_size,
                 self.audio_preview.as_ref(),
                 self.video_preview.as_ref(),
+                self.operation_progress_animation_frame,
                 self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDirectory),
                 self.scrollbar_visibility_for(&ScrollbarRegion::PreviewArchive),
                 self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),

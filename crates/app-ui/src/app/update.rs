@@ -191,6 +191,11 @@ impl FileBrowser {
             Message::FileOperationFinished(task_id, completion) => {
                 self.accept_file_operation_finished(task_id, completion)
             }
+            Message::OperationProgressAnimationTick => {
+                self.operation_progress_animation_frame =
+                    self.operation_progress_animation_frame.wrapping_add(1);
+                Task::none()
+            }
             Message::DesktopNotificationPublished(outcome) => {
                 self.accept_desktop_notification_published(outcome)
             }

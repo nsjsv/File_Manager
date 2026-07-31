@@ -383,7 +383,10 @@ use std::sync::Mutex;
 use crate::{FileOperationVerification, FileTransferOptions, TransferConflictStrategy};
 use tokio_util::sync::CancellationToken;
 
-use super::executor::{advance_recoverable_transfer, run_recoverable_transfer, TransferAdvance};
+use super::executor::{
+    advance_recoverable_transfer, persist_recoverable_source_manifest, run_recoverable_transfer,
+    TransferAdvance,
+};
 
 struct MemoryJournalState {
     revision: u64,
@@ -519,6 +522,74 @@ fn canceled_transfer_options() -> FileTransferOptions {
     let cancel = CancellationToken::new();
     cancel.cancel();
     FileTransferOptions::running(cancel)
+}
+
+#[tokio::test]
+async fn persisted_source_manifest_keeps_awaiting_checkpoint_and_is_reused() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"before").await.unwrap();
+    let key = TransferWorkKey::top_level(0);
+    let journal = MemoryJournal::new(2_001, key, None);
+    let mut record = journal.record(transfer_request(
+        source.clone(),
+        target.clone(),
+        RecoverableTransferOperation::Copy,
+        TransferConflictStrategy::Fail,
+    ));
+
+    persist_recoverable_source_manifest(&mut record, &journal)
+        .await
+        .unwrap();
+
+    assert_eq!(record.revision, 1);
+    assert!(matches!(
+        record.checkpoint,
+        TransferCheckpoint::AwaitingManifest
+    ));
+    assert!(record.manifest.is_some());
+    fs::write(&source, b"after-longer").await.unwrap();
+
+    let error = run_recoverable_transfer(record, &journal, running_transfer_options())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RecoverableTransferError::SourceChanged { path } if path == source
+    ));
+    assert!(fs::symlink_metadata(&target).await.is_err());
+}
+
+#[tokio::test]
+async fn source_manifest_journal_failure_leaves_record_and_filesystem_unchanged() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"content").await.unwrap();
+    let key = TransferWorkKey::top_level(0);
+    let journal = MemoryJournal::new(2_002, key, Some(1));
+    let mut record = journal.record(transfer_request(
+        source.clone(),
+        target.clone(),
+        RecoverableTransferOperation::Copy,
+        TransferConflictStrategy::Fail,
+    ));
+
+    let error = persist_recoverable_source_manifest(&mut record, &journal)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RecoverableTransferError::Journal { .. }));
+    assert_eq!(record.revision, 0);
+    assert!(record.manifest.is_none());
+    assert!(matches!(
+        record.checkpoint,
+        TransferCheckpoint::AwaitingManifest
+    ));
+    assert_eq!(fs::read(&source).await.unwrap(), b"content");
+    assert!(fs::symlink_metadata(&target).await.is_err());
+    assert_no_transfer_artifacts(directory.path());
 }
 
 fn assert_no_transfer_artifacts(parent: &Path) {

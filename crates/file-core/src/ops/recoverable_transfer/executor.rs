@@ -44,6 +44,30 @@ pub enum TransferAdvance {
     Complete(RecoverableTransferOutcome),
 }
 
+pub async fn persist_recoverable_source_manifest<J: TransferJournal>(
+    record: &mut TransferJournalRecord,
+    journal: &J,
+) -> Result<(), RecoverableTransferError> {
+    if record.manifest.is_some() {
+        return Ok(());
+    }
+    if !matches!(record.checkpoint, TransferCheckpoint::AwaitingManifest) {
+        return Err(RecoverableTransferError::InvalidCheckpoint {
+            message: "source manifest can only be installed while awaiting manifest".to_owned(),
+        });
+    }
+
+    let manifest = build_source_manifest(&record.request.source).await?;
+    install_manifest_and_checkpoint(
+        record,
+        journal,
+        manifest,
+        None,
+        TransferCheckpoint::AwaitingManifest,
+    )
+    .await
+}
+
 pub async fn run_recoverable_transfer<J: TransferJournal>(
     mut record: TransferJournalRecord,
     journal: &J,

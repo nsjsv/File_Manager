@@ -24,7 +24,7 @@ pub use artifacts::{
     ArtifactOwner, ArtifactToken, OwnedArtifact, OwnedArtifactKind, OwnedArtifactPlan,
 };
 pub(crate) use durability::{sync_parent_blocking, sync_tree_blocking};
-pub use executor::run_recoverable_transfer;
+pub use executor::{persist_recoverable_source_manifest, run_recoverable_transfer};
 pub(crate) use fingerprint::fingerprint_object;
 pub use fingerprint::ObjectFingerprint;
 pub(crate) use identity::inspect_file_identity;

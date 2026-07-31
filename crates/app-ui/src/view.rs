@@ -310,6 +310,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             element: operation_queue_panel(
                 &browser.operation_queue,
                 browser.scrollbar_visibility_for(&ScrollbarRegion::OperationQueue),
+                browser.operation_progress_animation_frame,
             ),
             placement: FloatingPlacement::BottomLeft {
                 left: browser.sidebar_width + 12.0,
@@ -318,7 +319,10 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if let Some(indicator) = operation_queue_indicator(&browser.operation_queue) {
+    if let Some(indicator) = operation_queue_indicator(
+        &browser.operation_queue,
+        browser.operation_progress_animation_frame,
+    ) {
         floating.push(FloatingContent {
             element: indicator,
             placement: FloatingPlacement::BottomRightInArea {

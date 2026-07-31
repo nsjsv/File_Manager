@@ -7,6 +7,7 @@ use desktop_linux::{
     StorageDeviceSnapshot, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
     WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
 };
+use file_core::FileOperationVerification;
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 use file_operation_store::TaskQueueStore;
 use file_search::{SearchHit, SearchServiceStatus};
@@ -23,14 +24,13 @@ use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
 use crate::operation_history::FileOperationCompletion;
-use crate::operation_queue::{FileOperationProgressUpdate, QueuedTransfer};
+use crate::operation_queue::QueuedTransfer;
 use crate::shortcuts::{ShortcutAction, ShortcutBindingId};
 use crate::sidebar_devices::{
     SidebarDeviceAction, SidebarDeviceActionRequest, SidebarDeviceContextMenuState,
 };
 use crate::startup_rendering::StartupRenderingEnvironmentStatus;
 use crate::thumbnail_cache::ThumbnailLoadOutcome;
-use file_core::FileOperationVerification;
 
 pub(crate) use crate::text_preview::{
     MarkdownPreviewMode, TextPreviewChunk, TextPreviewDocument, TextPreviewFormat,
@@ -286,8 +286,9 @@ pub(crate) enum Message {
     VideoPreviewSeekFrameFailed(PathBuf, u64, Duration, String),
     VideoPreviewFinished(PathBuf, u64),
     VideoPreviewFailed(PathBuf, u64, String),
-    FileOperationProgressed(u64, FileOperationProgressUpdate),
+    FileOperationProgressed(u64, crate::operation_progress::FileOperationProgressUpdate),
     FileOperationFinished(u64, FileOperationCompletion),
+    OperationProgressAnimationTick,
     DesktopNotificationPublished(Result<(), String>),
     FileOperationIndicatorPressed,
     FileOperationPauseToggled(u64),

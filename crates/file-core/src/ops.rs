@@ -16,15 +16,15 @@ mod copy;
 mod copy_verification;
 mod recoverable_transfer;
 pub use recoverable_transfer::{
-    run_recoverable_transfer, ArtifactOwner, ArtifactToken, CommitPayload, CommitTransfer,
-    CommittedTransfer, CompletedTarget, FileIdentity, FileObjectKind, MergeChildCompletion,
-    MergeChildOutcome, MergeTransfer, ObjectFingerprint, OwnedArtifact, OwnedArtifactKind,
-    OwnedArtifactPlan, PreparedTransfer, RecoverableTransferError, RecoverableTransferOperation,
-    RecoverableTransferOutcome, RecoverableTransferRequest, RetiredSource, SourceDisposition,
-    SourceManifest, SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation,
-    StagingTransfer, TransferCheckpoint, TransferExecutionKind, TransferJournal,
-    TransferJournalError, TransferJournalFuture, TransferJournalMutation, TransferJournalRecord,
-    TransferWorkKey,
+    persist_recoverable_source_manifest, run_recoverable_transfer, ArtifactOwner, ArtifactToken,
+    CommitPayload, CommitTransfer, CommittedTransfer, CompletedTarget, FileIdentity,
+    FileObjectKind, MergeChildCompletion, MergeChildOutcome, MergeTransfer, ObjectFingerprint,
+    OwnedArtifact, OwnedArtifactKind, OwnedArtifactPlan, PreparedTransfer,
+    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
+    RecoverableTransferRequest, RetiredSource, SourceDisposition, SourceManifest,
+    SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation, StagingTransfer,
+    TransferCheckpoint, TransferExecutionKind, TransferJournal, TransferJournalError,
+    TransferJournalFuture, TransferJournalMutation, TransferJournalRecord, TransferWorkKey,
 };
 mod transfer_metadata;
 mod transfer_object;

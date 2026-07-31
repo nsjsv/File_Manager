@@ -1,3 +1,5 @@
+use file_operation_store::StoredProgress;
+
 use super::*;
 
 impl FileOperationQueue {

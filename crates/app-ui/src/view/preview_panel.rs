@@ -2,8 +2,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use iced::widget::{
-    button, column, container, image, mouse_area, progress_bar, row, scrollable, slider, Button,
-    Column, Space, Stack,
+    button, column, container, image, mouse_area, row, scrollable, slider, Button, Column, Space,
+    Stack,
 };
 use iced::{Alignment, Element, Length};
 
@@ -17,10 +17,10 @@ use crate::formatting::{format_duration, format_file_size, format_middle_ellipsi
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
-    PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, RemotePreviewDownload,
-    ScrollbarRegion, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
-    VideoPreviewPlaybackStatus,
+    PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion,
+    ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
 };
+use crate::operation_progress::remote_preview_download_panel;
 use crate::typography::{localized_text, readable_text};
 
 use super::{
@@ -58,6 +58,7 @@ pub(crate) fn view_preview_window<'a>(
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
+    operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
     archive_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_visibility: ScrollbarVisibility,
@@ -70,6 +71,7 @@ pub(crate) fn view_preview_window<'a>(
                 size,
                 audio_preview,
                 video_preview,
+                operation_progress_animation_frame,
                 directory_scrollbar_visibility,
                 archive_scrollbar_visibility,
                 markdown_scrollbar_visibility,
@@ -86,6 +88,7 @@ fn preview_panel<'a>(
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
+    operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
     archive_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_visibility: ScrollbarVisibility,
@@ -93,7 +96,9 @@ fn preview_panel<'a>(
     let scroll_height = preview_scroll_height(size);
     let panel = match preview {
         PreviewState::Loading(_) => column![readable_text("Loading preview...").size(14)],
-        PreviewState::DownloadingRemoteFile(download) => remote_preview_download_panel(download),
+        PreviewState::DownloadingRemoteFile(download) => {
+            remote_preview_download_panel(download, operation_progress_animation_frame)
+        }
         PreviewState::Ready(PreviewContent::Directory { entries, .. }) => {
             directory_preview_panel(entries, scroll_height, directory_scrollbar_visibility)
         }
@@ -167,38 +172,6 @@ fn preview_panel<'a>(
 
 fn preview_scroll_height(size: PreviewSize) -> f32 {
     (size.height - PREVIEW_PANEL_PADDING_RESERVED_HEIGHT).max(PREVIEW_MIN_SCROLL_HEIGHT)
-}
-
-fn remote_preview_download_panel(download: &RemotePreviewDownload) -> Column<'static, Message> {
-    let name = download
-        .source_path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| download.source_path.to_string_lossy().into_owned());
-    let name = format_middle_ellipsized_text(&name, PREVIEW_ENTRY_NAME_MAX_CHARS);
-    let title = if crate::localization::current_language_is_chinese() {
-        format!("正在下载 {name}")
-    } else {
-        format!("Downloading {name}")
-    };
-    let progress = download.fraction().unwrap_or(0.0);
-    let detail = download
-        .bytes_total
-        .map(|bytes_total| {
-            format!(
-                "{} / {}",
-                format_file_size(download.bytes_done),
-                format_file_size(bytes_total)
-            )
-        })
-        .unwrap_or_else(|| crate::localization::translate_current("Preparing download..."));
-
-    column![
-        readable_text(title).size(14),
-        container(progress_bar(0.0..=1.0, progress)).width(Length::Fill),
-        readable_text(detail).size(12),
-    ]
-    .spacing(8)
 }
 
 fn directory_preview_panel(

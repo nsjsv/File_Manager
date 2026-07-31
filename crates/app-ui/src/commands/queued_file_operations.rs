@@ -7,9 +7,10 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use file_core::{
-    create_archive_with_progress, create_directory, create_empty_file, delete_path_permanently,
-    delete_trash_entry, empty_trash, extract_archive, rename_path, restore_trash_entry,
-    run_recoverable_transfer, trash_path_with_restore_entry, ArchiveCreationProgress,
+    create_archive_with_controls_and_progress, create_directory, create_empty_file,
+    delete_path_permanently, delete_trash_entry, empty_trash,
+    extract_archive_with_controls_and_progress, persist_recoverable_source_manifest, rename_path,
+    restore_trash_entry, run_recoverable_transfer, trash_path_with_restore_entry,
     ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileOperationControls,
     FileOperationVerification, FileTransferOptions, RecoverableTransferError,
     RecoverableTransferOperation, RecoverableTransferOutcome, TransferConflictStrategy,
@@ -28,15 +29,22 @@ use crate::operation_history::{
     CompletedTransfer, FileOperationCompletion, FileOperationHistoryEligibility,
     FileOperationOutcome,
 };
+use crate::operation_progress::FileOperationProgressUpdate;
 use crate::operation_queue::{
-    FileOperationProgressUpdate, QueuedFileOperation, QueuedTransfer, RunningFileOperation,
-    NEW_DIRECTORY_NAME, NEW_FILE_NAME,
+    QueuedFileOperation, QueuedTransfer, RunningFileOperation, NEW_DIRECTORY_NAME, NEW_FILE_NAME,
 };
 
 use super::batch_rename_operation::run_queued_batch_rename;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
-const COPY_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
+const BYTE_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
+
+fn should_send_byte_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
+    match last_sent_at {
+        Some(last_sent_at) => now.duration_since(last_sent_at) >= BYTE_PROGRESS_UI_INTERVAL,
+        None => true,
+    }
+}
 
 pub(crate) fn file_operation_subscription(task: RunningFileOperation) -> Subscription<Message> {
     subscription::from_recipe(FileOperationRecipe { task })
@@ -95,14 +103,15 @@ async fn run_queued_file_operation(
                 FileOperationProgressUpdate::Indeterminate,
             )
             .await;
+            let total_items = items.len();
             match run_queued_batch_rename(items, controls).await {
                 Ok(outcome) => {
                     send_file_operation_progress(
                         output,
                         task_id,
-                        FileOperationProgressUpdate::Items {
-                            completed: 1,
-                            total: 1,
+                        FileOperationProgressUpdate::IndeterminateItems {
+                            completed: total_items,
+                            total: total_items,
                         },
                     )
                     .await;
@@ -193,30 +202,52 @@ async fn run_queued_file_operation(
 
 async fn run_queued_extract_archive(
     request: ArchiveExtractionRequest,
-    mut controls: FileOperationControls,
+    controls: FileOperationControls,
     task_id: u64,
     output: &mut IcedSender<Message>,
 ) -> Result<FileOperationOutcome, String> {
     send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
-    let cancel = controls.cancellation_token();
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    extract_archive(request, cancel)
-        .await
-        .map_err(|error| error.to_string())?;
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: 1,
-            total: 1,
+    let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+    let mut extraction = Box::pin(extract_archive_with_controls_and_progress(
+        request,
+        controls,
+        move |progress| {
+            progress_sender.send_replace(Some(progress));
         },
-    )
-    .await;
-    Ok(FileOperationOutcome::NoHistory)
+    ));
+    let mut progress_open = true;
+    let mut last_progress_sent = None;
+    let mut last_progress_sent_at = None;
+
+    loop {
+        tokio::select! {
+            changed = progress_receiver.changed(), if progress_open => {
+                match changed {
+                    Ok(()) => {
+                        let progress = *progress_receiver.borrow_and_update();
+                        let now = Instant::now();
+                        if should_send_byte_progress(last_progress_sent_at, now) {
+                            if let Some(progress) = progress {
+                                send_archive_extraction_progress(output, task_id, progress).await;
+                                last_progress_sent = Some(progress);
+                                last_progress_sent_at = Some(now);
+                            }
+                        }
+                    }
+                    Err(_) => progress_open = false,
+                }
+            }
+            outcome = &mut extraction => {
+                let latest_progress = *progress_receiver.borrow_and_update();
+                if let Some(progress) = latest_progress.filter(|progress| Some(*progress) != last_progress_sent) {
+                    send_archive_extraction_progress(output, task_id, progress).await;
+                }
+                return outcome
+                    .map(|_| FileOperationOutcome::NoHistory)
+                    .map_err(|error| error.to_string());
+            }
+        }
+    }
 }
 
 async fn run_queued_create_archive(
@@ -225,19 +256,14 @@ async fn run_queued_create_archive(
     format: file_core::ArchiveFormat,
     compression_level: file_core::ArchiveCompressionLevel,
     password: Option<file_core::ArchivePassword>,
-    mut controls: FileOperationControls,
+    controls: FileOperationControls,
     task_id: u64,
     output: &mut IcedSender<Message>,
 ) -> Result<FileOperationOutcome, String> {
     send_file_operation_progress(output, task_id, FileOperationProgressUpdate::Indeterminate).await;
-    let cancel = controls.cancellation_token();
-    controls
-        .wait_until_running()
-        .await
-        .map_err(|error| error.to_string())?;
 
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut archive = Box::pin(create_archive_with_progress(
+    let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+    let mut archive = Box::pin(create_archive_with_controls_and_progress(
         ArchiveCreationRequest {
             sources,
             target,
@@ -245,33 +271,41 @@ async fn run_queued_create_archive(
             compression_level,
             password,
         },
-        cancel,
+        controls,
         move |progress| {
-            let _ = progress_sender.send(progress);
+            progress_sender.send_replace(Some(progress));
         },
     ));
     let mut progress_open = true;
+    let mut last_progress_sent = None;
+    let mut last_progress_sent_at = None;
 
     loop {
         tokio::select! {
-            progress = progress_receiver.recv(), if progress_open => {
-                match progress {
-                    Some(progress) => send_archive_progress(output, task_id, progress).await,
-                    None => progress_open = false,
+            changed = progress_receiver.changed(), if progress_open => {
+                match changed {
+                    Ok(()) => {
+                        let progress = *progress_receiver.borrow_and_update();
+                        let now = Instant::now();
+                        if should_send_byte_progress(last_progress_sent_at, now) {
+                            if let Some(progress) = progress {
+                                send_archive_creation_progress(output, task_id, progress).await;
+                                last_progress_sent = Some(progress);
+                                last_progress_sent_at = Some(now);
+                            }
+                        }
+                    }
+                    Err(_) => progress_open = false,
                 }
             }
             outcome = &mut archive => {
-                outcome.map_err(|error| error.to_string())?;
-                send_file_operation_progress(
-                    output,
-                    task_id,
-                    FileOperationProgressUpdate::Items {
-                        completed: 1,
-                        total: 1,
-                    },
-                )
-                .await;
-                return Ok(FileOperationOutcome::NoHistory);
+                let latest_progress = *progress_receiver.borrow_and_update();
+                if let Some(progress) = latest_progress.filter(|progress| Some(*progress) != last_progress_sent) {
+                    send_archive_creation_progress(output, task_id, progress).await;
+                }
+                return outcome
+                    .map(|_| FileOperationOutcome::NoHistory)
+                    .map_err(|error| error.to_string());
             }
         }
     }
@@ -295,7 +329,7 @@ async fn run_queued_rename(
     send_file_operation_progress(
         output,
         task_id,
-        FileOperationProgressUpdate::Items {
+        FileOperationProgressUpdate::IndeterminateItems {
             completed: 1,
             total: 1,
         },
@@ -324,7 +358,7 @@ async fn run_queued_create_directory(
     send_file_operation_progress(
         output,
         task_id,
-        FileOperationProgressUpdate::Items {
+        FileOperationProgressUpdate::IndeterminateItems {
             completed: 1,
             total: 1,
         },
@@ -350,7 +384,7 @@ async fn run_queued_create_empty_file(
     send_file_operation_progress(
         output,
         task_id,
-        FileOperationProgressUpdate::Items {
+        FileOperationProgressUpdate::IndeterminateItems {
             completed: 1,
             total: 1,
         },
@@ -381,7 +415,7 @@ async fn run_queued_trash(
         send_file_operation_progress(
             output,
             task_id,
-            FileOperationProgressUpdate::Items {
+            FileOperationProgressUpdate::IndeterminateItems {
                 completed: index + 1,
                 total,
             },
@@ -416,7 +450,7 @@ async fn run_queued_restore(
         send_file_operation_progress(
             output,
             task_id,
-            FileOperationProgressUpdate::Items {
+            FileOperationProgressUpdate::IndeterminateItems {
                 completed: index + 1,
                 total,
             },
@@ -447,7 +481,7 @@ async fn run_queued_delete_trash_entries(
         send_file_operation_progress(
             output,
             task_id,
-            FileOperationProgressUpdate::Items {
+            FileOperationProgressUpdate::IndeterminateItems {
                 completed: index + 1,
                 total,
             },
@@ -475,7 +509,7 @@ async fn run_queued_delete_permanently(
         send_file_operation_progress(
             output,
             task_id,
-            FileOperationProgressUpdate::Items {
+            FileOperationProgressUpdate::IndeterminateItems {
                 completed: index + 1,
                 total,
             },
@@ -496,15 +530,6 @@ async fn run_queued_empty_trash(
         .await
         .map_err(|error| error.to_string())?;
     empty_trash().await.map_err(|error| error.to_string())?;
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: 1,
-            total: 1,
-        },
-    )
-    .await;
     Ok(FileOperationOutcome::NoHistory)
 }
 
@@ -525,4 +550,10 @@ impl QueuedTransferMode {
 
 mod recoverable;
 
-use recoverable::{run_queued_transfers, send_archive_progress, send_file_operation_progress};
+#[cfg(test)]
+mod archive_progress_tests;
+
+use recoverable::{
+    run_queued_transfers, send_archive_creation_progress, send_archive_extraction_progress,
+    send_file_operation_progress,
+};

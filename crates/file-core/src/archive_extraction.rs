@@ -1,14 +1,17 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use tokio::process::Command;
+use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 use zip::result::ZipError;
 
-use crate::{ArchivePassword, FileError, SEVEN_ZIP_COMMAND_NAMES};
+use crate::{ArchivePassword, FileError, FileOperationControls, SEVEN_ZIP_COMMAND_NAMES};
+
+const ARCHIVE_EXTRACTION_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveExtractionFormat {
@@ -17,6 +20,20 @@ pub enum ArchiveExtractionFormat {
     TarGz,
     SevenZip,
     Rar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveExtractionProgress {
+    pub completed_bytes: u64,
+    pub total_bytes: u64,
+    pub completed_entries: usize,
+    pub total_entries: usize,
+}
+
+#[derive(Debug)]
+struct ZipExtractionWorkload {
+    entry_bytes: Vec<u64>,
+    total_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,22 +124,44 @@ pub async fn extract_archive(
     request: ArchiveExtractionRequest,
     cancel: CancellationToken,
 ) -> Result<PathBuf, FileError> {
+    extract_archive_with_progress(request, cancel, |_| {}).await
+}
+
+pub async fn extract_archive_with_progress(
+    request: ArchiveExtractionRequest,
+    cancel: CancellationToken,
+    progress: impl FnMut(ArchiveExtractionProgress) + Send + 'static,
+) -> Result<PathBuf, FileError> {
+    extract_archive_with_controls_and_progress(
+        request,
+        FileOperationControls::running(cancel),
+        progress,
+    )
+    .await
+}
+
+pub async fn extract_archive_with_controls_and_progress(
+    request: ArchiveExtractionRequest,
+    mut controls: FileOperationControls,
+    progress: impl FnMut(ArchiveExtractionProgress) + Send + 'static,
+) -> Result<PathBuf, FileError> {
     let format = archive_extraction_format_for_path(&request.archive).ok_or(
         FileError::Unsupported("archive format is not supported for extraction"),
     )?;
+    controls.wait_until_running().await?;
 
     match format {
-        ArchiveExtractionFormat::Zip => extract_zip_archive(request, cancel).await,
+        ArchiveExtractionFormat::Zip => extract_zip_archive(request, controls, progress).await,
         ArchiveExtractionFormat::Tar => {
             reject_tar_password(&request)?;
-            extract_tar_archive(request, TarCompression::Plain, cancel).await
+            extract_tar_archive(request, TarCompression::Plain, controls).await
         }
         ArchiveExtractionFormat::TarGz => {
             reject_tar_password(&request)?;
-            extract_tar_archive(request, TarCompression::Gzip, cancel).await
+            extract_tar_archive(request, TarCompression::Gzip, controls).await
         }
         ArchiveExtractionFormat::SevenZip | ArchiveExtractionFormat::Rar => {
-            extract_archive_with_seven_zip(request, cancel).await
+            extract_archive_with_seven_zip(request, controls.cancellation_token()).await
         }
     }
 }
@@ -132,7 +171,7 @@ async fn inspect_zip_archive(
     cancel: CancellationToken,
 ) -> Result<(), FileError> {
     let archive = request.archive.clone();
-    tokio::task::spawn_blocking(move || inspect_zip_entries(&request, &cancel))
+    tokio::task::spawn_blocking(move || inspect_zip_entries(&request, &cancel).map(|_| ()))
         .await
         .map_err(|error| FileError::Archive {
             path: archive,
@@ -142,25 +181,39 @@ async fn inspect_zip_archive(
 
 async fn extract_zip_archive(
     request: ArchiveExtractionRequest,
-    cancel: CancellationToken,
+    controls: FileOperationControls,
+    progress: impl FnMut(ArchiveExtractionProgress) + Send + 'static,
 ) -> Result<PathBuf, FileError> {
     let destination = request.destination.clone();
     let join_destination = destination.clone();
-    tokio::task::spawn_blocking(move || extract_zip_archive_blocking(request, cancel))
-        .await
-        .map_err(|error| FileError::Archive {
-            path: join_destination,
-            message: error.to_string(),
-        })?
+    let runtime = Handle::current();
+    tokio::task::spawn_blocking(move || {
+        extract_zip_archive_blocking(request, controls, runtime, progress)
+    })
+    .await
+    .map_err(|error| FileError::Archive {
+        path: join_destination,
+        message: error.to_string(),
+    })?
 }
 
 fn extract_zip_archive_blocking(
     request: ArchiveExtractionRequest,
-    cancel: CancellationToken,
+    mut controls: FileOperationControls,
+    runtime: Handle,
+    mut progress: impl FnMut(ArchiveExtractionProgress),
 ) -> Result<PathBuf, FileError> {
-    inspect_zip_entries(&request, &cancel)?;
+    let cancel = controls.cancellation_token();
+    let workload = inspect_zip_entries(&request, &cancel)?;
+    archive_control_checkpoint(&mut controls, &runtime)?;
+    progress(ArchiveExtractionProgress {
+        completed_bytes: 0,
+        total_bytes: workload.total_bytes,
+        completed_entries: 0,
+        total_entries: workload.entry_bytes.len(),
+    });
     create_destination_directory(&request.destination)?;
-    let outcome = extract_zip_entries(&request, &cancel);
+    let outcome = extract_zip_entries(&request, &mut controls, &runtime, &workload, &mut progress);
     if outcome.is_err() {
         let _ = fs::remove_dir_all(&request.destination);
     }
@@ -170,10 +223,12 @@ fn extract_zip_archive_blocking(
 fn inspect_zip_entries(
     request: &ArchiveExtractionRequest,
     cancel: &CancellationToken,
-) -> Result<(), FileError> {
+) -> Result<ZipExtractionWorkload, FileError> {
     let file = open_archive_file(&request.archive)?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|error| zip_error(&request.archive, error))?;
+    let mut entry_bytes = Vec::with_capacity(archive.len());
+    let mut total_bytes = 0_u64;
 
     for index in 0..archive.len() {
         cancel_if_requested(cancel)?;
@@ -184,20 +239,45 @@ fn inspect_zip_entries(
             &request.archive,
         )?;
         validate_zip_entry_path(&request.archive, &entry)?;
+        if entry.is_symlink() {
+            return Err(FileError::Unsupported(
+                "zip symlink extraction is not supported",
+            ));
+        }
+        let size = if entry.is_dir() { 0 } else { entry.size() };
+        total_bytes = total_bytes
+            .checked_add(size)
+            .ok_or_else(|| FileError::InvalidInput {
+                path: request.archive.clone(),
+                message: "ZIP uncompressed byte total exceeds the supported range".to_owned(),
+            })?;
+        entry_bytes.push(size);
     }
-    Ok(())
+    Ok(ZipExtractionWorkload {
+        entry_bytes,
+        total_bytes,
+    })
 }
 
 fn extract_zip_entries(
     request: &ArchiveExtractionRequest,
-    cancel: &CancellationToken,
+    controls: &mut FileOperationControls,
+    runtime: &Handle,
+    workload: &ZipExtractionWorkload,
+    progress: &mut impl FnMut(ArchiveExtractionProgress),
 ) -> Result<(), FileError> {
     let file = open_archive_file(&request.archive)?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|error| zip_error(&request.archive, error))?;
+    if archive.len() != workload.entry_bytes.len() {
+        return Err(archive_changed_after_inspection(&request.archive));
+    }
+    let total_entries = workload.entry_bytes.len();
+    let mut completed_bytes = 0_u64;
+    let mut buffer = vec![0_u8; ARCHIVE_EXTRACTION_BUFFER_SIZE];
 
-    for index in 0..archive.len() {
-        cancel_if_requested(cancel)?;
+    for (index, expected_entry_bytes) in workload.entry_bytes.iter().copied().enumerate() {
+        archive_control_checkpoint(controls, runtime)?;
         let mut entry = open_zip_entry(
             &mut archive,
             index,
@@ -205,18 +285,23 @@ fn extract_zip_entries(
             &request.archive,
         )?;
         let relative_path = validate_zip_entry_path(&request.archive, &entry)?;
+        if entry.size() != expected_entry_bytes {
+            return Err(archive_changed_after_inspection(&request.archive));
+        }
         let target = request.destination.join(relative_path);
         if entry.is_dir() {
             fs::create_dir_all(&target).map_err(|source| FileError::CreateDirectory {
                 path: target,
                 source,
             })?;
+            archive_control_checkpoint(controls, runtime)?;
+            progress(ArchiveExtractionProgress {
+                completed_bytes,
+                total_bytes: workload.total_bytes,
+                completed_entries: index + 1,
+                total_entries,
+            });
             continue;
-        }
-        if entry.is_symlink() {
-            return Err(FileError::Unsupported(
-                "zip symlink extraction is not supported",
-            ));
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|source| FileError::CreateDirectory {
@@ -232,14 +317,53 @@ fn extract_zip_entries(
                 path: target.clone(),
                 source,
             })?;
-        io::copy(&mut entry, &mut output).map_err(|source| FileError::Archive {
-            path: request.archive.clone(),
-            message: source.to_string(),
-        })?;
+        let mut completed_entry_bytes = 0_u64;
+        loop {
+            archive_control_checkpoint(controls, runtime)?;
+            let read = entry
+                .read(&mut buffer)
+                .map_err(|source| FileError::Archive {
+                    path: request.archive.clone(),
+                    message: source.to_string(),
+                })?;
+            if read == 0 {
+                break;
+            }
+            completed_entry_bytes = completed_entry_bytes
+                .checked_add(read as u64)
+                .ok_or_else(|| archive_changed_after_inspection(&request.archive))?;
+            if completed_entry_bytes > expected_entry_bytes {
+                return Err(archive_changed_after_inspection(&request.archive));
+            }
+            output
+                .write_all(&buffer[..read])
+                .map_err(|source| FileError::Archive {
+                    path: target.clone(),
+                    message: source.to_string(),
+                })?;
+            completed_bytes += read as u64;
+            archive_control_checkpoint(controls, runtime)?;
+            progress(ArchiveExtractionProgress {
+                completed_bytes,
+                total_bytes: workload.total_bytes,
+                completed_entries: index,
+                total_entries,
+            });
+        }
+        if completed_entry_bytes != expected_entry_bytes {
+            return Err(archive_changed_after_inspection(&request.archive));
+        }
         output.flush().map_err(|source| FileError::Archive {
             path: target,
             message: source.to_string(),
         })?;
+        archive_control_checkpoint(controls, runtime)?;
+        progress(ArchiveExtractionProgress {
+            completed_bytes,
+            total_bytes: workload.total_bytes,
+            completed_entries: index + 1,
+            total_entries,
+        });
     }
     Ok(())
 }
@@ -283,32 +407,42 @@ fn validate_zip_entry_path<R: io::Read>(
 async fn extract_tar_archive(
     request: ArchiveExtractionRequest,
     compression: TarCompression,
-    cancel: CancellationToken,
+    controls: FileOperationControls,
 ) -> Result<PathBuf, FileError> {
     let destination = request.destination.clone();
     let join_destination = destination.clone();
-    tokio::task::spawn_blocking(move || extract_tar_archive_blocking(request, compression, cancel))
-        .await
-        .map_err(|error| FileError::Archive {
-            path: join_destination,
-            message: error.to_string(),
-        })?
+    let runtime = Handle::current();
+    tokio::task::spawn_blocking(move || {
+        extract_tar_archive_blocking(request, compression, controls, runtime)
+    })
+    .await
+    .map_err(|error| FileError::Archive {
+        path: join_destination,
+        message: error.to_string(),
+    })?
 }
 
 fn extract_tar_archive_blocking(
     request: ArchiveExtractionRequest,
     compression: TarCompression,
-    cancel: CancellationToken,
+    mut controls: FileOperationControls,
+    runtime: Handle,
 ) -> Result<PathBuf, FileError> {
+    archive_control_checkpoint(&mut controls, &runtime)?;
     create_destination_directory(&request.destination)?;
     let outcome = match compression {
         TarCompression::Plain => {
             let file = open_archive_file(&request.archive)?;
-            extract_tar_entries(file, &request, &cancel)
+            extract_tar_entries(file, &request, &mut controls, &runtime)
         }
         TarCompression::Gzip => {
             let file = open_archive_file(&request.archive)?;
-            extract_tar_entries(flate2::read::GzDecoder::new(file), &request, &cancel)
+            extract_tar_entries(
+                flate2::read::GzDecoder::new(file),
+                &request,
+                &mut controls,
+                &runtime,
+            )
         }
     };
     if outcome.is_err() {
@@ -320,7 +454,8 @@ fn extract_tar_archive_blocking(
 fn extract_tar_entries<R: io::Read>(
     reader: R,
     request: &ArchiveExtractionRequest,
-    cancel: &CancellationToken,
+    controls: &mut FileOperationControls,
+    runtime: &Handle,
 ) -> Result<(), FileError> {
     let mut archive = tar::Archive::new(reader);
     let entries = archive.entries().map_err(|source| FileError::Archive {
@@ -329,7 +464,7 @@ fn extract_tar_entries<R: io::Read>(
     })?;
 
     for entry in entries {
-        cancel_if_requested(cancel)?;
+        archive_control_checkpoint(controls, runtime)?;
         let mut entry = entry.map_err(|source| FileError::Archive {
             path: request.archive.clone(),
             message: source.to_string(),
@@ -347,6 +482,7 @@ fn extract_tar_entries<R: io::Read>(
                 message: "archive entry path is not safe".to_owned(),
             });
         }
+        archive_control_checkpoint(controls, runtime)?;
     }
     Ok(())
 }
@@ -594,6 +730,20 @@ fn zip_error(path: &Path, error: ZipError) -> FileError {
     }
 }
 
+fn archive_changed_after_inspection(path: &Path) -> FileError {
+    FileError::Archive {
+        path: path.to_path_buf(),
+        message: "ZIP archive changed after progress workload inspection".to_owned(),
+    }
+}
+
+fn archive_control_checkpoint(
+    controls: &mut FileOperationControls,
+    runtime: &Handle,
+) -> Result<(), FileError> {
+    runtime.block_on(controls.wait_until_running())
+}
+
 fn cancel_if_requested(cancel: &CancellationToken) -> Result<(), FileError> {
     if cancel.is_cancelled() {
         Err(FileError::Cancelled)
@@ -613,103 +763,4 @@ enum TarCompression {
 }
 
 #[cfg(test)]
-mod tests {
-    #[cfg(unix)]
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::os::unix::process::ExitStatusExt;
-
-    use super::*;
-
-    fn seven_zip_test_request(password: Option<ArchivePassword>) -> ArchiveExtractionRequest {
-        ArchiveExtractionRequest {
-            archive: PathBuf::from("/tmp/locked.7z"),
-            destination: PathBuf::from("/tmp/locked"),
-            password,
-        }
-    }
-
-    fn seven_zip_exit_status(code: i32) -> std::process::ExitStatus {
-        std::process::ExitStatus::from_raw(code << 8)
-    }
-
-    #[test]
-    fn seven_zip_extract_output_switch_precedes_archive_operand() {
-        let request = seven_zip_test_request(None);
-        let command = seven_zip_extract_command("7z", &request);
-        let arguments = command
-            .as_std()
-            .get_args()
-            .map(OsStr::to_os_string)
-            .collect::<Vec<_>>();
-        let output_switch = seven_zip_output_directory_switch(&request.destination);
-        let output_index = arguments
-            .iter()
-            .position(|argument| argument == &output_switch)
-            .unwrap();
-        let archive_separator_index = arguments
-            .iter()
-            .position(|argument| argument == OsStr::new("--"))
-            .unwrap();
-
-        assert!(output_index < archive_separator_index);
-        assert_eq!(
-            arguments.get(archive_separator_index + 1),
-            Some(&request.archive.as_os_str().to_os_string())
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn seven_zip_extract_output_switch_preserves_destination_bytes() {
-        let destination_bytes = b"/tmp/archive-parent-\x80/output".to_vec();
-        let mut expected_bytes = b"-o".to_vec();
-        expected_bytes.extend_from_slice(&destination_bytes);
-
-        for extension in ["7z", "rar"] {
-            let mut request = seven_zip_test_request(None);
-            request.archive = PathBuf::from(format!("/tmp/locked.{extension}"));
-            request.destination = PathBuf::from(OsString::from_vec(destination_bytes.clone()));
-
-            let command = seven_zip_extract_command("7z", &request);
-            let output_switch = command
-                .as_std()
-                .get_args()
-                .find(|argument| argument.as_bytes().starts_with(b"-o"))
-                .expect("output directory switch");
-
-            assert_eq!(output_switch.as_bytes(), expected_bytes);
-        }
-    }
-
-    #[test]
-    fn seven_zip_stdout_password_prompt_requires_password() {
-        let request = seven_zip_test_request(None);
-        let error = seven_zip_error(
-            &request,
-            seven_zip_exit_status(255),
-            "Enter password:".to_owned(),
-            "Break signaled".to_owned(),
-        );
-
-        assert!(matches!(
-            error,
-            FileError::ArchivePasswordRequired { path } if path == request.archive
-        ));
-    }
-
-    #[test]
-    fn seven_zip_wrong_password_reports_invalid_password() {
-        let request = seven_zip_test_request(ArchivePassword::new("wrong"));
-        let error = seven_zip_error(
-            &request,
-            seven_zip_exit_status(2),
-            String::new(),
-            "Cannot open encrypted archive. Wrong password?".to_owned(),
-        );
-
-        assert!(matches!(
-            error,
-            FileError::ArchiveInvalidPassword { path } if path == request.archive
-        ));
-    }
-}
+mod tests;

@@ -142,7 +142,7 @@ fn progress_and_completion_keep_queue_panel_closed() {
 
     drop(browser.update(Message::FileOperationProgressed(
         task_id,
-        crate::operation_queue::FileOperationProgressUpdate::Items {
+        crate::operation_progress::FileOperationProgressUpdate::IndeterminateItems {
             completed: 1,
             total: 2,
         },

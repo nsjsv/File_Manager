@@ -1,13 +1,16 @@
 use std::fmt;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 
 use tokio::process::Command;
+use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
-use crate::{FileError, SEVEN_ZIP_COMMAND_NAMES};
+use crate::{FileError, FileOperationControls, SEVEN_ZIP_COMMAND_NAMES};
+
+const ARCHIVE_COPY_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveFormat {
@@ -94,6 +97,8 @@ pub struct ArchiveCreationRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArchiveCreationProgress {
+    pub completed_source_bytes: u64,
+    pub total_source_bytes: u64,
     pub completed_entries: usize,
     pub total_entries: usize,
 }
@@ -103,11 +108,25 @@ struct ArchiveEntry {
     path: PathBuf,
     relative_path: PathBuf,
     is_directory: bool,
+    source_bytes: u64,
 }
 
 pub async fn create_archive_with_progress(
     request: ArchiveCreationRequest,
     cancel: CancellationToken,
+    progress: impl FnMut(ArchiveCreationProgress) + Send + 'static,
+) -> Result<PathBuf, FileError> {
+    create_archive_with_controls_and_progress(
+        request,
+        FileOperationControls::running(cancel),
+        progress,
+    )
+    .await
+}
+
+pub async fn create_archive_with_controls_and_progress(
+    request: ArchiveCreationRequest,
+    mut controls: FileOperationControls,
     progress: impl FnMut(ArchiveCreationProgress) + Send + 'static,
 ) -> Result<PathBuf, FileError> {
     validate_archive_request(&request)?;
@@ -119,12 +138,15 @@ pub async fn create_archive_with_progress(
     }
 
     if request.format == ArchiveFormat::SevenZip || request.password.is_some() {
-        return create_archive_with_seven_zip(request, cancel).await;
+        controls.wait_until_running().await?;
+        return create_archive_with_seven_zip(request, controls.cancellation_token()).await;
     }
 
+    controls.wait_until_running().await?;
     let target = request.target.clone();
     let join_target = target.clone();
-    tokio::task::spawn_blocking(move || create_rust_archive(request, cancel, progress))
+    let runtime = Handle::current();
+    tokio::task::spawn_blocking(move || create_rust_archive(request, controls, runtime, progress))
         .await
         .map_err(|error| FileError::Archive {
             path: join_target,
@@ -150,15 +172,39 @@ fn validate_archive_request(request: &ArchiveCreationRequest) -> Result<(), File
 
 fn create_rust_archive(
     request: ArchiveCreationRequest,
-    cancel: CancellationToken,
+    mut controls: FileOperationControls,
+    runtime: Handle,
     mut progress: impl FnMut(ArchiveCreationProgress),
 ) -> Result<PathBuf, FileError> {
-    cancel_if_requested(&cancel)?;
+    archive_control_checkpoint(&mut controls, &runtime)?;
+    let cancel = controls.cancellation_token();
     let base_directory = common_source_parent(&request.sources)?;
     let entries = collect_archive_entries(&request.sources, &base_directory, &cancel)?;
+    let total_source_bytes = archive_source_bytes(&entries, &request.target)?;
+    archive_control_checkpoint(&mut controls, &runtime)?;
+    progress(ArchiveCreationProgress {
+        completed_source_bytes: 0,
+        total_source_bytes,
+        completed_entries: 0,
+        total_entries: entries.len(),
+    });
     let outcome = match request.format {
-        ArchiveFormat::Zip => write_zip_archive(&request, &entries, &cancel, &mut progress),
-        ArchiveFormat::TarGz => write_tar_gz_archive(&request, &entries, &cancel, &mut progress),
+        ArchiveFormat::Zip => write_zip_archive(
+            &request,
+            &entries,
+            total_source_bytes,
+            &mut controls,
+            &runtime,
+            &mut progress,
+        ),
+        ArchiveFormat::TarGz => write_tar_gz_archive(
+            &request,
+            &entries,
+            total_source_bytes,
+            &mut controls,
+            &runtime,
+            &mut progress,
+        ),
         ArchiveFormat::SevenZip => Err(FileError::Unsupported("7z requires system 7z backend")),
     };
     if outcome.is_err() {
@@ -196,6 +242,7 @@ fn collect_archive_entry(
         path: path.to_path_buf(),
         relative_path: relative_path.clone(),
         is_directory,
+        source_bytes: if is_directory { 0 } else { metadata.len() },
     });
     if !is_directory {
         return Ok(());
@@ -219,10 +266,42 @@ fn collect_archive_entry(
     Ok(())
 }
 
+fn archive_source_bytes(entries: &[ArchiveEntry], target: &Path) -> Result<u64, FileError> {
+    entries.iter().try_fold(0_u64, |total, entry| {
+        total
+            .checked_add(entry.source_bytes)
+            .ok_or_else(|| FileError::InvalidInput {
+                path: target.to_path_buf(),
+                message: "archive source byte total exceeds the supported range".to_owned(),
+            })
+    })
+}
+
+fn validate_archive_entry_source_size(entry: &ArchiveEntry) -> Result<(), FileError> {
+    let metadata = fs::metadata(&entry.path).map_err(|source| FileError::Metadata {
+        path: entry.path.clone(),
+        source,
+    })?;
+    if metadata.len() == entry.source_bytes {
+        Ok(())
+    } else {
+        Err(archive_source_size_changed(&entry.path))
+    }
+}
+
+fn archive_source_size_changed(path: &Path) -> FileError {
+    FileError::InvalidInput {
+        path: path.to_path_buf(),
+        message: "archive source size changed after workload collection".to_owned(),
+    }
+}
+
 fn write_zip_archive(
     request: &ArchiveCreationRequest,
     entries: &[ArchiveEntry],
-    cancel: &CancellationToken,
+    total_source_bytes: u64,
+    controls: &mut FileOperationControls,
+    runtime: &Handle,
     progress: &mut impl FnMut(ArchiveCreationProgress),
 ) -> Result<(), FileError> {
     let archive_names = zip_archive_names(entries)?;
@@ -238,9 +317,11 @@ fn write_zip_archive(
         .compression_level(request.compression_level.zip_level())
         .large_file(true);
     let total_entries = entries.len();
+    let mut completed_source_bytes = 0_u64;
+    let mut buffer = vec![0_u8; ARCHIVE_COPY_BUFFER_SIZE];
 
     for (index, (entry, archive_name)) in entries.iter().zip(archive_names).enumerate() {
-        cancel_if_requested(cancel)?;
+        archive_control_checkpoint(controls, runtime)?;
         if entry.is_directory {
             archive
                 .add_directory(archive_name, options)
@@ -253,10 +334,42 @@ fn write_zip_archive(
                 path: entry.path.clone(),
                 source,
             })?;
-            io::copy(&mut input, &mut archive)
-                .map_err(|source| archive_io_error(&request.target, source))?;
+            let mut completed_entry_bytes = 0_u64;
+            loop {
+                archive_control_checkpoint(controls, runtime)?;
+                let read = input
+                    .read(&mut buffer)
+                    .map_err(|source| archive_io_error(&request.target, source))?;
+                if read == 0 {
+                    break;
+                }
+                let next_entry_bytes = completed_entry_bytes
+                    .checked_add(read as u64)
+                    .ok_or_else(|| archive_source_size_changed(&entry.path))?;
+                if next_entry_bytes > entry.source_bytes {
+                    return Err(archive_source_size_changed(&entry.path));
+                }
+                archive
+                    .write_all(&buffer[..read])
+                    .map_err(|source| archive_io_error(&request.target, source))?;
+                completed_entry_bytes = next_entry_bytes;
+                completed_source_bytes += read as u64;
+                archive_control_checkpoint(controls, runtime)?;
+                progress(ArchiveCreationProgress {
+                    completed_source_bytes,
+                    total_source_bytes,
+                    completed_entries: index,
+                    total_entries,
+                });
+            }
+            if completed_entry_bytes != entry.source_bytes {
+                return Err(archive_source_size_changed(&entry.path));
+            }
         }
+        archive_control_checkpoint(controls, runtime)?;
         progress(ArchiveCreationProgress {
+            completed_source_bytes,
+            total_source_bytes,
             completed_entries: index + 1,
             total_entries,
         });
@@ -264,32 +377,42 @@ fn write_zip_archive(
     archive
         .finish()
         .map_err(|source| archive_write_error(&request.target, source))?;
+    archive_control_checkpoint(controls, runtime)?;
     Ok(())
 }
 
 fn write_tar_gz_archive(
     request: &ArchiveCreationRequest,
     entries: &[ArchiveEntry],
-    cancel: &CancellationToken,
+    total_source_bytes: u64,
+    controls: &mut FileOperationControls,
+    runtime: &Handle,
     progress: &mut impl FnMut(ArchiveCreationProgress),
 ) -> Result<(), FileError> {
     let file = create_archive_file(&request.target)?;
     let encoder = flate2::write::GzEncoder::new(file, request.compression_level.gzip_level());
     let mut archive = tar::Builder::new(encoder);
     let total_entries = entries.len();
+    let mut completed_source_bytes = 0_u64;
 
     for (index, entry) in entries.iter().enumerate() {
-        cancel_if_requested(cancel)?;
+        archive_control_checkpoint(controls, runtime)?;
         if entry.is_directory {
             archive
                 .append_dir(&entry.relative_path, &entry.path)
                 .map_err(|source| archive_io_error(&request.target, source))?;
         } else {
+            validate_archive_entry_source_size(entry)?;
             archive
                 .append_path_with_name(&entry.path, &entry.relative_path)
                 .map_err(|source| archive_io_error(&request.target, source))?;
+            validate_archive_entry_source_size(entry)?;
+            completed_source_bytes += entry.source_bytes;
         }
+        archive_control_checkpoint(controls, runtime)?;
         progress(ArchiveCreationProgress {
+            completed_source_bytes,
+            total_source_bytes,
             completed_entries: index + 1,
             total_entries,
         });
@@ -300,6 +423,7 @@ fn write_tar_gz_archive(
     encoder
         .finish()
         .map_err(|source| archive_io_error(&request.target, source))?;
+    archive_control_checkpoint(controls, runtime)?;
     Ok(())
 }
 
@@ -515,6 +639,13 @@ fn archive_io_error(path: &Path, source: io::Error) -> FileError {
         path: path.to_path_buf(),
         message: source.to_string(),
     }
+}
+
+fn archive_control_checkpoint(
+    controls: &mut FileOperationControls,
+    runtime: &Handle,
+) -> Result<(), FileError> {
+    runtime.block_on(controls.wait_until_running())
 }
 
 fn cancel_if_requested(cancel: &CancellationToken) -> Result<(), FileError> {

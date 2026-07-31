@@ -1,6 +1,12 @@
 use super::*;
 
+mod progress;
 mod store_codec;
+
+use progress::TransferBatchProgress;
+pub(super) use progress::{
+    send_archive_creation_progress, send_archive_extraction_progress, send_file_operation_progress,
+};
 
 #[derive(Clone)]
 struct TaskQueueTransferJournal {
@@ -93,7 +99,7 @@ pub(super) async fn run_queued_transfers(
             "File operation queue storage is unavailable; transfer was not started".to_owned(),
         ));
     };
-    let records = match load_recoverable_transfer_records(store.clone(), task_id).await {
+    let mut records = match load_recoverable_transfer_records(store.clone(), task_id).await {
         Ok(records) => records,
         Err(RecoverableRecordLoadError::Interrupted(error)) => {
             return FileOperationCompletion::RecoveryInterrupted(error, Vec::new());
@@ -130,8 +136,33 @@ pub(super) async fn run_queued_transfers(
     } else {
         FileOperationHistoryEligibility::NotReplayable
     };
-    let total = records.len();
     let journal = TaskQueueTransferJournal { store };
+    let mut manifest_controls = controls.clone();
+    for record in &mut records {
+        if record.manifest.is_some()
+            || !matches!(
+                record.checkpoint,
+                file_core::TransferCheckpoint::AwaitingManifest
+            )
+        {
+            continue;
+        }
+        if manifest_controls.wait_until_running().await.is_err() {
+            break;
+        }
+        if let Err(error) = persist_recoverable_source_manifest(record, &journal).await {
+            if matches!(
+                error,
+                RecoverableTransferError::Journal { .. }
+                    | RecoverableTransferError::RecoveryRequired { .. }
+            ) {
+                return recoverable_transfer_failure(mode, error, Vec::new());
+            }
+            break;
+        }
+    }
+
+    let mut batch_progress = TransferBatchProgress::new(&records);
     let mut completed = Vec::new();
     for (index, record) in records.into_iter().enumerate() {
         let transfer_outcome = run_recoverable_record_with_progress(
@@ -141,7 +172,7 @@ pub(super) async fn run_queued_transfers(
             task_id,
             output,
             index,
-            total,
+            &mut batch_progress,
         )
         .await;
         match transfer_outcome {
@@ -156,15 +187,7 @@ pub(super) async fn run_queued_transfers(
                 return recoverable_transfer_failure(mode, error, completed);
             }
         }
-        send_file_operation_progress(
-            output,
-            task_id,
-            FileOperationProgressUpdate::Items {
-                completed: index + 1,
-                total,
-            },
-        )
-        .await;
+        send_file_operation_progress(output, task_id, batch_progress.complete_record(index)).await;
     }
 
     match mode {
@@ -254,8 +277,8 @@ async fn run_recoverable_record_with_progress(
     journal: &TaskQueueTransferJournal,
     task_id: u64,
     output: &mut IcedSender<Message>,
-    completed_transfers: usize,
-    total_transfers: usize,
+    record_index: usize,
+    batch_progress: &mut TransferBatchProgress,
 ) -> Result<RecoverableTransferOutcome, RecoverableTransferError> {
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
     let transfer_options = FileTransferOptions::new(controls).with_progress_sender(progress_sender);
@@ -270,14 +293,14 @@ async fn run_recoverable_record_with_progress(
                 if let Some(progress) = progress {
                     latest_copy_progress = Some(progress);
                     let now = Instant::now();
-                    if should_send_copy_progress(last_copy_progress_sent_at, now) {
+                    if should_send_byte_progress(last_copy_progress_sent_at, now) {
                         if let Some(progress) = latest_copy_progress.take() {
                             send_copy_progress(
                                 output,
                                 task_id,
+                                record_index,
                                 progress,
-                                completed_transfers,
-                                total_transfers,
+                                batch_progress,
                             ).await;
                             last_copy_progress_sent_at = Some(now);
                         }
@@ -285,13 +308,17 @@ async fn run_recoverable_record_with_progress(
                 }
             }
             transfer_outcome = &mut transfer => {
+                latest_copy_progress = progress::drain_latest_copy_progress(
+                    &mut progress_receiver,
+                    latest_copy_progress,
+                );
                 if let Some(progress) = latest_copy_progress.take() {
                     send_copy_progress(
                         output,
                         task_id,
+                        record_index,
                         progress,
-                        completed_transfers,
-                        total_transfers,
+                        batch_progress,
                     ).await;
                 }
                 return transfer_outcome;
@@ -309,57 +336,17 @@ fn history_safe_transfer(transfer: &QueuedTransfer) -> bool {
     )
 }
 
-fn should_send_copy_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
-    match last_sent_at {
-        Some(last_sent_at) => now.duration_since(last_sent_at) >= COPY_PROGRESS_UI_INTERVAL,
-        None => true,
-    }
-}
-
 async fn send_copy_progress(
     output: &mut IcedSender<Message>,
     task_id: u64,
+    record_index: usize,
     progress: CopyProgress,
-    completed_transfers: usize,
-    total_transfers: usize,
+    batch_progress: &mut TransferBatchProgress,
 ) {
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Bytes {
-            bytes_done: progress.bytes_done,
-            bytes_total: progress.bytes_total,
-            completed_transfers,
-            total_transfers,
-        },
-    )
-    .await;
-}
-
-pub(super) async fn send_archive_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: ArchiveCreationProgress,
-) {
-    send_file_operation_progress(
-        output,
-        task_id,
-        FileOperationProgressUpdate::Items {
-            completed: progress.completed_entries,
-            total: progress.total_entries,
-        },
-    )
-    .await;
-}
-
-pub(super) async fn send_file_operation_progress(
-    output: &mut IcedSender<Message>,
-    task_id: u64,
-    progress: FileOperationProgressUpdate,
-) {
-    let _ = output
-        .send(Message::FileOperationProgressed(task_id, progress))
-        .await;
+    let Some(update) = batch_progress.observe_copy_progress(record_index, &progress) else {
+        return;
+    };
+    send_file_operation_progress(output, task_id, update).await;
 }
 
 #[cfg(test)]
@@ -368,6 +355,7 @@ mod recoverable_transfer_tests {
     use crate::operation_queue::{
         FileOperationEnqueueOutcome, FileOperationFinish, FileOperationQueue,
     };
+    use iced::futures::StreamExt;
 
     mod cross_filesystem_recovery;
 
@@ -385,6 +373,77 @@ mod recoverable_transfer_tests {
             FileOperationCompletion::Canceled(completed_move_transfers)
                 if completed_move_transfers.len() == 1
         ));
+    }
+
+    #[tokio::test]
+    async fn recoverable_copy_uses_one_manifest_byte_denominator_for_the_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let first_source = directory.path().join("first-source");
+        let second_source = directory.path().join("second-source");
+        let first_target = directory.path().join("first-target");
+        let second_target = directory.path().join("second-target");
+        tokio::fs::write(&first_source, vec![1_u8; 10])
+            .await
+            .unwrap();
+        tokio::fs::write(&second_source, vec![2_u8; 990])
+            .await
+            .unwrap();
+        let transfers = vec![
+            QueuedTransfer::new(first_source, first_target),
+            QueuedTransfer::new(second_source, second_target),
+        ];
+        let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+        let mut queue = FileOperationQueue::new();
+        queue.set_store(store.clone());
+        let FileOperationEnqueueOutcome::Queued { task_id } =
+            queue.enqueue(QueuedFileOperation::Copy {
+                transfers: transfers.clone(),
+                verification: FileOperationVerification::BasicMetadata,
+            })
+        else {
+            panic!("recoverable copy should enqueue");
+        };
+        let running = queue.active_subscription().unwrap();
+        let (mut output, mut messages) = iced::futures::channel::mpsc::channel(32);
+
+        let completion = run_queued_transfers(
+            transfers,
+            running.controls,
+            task_id,
+            &mut output,
+            running.store,
+            QueuedTransferMode::Copy,
+            FileOperationVerification::BasicMetadata,
+        )
+        .await;
+        drop(output);
+
+        assert!(matches!(
+            completion,
+            FileOperationCompletion::Succeeded(FileOperationOutcome::Copy { .. })
+        ));
+        let mut byte_updates = Vec::new();
+        while let Some(message) = messages.next().await {
+            if let Message::FileOperationProgressed(
+                id,
+                FileOperationProgressUpdate::Bytes {
+                    completed_bytes,
+                    total_bytes,
+                    completed_items,
+                    total_items,
+                },
+            ) = message
+            {
+                assert_eq!(id, task_id);
+                byte_updates.push((completed_bytes, total_bytes, completed_items, total_items));
+            }
+        }
+
+        assert!(byte_updates.contains(&(10, 1_000, 1, 2)));
+        assert_eq!(byte_updates.last(), Some(&(1_000, 1_000, 2, 2)));
+        assert!(byte_updates
+            .iter()
+            .all(|(_, total_bytes, _, total_items)| *total_bytes == 1_000 && *total_items == 2));
     }
 
     #[tokio::test]
@@ -536,6 +595,7 @@ mod recoverable_transfer_tests {
             store: store.clone(),
         };
         let (mut output, _messages) = iced::futures::channel::mpsc::channel(64);
+        let mut batch_progress = TransferBatchProgress::new(&records);
 
         run_recoverable_record_with_progress(
             records.remove(0),
@@ -544,7 +604,7 @@ mod recoverable_transfer_tests {
             task_id,
             &mut output,
             0,
-            transfers.len(),
+            &mut batch_progress,
         )
         .await
         .unwrap();
@@ -631,6 +691,7 @@ mod recoverable_transfer_tests {
             store: store.clone(),
         };
         let (mut output, _messages) = iced::futures::channel::mpsc::channel(64);
+        let mut batch_progress = TransferBatchProgress::new(&records);
 
         run_recoverable_record_with_progress(
             records.remove(0),
@@ -639,7 +700,7 @@ mod recoverable_transfer_tests {
             task_id,
             &mut output,
             0,
-            transfers.len(),
+            &mut batch_progress,
         )
         .await
         .unwrap();

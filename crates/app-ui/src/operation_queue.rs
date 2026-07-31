@@ -6,13 +6,13 @@ use file_core::{
     TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
-    RecoverableTaskRunnerLease, StoredOperation, StoredProgress, StoredTask, StoredTaskStatus,
-    TaskQueueStore,
+    RecoverableTaskRunnerLease, StoredOperation, StoredTask, StoredTaskStatus, TaskQueueStore,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::model::sanitized_application_log_detail;
+use crate::operation_progress::{FileOperationProgress, FileOperationProgressUpdate};
 
 mod persistence;
 use persistence::{queued_operation_from_stored, queued_operation_to_stored};
@@ -21,7 +21,6 @@ pub(crate) const NEW_DIRECTORY_NAME: &str = "New Folder";
 pub(crate) const NEW_FILE_NAME: &str = "New File";
 
 const LOCAL_TASK_ID_START: u64 = 1 << 63;
-const ACTIVE_TRANSFER_PROGRESS_LIMIT: f32 = 0.999;
 
 #[cfg(test)]
 std::thread_local! {
@@ -195,79 +194,6 @@ impl FileOperationStatus {
             Self::Canceled => StoredTaskStatus::Canceled,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct FileOperationProgress {
-    fraction: Option<f32>,
-}
-
-impl FileOperationProgress {
-    pub(crate) fn pending() -> Self {
-        Self { fraction: None }
-    }
-
-    fn complete() -> Self {
-        Self {
-            fraction: Some(1.0),
-        }
-    }
-
-    pub(crate) fn fraction(self) -> Option<f32> {
-        self.fraction
-    }
-
-    pub(crate) fn display_fraction(self) -> f32 {
-        self.fraction.unwrap_or(0.0).clamp(0.0, 1.0)
-    }
-
-    fn to_stored(self) -> StoredProgress {
-        match self.fraction {
-            Some(fraction) => StoredProgress::with_fraction(fraction as f64),
-            None => StoredProgress::pending(),
-        }
-    }
-
-    fn update(&mut self, update: FileOperationProgressUpdate) {
-        let next_fraction = match update {
-            FileOperationProgressUpdate::Bytes {
-                bytes_done,
-                bytes_total,
-                completed_transfers,
-                total_transfers,
-            } if bytes_total > 0 && total_transfers > 0 => {
-                let transfer_fraction = (bytes_done as f32 / bytes_total as f32)
-                    .clamp(0.0, ACTIVE_TRANSFER_PROGRESS_LIMIT);
-                Some((completed_transfers as f32 + transfer_fraction) / total_transfers as f32)
-            }
-            FileOperationProgressUpdate::Items { completed, total } if total > 0 => {
-                Some(completed as f32 / total as f32)
-            }
-            FileOperationProgressUpdate::Indeterminate => None,
-            _ => None,
-        };
-        self.fraction = match (self.fraction, next_fraction) {
-            (Some(current), Some(next)) => Some(current.max(next)),
-            (None, Some(next)) => Some(next),
-            (current, None) => current,
-        }
-        .map(|fraction| fraction.clamp(0.0, 1.0));
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum FileOperationProgressUpdate {
-    Bytes {
-        bytes_done: u64,
-        bytes_total: u64,
-        completed_transfers: usize,
-        total_transfers: usize,
-    },
-    Items {
-        completed: usize,
-        total: usize,
-    },
-    Indeterminate,
 }
 
 pub(crate) enum FileOperationFinish {
@@ -492,6 +418,12 @@ impl FileOperationQueue {
         update: FileOperationProgressUpdate,
     ) -> Option<String> {
         let position = self.tasks.iter().position(|task| task.id == id)?;
+        if !matches!(
+            self.tasks[position].status,
+            FileOperationStatus::Running | FileOperationStatus::Canceling
+        ) {
+            return None;
+        }
         self.tasks[position].progress.update(update);
         None
     }
@@ -518,7 +450,7 @@ impl FileOperationQueue {
             FileOperationFinish::Succeeded => {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Completed;
-                task.progress = FileOperationProgress::complete();
+                task.progress.mark_complete();
                 task.error = None;
                 task.is_read = self.is_panel_open;
                 self.persist_task_state(position)
@@ -700,6 +632,15 @@ impl FileOperationQueue {
         })
     }
 
+    pub(crate) fn has_active_indeterminate_progress(&self) -> bool {
+        self.tasks.iter().any(|task| {
+            matches!(
+                task.status,
+                FileOperationStatus::Running | FileOperationStatus::Canceling
+            ) && task.progress.fraction().is_none()
+        })
+    }
+
     pub(crate) fn indicator_progress(&self) -> Option<f32> {
         self.tasks
             .iter()
@@ -736,5 +677,7 @@ fn stored_status_is_terminal(status: StoredTaskStatus) -> bool {
     )
 }
 
+#[cfg(test)]
+mod progress_tests;
 #[cfg(test)]
 mod tests;

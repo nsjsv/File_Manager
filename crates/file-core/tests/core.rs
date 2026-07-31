@@ -6,8 +6,9 @@ use std::{fs, io};
 
 use file_core::{
     available_transfer_target_path, batch_rename_paths, check_transfer_conflicts, copy_path,
-    copy_path_with_options, create_archive_with_progress, create_directory, create_empty_file,
-    create_file_with_contents, delete_path_permanently, extract_archive, filter_hidden,
+    copy_path_with_options, create_archive_with_controls_and_progress,
+    create_archive_with_progress, create_directory, create_empty_file, create_file_with_contents,
+    delete_path_permanently, extract_archive, extract_archive_with_progress, filter_hidden,
     is_transfer_target_available, move_path, move_path_with_options, rename_path, scan_directory,
     scan_directory_with_progress, sort_entries, watch_directory, ArchiveCompressionLevel,
     ArchiveCreationRequest, ArchiveExtractionRequest, ArchiveFormat, BatchRenameItem,

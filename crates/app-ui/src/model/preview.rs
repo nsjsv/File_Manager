@@ -6,6 +6,7 @@ use iced::widget::image;
 
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::audio_preview::AudioPreviewRuntime;
+use crate::operation_progress::active_byte_fraction;
 use crate::text_preview::{TextPreviewFormat, TextPreviewLineLimitNotice};
 
 #[derive(Debug, Clone)]
@@ -35,16 +36,20 @@ impl RemotePreviewDownload {
     }
 
     pub(crate) fn accept_progress(&mut self, progress: &RemotePreviewCacheProgress) {
-        self.bytes_done = progress.bytes_done;
-        self.bytes_total = Some(progress.bytes_total);
+        match self.bytes_total {
+            Some(bytes_total) if bytes_total == progress.bytes_total => {
+                self.bytes_done = self.bytes_done.max(progress.bytes_done.min(bytes_total));
+            }
+            Some(_) => {}
+            None => {
+                self.bytes_done = progress.bytes_done.min(progress.bytes_total);
+                self.bytes_total = Some(progress.bytes_total);
+            }
+        }
     }
 
     pub(crate) fn fraction(&self) -> Option<f32> {
-        let bytes_total = self.bytes_total?;
-        if bytes_total == 0 {
-            return Some(1.0);
-        }
-        Some((self.bytes_done as f32 / bytes_total as f32).clamp(0.0, 1.0))
+        active_byte_fraction(self.bytes_done, self.bytes_total?)
     }
 }
 
@@ -265,4 +270,45 @@ pub(crate) enum PreviewTreeDirectoryChildren {
 
 fn preview_tree_directory_children(kind: FileKind) -> Option<PreviewTreeDirectoryChildren> {
     (kind == FileKind::Directory).then_some(PreviewTreeDirectoryChildren::Pending)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress(bytes_done: u64, bytes_total: u64) -> RemotePreviewCacheProgress {
+        RemotePreviewCacheProgress {
+            source_path: PathBuf::from("/remote/file.bin"),
+            generation: 1,
+            bytes_done,
+            bytes_total,
+        }
+    }
+
+    #[test]
+    fn remote_preview_progress_is_unknown_until_total_arrives() {
+        let download = RemotePreviewDownload::new(PathBuf::from("/remote/file.bin"), 1);
+
+        assert_eq!(download.fraction(), None);
+    }
+
+    #[test]
+    fn remote_preview_progress_keeps_a_stable_total_and_never_regresses() {
+        let mut download = RemotePreviewDownload::new(PathBuf::from("/remote/file.bin"), 1);
+        download.accept_progress(&progress(500, 1_000));
+        download.accept_progress(&progress(250, 1_000));
+        download.accept_progress(&progress(900, 2_000));
+
+        assert_eq!(download.bytes_done, 500);
+        assert_eq!(download.bytes_total, Some(1_000));
+        assert_eq!(download.fraction(), Some(0.5));
+    }
+
+    #[test]
+    fn active_empty_remote_preview_does_not_report_terminal_completion() {
+        let mut download = RemotePreviewDownload::new(PathBuf::from("/remote/empty.bin"), 1);
+        download.accept_progress(&progress(0, 0));
+
+        assert_eq!(download.fraction(), None);
+    }
 }

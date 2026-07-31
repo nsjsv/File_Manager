@@ -7,8 +7,11 @@ use crate::appearance::{
     context_menu_style, error_notification_style, operation_queue_indicator_button_style,
     path_suggestion_item_style,
 };
-use crate::formatting::format_middle_ellipsized_text;
+use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
+use crate::operation_progress::{
+    active_indeterminate_track_handle, static_indeterminate_track_handle,
+};
 use crate::operation_queue::{FileOperationQueue, FileOperationStatus, FileOperationTask};
 use crate::operation_queue_display::FileOperationPathLines;
 use crate::typography::readable_text;
@@ -26,14 +29,12 @@ const TASK_LIST_MAX_HEIGHT: f32 = 320.0;
 
 pub(crate) fn operation_queue_indicator(
     queue: &FileOperationQueue,
+    animation_frame: u8,
 ) -> Option<Element<'_, Message>> {
     let svg = Svg::new(svg::Handle::from_memory(
         indicator_svg(
-            queue.indicator_progress(),
-            queue.unread_count(),
-            queue.has_active_task(),
-            queue.has_unread_failed_task(),
-            queue.is_active_paused(),
+            queue_indicator_ring(queue, animation_frame),
+            queue_indicator_badge(queue),
         )
         .into_bytes(),
     ))
@@ -52,6 +53,7 @@ pub(crate) fn operation_queue_indicator(
 pub(crate) fn operation_queue_panel(
     queue: &FileOperationQueue,
     scrollbar_visibility: ScrollbarVisibility,
+    animation_frame: u8,
 ) -> Element<'_, Message> {
     let header = row![
         readable_text("Tasks").size(16).width(Length::Fill),
@@ -70,7 +72,7 @@ pub(crate) fn operation_queue_panel(
         tasks = tasks.push(empty_queue_row());
     } else {
         for task in queue.tasks() {
-            tasks = tasks.push(operation_task_row(task));
+            tasks = tasks.push(operation_task_row(task, animation_frame));
         }
     }
 
@@ -96,7 +98,7 @@ pub(crate) fn operation_queue_panel(
         .into()
 }
 
-fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
+fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<'_, Message> {
     let path_lines = task.operation.path_lines();
     let title = row![
         readable_text(operation_title_text(task.operation.title(), &path_lines))
@@ -114,12 +116,33 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
     .spacing(2)
     .width(Length::Fill);
 
-    let progress =
-        progress_bar(0.0..=1.0, task.progress.display_fraction()).girth(Length::Fixed(3.0));
+    let progress: Element<'static, Message> = match task.progress.fraction() {
+        Some(fraction) => progress_bar(0.0..=1.0, fraction)
+            .girth(Length::Fixed(3.0))
+            .into(),
+        None if matches!(
+            task.status,
+            FileOperationStatus::Running | FileOperationStatus::Canceling
+        ) =>
+        {
+            Svg::new(active_indeterminate_track_handle(animation_frame))
+                .width(Length::Fill)
+                .height(Length::Fixed(4.0))
+                .into()
+        }
+        None => Svg::new(static_indeterminate_track_handle())
+            .width(Length::Fill)
+            .height(Length::Fixed(4.0))
+            .into(),
+    };
 
     let mut body = column![title, paths, progress]
         .spacing(4)
         .width(Length::Fill);
+
+    if let Some(detail) = operation_progress_detail(task) {
+        body = body.push(readable_text(detail).size(11).width(Length::Fill));
+    }
 
     if let Some(error) = task.error.as_deref() {
         let error = crate::localization::translate_current(error);
@@ -142,6 +165,42 @@ fn operation_task_row(task: &FileOperationTask) -> Element<'_, Message> {
     };
 
     item.into()
+}
+
+fn operation_progress_detail(task: &FileOperationTask) -> Option<String> {
+    let byte_detail = task.progress.bytes().map(|(completed_bytes, total_bytes)| {
+        format!(
+            "{} / {}",
+            format_file_size(completed_bytes),
+            format_file_size(total_bytes)
+        )
+    });
+    let item_detail = task.progress.items().map(|(completed_items, total_items)| {
+        if crate::localization::current_language_is_chinese() {
+            format!("{completed_items} / {total_items} 项")
+        } else {
+            format!("{completed_items} / {total_items} items")
+        }
+    });
+
+    match (byte_detail, item_detail) {
+        (Some(bytes), Some(items)) => Some(format!("{bytes} | {items}")),
+        (Some(bytes), None) => Some(bytes),
+        (None, Some(items)) => Some(items),
+        (None, None)
+            if matches!(
+                task.status,
+                FileOperationStatus::Running | FileOperationStatus::Canceling
+            ) =>
+        {
+            Some(if crate::localization::current_language_is_chinese() {
+                "处理中...".to_owned()
+            } else {
+                "Processing...".to_owned()
+            })
+        }
+        (None, None) => None,
+    }
 }
 
 fn operation_title_text(title: &str, path_lines: &FileOperationPathLines) -> String {
@@ -211,58 +270,102 @@ fn task_control_button(label: &'static str, message: Message) -> Element<'static
         .into()
 }
 
-fn indicator_svg(
-    progress: Option<f32>,
-    unread_count: usize,
-    has_active_task: bool,
-    has_unread_error: bool,
-    is_paused: bool,
-) -> String {
-    let has_visible_progress =
-        has_active_task || has_unread_error || is_paused || progress.is_some();
-    let progress = progress
-        .unwrap_or(if has_visible_progress { 0.35 } else { 0.0 })
-        .clamp(0.0, 1.0);
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum QueueIndicatorRing {
+    Hidden,
+    Determinate {
+        fraction: f32,
+        tone: QueueIndicatorTone,
+    },
+    ActiveIndeterminate {
+        animation_frame: u8,
+    },
+    PausedIndeterminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueIndicatorTone {
+    Active,
+    Paused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueIndicatorBadge {
+    Hidden,
+    Count(usize),
+    Error,
+    Paused,
+}
+
+fn queue_indicator_ring(queue: &FileOperationQueue, animation_frame: u8) -> QueueIndicatorRing {
+    if let Some(fraction) = queue.indicator_progress() {
+        return QueueIndicatorRing::Determinate {
+            fraction,
+            tone: if queue.is_active_paused() {
+                QueueIndicatorTone::Paused
+            } else {
+                QueueIndicatorTone::Active
+            },
+        };
+    }
+    if queue.is_active_paused() {
+        QueueIndicatorRing::PausedIndeterminate
+    } else if queue.has_active_task() {
+        QueueIndicatorRing::ActiveIndeterminate { animation_frame }
+    } else {
+        QueueIndicatorRing::Hidden
+    }
+}
+
+fn queue_indicator_badge(queue: &FileOperationQueue) -> QueueIndicatorBadge {
+    if queue.unread_count() > 1 {
+        QueueIndicatorBadge::Count(queue.unread_count().min(99))
+    } else if queue.has_unread_failed_task() {
+        QueueIndicatorBadge::Error
+    } else if queue.is_active_paused() {
+        QueueIndicatorBadge::Paused
+    } else {
+        QueueIndicatorBadge::Hidden
+    }
+}
+
+fn indicator_svg(ring: QueueIndicatorRing, badge: QueueIndicatorBadge) -> String {
     let circumference = 2.0 * std::f32::consts::PI * 12.0;
-    let offset = circumference * (1.0 - progress);
-    let stroke = if has_unread_error {
-        "#ef4444"
-    } else if is_paused {
-        "#f59e0b"
-    } else {
-        "#3b82f6"
+    let progress_svg = match ring {
+        QueueIndicatorRing::Hidden => String::new(),
+        QueueIndicatorRing::Determinate { fraction, tone } => {
+            let offset = circumference * (1.0 - fraction.clamp(0.0, 1.0));
+            let stroke = match tone {
+                QueueIndicatorTone::Active => "#3b82f6",
+                QueueIndicatorTone::Paused => "#f59e0b",
+            };
+            format!(
+                r#"<circle data-progress-kind="determinate" cx="15" cy="15" r="12" fill="none" stroke="{stroke}" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="{circumference:.2}" stroke-dashoffset="{offset:.2}" transform="rotate(-90 15 15)"/>"#
+            )
+        }
+        QueueIndicatorRing::ActiveIndeterminate { animation_frame } => {
+            let dash_offset = animation_frame % 12;
+            format!(
+                r##"<circle data-progress-kind="indeterminate" cx="15" cy="15" r="12" fill="none" stroke="#3b82f6" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 5" stroke-dashoffset="-{dash_offset}" transform="rotate(-90 15 15)"/>"##
+            )
+        }
+        QueueIndicatorRing::PausedIndeterminate => r##"<circle data-progress-kind="indeterminate" cx="15" cy="15" r="12" fill="none" stroke="#f59e0b" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 5" transform="rotate(-90 15 15)"/>"##.to_owned(),
     };
-    let badge = if unread_count > 1 {
-        Some(unread_count.min(99).to_string())
-    } else if has_unread_error {
-        Some("!".to_owned())
-    } else if is_paused {
-        Some("||".to_owned())
-    } else {
-        None
+
+    let (badge_label, badge_fill) = match badge {
+        QueueIndicatorBadge::Hidden => (None, "#2563eb"),
+        QueueIndicatorBadge::Count(count) => (Some(count.to_string()), "#2563eb"),
+        QueueIndicatorBadge::Error => (Some("!".to_owned()), "#ef4444"),
+        QueueIndicatorBadge::Paused => (Some("||".to_owned()), "#f59e0b"),
     };
-    let badge_fill = if has_unread_error {
-        "#ef4444"
-    } else if is_paused {
-        "#f59e0b"
-    } else {
-        "#2563eb"
-    };
-    let badge_svg = if let Some(label) = badge {
-        format!(
-            r##"<circle cx="23" cy="7" r="5.2" fill="{badge_fill}"/>
+    let badge_svg = badge_label
+        .map(|label| {
+            format!(
+                r##"<circle cx="23" cy="7" r="5.2" fill="{badge_fill}"/>
 <text x="23" y="9.8" text-anchor="middle" font-family="sans-serif" font-size="7.4" font-weight="700" fill="#ffffff">{label}</text>"##
-        )
-    } else {
-        String::new()
-    };
-    let progress_svg = if has_visible_progress {
-        format!(
-            r#"<circle cx="15" cy="15" r="12" fill="none" stroke="{stroke}" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="{circumference:.2}" stroke-dashoffset="{offset:.2}" transform="rotate(-90 15 15)"/>"#
-        )
-    } else {
-        String::new()
-    };
+            )
+        })
+        .unwrap_or_default();
 
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">
@@ -287,22 +390,43 @@ mod tests {
 
     #[test]
     fn indicator_hides_progress_ring_for_completed_only_tasks() {
-        let svg = indicator_svg(None, 1, false, false, false);
+        let svg = indicator_svg(QueueIndicatorRing::Hidden, QueueIndicatorBadge::Count(1));
 
-        assert!(!svg.contains("stroke-dasharray"));
+        assert!(!svg.contains("data-progress-kind"));
     }
 
     #[test]
     fn indicator_hides_badge_after_tasks_are_read() {
-        let svg = indicator_svg(None, 0, false, false, false);
+        let svg = indicator_svg(QueueIndicatorRing::Hidden, QueueIndicatorBadge::Hidden);
 
         assert!(!svg.contains("<text"));
     }
 
     #[test]
-    fn indicator_keeps_progress_ring_for_active_indeterminate_task() {
-        let svg = indicator_svg(None, 1, true, false, false);
+    fn active_indeterminate_indicator_has_no_completion_fraction() {
+        let svg = indicator_svg(
+            QueueIndicatorRing::ActiveIndeterminate { animation_frame: 0 },
+            QueueIndicatorBadge::Hidden,
+        );
 
-        assert!(svg.contains("stroke-dasharray"));
+        assert!(svg.contains(r#"data-progress-kind="indeterminate""#));
+        assert!(svg.contains(r#"stroke-dasharray="7 5""#));
+        assert!(!svg.contains("0.35"));
+    }
+
+    #[test]
+    fn indeterminate_indicator_animation_changes_only_dash_phase() {
+        let first = indicator_svg(
+            QueueIndicatorRing::ActiveIndeterminate { animation_frame: 0 },
+            QueueIndicatorBadge::Hidden,
+        );
+        let second = indicator_svg(
+            QueueIndicatorRing::ActiveIndeterminate { animation_frame: 1 },
+            QueueIndicatorBadge::Hidden,
+        );
+
+        assert!(first.contains(r#"stroke-dasharray="7 5""#));
+        assert!(second.contains(r#"stroke-dasharray="7 5""#));
+        assert_ne!(first, second);
     }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use file_core::TransferCheckpoint;
+use file_operation_store::StoredProgress;
 
 fn sample_operation() -> QueuedFileOperation {
     QueuedFileOperation::CreateDirectory {
@@ -600,56 +601,6 @@ fn local_and_persisted_task_ids_do_not_collide() {
     assert!(persisted_id <= i64::MAX as u64);
     assert_ne!(local_id, persisted_id);
     let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn transfer_byte_progress_is_aggregated_by_transfer() {
-    let mut progress = FileOperationProgress::pending();
-
-    progress.update(FileOperationProgressUpdate::Bytes {
-        bytes_done: 100,
-        bytes_total: 100,
-        completed_transfers: 0,
-        total_transfers: 2,
-    });
-    assert!(progress.fraction().unwrap() < 0.5);
-
-    progress.update(FileOperationProgressUpdate::Items {
-        completed: 1,
-        total: 2,
-    });
-    assert_eq!(progress.fraction(), Some(0.5));
-
-    progress.update(FileOperationProgressUpdate::Bytes {
-        bytes_done: 50,
-        bytes_total: 100,
-        completed_transfers: 1,
-        total_transfers: 2,
-    });
-    let second_transfer_progress = progress.fraction().unwrap();
-    assert!(second_transfer_progress > 0.5);
-    assert!(second_transfer_progress < 1.0);
-
-    progress.update(FileOperationProgressUpdate::Bytes {
-        bytes_done: 100,
-        bytes_total: 100,
-        completed_transfers: 1,
-        total_transfers: 2,
-    });
-    assert!(progress.fraction().unwrap() < 1.0);
-
-    progress.update(FileOperationProgressUpdate::Items {
-        completed: 2,
-        total: 2,
-    });
-    assert_eq!(progress.fraction(), Some(1.0));
-}
-
-#[test]
-fn indeterminate_failed_task_does_not_display_as_complete() {
-    let progress = FileOperationProgress::pending();
-
-    assert_eq!(progress.display_fraction(), 0.0);
 }
 
 #[test]
