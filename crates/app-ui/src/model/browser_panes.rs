@@ -21,6 +21,15 @@ impl BrowserPaneId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct IconGridExpansionSessionId(u64);
+
+impl IconGridExpansionSessionId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DirectoryLoadRequest {
     pub(crate) pane_id: BrowserPaneId,
@@ -29,8 +38,20 @@ pub(crate) struct DirectoryLoadRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirectoryExpansionLoadContext {
+    BrowserTree {
+        pane_id: BrowserPaneId,
+    },
+    IconGrid {
+        pane_id: BrowserPaneId,
+        current_dir: PathBuf,
+        session_id: IconGridExpansionSessionId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExpandedDirectoryLoadRequest {
-    pub(crate) pane_id: BrowserPaneId,
+    pub(crate) context: DirectoryExpansionLoadContext,
     pub(crate) path: PathBuf,
     pub(crate) generation: u64,
 }
@@ -456,7 +477,7 @@ pub(crate) fn retain_direct_entry_selection(
     }
 }
 
-fn migrate_directory_entries(
+pub(super) fn migrate_directory_entries(
     entries: &mut [DirectoryEntry],
     migrations: &[CompletedPathMigration],
 ) {

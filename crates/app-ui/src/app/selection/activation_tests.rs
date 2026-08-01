@@ -8,9 +8,9 @@ use iced::{keyboard, window, Point};
 use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
-    trash_location_path, BrowserPaneId, BrowserViewMode, ExpandedDirectory,
-    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, FileDragHitTestBounds,
-    FileDragNativeDndState, FileDragPhase, Message,
+    trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext,
+    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
+    FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase, Message,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -467,7 +467,9 @@ fn right_arrow_focuses_first_child_after_directory_loads() {
 
     drop(browser.accept_expanded_directory(
         ExpandedDirectoryLoadRequest {
-            pane_id: BrowserPaneId::PRIMARY,
+            context: DirectoryExpansionLoadContext::BrowserTree {
+                pane_id: BrowserPaneId::PRIMARY,
+            },
             path: parent.clone(),
             generation: load_generation,
         },

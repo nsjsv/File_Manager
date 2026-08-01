@@ -274,6 +274,7 @@ impl FileBrowser {
             return;
         }
 
+        self.clear_icon_grid_expansion_for_context_change();
         self.sync_active_tab_state();
         let Some(next_pane) = self.pane_by_id(pane_id).cloned() else {
             return;
@@ -386,6 +387,7 @@ impl FileBrowser {
     }
 
     pub(super) fn restore_pane_snapshot(&mut self, pane: BrowserPane) {
+        self.clear_icon_grid_expansion();
         self.search.abandon_and_clear_input();
         self.apply_pane_browsing_snapshot(pane);
         self.tab_animations.clear();

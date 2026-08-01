@@ -9,9 +9,9 @@ use crate::commands::{
     load_trash_command,
 };
 use crate::model::{
-    trash_location_path, BrowserPaneId, DirectoryLoadFailure, DirectoryLoadRequest,
-    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, ExpandedDirectoryLoadRequest,
-    ExpandedDirectoryStatus, Message, NavigationMode,
+    trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext,
+    DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, Message, NavigationMode,
 };
 use crate::startup_trace;
 impl FileBrowser {
@@ -78,7 +78,7 @@ impl FileBrowser {
     }
 
     pub(super) fn next_expanded_directory_load_request(
-        pane_id: BrowserPaneId,
+        context: DirectoryExpansionLoadContext,
         path: PathBuf,
         expanded: &mut ExpandedDirectory,
     ) -> (ExpandedDirectoryLoadRequest, CancellationToken) {
@@ -90,7 +90,7 @@ impl FileBrowser {
         expanded.load_cancel = Some(cancellation.clone());
         (
             ExpandedDirectoryLoadRequest {
-                pane_id,
+                context,
                 path,
                 generation: expanded.load_generation,
             },
@@ -195,10 +195,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        self.reconcile_icon_grid_root_after_scan(&scan.entries);
         self.current_dir = scan.path;
         self.entries = scan.entries;
         if self.view_mode == crate::model::BrowserViewMode::Icons {
-            self.retain_direct_entry_selection();
+            self.retain_icon_grid_visible_selection();
         }
         self.directory_loading_placeholder_entries.clear();
         self.is_loading = false;
@@ -291,6 +292,7 @@ impl FileBrowser {
             self.back_stack.push(self.current_dir.clone());
             self.forward_stack.clear();
         }
+        self.clear_icon_grid_expansion();
         self.current_dir = path.clone();
         self.is_trash_view = false;
         self.entries.clear();
@@ -324,6 +326,7 @@ impl FileBrowser {
             self.back_stack.push(self.current_dir.clone());
             self.forward_stack.clear();
         }
+        self.clear_icon_grid_expansion();
         self.current_dir = trash_location_path();
         self.is_trash_view = true;
         self.entries.clear();
@@ -361,6 +364,7 @@ impl FileBrowser {
         &mut self,
     ) -> Task<Message> {
         if self.is_trash_view {
+            self.clear_icon_grid_expansion();
             self.directory_loading_placeholder_entries.clear();
             self.is_loading = true;
             self.clear_global_error();
@@ -376,6 +380,7 @@ impl FileBrowser {
         self.clear_global_error();
 
         let mut commands = self.refresh_expanded_directory_commands();
+        commands.extend(self.refresh_icon_grid_expansion_commands());
         let request = self.next_directory_load_request(self.current_dir.clone());
         let cancellation = self.directory_load_cancellation(&request);
         commands.push(load_directory_command(
@@ -474,8 +479,11 @@ impl FileBrowser {
             let Some(expanded) = pane.expanded_directories.get_mut(&path) else {
                 continue;
             };
-            let (request, cancellation) =
-                Self::next_expanded_directory_load_request(pane_id, path, expanded);
+            let (request, cancellation) = Self::next_expanded_directory_load_request(
+                DirectoryExpansionLoadContext::BrowserTree { pane_id },
+                path,
+                expanded,
+            );
             commands.push(load_expanded_directory_command(
                 request,
                 options.clone(),
@@ -497,20 +505,31 @@ impl FileBrowser {
             return self.reload_current_preserving_list_directory_summaries();
         }
 
+        let mut commands = Vec::with_capacity(2);
+        if let Some(command) = self.reload_observed_icon_grid_directory(&path) {
+            commands.push(command);
+        }
+
         self.invalidate_list_directory_summary_subtree_and_ancestor_chain(&path);
 
         let pane_id = self.active_pane_id();
-        let Some(expanded) = self.expanded_directories.get_mut(&path) else {
-            return Task::none();
-        };
-
-        expanded.status = ExpandedDirectoryStatus::Loading;
-        expanded.is_expanded = true;
-        expanded.is_collapsing = false;
-        expanded.animation_progress = 1.0;
-        let (request, cancellation) =
-            Self::next_expanded_directory_load_request(pane_id, path, expanded);
-        load_expanded_directory_command(request, self.options.clone(), cancellation)
+        if let Some(expanded) = self.expanded_directories.get_mut(&path) {
+            expanded.status = ExpandedDirectoryStatus::Loading;
+            expanded.is_expanded = true;
+            expanded.is_collapsing = false;
+            expanded.animation_progress = 1.0;
+            let (request, cancellation) = Self::next_expanded_directory_load_request(
+                DirectoryExpansionLoadContext::BrowserTree { pane_id },
+                path,
+                expanded,
+            );
+            commands.push(load_expanded_directory_command(
+                request,
+                self.options.clone(),
+                cancellation,
+            ));
+        }
+        Task::batch(commands)
     }
 
     pub(super) fn navigate_up(&mut self) -> Task<Message> {
@@ -550,144 +569,21 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn accept_expanded_directory_batch(
-        &mut self,
-        request: ExpandedDirectoryLoadRequest,
-        batch: file_core::DirectoryScanBatch,
-    ) -> Task<Message> {
-        if request.pane_id != self.active_pane_id() {
-            let options = self.options.clone();
-            {
-                let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
-                    return Task::none();
-                };
-                let Some(expanded) = pane.expanded_directories.get_mut(&request.path) else {
-                    return Task::none();
-                };
-                if !expanded_load_request_matches_directory(&request, expanded) {
-                    return Task::none();
-                }
-                merge_directory_scan_batch(&mut expanded.entries, batch, &options);
-                pane.sync_active_tab_state();
-            }
-            self.resort_size_sorted_list_panes();
-            return Task::none();
-        }
-
-        let Some(expanded) = self.expanded_directories.get_mut(&request.path) else {
-            return Task::none();
-        };
-        if !expanded_load_request_matches_directory(&request, expanded) {
-            return Task::none();
-        }
-        merge_directory_scan_batch(&mut expanded.entries, batch, &self.options);
-        self.sync_active_tab_state();
-        self.resort_size_sorted_list_panes();
-        self.schedule_thumbnail_refresh()
-    }
-
-    pub(super) fn accept_expanded_directory(
-        &mut self,
-        request: ExpandedDirectoryLoadRequest,
-        scan: Result<DirectoryScan, DirectoryLoadFailure>,
-    ) -> Task<Message> {
-        if request.pane_id != self.active_pane_id() {
-            let (pending_failure, loaded_child_count) = {
-                let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
-                    return Task::none();
-                };
-                let Some(expanded) = pane.expanded_directories.get_mut(&request.path) else {
-                    return Task::none();
-                };
-                if !expanded_load_request_matches_directory(&request, expanded) {
-                    return Task::none();
-                }
-
-                expanded.load_cancel = None;
-                let mut pending_failure = None;
-                let mut loaded_child_count = None;
-                match scan {
-                    Ok(scan) => {
-                        expanded.entries = scan.entries;
-                        expanded.status = ExpandedDirectoryStatus::Loaded;
-                        loaded_child_count = Some(expanded.entries.len());
-                    }
-                    Err(failure) => {
-                        expanded.entries.clear();
-                        expanded.status = ExpandedDirectoryStatus::Error;
-                        pending_failure = Some(failure);
-                    }
-                }
-                pane.sync_active_tab_state();
-                (pending_failure, loaded_child_count)
-            };
-            self.resort_size_sorted_list_panes();
-            if let Some(loaded_child_count) = loaded_child_count {
-                self.remember_loaded_list_directory_children(&request.path, loaded_child_count);
-            }
-            if let Some(failure) = pending_failure {
-                self.accept_expanded_directory_load_failure(
-                    request.pane_id,
-                    &request.path,
-                    failure,
-                );
-            }
-            return self.schedule_visible_list_directory_summaries_for_pane(request.pane_id);
-        }
-
-        let loaded_path = request.path.clone();
-        let mut loaded_child_count = None;
-        let pending_failure = {
-            let Some(expanded) = self.expanded_directories.get_mut(&request.path) else {
-                return Task::none();
-            };
-            if !expanded_load_request_matches_directory(&request, expanded) {
-                return Task::none();
-            }
-            expanded.load_cancel = None;
-
-            match scan {
-                Ok(scan) => {
-                    expanded.entries = scan.entries;
-                    expanded.status = ExpandedDirectoryStatus::Loaded;
-                    loaded_child_count = Some(expanded.entries.len());
-                    None
-                }
-                Err(failure) => {
-                    expanded.entries.clear();
-                    expanded.status = ExpandedDirectoryStatus::Error;
-                    Some(failure)
-                }
-            }
-        };
-
-        if let Some(loaded_child_count) = loaded_child_count {
-            self.remember_loaded_list_directory_children(&request.path, loaded_child_count);
-        }
-        if let Some(failure) = pending_failure {
-            self.accept_expanded_directory_load_failure(request.pane_id, &request.path, failure);
-        }
-        let pending_keyboard_focus = self.complete_pending_keyboard_column_focus(&loaded_path);
-        let command = self.focus_created_entry_for_rename();
-        self.sync_active_tab_state();
-        self.resort_size_sorted_list_panes();
-        Task::batch([
-            pending_keyboard_focus,
-            command,
-            self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
-            self.schedule_thumbnail_refresh(),
-        ])
-    }
-
     pub(crate) fn entry_for_path(&self, path: &Path) -> Option<&DirectoryEntry> {
         self.entries
             .iter()
-            .chain(
-                self.expanded_directories
-                    .values()
-                    .flat_map(|expanded| expanded.entries.iter()),
-            )
             .find(|entry| entry.path == path)
+            .or_else(|| match self.view_mode {
+                BrowserViewMode::Icons => self
+                    .icon_grid_expansion
+                    .as_ref()
+                    .and_then(|state| state.entry(path)),
+                BrowserViewMode::List | BrowserViewMode::Columns => self
+                    .expanded_directories
+                    .values()
+                    .flat_map(|expanded| expanded.entries.iter())
+                    .find(|entry| entry.path == path),
+            })
     }
 
     pub(super) fn entry_kind_recursive(&self, path: &Path) -> Option<FileKind> {
@@ -697,6 +593,9 @@ impl FileBrowser {
     fn capture_directory_loading_placeholder_entries(
         &self,
     ) -> Vec<DirectoryLoadingPlaceholderEntry> {
+        if self.view_mode != BrowserViewMode::List {
+            return Vec::new();
+        }
         crate::visible_entries::visible_entries(&self.entries, &self.expanded_directories)
             .into_iter()
             .map(|visible_entry| DirectoryLoadingPlaceholderEntry {
@@ -765,8 +664,11 @@ impl FileBrowser {
             .into_iter()
             .filter_map(|path| {
                 let expanded = self.expanded_directories.get_mut(&path)?;
-                let (request, cancellation) =
-                    Self::next_expanded_directory_load_request(pane_id, path, expanded);
+                let (request, cancellation) = Self::next_expanded_directory_load_request(
+                    DirectoryExpansionLoadContext::BrowserTree { pane_id },
+                    path,
+                    expanded,
+                );
                 Some(load_expanded_directory_command(
                     request,
                     self.options.clone(),
@@ -785,14 +687,7 @@ fn directory_load_request_matches_pane(
     request.generation == generation && request.path.as_path() == current_dir
 }
 
-fn expanded_load_request_matches_directory(
-    request: &ExpandedDirectoryLoadRequest,
-    expanded: &ExpandedDirectory,
-) -> bool {
-    request.generation == expanded.load_generation
-}
-
-fn merge_directory_scan_batch(
+pub(super) fn merge_directory_scan_batch(
     entries: &mut Vec<DirectoryEntry>,
     batch: file_core::DirectoryScanBatch,
     options: &file_core::ScanOptions,

@@ -26,6 +26,15 @@ pub(crate) struct CompletedPathMigration {
     destination: PathBuf,
 }
 
+impl CompletedPathMigration {
+    pub(crate) fn new(source: PathBuf, destination: PathBuf) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FileOperationOutcome {
     NoHistory,
@@ -109,9 +118,8 @@ impl FileOperationCompletion {
                 ..
             } => completed_move_transfers
                 .iter()
-                .map(|transfer| CompletedPathMigration {
-                    source: transfer.source.clone(),
-                    destination: transfer.target.clone(),
+                .map(|transfer| {
+                    CompletedPathMigration::new(transfer.source.clone(), transfer.target.clone())
                 })
                 .collect(),
         }
@@ -121,22 +129,17 @@ impl FileOperationCompletion {
 impl FileOperationOutcome {
     pub(crate) fn completed_path_migrations(&self) -> Vec<CompletedPathMigration> {
         match self {
-            Self::Rename { from, to } => vec![CompletedPathMigration {
-                source: from.clone(),
-                destination: to.clone(),
-            }],
+            Self::Rename { from, to } => {
+                vec![CompletedPathMigration::new(from.clone(), to.clone())]
+            }
             Self::BatchRename { renames } => renames
                 .iter()
-                .map(|rename| CompletedPathMigration {
-                    source: rename.from.clone(),
-                    destination: rename.to.clone(),
-                })
+                .map(|rename| CompletedPathMigration::new(rename.from.clone(), rename.to.clone()))
                 .collect(),
             Self::Move { transfers, .. } => transfers
                 .iter()
-                .map(|transfer| CompletedPathMigration {
-                    source: transfer.source.clone(),
-                    destination: transfer.target.clone(),
+                .map(|transfer| {
+                    CompletedPathMigration::new(transfer.source.clone(), transfer.target.clone())
                 })
                 .collect(),
             Self::NoHistory

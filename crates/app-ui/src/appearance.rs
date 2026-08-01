@@ -6,9 +6,11 @@ mod container {
     pub use iced::widget::container::*;
     pub type Appearance = Style;
 }
+mod icon_grid;
 mod list_header;
 mod window_chrome;
 
+pub(crate) use icon_grid::icon_grid_expansion_panel_style;
 pub(crate) use navigation_input::{address_bar_style, navigation_text_input_style};
 pub(crate) use window_chrome::{
     window_close_button_style, window_control_button_style, window_title_bar_style,

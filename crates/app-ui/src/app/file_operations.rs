@@ -2,7 +2,7 @@ use iced::Task;
 use std::path::PathBuf;
 
 use super::FileBrowser;
-use crate::model::Message;
+use crate::model::{IconGridExpansionMigration, Message};
 use crate::operation_history::{
     path_after_completed_migrations, FileOperationCompletion, PendingHistoryOperation,
 };
@@ -102,6 +102,21 @@ impl FileBrowser {
             None => Task::none(),
         };
         let search_refresh_task = self.migrate_paths_after_file_operation(&completion);
+        if completed_successfully {
+            if let Some(removed_paths) =
+                completed_operation
+                    .as_ref()
+                    .and_then(|operation| match operation {
+                        QueuedFileOperation::Trash { paths }
+                        | QueuedFileOperation::DeletePermanently { paths } => {
+                            Some(paths.as_slice())
+                        }
+                        _ => None,
+                    })
+            {
+                self.reconcile_icon_grid_removed_paths(removed_paths);
+            }
+        }
         match &completion {
             FileOperationCompletion::Succeeded(outcome) => {
                 self.operation_history.accept_completed(task_id, outcome);
@@ -140,6 +155,15 @@ impl FileBrowser {
         let migrations = completion.completed_path_migrations();
         if migrations.is_empty() {
             return Task::none();
+        }
+
+        let invalidate_icon_grid_expansion =
+            self.icon_grid_expansion.as_mut().is_some_and(|state| {
+                state.migrate_completed_paths(&migrations)
+                    == IconGridExpansionMigration::Invalidated
+            });
+        if invalidate_icon_grid_expansion {
+            self.clear_icon_grid_expansion();
         }
 
         self.sync_active_tab_state();

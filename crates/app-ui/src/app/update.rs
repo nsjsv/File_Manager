@@ -232,6 +232,12 @@ impl FileBrowser {
             Message::BrowserViewModeSelected(pane_id, view_mode) => {
                 self.select_browser_view_mode(pane_id, view_mode)
             }
+            Message::IconGridDirectoryToggled(pane_id, anchor) => {
+                self.toggle_icon_grid_directory(pane_id, anchor)
+            }
+            Message::IconGridPanelPressed(pane_id, directory) => {
+                self.press_icon_grid_panel(pane_id, directory)
+            }
             Message::ListDirectoryToggled(pane_id, path) => {
                 self.toggle_list_directory(pane_id, path)
             }
@@ -619,15 +625,7 @@ impl FileBrowser {
                 self.start_global_scrollbar_hide(generation);
                 Task::none()
             }
-            Message::WindowChromeAnimationTick => Task::batch([
-                self.advance_smooth_scroll_animation(),
-                self.advance_scrollbar_animation(),
-                self.advance_address_bar_transition(),
-                self.advance_tab_bar_reveal_animation(),
-                self.advance_tab_animations(),
-                self.advance_list_directory_animations(),
-                self.advance_sidebar_bookmark_motion(),
-            ]),
+            Message::WindowChromeAnimationTick => self.advance_window_animation_frame(),
             Message::SidebarScrolled => self.show_scrollbars_temporarily(Region::Sidebar),
             Message::SettingsScrolled => self.show_scrollbars_temporarily(Region::Settings),
             Message::PropertiesScrolled => self.show_scrollbars_temporarily(Region::Properties),

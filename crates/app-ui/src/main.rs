@@ -41,6 +41,7 @@ mod file_entry_view;
 mod floating_surface;
 mod formatting;
 mod icon_grid_geometry;
+mod icon_grid_layout;
 mod icon_grid_view;
 mod icons;
 mod input_blocking_space;

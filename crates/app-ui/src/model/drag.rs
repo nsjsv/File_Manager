@@ -106,6 +106,7 @@ pub(crate) struct FileDragHitTestBounds {
     pub(crate) entries: Vec<super::ColumnEntryBounds>,
     pub(crate) breadcrumbs: Vec<BreadcrumbDropTargetBounds>,
     pub(crate) directory_targets: Vec<DirectoryFileDragTargetBounds>,
+    pub(crate) blocked_directories: Vec<FileDragBlockedDirectoryBounds>,
     pub(crate) sidebar_directories: Vec<SidebarFileDragTargetBounds>,
     pub(crate) empty_sidebar_bookmarks: Option<Rectangle>,
 }
@@ -114,6 +115,12 @@ pub(crate) struct FileDragHitTestBounds {
 pub(crate) struct DirectoryFileDragTargetBounds {
     pub(crate) pane_id: super::BrowserPaneId,
     pub(crate) directory: PathBuf,
+    pub(crate) bounds: Rectangle,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FileDragBlockedDirectoryBounds {
+    pub(crate) pane_id: super::BrowserPaneId,
     pub(crate) bounds: Rectangle,
 }
 
@@ -136,6 +143,7 @@ pub(crate) struct WaylandFileDragHitTestBounds {
     pub(crate) entries: Vec<WaylandFileDragEntryTargetBounds>,
     pub(crate) breadcrumbs: Vec<BreadcrumbDropTargetBounds>,
     pub(crate) directory_targets: Vec<DirectoryFileDragTargetBounds>,
+    pub(crate) blocked_directories: Vec<FileDragBlockedDirectoryBounds>,
     pub(crate) sidebar_directories: Vec<SidebarFileDragTargetBounds>,
     pub(crate) empty_sidebar_bookmarks: Option<Rectangle>,
 }

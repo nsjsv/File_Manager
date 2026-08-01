@@ -6,11 +6,17 @@ mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
+mod directory_expansion_loading;
 mod directory_recovery;
 mod events;
 mod file_operation_notifications;
 mod file_operations;
 mod global_error;
+mod icon_grid_expansion;
+#[cfg(test)]
+mod icon_grid_file_operation_tests;
+#[cfg(test)]
+mod icon_grid_invariant_tests;
 mod list_directory_summaries;
 #[cfg(test)]
 mod list_size_sorting_tests;
@@ -97,9 +103,9 @@ use crate::model::{
     BatchRenameState, BreadcrumbDropTargetBounds, BrowserPane, BrowserPaneId, BrowserPaneLayout,
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    FileDragState, FileDropPrompt, FilePropertiesState, IconGridViewport, ListColumnKind, Message,
-    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
+    FileDragState, FileDropPrompt, FilePropertiesState, IconGridExpansionState, IconGridViewport,
+    ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
+    PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
     VideoPreviewPlayback,
@@ -164,6 +170,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_browser_viewport: ColumnBrowserViewport,
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     icon_grid_viewports: HashMap<BrowserPaneId, PaneIconGridViewport>,
+    pub(crate) icon_grid_expansion: Option<IconGridExpansionState>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) open_with: Option<OpenWithState>,
     pub(crate) file_drop_prompt: Option<FileDropPrompt>,
@@ -264,6 +271,7 @@ pub(crate) struct FileBrowser {
     forward_stack: Vec<PathBuf>,
     next_tab_id: usize,
     next_pane_id: u64,
+    next_icon_grid_expansion_session_id: u64,
     theme: Theme,
     is_shutting_down: bool,
 }
@@ -295,6 +303,19 @@ impl FileBrowser {
         self.user_config
             .language_setting
             .resolve(self.system_language)
+    }
+
+    pub(crate) fn advance_window_animation_frame(&mut self) -> Task<Message> {
+        Task::batch([
+            self.advance_smooth_scroll_animation(),
+            self.advance_scrollbar_animation(),
+            self.advance_address_bar_transition(),
+            self.advance_tab_bar_reveal_animation(),
+            self.advance_tab_animations(),
+            self.advance_list_directory_animations(),
+            self.advance_icon_grid_expansion_animation(),
+            self.advance_sidebar_bookmark_motion(),
+        ])
     }
 
     fn refresh_current_language(&self) {
@@ -414,6 +435,7 @@ impl FileBrowser {
             column_browser_viewport: ColumnBrowserViewport::default(),
             column_viewports: HashMap::new(),
             icon_grid_viewports: HashMap::new(),
+            icon_grid_expansion: None,
             context_menu: None,
             open_with: None,
             file_drop_prompt: None,
@@ -522,6 +544,7 @@ impl FileBrowser {
             forward_stack: Vec::new(),
             next_tab_id: 1,
             next_pane_id: 1,
+            next_icon_grid_expansion_session_id: 1,
             theme: Theme::Light,
             is_shutting_down: false,
         };
@@ -557,11 +580,13 @@ impl FileBrowser {
         }
 
         if !self.is_loading && !self.is_trash_view {
-            subscriptions.push(directory_watch_subscription(self.current_dir.clone()));
+            let watched_directories = std::iter::once(self.current_dir.clone())
+                .chain(self.expanded_directories.keys().cloned())
+                .chain(self.icon_grid_expansion_watch_directories())
+                .collect::<HashSet<_>>();
             subscriptions.extend(
-                self.expanded_directories
-                    .keys()
-                    .cloned()
+                watched_directories
+                    .into_iter()
                     .map(directory_watch_subscription),
             );
         }
@@ -622,6 +647,7 @@ impl FileBrowser {
             || self.tab_bar_reveal_animation_is_active()
             || self.tab_animation_is_active()
             || self.list_directory_animation_is_active()
+            || self.icon_grid_expansion_animation_is_active()
             || self.sidebar_bookmark_motion_is_active()
         {
             subscriptions.push(

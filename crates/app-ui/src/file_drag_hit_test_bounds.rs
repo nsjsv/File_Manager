@@ -7,7 +7,7 @@ use iced::{Rectangle, Task, Vector};
 
 use crate::model::{
     BreadcrumbDropTargetBounds, BrowserPaneId, ColumnEntryBounds, DirectoryFileDragTargetBounds,
-    FileDragHitTestBounds, Message, SidebarFileDragTargetBounds,
+    FileDragBlockedDirectoryBounds, FileDragHitTestBounds, Message, SidebarFileDragTargetBounds,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +26,9 @@ pub(crate) enum FileDragHitTestMarker {
     DirectoryTarget {
         pane_id: BrowserPaneId,
         directory: PathBuf,
+    },
+    BlockedDirectoryTarget {
+        pane_id: BrowserPaneId,
     },
     SidebarDirectory {
         directory: PathBuf,
@@ -97,6 +100,7 @@ struct FileDragHitTestBoundsOperation {
     breadcrumb_viewports: Vec<(BrowserPaneId, Rectangle)>,
     breadcrumb_directories: Vec<MeasuredBreadcrumbDirectory>,
     directory_targets: Vec<DirectoryFileDragTargetBounds>,
+    blocked_directories: Vec<FileDragBlockedDirectoryBounds>,
     sidebar_directories: Vec<SidebarFileDragTargetBounds>,
     empty_sidebar_bookmark_bounds: Option<Rectangle>,
 }
@@ -111,6 +115,7 @@ impl FileDragHitTestBoundsOperation {
             breadcrumb_viewports: Vec::new(),
             breadcrumb_directories: Vec::new(),
             directory_targets: Vec::new(),
+            blocked_directories: Vec::new(),
             sidebar_directories: Vec::new(),
             empty_sidebar_bookmark_bounds: None,
         }
@@ -195,6 +200,13 @@ impl widget::Operation<Message> for FileDragHitTestBoundsOperation {
                     bounds,
                 });
             }
+            FileDragHitTestMarker::BlockedDirectoryTarget { pane_id } => {
+                self.blocked_directories
+                    .push(FileDragBlockedDirectoryBounds {
+                        pane_id: *pane_id,
+                        bounds,
+                    });
+            }
             FileDragHitTestMarker::SidebarDirectory {
                 directory,
                 favorite_index,
@@ -226,6 +238,7 @@ impl widget::Operation<Message> for FileDragHitTestBoundsOperation {
                         entries: self.entries.clone(),
                         breadcrumbs: self.breadcrumb_targets(),
                         directory_targets: self.directory_targets.clone(),
+                        blocked_directories: self.blocked_directories.clone(),
                         sidebar_directories: self.sidebar_directories.clone(),
                         empty_sidebar_bookmarks: self.empty_sidebar_bookmark_bounds,
                     },

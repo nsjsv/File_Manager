@@ -610,6 +610,15 @@ impl FileBrowser {
             return Task::none();
         }
 
+        let dismissed_existing_interaction = self.context_menu.is_some()
+            || self.address_editing.is_some()
+            || self.shortcut_capture.is_some()
+            || self.operation_queue.is_panel_open()
+            || self.file_drag.is_some()
+            || self.sidebar_bookmark_drag.is_some()
+            || self.sidebar_bookmark_drop_slot.is_some()
+            || self.selection_marquee.is_some()
+            || self.renaming.is_some();
         self.context_menu = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
@@ -617,10 +626,16 @@ impl FileBrowser {
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
-        Task::batch([
+        let dismiss_command = Task::batch([
             self.cancel_address_editing(),
             self.commit_rename_if_active(),
-        ])
+        ]);
+        if !dismissed_existing_interaction {
+            if let Some(expansion_command) = self.escape_icon_grid_expansion() {
+                return Task::batch([dismiss_command, expansion_command]);
+            }
+        }
+        dismiss_command
     }
 
     pub(super) fn close_auxiliary_window(&mut self, window_id: window::Id) -> Task<Message> {

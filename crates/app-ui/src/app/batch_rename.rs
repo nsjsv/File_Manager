@@ -106,21 +106,17 @@ impl FileBrowser {
             return HashSet::new();
         };
 
-        crate::visible_entries::visible_entry_paths(&self.entries, &self.expanded_directories)
-            .into_iter()
-            .filter(|path| path.parent() == Some(parent))
-            .collect()
+        self.entry_paths_in_directory(parent).into_iter().collect()
     }
 
     fn batch_rename_sources_for_paths(
         &self,
         selected_paths: &[PathBuf],
     ) -> Result<Vec<BatchRenameSource>, BatchRenameSourceNameError> {
-        let selected = selected_paths.iter().cloned().collect::<HashSet<_>>();
-        crate::visible_entries::visible_entries(&self.entries, &self.expanded_directories)
-            .into_iter()
-            .filter(|visible| selected.contains(&visible.entry.path))
-            .map(|visible| BatchRenameSource::try_from_entry(visible.entry))
+        selected_paths
+            .iter()
+            .filter_map(|path| self.entry_for_path(path))
+            .map(BatchRenameSource::try_from_entry)
             .collect()
     }
 }

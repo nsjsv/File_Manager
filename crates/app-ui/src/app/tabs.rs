@@ -100,6 +100,7 @@ impl FileBrowser {
     }
 
     pub(super) fn open_directory_in_new_tab(&mut self, directory: PathBuf) -> Task<Message> {
+        self.clear_icon_grid_expansion_for_context_change();
         let cancel_address_editing = self.cancel_address_editing();
         self.sync_active_tab_state();
         self.context_menu = None;
@@ -123,6 +124,7 @@ impl FileBrowser {
     }
 
     pub(super) fn open_trash_in_new_tab(&mut self) -> Task<Message> {
+        self.clear_icon_grid_expansion_for_context_change();
         let cancel_address_editing = self.cancel_address_editing();
         self.sync_active_tab_state();
         self.context_menu = None;
@@ -158,6 +160,7 @@ impl FileBrowser {
             return Task::none();
         };
 
+        self.clear_icon_grid_expansion_for_context_change();
         let cancel_address_editing = self.cancel_address_editing();
         self.search.abandon_and_clear_input();
         self.sync_active_tab_state();

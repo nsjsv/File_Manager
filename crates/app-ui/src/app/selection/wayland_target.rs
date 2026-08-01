@@ -163,6 +163,14 @@ fn file_drag_directory_target_in_snapshot(
             hovered_entry: None,
         });
     }
+    if hit_test_bounds
+        .blocked_directories
+        .iter()
+        .rev()
+        .any(|blocked| blocked.bounds.contains(position))
+    {
+        return None;
+    }
     for entry_bounds in hit_test_bounds.entries.iter().rev() {
         if entry_bounds.bounds.contains(position) {
             return Some(WaylandFileDragDirectoryTarget {
@@ -289,6 +297,33 @@ mod tests {
 
         assert_eq!(target.directory, project);
         assert!(target.hovered_entry.is_none());
+    }
+
+    #[test]
+    fn blocked_animation_band_prevents_outer_directory_fallback() {
+        let pane_id = crate::model::BrowserPaneId::PRIMARY;
+        let hit_test_bounds = WaylandFileDragHitTestBounds {
+            directory_targets: vec![crate::model::DirectoryFileDragTargetBounds {
+                pane_id,
+                directory: PathBuf::from("/workspace"),
+                bounds: Rectangle::new(Point::ORIGIN, Size::new(500.0, 500.0)),
+            }],
+            blocked_directories: vec![crate::model::FileDragBlockedDirectoryBounds {
+                pane_id,
+                bounds: Rectangle::new(Point::new(0.0, 120.0), Size::new(500.0, 120.0)),
+            }],
+            ..WaylandFileDragHitTestBounds::default()
+        };
+
+        assert!(
+            file_drag_directory_target_in_snapshot(Point::new(200.0, 180.0), &hit_test_bounds,)
+                .is_none()
+        );
+        assert_eq!(
+            file_drag_directory_target_in_snapshot(Point::new(200.0, 300.0), &hit_test_bounds)
+                .map(|target| target.directory),
+            Some(PathBuf::from("/workspace")),
+        );
     }
 
     #[test]

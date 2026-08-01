@@ -99,10 +99,16 @@ impl FileBrowser {
             .into_iter()
             .filter(|target| self.pane_accepts_file_drag(target.pane_id))
             .collect();
+        let blocked_directories = hit_test_bounds
+            .blocked_directories
+            .into_iter()
+            .filter(|blocked| self.pane_accepts_file_drag(blocked.pane_id))
+            .collect();
         let wayland_hit_test_bounds = WaylandFileDragHitTestBounds {
             entries,
             breadcrumbs: hit_test_bounds.breadcrumbs,
             directory_targets,
+            blocked_directories,
             sidebar_directories: hit_test_bounds.sidebar_directories,
             empty_sidebar_bookmarks: hit_test_bounds.empty_sidebar_bookmarks,
         };
@@ -162,7 +168,8 @@ impl FileBrowser {
                 return None;
             }
             match &marquee.source {
-                SelectionMarqueeSource::PaneBlank => None,
+                SelectionMarqueeSource::PaneBlank
+                | SelectionMarqueeSource::IconGridPanel { .. } => None,
                 SelectionMarqueeSource::ColumnBlank { directory } => Some(directory.clone()),
             }
         });

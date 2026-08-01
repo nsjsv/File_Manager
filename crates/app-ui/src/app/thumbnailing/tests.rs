@@ -12,8 +12,10 @@ use crate::animated_image_preview::{
 };
 use crate::config::ui_thread_startup_config;
 use crate::model::{
-    BrowserPaneLayout, BrowserTab, ExpandedDirectory, ExpandedDirectoryStatus, IconGridViewport,
-    SplitAxis, TransferConflictMode, TransferConflictState,
+    BrowserPaneLayout, BrowserTab, ExpandedDirectory, ExpandedDirectoryStatus,
+    IconGridExpansionAnchor, IconGridExpansionContext, IconGridExpansionSessionId,
+    IconGridExpansionState, IconGridViewport, SplitAxis, TransferConflictMode,
+    TransferConflictState,
 };
 use crate::network_connections::NetworkConnectionState;
 use crate::operation_queue::QueuedTransfer;
@@ -60,6 +62,29 @@ fn inactive_pane_thumbnail_request_matches_current_entry() {
     let request = request_for_entry(&image_entry, LIST_THUMBNAIL_EDGE).expect("image request");
 
     assert!(browser.is_current_thumbnail_request(&request));
+}
+
+#[test]
+fn icons_pane_rejects_thumbnail_results_from_hidden_persistent_expansions() {
+    let (mut browser, _, _, image_entry) = browser_with_inactive_image_pane();
+    let request = request_for_entry(&image_entry, LIST_THUMBNAIL_EDGE).expect("image request");
+    let pane = browser.panes.last_mut().unwrap();
+    pane.view_mode = BrowserViewMode::Icons;
+    pane.entries.clear();
+    pane.expanded_directories.insert(
+        PathBuf::from("/inactive/hidden"),
+        ExpandedDirectory {
+            entries: vec![image_entry],
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: true,
+            is_collapsing: false,
+            animation_progress: 1.0,
+            load_generation: 0,
+            load_cancel: None,
+        },
+    );
+
+    assert!(!browser.is_current_thumbnail_request(&request));
 }
 
 #[test]
@@ -189,6 +214,66 @@ fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
         file_name.is_some_and(|index| (visible.start_entry..visible.end_entry).contains(&index))
     }));
     assert!(!queued_sources.contains(&PathBuf::from("/workspace/subdir/hidden.png")));
+}
+
+#[test]
+fn icon_grid_schedules_visible_expansion_thumbnail_requests() {
+    let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+    let root = PathBuf::from("/workspace/root");
+    let main_image = image_entry("/workspace/main.png");
+    let child_image = image_entry("/workspace/root/child.png");
+    browser.current_dir = PathBuf::from("/workspace");
+    browser.view_mode = BrowserViewMode::Icons;
+    browser.entries = vec![directory_entry(root.clone()), main_image.clone()];
+    browser.icon_grid_expansion = Some(IconGridExpansionState::new(
+        IconGridExpansionContext {
+            pane_id: BrowserPaneId::PRIMARY,
+            current_dir: browser.current_dir.clone(),
+            session_id: IconGridExpansionSessionId::new(1),
+        },
+        IconGridExpansionAnchor {
+            parent_directory: browser.current_dir.clone(),
+            path: root.clone(),
+            index: 0,
+        },
+        ExpandedDirectory {
+            entries: vec![child_image.clone()],
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: true,
+            is_collapsing: false,
+            animation_progress: 1.0,
+            load_generation: 1,
+            load_cancel: None,
+        },
+    ));
+    browser.icon_grid_viewports.insert(
+        BrowserPaneId::PRIMARY,
+        PaneIconGridViewport {
+            directory: browser.current_dir.clone(),
+            viewport: IconGridViewport {
+                offset_y: 0.0,
+                width: 500.0,
+                height: 800.0,
+            },
+        },
+    );
+
+    browser.schedule_visible_icon_grid_thumbnails_for_pane(BrowserPaneId::PRIMARY);
+
+    let queued_sources = browser
+        .thumbnail_cache
+        .take_next_batch()
+        .into_iter()
+        .map(|work| work.request.source)
+        .collect::<HashSet<_>>();
+    assert!(queued_sources.contains(&main_image.path));
+    assert!(queued_sources.contains(&child_image.path));
+    let child_request = request_for_entry(
+        &child_image,
+        crate::icon_grid_geometry::thumbnail_edge(browser.user_config.icon_grid_size),
+    )
+    .unwrap();
+    assert!(browser.is_current_thumbnail_request(&child_request));
 }
 
 #[test]
@@ -437,6 +522,17 @@ fn browser_with_inactive_pane_image(
     };
 
     (browser, inactive_id, inactive_dir, image_entry)
+}
+
+fn directory_entry(path: PathBuf) -> DirectoryEntry {
+    DirectoryEntry::new(
+        path,
+        FileKind::Directory,
+        EntryMetadata::default(),
+        false,
+        false,
+        false,
+    )
 }
 
 fn image_entry(path: &str) -> DirectoryEntry {

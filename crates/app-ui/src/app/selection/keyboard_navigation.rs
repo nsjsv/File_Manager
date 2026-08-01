@@ -14,8 +14,8 @@ use crate::commands::{
 };
 use crate::formatting::format_file_size;
 use crate::model::{
-    AudioPreviewPlayback, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryStatus, Message,
-    NavigationMode, PreviewState, PreviewWindowProfile,
+    AudioPreviewPlayback, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
+    ExpandedDirectoryStatus, Message, NavigationMode, PreviewState, PreviewWindowProfile,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -76,50 +76,35 @@ impl FileBrowser {
         &mut self,
         direction: FileSelectionDirection,
     ) -> Task<Message> {
-        let viewport = self
-            .pane_view(self.active_pane_id())
-            .map(|pane| pane.icon_grid_viewport)
-            .unwrap_or_default();
-        let icon_edge = self.user_config.icon_grid_size;
-        let column_count =
-            crate::icon_grid_geometry::column_count_for_width(viewport.width, icon_edge);
-        let current_index = self.selected.as_ref().and_then(|selected| {
-            self.entries
-                .iter()
-                .position(|entry| &entry.path == selected)
-        });
+        let pane_id = self.active_pane_id();
         let direction = match direction {
             FileSelectionDirection::Up => crate::icon_grid_geometry::IconGridDirection::Up,
             FileSelectionDirection::Down => crate::icon_grid_geometry::IconGridDirection::Down,
             FileSelectionDirection::Left => crate::icon_grid_geometry::IconGridDirection::Left,
             FileSelectionDirection::Right => crate::icon_grid_geometry::IconGridDirection::Right,
         };
-        let Some(target_index) = crate::icon_grid_geometry::keyboard_target_index(
-            current_index,
-            direction,
-            self.entries.len(),
-            column_count,
-        ) else {
-            return Task::none();
-        };
-        let Some(target) = self
-            .entries
-            .get(target_index)
-            .map(|entry| entry.path.clone())
+        let Some((target, target_directory, scroll_delta)) =
+            self.pane_view(pane_id).and_then(|pane| {
+                let viewport = pane.icon_grid_viewport;
+                let layout = self.icon_grid_layout_for_pane(pane);
+                let target = layout.keyboard_target(self.selected.as_deref(), direction)?;
+                let target_path = target.entry.path.clone();
+                let target_directory = target.directory.to_path_buf();
+                let scroll_delta = layout.scroll_delta_to_reveal(viewport, &target_path);
+                Some((target_path, target_directory, scroll_delta))
+            })
         else {
             return Task::none();
         };
 
+        if let Some(state) = self.icon_grid_expansion.as_mut() {
+            state.set_selection_directory(&target_directory);
+        }
         self.select_path_from_keyboard(target);
-        let scroll_delta = crate::icon_grid_geometry::scroll_delta_to_reveal_row(
-            viewport,
-            target_index / column_count,
-            icon_edge,
-        );
         let scroll_task = if scroll_delta.abs() > f32::EPSILON {
             iced::widget::operation::scroll_by(
                 crate::app::smooth_scroll::smooth_scroll_id(
-                    &crate::model::ScrollbarRegion::PaneIcons(self.active_pane_id()),
+                    &crate::model::ScrollbarRegion::PaneIcons(pane_id),
                 ),
                 iced::widget::scrollable::AbsoluteOffset {
                     x: 0.0,
@@ -341,7 +326,9 @@ impl FileBrowser {
             load_cancel: None,
         };
         let (request, cancellation) = Self::next_expanded_directory_load_request(
-            self.active_pane_id(),
+            DirectoryExpansionLoadContext::BrowserTree {
+                pane_id: self.active_pane_id(),
+            },
             path.clone(),
             &mut expanded,
         );

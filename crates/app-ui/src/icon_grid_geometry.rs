@@ -1,7 +1,9 @@
 use crate::config::{
     normalize_icon_grid_size, ICON_GRID_SIZE_STEP, MAX_ICON_GRID_SIZE, MIN_ICON_GRID_SIZE,
 };
+#[cfg(test)]
 use crate::model::IconGridViewport;
+#[cfg(test)]
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 pub(crate) const ICON_GRID_CONTENT_PADDING: f32 = 12.0;
@@ -9,6 +11,7 @@ pub(crate) const ICON_GRID_GAP: f32 = 12.0;
 pub(crate) const ICON_GRID_OVERSCAN_ROWS: usize = 3;
 const ICON_GRID_TILE_EXTRA_WIDTH: f32 = 32.0;
 const ICON_GRID_TILE_EXTRA_HEIGHT: f32 = 52.0;
+#[cfg(test)]
 const ICON_GRID_INITIAL_ROWS: usize = ICON_GRID_OVERSCAN_ROWS * 2 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +28,7 @@ pub(crate) enum IconGridZoom {
     Out,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct IconGridVisibleRange {
     pub(crate) start_row: usize,
@@ -59,6 +63,7 @@ pub(crate) fn row_count_for_entries(entry_count: usize, column_count: usize) -> 
     entry_count.div_ceil(column_count.max(1))
 }
 
+#[cfg(test)]
 pub(crate) fn visible_entry_range(
     viewport: IconGridViewport,
     entry_count: usize,
@@ -116,6 +121,7 @@ pub(crate) fn keyboard_target_index(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn scroll_delta_to_reveal_row(
     viewport: IconGridViewport,
     target_row: usize,

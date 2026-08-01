@@ -388,14 +388,11 @@ impl FileBrowser {
         let icon_edge = self.user_config.icon_grid_size;
         let thumbnail_edge = crate::icon_grid_geometry::thumbnail_edge(icon_edge);
         let Some((directory, requests)) = self.pane_view(pane_id).map(|pane| {
-            let range = crate::icon_grid_geometry::visible_entry_range(
-                pane.icon_grid_viewport,
-                pane.entries.len(),
-                icon_edge,
-            );
-            let requests = pane.entries[range.start_entry..range.end_entry]
-                .iter()
-                .filter_map(|entry| request_for_entry(entry, thumbnail_edge))
+            let layout = self.icon_grid_layout_for_pane(pane);
+            let requests = layout
+                .visible_entries(pane.icon_grid_viewport)
+                .into_iter()
+                .filter_map(|visible| request_for_entry(visible.entry, thumbnail_edge))
                 .collect::<Vec<_>>();
             (pane.current_dir.clone(), requests)
         }) else {
@@ -706,15 +703,22 @@ fn thumbnail_request_matches_entry(entry: &DirectoryEntry, request: &ThumbnailRe
 }
 
 fn thumbnail_request_matches_pane(pane: &BrowserPane, request: &ThumbnailRequest) -> bool {
-    pane.entries
-        .iter()
-        .chain(
-            pane.expanded_directories
-                .values()
-                .flat_map(|expanded| expanded.entries.iter()),
-        )
-        .find(|entry| entry.path == request.source)
-        .is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
+    let entry = match pane.view_mode {
+        BrowserViewMode::Icons => pane
+            .entries
+            .iter()
+            .find(|entry| entry.path == request.source),
+        BrowserViewMode::Columns | BrowserViewMode::List => pane
+            .entries
+            .iter()
+            .chain(
+                pane.expanded_directories
+                    .values()
+                    .flat_map(|expanded| expanded.entries.iter()),
+            )
+            .find(|entry| entry.path == request.source),
+    };
+    entry.is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
 }
 
 fn thumbnail_request_matches_transfer_conflict(

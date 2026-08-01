@@ -178,7 +178,9 @@ mod tests {
     use super::*;
     use crate::app::global_error::{recorded_global_error_count, reset_recorded_global_errors};
     use crate::config;
-    use crate::model::{BrowserTab, ExpandedDirectory, ExpandedDirectoryStatus};
+    use crate::model::{
+        BrowserTab, DirectoryExpansionLoadContext, ExpandedDirectory, ExpandedDirectoryStatus,
+    };
     use crate::thumbnail_cache::ColumnViewport;
 
     #[test]
@@ -298,7 +300,9 @@ mod tests {
 
         drop(browser.accept_expanded_directory(
             crate::model::ExpandedDirectoryLoadRequest {
-                pane_id: BrowserPaneId::PRIMARY,
+                context: DirectoryExpansionLoadContext::BrowserTree {
+                    pane_id: BrowserPaneId::PRIMARY,
+                },
                 path: unavailable_directory.clone(),
                 generation: 4,
             },
@@ -368,7 +372,9 @@ mod tests {
 
         drop(browser.accept_expanded_directory(
             crate::model::ExpandedDirectoryLoadRequest {
-                pane_id: BrowserPaneId::PRIMARY,
+                context: DirectoryExpansionLoadContext::BrowserTree {
+                    pane_id: BrowserPaneId::PRIMARY,
+                },
                 path: unavailable_directory.clone(),
                 generation: 4,
             },
@@ -419,7 +425,9 @@ mod tests {
 
         drop(browser.accept_expanded_directory(
             crate::model::ExpandedDirectoryLoadRequest {
-                pane_id: BrowserPaneId::PRIMARY,
+                context: DirectoryExpansionLoadContext::BrowserTree {
+                    pane_id: BrowserPaneId::PRIMARY,
+                },
                 path: unavailable_directory.clone(),
                 generation: 5,
             },
@@ -468,7 +476,9 @@ mod tests {
 
         drop(browser.accept_expanded_directory(
             crate::model::ExpandedDirectoryLoadRequest {
-                pane_id: inactive_pane_id,
+                context: DirectoryExpansionLoadContext::BrowserTree {
+                    pane_id: inactive_pane_id,
+                },
                 path: unavailable_directory.clone(),
                 generation: 4,
             },

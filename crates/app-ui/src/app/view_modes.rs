@@ -7,7 +7,8 @@ use iced::Task;
 use super::FileBrowser;
 use crate::commands::load_expanded_directory_command;
 use crate::model::{
-    BrowserPaneId, BrowserViewMode, ExpandedDirectory, ExpandedDirectoryStatus, Message,
+    BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
+    ExpandedDirectoryStatus, Message,
 };
 
 const LIST_DIRECTORY_ANIMATION_STEP: f32 = 0.18;
@@ -23,6 +24,7 @@ impl FileBrowser {
             return Task::none();
         }
 
+        self.clear_icon_grid_expansion_for_context_change();
         let previous_mode = self.view_mode;
         if previous_mode == BrowserViewMode::Icons || view_mode == BrowserViewMode::Icons {
             self.retain_direct_entry_selection();
@@ -222,7 +224,9 @@ impl FileBrowser {
             load_cancel: None,
         };
         let (request, cancellation) = Self::next_expanded_directory_load_request(
-            self.active_pane_id(),
+            DirectoryExpansionLoadContext::BrowserTree {
+                pane_id: self.active_pane_id(),
+            },
             path.clone(),
             &mut expanded,
         );

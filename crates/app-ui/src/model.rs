@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use file_operation_store::TaskQueueStore;
 use file_search::{SearchHit, SearchServiceStatus};
 use iced::keyboard;
 use iced::widget::text_editor;
-use iced::{event, mouse, window, Point, Rectangle, Theme};
+use iced::{event, mouse, window, Point, Theme};
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
@@ -47,9 +47,22 @@ pub(crate) use address_bar::{
 mod browser_panes;
 pub(crate) use browser_panes::{
     retain_direct_entry_selection, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    BrowserViewMode, ColumnBrowserViewport, DirectoryLoadFailure, DirectoryLoadRequest,
-    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, ExpandedDirectoryLoadRequest,
-    ExpandedDirectoryStatus, IconGridViewport, SplitAxis, SplitRegion,
+    BrowserViewMode, ColumnBrowserViewport, DirectoryExpansionLoadContext, DirectoryLoadFailure,
+    DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridExpansionSessionId,
+    IconGridViewport, SplitAxis, SplitRegion,
+};
+mod selection;
+pub(crate) use selection::{
+    ColumnEntryBounds, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
+};
+mod icon_grid_expansion;
+#[cfg(test)]
+mod icon_grid_expansion_tests;
+pub(crate) use icon_grid_expansion::{
+    IconGridAnchorReconciliation, IconGridChildSwitch, IconGridExpandedDirectory,
+    IconGridExpansionAnchor, IconGridExpansionContext, IconGridExpansionMigration,
+    IconGridExpansionState, IconGridRemovedPathReconciliation,
 };
 mod list_view_preferences;
 pub(crate) use list_view_preferences::{
@@ -111,12 +124,12 @@ pub(crate) use session::{
 };
 mod drag;
 pub(crate) use drag::{
-    BreadcrumbDropTargetBounds, DirectoryFileDragTargetBounds, FileDragHitTestBounds,
-    FileDragNativeDndState, FileDragPhase, FileDragState, FileDragStationaryAction, FileDragTarget,
-    LastActivationClick, PaneDragPointerPress, PaneDragState, PaneDropTarget,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarFileDragTargetBounds, TabDragMode,
-    TabDragState, TabSplitTarget, WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds,
-    WaylandFileDragTargetSnapshot,
+    BreadcrumbDropTargetBounds, DirectoryFileDragTargetBounds, FileDragBlockedDirectoryBounds,
+    FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase, FileDragState,
+    FileDragStationaryAction, FileDragTarget, LastActivationClick, PaneDragPointerPress,
+    PaneDragState, PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarFileDragTargetBounds, TabDragMode, TabDragState, TabSplitTarget,
+    WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds, WaylandFileDragTargetSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -298,6 +311,8 @@ pub(crate) enum Message {
     ThumbnailRefreshRequested(BrowserPaneId, PathBuf),
     ThumbnailBatchLoaded(Vec<ThumbnailLoadOutcome>),
     BrowserViewModeSelected(BrowserPaneId, BrowserViewMode),
+    IconGridDirectoryToggled(BrowserPaneId, IconGridExpansionAnchor),
+    IconGridPanelPressed(BrowserPaneId, PathBuf),
     ListDirectoryToggled(BrowserPaneId, PathBuf),
     FlatEntryClicked(BrowserPaneId, PathBuf),
     ListHeaderRightClicked(BrowserPaneId),
@@ -685,66 +700,6 @@ pub(crate) enum FileContextMenuExpansion {
 pub(crate) struct SidebarBookmarkContextMenuState {
     pub(crate) path: PathBuf,
     pub(crate) position: Point,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ColumnEntryBounds {
-    pub(crate) pane_id: BrowserPaneId,
-    pub(crate) path: PathBuf,
-    pub(crate) bounds: Rectangle,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SelectionMarquee {
-    pub(crate) start: Point,
-    pub(crate) current: Point,
-    pub(crate) source: SelectionMarqueeSource,
-    pub(crate) phase: SelectionMarqueePhase,
-    pub(crate) base_selection: HashSet<PathBuf>,
-    pub(crate) preserve_existing: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum SelectionMarqueeSource {
-    PaneBlank,
-    ColumnBlank { directory: PathBuf },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectionMarqueePhase {
-    WaitingForMovement,
-    Selecting,
-}
-
-impl SelectionMarquee {
-    pub(crate) fn top_left(&self) -> Point {
-        Point::new(
-            self.start.x.min(self.current.x),
-            self.start.y.min(self.current.y),
-        )
-    }
-
-    pub(crate) fn width(&self) -> f32 {
-        (self.current.x - self.start.x).abs().max(1.0)
-    }
-
-    pub(crate) fn height(&self) -> f32 {
-        (self.current.y - self.start.y).abs().max(1.0)
-    }
-
-    pub(crate) fn rectangle(&self) -> Rectangle {
-        let top_left = self.top_left();
-        Rectangle {
-            x: top_left.x,
-            y: top_left.y,
-            width: self.width(),
-            height: self.height(),
-        }
-    }
-
-    pub(crate) fn is_selecting(&self) -> bool {
-        self.phase == SelectionMarqueePhase::Selecting
-    }
 }
 
 #[derive(Debug, Clone)]

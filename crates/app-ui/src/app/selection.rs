@@ -23,6 +23,7 @@ mod drag;
 mod keyboard_navigation;
 #[cfg(test)]
 mod tests;
+mod visible_paths;
 mod wayland_drop;
 mod wayland_target;
 
@@ -52,12 +53,16 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_flat_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
+        let expansion_command = self.prepare_icon_grid_entry_interaction(&path);
         let column_directories_snapshot = Vec::new();
-        self.handle_file_entry_clicked(
-            path,
-            FileDragStationaryAction::SelectionOnly,
-            column_directories_snapshot,
-        )
+        Task::batch([
+            expansion_command,
+            self.handle_file_entry_clicked(
+                path,
+                FileDragStationaryAction::SelectionOnly,
+                column_directories_snapshot,
+            ),
+        ])
     }
 
     fn handle_file_entry_clicked(
@@ -87,13 +92,10 @@ impl FileBrowser {
                 .clone()
                 .or_else(|| self.selected.clone())
                 .unwrap_or_else(|| path.clone());
-            self.select_range(
-                anchor.clone(),
-                path.clone(),
-                self.keyboard_modifiers.control(),
-            );
-            self.selection_anchor = Some(anchor.clone());
-            self.drag_selection_anchor = Some(anchor);
+            let range_anchor =
+                self.select_range(anchor, path.clone(), self.keyboard_modifiers.control());
+            self.selection_anchor = Some(range_anchor.clone());
+            self.drag_selection_anchor = Some(range_anchor);
         } else if self.keyboard_modifiers.control() {
             self.toggle_path_selection(path.clone());
             self.selection_anchor = Some(path.clone());
@@ -289,6 +291,7 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
+        let expansion_command = self.prepare_icon_grid_entry_interaction(&path);
         let rename_command = self.commit_rename_if_active();
         self.select_context_menu_target(path.clone());
         let delete_action = self.file_delete_action_for_selection();
@@ -304,10 +307,19 @@ impl FileBrowser {
             position: self.cursor_position,
             expansion: FileContextMenuExpansion::None,
         }));
-        rename_command
+        Task::batch([expansion_command, rename_command])
     }
 
     pub(super) fn handle_blank_area_right_clicked(&mut self, directory: PathBuf) -> Task<Message> {
+        let expansion_command =
+            if self.view_mode == BrowserViewMode::Icons && directory == self.current_dir {
+                self.dismiss_icon_grid_expansion_from_outside()
+            } else {
+                if let Some(state) = self.icon_grid_expansion.as_mut() {
+                    state.set_selection_directory(&directory);
+                }
+                Task::none()
+            };
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.drag_selection_anchor = None;
@@ -321,7 +333,7 @@ impl FileBrowser {
             position: self.cursor_position,
             expansion: FileContextMenuExpansion::None,
         }));
-        rename_command
+        Task::batch([expansion_command, rename_command])
     }
 
     pub(super) fn update_file_context_menu_expansion(
@@ -335,7 +347,11 @@ impl FileBrowser {
     }
 
     pub(super) fn start_selection_marquee(&mut self) -> Task<Message> {
-        self.start_selection_marquee_from(SelectionMarqueeSource::PaneBlank)
+        let expansion_command = self.dismiss_icon_grid_expansion_from_outside();
+        Task::batch([
+            expansion_command,
+            self.start_selection_marquee_from(SelectionMarqueeSource::PaneBlank),
+        ])
     }
 
     pub(super) fn start_column_blank_selection_marquee(
@@ -349,6 +365,16 @@ impl FileBrowser {
         self.start_selection_marquee_from(SelectionMarqueeSource::ColumnBlank { directory })
     }
 
+    pub(super) fn start_icon_grid_panel_selection_marquee(
+        &mut self,
+        directory: PathBuf,
+    ) -> Task<Message> {
+        if let Some(state) = self.icon_grid_expansion.as_mut() {
+            state.set_selection_directory(&directory);
+        }
+        self.start_selection_marquee_from(SelectionMarqueeSource::IconGridPanel { directory })
+    }
+
     fn start_selection_marquee_from(&mut self, source: SelectionMarqueeSource) -> Task<Message> {
         if self.renaming.is_some() {
             return self.commit_rename_if_active();
@@ -358,7 +384,9 @@ impl FileBrowser {
             SelectionMarqueeSource::ColumnBlank { directory } => {
                 self.column_blank_context_directory(directory)
             }
-            SelectionMarqueeSource::PaneBlank => None,
+            SelectionMarqueeSource::PaneBlank | SelectionMarqueeSource::IconGridPanel { .. } => {
+                None
+            }
         };
         self.clear_preview();
         self.context_menu = None;
@@ -372,7 +400,8 @@ impl FileBrowser {
         if !preserve_existing {
             match (&source, column_context_directory) {
                 (_, Some(directory)) => self.select_path(directory),
-                (SelectionMarqueeSource::ColumnBlank { .. }, None) => {
+                (SelectionMarqueeSource::ColumnBlank { .. }, None)
+                | (SelectionMarqueeSource::IconGridPanel { .. }, _) => {
                     self.clear_file_selection();
                 }
                 (SelectionMarqueeSource::PaneBlank, None) => {
@@ -462,6 +491,13 @@ impl FileBrowser {
             return Task::none();
         };
         let marquee_rectangle = marquee.rectangle();
+        let icon_grid_panel_directory = match &marquee.source {
+            SelectionMarqueeSource::IconGridPanel { directory } => Some(directory.as_path()),
+            SelectionMarqueeSource::PaneBlank if self.view_mode == BrowserViewMode::Icons => {
+                Some(self.current_dir.as_path())
+            }
+            SelectionMarqueeSource::PaneBlank | SelectionMarqueeSource::ColumnBlank { .. } => None,
+        };
         let active_pane_id = self.active_pane_id();
         let visible_paths = self
             .visible_entry_paths()
@@ -476,6 +512,8 @@ impl FileBrowser {
         for entry_bounds in &self.file_entry_bounds {
             if entry_bounds.pane_id == active_pane_id
                 && visible_paths.contains(&entry_bounds.path)
+                && icon_grid_panel_directory
+                    .is_none_or(|directory| entry_bounds.path.parent() == Some(directory))
                 && rectangles_intersect(marquee_rectangle, entry_bounds.bounds)
             {
                 next_selection.insert(entry_bounds.path.clone());
@@ -515,6 +553,15 @@ impl FileBrowser {
             return self.visible_entry_paths();
         }
 
+        if self.view_mode == BrowserViewMode::Icons {
+            let directory = self
+                .icon_grid_expansion
+                .as_ref()
+                .map(|state| state.selection_directory())
+                .unwrap_or(self.current_dir.as_path());
+            return self.entry_paths_in_directory(directory);
+        }
+
         if self.view_mode == BrowserViewMode::Columns {
             return self.entry_paths_in_directory(&self.column_select_all_directory());
         }
@@ -549,27 +596,6 @@ impl FileBrowser {
         self.entry_kind_recursive(path)
     }
 
-    fn entry_paths_in_directory(&self, directory: &Path) -> Vec<PathBuf> {
-        if directory == self.current_dir.as_path() {
-            return self
-                .entries
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect();
-        }
-
-        self.expanded_directories
-            .get(directory)
-            .map(|expanded| {
-                expanded
-                    .entries
-                    .iter()
-                    .map(|entry| entry.path.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     fn cursor_paste_directory_for_entry(&self, path: &Path) -> PathBuf {
         if self.entry_kind(path) == Some(FileKind::Directory) {
             path.to_path_buf()
@@ -588,16 +614,24 @@ impl FileBrowser {
             return None;
         }
 
-        let entry_kind = pane
-            .entries
-            .iter()
-            .chain(
-                pane.expanded_directories
-                    .values()
-                    .flat_map(|expanded| expanded.entries.iter()),
-            )
-            .find(|entry| entry.path == path)
-            .map(|entry| entry.kind);
+        let entry_kind = match pane.view_mode {
+            BrowserViewMode::Icons if pane_id == self.active_pane_id() => self.entry_kind(path),
+            BrowserViewMode::Icons => pane
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .map(|entry| entry.kind),
+            BrowserViewMode::Columns | BrowserViewMode::List => pane
+                .entries
+                .iter()
+                .chain(
+                    pane.expanded_directories
+                        .values()
+                        .flat_map(|expanded| expanded.entries.iter()),
+                )
+                .find(|entry| entry.path == path)
+                .map(|entry| entry.kind),
+        };
 
         if entry_kind == Some(FileKind::Directory) {
             Some(path.to_path_buf())
@@ -647,16 +681,28 @@ impl FileBrowser {
         self.context_menu = None;
     }
 
-    fn select_range(&mut self, anchor: PathBuf, target: PathBuf, preserve_existing: bool) {
+    fn select_range(
+        &mut self,
+        anchor: PathBuf,
+        target: PathBuf,
+        preserve_existing: bool,
+    ) -> PathBuf {
+        let effective_anchor =
+            if self.view_mode == BrowserViewMode::Icons && anchor.parent() != target.parent() {
+                target.clone()
+            } else {
+                anchor
+            };
         if !preserve_existing {
             self.selected_paths.clear();
         }
 
-        for path in self.visible_range_paths(&anchor, &target) {
+        for path in self.visible_range_paths(&effective_anchor, &target) {
             self.selected_paths.insert(path);
         }
 
         self.focus_path(target);
+        effective_anchor
     }
 
     fn select_drag_range(&mut self, anchor: PathBuf, target: PathBuf, preserve_existing: bool) {
@@ -667,23 +713,6 @@ impl FileBrowser {
         for path in self.visible_range_paths(&anchor, &target) {
             self.selected_paths.insert(path);
         }
-    }
-
-    fn visible_range_paths(&self, anchor: &Path, target: &Path) -> Vec<PathBuf> {
-        let paths = self.visible_entry_paths();
-        let Some(anchor_index) = paths.iter().position(|path| path == anchor) else {
-            return vec![target.to_path_buf()];
-        };
-        let Some(target_index) = paths.iter().position(|path| path == target) else {
-            return vec![target.to_path_buf()];
-        };
-
-        let (start, end) = if anchor_index <= target_index {
-            (anchor_index, target_index)
-        } else {
-            (target_index, anchor_index)
-        };
-        paths[start..=end].to_vec()
     }
 
     pub(super) fn selected_paths_for_operation(&self) -> Vec<PathBuf> {
@@ -725,22 +754,6 @@ impl FileBrowser {
             .into_iter()
             .rev()
             .find(|path| self.selected_paths.contains(path))
-    }
-
-    fn visible_entry_paths(&self) -> Vec<PathBuf> {
-        match self.view_mode {
-            BrowserViewMode::Icons => self
-                .entries
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect(),
-            BrowserViewMode::Columns | BrowserViewMode::List => {
-                crate::visible_entries::visible_entry_paths(
-                    &self.entries,
-                    &self.expanded_directories,
-                )
-            }
-        }
     }
 
     fn focus_path(&mut self, path: PathBuf) {
