@@ -139,7 +139,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app-ui"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "blake3",
  "chrono",
@@ -1184,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-linux"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "gio",
  "smithay-client-toolkit 0.19.2",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "file-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "blake3",
  "exacl",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "file-operation-store"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "rusqlite",
  "rustix 1.1.4",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "file-search"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dirs",
  "libc",
@@ -5134,7 +5134,7 @@ dependencies = [
 
 [[package]]
 name = "thumbnails"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "blake3",
  "file-core",
