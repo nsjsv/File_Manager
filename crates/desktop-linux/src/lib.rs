@@ -2,6 +2,7 @@ mod desktop_entries;
 mod desktop_notifications;
 pub mod display_renderer;
 pub mod file_clipboard;
+mod file_manager_activation;
 mod gvfs_devices;
 mod gvfs_paths;
 pub mod network_mounts;
@@ -21,6 +22,13 @@ pub use file_clipboard::{
     serialize_file_uri_list, serialize_gnome_copied_files, write_file_clipboard, ClipboardImage,
     DesktopClipboardContent, FileClipboardError, FileClipboardOperation, FileClipboardPayloadError,
     FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
+};
+pub use file_manager_activation::{
+    DesktopActivationEvent, DesktopActivationRuntime, DesktopStartupId, FileManagerActivationClaim,
+    FileManagerActivationError, LocalPropertyTargets, LocalRequestError, LocalWorkspaceRequest,
+    LocalWorkspaceTab, StandardFileManagerServiceStatus, FILE_MANAGER1_BUS_NAME,
+    FILE_MANAGER1_OBJECT_PATH, FILE_MANAGER_ACTIVATION_BUS_NAME,
+    FILE_MANAGER_ACTIVATION_OBJECT_PATH,
 };
 pub use network_mounts::{
     load_network_mount_states, mount_network_connection, mount_network_connection_with_credentials,

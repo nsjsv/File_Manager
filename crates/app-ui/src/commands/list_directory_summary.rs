@@ -51,5 +51,8 @@ fn directory_summary_error_message(
             "operation cancelled".to_owned()
         }
         crate::directory_summary::DirectorySummaryError::Io(error) => error.to_string(),
+        crate::directory_summary::DirectorySummaryError::Overflow(field) => {
+            format!("directory summary {field} overflowed")
+        }
     }
 }

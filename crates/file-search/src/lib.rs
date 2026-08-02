@@ -26,12 +26,15 @@ pub use error::{SearchError, SearchResult};
 pub use extractor::{
     extract_content, extract_with_system_command, CommandSpec, ExtractionOutcome, ExtractionStatus,
 };
-pub use fallback::search_directory_fallback;
+pub use fallback::{
+    search_directory_fallback, DirectoryFallbackCompletion, DirectoryFallbackLimits,
+};
 pub use model::{
     daemon_build_id, ExtractorCapability, IndexHealth, IndexPhase, IndexStatus,
-    IndexedQueryAvailability, MatchSource, SearchCursor, SearchFileKind, SearchFilters, SearchHit,
-    SearchProviderFailure, SearchQuery, SearchResultBatch, SearchScope, SearchServiceEvent,
-    SearchServicePhase, SearchServiceRequest, SearchServiceStatus, TimeRange, PROTOCOL_VERSION,
+    IndexedQueryAvailability, MatchSource, MimePattern, SearchCursor, SearchFileKind,
+    SearchFilters, SearchHit, SearchProviderFailure, SearchQuery, SearchResultBatch, SearchScope,
+    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus, TimeRange,
+    PROTOCOL_VERSION,
 };
 pub use protocol::{
     default_socket_path, read_service_event, read_service_request, search_via_socket,

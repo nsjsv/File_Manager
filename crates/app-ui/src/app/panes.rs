@@ -388,7 +388,6 @@ impl FileBrowser {
 
     pub(super) fn restore_pane_snapshot(&mut self, pane: BrowserPane) {
         self.clear_icon_grid_expansion();
-        self.search.abandon_and_clear_input();
         self.apply_pane_browsing_snapshot(pane);
         self.tab_animations.clear();
         self.hovered_entry = None;

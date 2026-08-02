@@ -6,6 +6,7 @@ mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
+mod desktop_activation;
 mod directory_expansion_loading;
 mod directory_recovery;
 mod events;
@@ -51,6 +52,9 @@ mod startup_settings;
 mod tabs;
 mod text_input_shortcuts;
 mod thumbnailing;
+mod trash;
+#[cfg(test)]
+mod trash_tests;
 mod update;
 mod view_modes;
 mod wayland_dnd;
@@ -62,9 +66,13 @@ pub(crate) use runtime::run;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-use desktop_linux::{NetworkConnectionId, StorageDeviceId, TerminalEmulator, WaylandDndFileDrop};
+use desktop_linux::{
+    DesktopActivationEvent, DesktopActivationRuntime, NetworkConnectionId, StorageDeviceId,
+    TerminalEmulator, WaylandDndFileDrop,
+};
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
@@ -77,8 +85,8 @@ use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
-    directory_watch_subscription, sidebar_device_refresh_subscription, system_theme_command,
-    wayland_file_dnd_subscription,
+    desktop_activation_subscription, directory_watch_subscription,
+    sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
 };
 use crate::app::scrollbar::{ScrollbarState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
@@ -97,7 +105,7 @@ use crate::commands::{
 use crate::config;
 use crate::config::UiLanguage;
 use crate::localization;
-use crate::model::search::SearchState;
+use crate::model::search::SearchWorkspaceState;
 use crate::model::{
     AddressBarTransition, AddressEditingSession, ApplicationLogViewState, AudioPreviewPlayback,
     BatchRenameState, BreadcrumbDropTargetBounds, BrowserPane, BrowserPaneId, BrowserPaneLayout,
@@ -105,10 +113,10 @@ use crate::model::{
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     FileDragState, FileDropPrompt, FilePropertiesState, IconGridExpansionState, IconGridViewport,
     ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, ScrollbarRegion, SelectionMarquee, SettingsCategory,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
+    PreviewState, PreviewWindowProfile, ScrollbarRegion, SearchServiceState, SelectionMarquee,
+    SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
-    VideoPreviewPlayback,
+    TrashRefreshState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -132,6 +140,7 @@ const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const SEARCH_SERVICE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const APPLICATION_LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const TRASH_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 pub(crate) struct FileBrowser {
     pub(crate) home_dir: PathBuf,
@@ -140,6 +149,7 @@ pub(crate) struct FileBrowser {
     pub(crate) entries: Vec<DirectoryEntry>,
     pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
     pub(crate) trash_entries: Vec<TrashEntry>,
+    pub(crate) trash_refresh: TrashRefreshState,
     pub(crate) selected: Option<PathBuf>,
     selected_paths: HashSet<PathBuf>,
     pub(crate) hovered_entry: Option<PathBuf>,
@@ -163,6 +173,7 @@ pub(crate) struct FileBrowser {
     main_window: window::Id,
     maximized_windows: HashSet<window::Id>,
     wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
+    file_manager_activation: Option<Arc<DesktopActivationRuntime>>,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
     system_focused_window: Option<window::Id>,
@@ -231,7 +242,8 @@ pub(crate) struct FileBrowser {
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) selected_settings_category: SettingsCategory,
-    pub(crate) search: SearchState,
+    pub(crate) search_service: SearchServiceState,
+    pub(crate) search_workspace: Option<SearchWorkspaceState>,
     pub(crate) deepest_open_column_directory: Option<PathBuf>,
     pub(crate) expanded_directories: HashMap<PathBuf, ExpandedDirectory>,
     pub(crate) view_mode: BrowserViewMode,
@@ -334,15 +346,31 @@ impl FileBrowser {
         self.user_config.max_preview_file_bytes
     }
 
-    fn boot(application_launch_request: ApplicationLaunchRequest) -> (Self, Task<Message>) {
+    fn boot(
+        application_launch_request: ApplicationLaunchRequest,
+        file_manager_activation: Arc<DesktopActivationRuntime>,
+        initial_desktop_activation: Option<DesktopActivationEvent>,
+    ) -> (Self, Task<Message>) {
         let (main_window, open_main_window) = window::open(main_window_settings());
         let user_config = config::ui_thread_startup_config();
-        let (browser, initial_tasks) =
-            Self::new_with_main_window(user_config, main_window, application_launch_request);
+        let (browser, initial_tasks) = Self::new_with_main_window(
+            user_config,
+            main_window,
+            application_launch_request,
+            Some(file_manager_activation),
+        );
 
         let open_main_window = open_main_window.then(wayland_dnd_window_handle_command);
 
-        (browser, Task::batch([open_main_window, initial_tasks]))
+        let initial_desktop_activation = initial_desktop_activation
+            .map(Message::DesktopActivationReceived)
+            .map(Task::done)
+            .unwrap_or_else(Task::none);
+
+        (
+            browser,
+            Task::batch([open_main_window, initial_tasks, initial_desktop_activation]),
+        )
     }
 
     #[cfg(test)]
@@ -359,6 +387,7 @@ impl FileBrowser {
             user_config,
             window::Id::unique(),
             application_launch_request,
+            None,
         )
     }
 
@@ -366,13 +395,14 @@ impl FileBrowser {
         user_config: config::UserConfig,
         main_window: window::Id,
         application_launch_request: ApplicationLaunchRequest,
+        file_manager_activation: Option<Arc<DesktopActivationRuntime>>,
     ) -> (Self, Task<Message>) {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
         let options = ScanOptions::default();
         let initial_view_mode = user_config.browser_view_mode;
-        let mut search = SearchState::new();
-        let initial_search_service_request = search.service.begin_initial_status_request();
+        let mut search_service = SearchServiceState::new();
+        let initial_search_service_request = search_service.begin_initial_status_request();
         let mut initial_tab = BrowserTab::directory(0, placeholder_dir.clone());
         initial_tab.view_mode = initial_view_mode;
         let initial_pane = BrowserPane {
@@ -405,6 +435,7 @@ impl FileBrowser {
             entries: Vec::new(),
             directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::new(),
+            trash_refresh: TrashRefreshState::default(),
             selected: None,
             selected_paths: HashSet::new(),
             hovered_entry: None,
@@ -428,6 +459,7 @@ impl FileBrowser {
             main_window,
             maximized_windows: HashSet::new(),
             wayland_dnd: None,
+            file_manager_activation,
             preview_window: None,
             focused_window: main_window,
             system_focused_window: None,
@@ -503,7 +535,8 @@ impl FileBrowser {
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             selected_settings_category: SettingsCategory::General,
-            search,
+            search_service,
+            search_workspace: None,
             deepest_open_column_directory: None,
             expanded_directories: HashMap::new(),
             view_mode: initial_view_mode,
@@ -572,6 +605,9 @@ impl FileBrowser {
 
         let mut subscriptions = vec![event::listen_with(global_event_message)];
         subscriptions.push(sidebar_device_refresh_subscription());
+        if let Some(runtime) = &self.file_manager_activation {
+            subscriptions.push(desktop_activation_subscription(Arc::clone(runtime)));
+        }
         if let Some(runtime) = &self.wayland_dnd {
             subscriptions.push(wayland_file_dnd_subscription(
                 runtime.window_handle,
@@ -607,6 +643,11 @@ impl FileBrowser {
                 time::every(APPLICATION_LOG_REFRESH_INTERVAL)
                     .map(|_| Message::ApplicationLogsRefreshRequested),
             );
+        }
+
+        if self.has_trash_tab() {
+            subscriptions
+                .push(time::every(TRASH_REFRESH_INTERVAL).map(|_| Message::TrashRefreshTick));
         }
 
         if !self.network_connections.entries.is_empty() {

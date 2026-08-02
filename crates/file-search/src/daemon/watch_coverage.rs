@@ -514,8 +514,7 @@ fn recommended_watch_limit() -> usize {
 fn watch_limit_for(system_limit: usize) -> usize {
     system_limit
         .saturating_sub(RESERVED_SYSTEM_WATCHES)
-        .min(TARGET_REGISTERED_DIRECTORIES)
-        .max(1)
+        .clamp(1, TARGET_REGISTERED_DIRECTORIES)
 }
 
 fn bounded_message(mut message: String) -> String {

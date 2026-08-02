@@ -491,40 +491,64 @@ fn collapse_affected_prefixes(mut affected_prefixes: Vec<PathBuf>) -> Vec<PathBu
     collapsed_prefixes
 }
 
-async fn push_pending_entry(
-    indexer: &SearchIndexer,
-    entry: FilesystemEntry,
-    current_scope: &Path,
-    pending_entries: &mut Vec<FilesystemEntry>,
-    pending_bytes: &mut usize,
-    stats: &mut RebuildStats,
-    cancellation: &CancellationToken,
-    on_progress: &mut impl FnMut(IndexMaintenanceProgress),
-) -> SearchResult<()> {
-    let estimated_bytes = entry
-        .path()
-        .as_os_str()
-        .as_encoded_bytes()
-        .len()
-        .saturating_add(CLASSIFICATION_FIXED_BYTES_PER_ENTRY);
-    let batch_is_full = pending_entries.len() == MAX_CLASSIFICATION_BATCH_ENTRIES
-        || pending_bytes.saturating_add(estimated_bytes) > MAX_CLASSIFICATION_BATCH_BYTES;
-    if batch_is_full {
-        indexer
-            .index_observed_batch(
-                std::mem::take(pending_entries),
-                current_scope,
-                stats,
-                cancellation,
-                on_progress,
-            )
-            .await?;
-        *pending_entries = Vec::with_capacity(MAX_CLASSIFICATION_BATCH_ENTRIES);
-        *pending_bytes = 0;
+struct PendingClassificationBatch {
+    entries: Vec<FilesystemEntry>,
+    estimated_bytes: usize,
+}
+
+impl PendingClassificationBatch {
+    fn new() -> Self {
+        Self {
+            entries: Vec::with_capacity(MAX_CLASSIFICATION_BATCH_ENTRIES),
+            estimated_bytes: 0,
+        }
     }
-    *pending_bytes = pending_bytes.saturating_add(estimated_bytes);
-    pending_entries.push(entry);
-    Ok(())
+
+    async fn push(
+        &mut self,
+        indexer: &SearchIndexer,
+        entry: FilesystemEntry,
+        current_scope: &Path,
+        stats: &mut RebuildStats,
+        cancellation: &CancellationToken,
+        on_progress: &mut impl FnMut(IndexMaintenanceProgress),
+    ) -> SearchResult<()> {
+        let estimated_bytes = entry
+            .path()
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            .saturating_add(CLASSIFICATION_FIXED_BYTES_PER_ENTRY);
+        let batch_is_full = self.entries.len() == MAX_CLASSIFICATION_BATCH_ENTRIES
+            || self.estimated_bytes.saturating_add(estimated_bytes)
+                > MAX_CLASSIFICATION_BATCH_BYTES;
+        if batch_is_full {
+            indexer
+                .index_observed_batch(
+                    self.take_entries(),
+                    current_scope,
+                    stats,
+                    cancellation,
+                    on_progress,
+                )
+                .await?;
+        }
+        self.estimated_bytes = self.estimated_bytes.saturating_add(estimated_bytes);
+        self.entries.push(entry);
+        Ok(())
+    }
+
+    fn take_entries(&mut self) -> Vec<FilesystemEntry> {
+        self.estimated_bytes = 0;
+        std::mem::replace(
+            &mut self.entries,
+            Vec::with_capacity(MAX_CLASSIFICATION_BATCH_ENTRIES),
+        )
+    }
+
+    fn into_entries(self) -> Vec<FilesystemEntry> {
+        self.entries
+    }
 }
 
 fn directory_signature(metadata: &std::fs::Metadata) -> DirectorySignature {
@@ -540,7 +564,7 @@ fn report_checking_if_needed(
     stats: &RebuildStats,
     on_progress: &mut impl FnMut(IndexMaintenanceProgress),
 ) {
-    if stats.checked % PROGRESS_REPORT_INTERVAL == 0 {
+    if stats.checked.is_multiple_of(PROGRESS_REPORT_INTERVAL) {
         on_progress(IndexMaintenanceProgress::Checking {
             checked_entries: stats.checked,
             changed_entries: stats.changed,
@@ -553,7 +577,7 @@ fn report_crawling_if_needed(
     current_scope: &Path,
     on_progress: &mut impl FnMut(IndexMaintenanceProgress),
 ) {
-    if stats.scanned % PROGRESS_REPORT_INTERVAL == 0 {
+    if stats.scanned.is_multiple_of(PROGRESS_REPORT_INTERVAL) {
         report_crawling(stats, current_scope, on_progress);
     }
 }

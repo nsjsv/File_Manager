@@ -162,7 +162,6 @@ impl FileBrowser {
 
         self.clear_icon_grid_expansion_for_context_change();
         let cancel_address_editing = self.cancel_address_editing();
-        self.search.abandon_and_clear_input();
         self.sync_active_tab_state();
         self.active_tab_id = tab.id;
         self.is_trash_view = tab.is_trash_view;
@@ -457,7 +456,7 @@ impl FileBrowser {
         Some(cloned)
     }
 
-    fn sync_tab_bar_visibility(&mut self) {
+    pub(super) fn sync_tab_bar_visibility(&mut self) {
         if self.tabs.len() > 1 {
             self.reveal_tab_bar();
         } else {
@@ -503,7 +502,7 @@ impl FileBrowser {
         };
     }
 
-    fn start_tab_intro_animation(&mut self, tab_id: usize) {
+    pub(super) fn start_tab_intro_animation(&mut self, tab_id: usize) {
         self.tab_animations.entry(tab_id).or_default().start_intro();
     }
 

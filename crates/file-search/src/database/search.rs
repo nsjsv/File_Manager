@@ -13,6 +13,7 @@ use super::{
 };
 
 const QUERY_VISIBLE_PREDICATE: &str = "f.tombstoned = 0 AND f.observation_state = 'observable'";
+const SEARCH_SNIPPET_CHARACTER_LIMIT: usize = 240;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FullTextQueryPlan {
@@ -23,12 +24,13 @@ enum FullTextQueryPlan {
 impl SearchDatabase {
     pub fn search(&self, query: &SearchQuery) -> SearchResult<SearchResultBatch> {
         let limit = query.limit.clamp(1, 200);
+        let fetch_limit = limit.saturating_add(1);
         let offset = query.cursor.map_or(0, |cursor| cursor.offset);
         let transaction = self.connection.unchecked_transaction()?;
         let full_text_plan = full_text_query_plan(&transaction, query)?;
-        let (sql, values) = search_sql(query, limit, offset, full_text_plan);
+        let (sql, values) = search_sql(query, fetch_limit, offset, full_text_plan);
 
-        let hits = {
+        let mut hits = {
             let mut statement = transaction.prepare(&sql)?;
             let rows = statement
                 .query_map(params_from_iter(values), |row| {
@@ -36,7 +38,13 @@ impl SearchDatabase {
                     let display_name: String = row.get(1)?;
                     let kind = SearchFileKind::from_storage_value(row.get_ref(2)?.as_str()?);
                     let score: f64 = row.get(7)?;
+                    let raw_snippet: Option<String> = row.get(8)?;
                     let match_source = match_source_for_hit(&query.terms, &display_name);
+                    let snippet = if match_source == MatchSource::Content {
+                        raw_snippet.and_then(|snippet| normalize_content_snippet(&snippet))
+                    } else {
+                        None
+                    };
                     Ok(SearchHit {
                         path: path_from_storage_bytes(path_bytes),
                         display_name,
@@ -46,7 +54,7 @@ impl SearchDatabase {
                         accessed_ms: row.get(5)?,
                         created_ms: row.get(6)?,
                         rank: -score,
-                        snippet: None,
+                        snippet,
                         match_source,
                     })
                 })?
@@ -55,21 +63,22 @@ impl SearchDatabase {
         };
         transaction.commit()?;
 
-        let finished = hits.len() < limit;
-        let next_cursor = (!finished).then_some(SearchCursor {
+        let has_more = hits.len() > limit;
+        hits.truncate(limit);
+        let next_cursor = has_more.then_some(SearchCursor {
             offset: offset + hits.len(),
         });
         Ok(SearchResultBatch {
             query_id: query.query_id,
             hits,
             next_cursor,
-            finished,
+            finished: !has_more,
         })
     }
 
     #[cfg(test)]
     pub(super) fn search_plan(&self, query: &SearchQuery) -> SearchResult<Vec<String>> {
-        let limit = query.limit.clamp(1, 200);
+        let limit = query.limit.clamp(1, 200).saturating_add(1);
         let offset = query.cursor.map_or(0, |cursor| cursor.offset);
         let full_text_plan = full_text_query_plan(&self.connection, query)?;
         let (sql, values) = search_sql(query, limit, offset, full_text_plan);
@@ -97,7 +106,7 @@ fn full_text_query_plan(
     let unrestricted_full_text_query = query.terms.split_whitespace().next().is_some()
         && matches!(query.scope, SearchScope::Global)
         && query.filters.kind.is_none()
-        && query.filters.mime_type.is_none()
+        && query.filters.mime_patterns.is_empty()
         && query.filters.modified.is_none()
         && query.filters.accessed.is_none()
         && query.filters.created.is_none();
@@ -131,13 +140,14 @@ fn search_sql(
     {
         return (
             "WITH ranked AS MATERIALIZED (
-                SELECT file_search_fts.rowid AS rowid, bm25(file_search_fts) AS score
+                SELECT file_search_fts.rowid AS rowid, bm25(file_search_fts) AS score,
+                       snippet(file_search_fts, 2, '', '', '...', 16) AS content_snippet
                 FROM file_search_fts
                 WHERE file_search_fts MATCH ?
                 ORDER BY score LIMIT ? OFFSET ?
              )
              SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
-                    f.created_ms, ranked.score
+                    f.created_ms, ranked.score, ranked.content_snippet
              FROM ranked
              JOIN files f ON f.rowid = ranked.rowid
              ORDER BY ranked.score"
@@ -155,7 +165,8 @@ fn search_sql(
     let mut sql = if let Some(match_expression) = match_expression.as_ref() {
         values.push(Value::Text(match_expression.clone()));
         "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
-                f.created_ms, bm25(file_search_fts) AS score
+                f.created_ms, bm25(file_search_fts) AS score,
+                snippet(file_search_fts, 2, '', '', '...', 16) AS content_snippet
          FROM file_search_fts
          JOIN files f ON f.rowid = file_search_fts.rowid
          WHERE file_search_fts MATCH ? AND "
@@ -163,7 +174,7 @@ fn search_sql(
             + QUERY_VISIBLE_PREDICATE
     } else if let Some(range) = recursive_range.as_ref() {
         let mut scoped_sql = "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms,
-                    f.accessed_ms, f.created_ms, 0.0 AS score
+                    f.accessed_ms, f.created_ms, 0.0 AS score, NULL AS content_snippet
              FROM files f
              WHERE f.rowid IN (SELECT rowid FROM files WHERE "
             .to_owned();
@@ -172,7 +183,7 @@ fn search_sql(
         scoped_sql + QUERY_VISIBLE_PREDICATE
     } else {
         "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
-                f.created_ms, 0.0 AS score
+                f.created_ms, 0.0 AS score, NULL AS content_snippet
          FROM files f
          WHERE "
             .to_owned()
@@ -241,13 +252,49 @@ fn append_filters(sql: &mut String, values: &mut Vec<Value>, query: &SearchQuery
         sql.push_str(" AND f.kind = ?");
         values.push(Value::Text(kind.as_storage_value().to_owned()));
     }
-    if let Some(mime_type) = &query.filters.mime_type {
-        sql.push_str(" AND f.mime_type = ?");
-        values.push(Value::Text(mime_type.clone()));
-    }
+    append_mime_patterns(sql, values, &query.filters.mime_patterns);
     append_time_filter(sql, values, "f.modified_ms", query.filters.modified);
     append_time_filter(sql, values, "f.accessed_ms", query.filters.accessed);
     append_time_filter(sql, values, "f.created_ms", query.filters.created);
+}
+
+fn append_mime_patterns(
+    sql: &mut String,
+    values: &mut Vec<Value>,
+    patterns: &[crate::model::MimePattern],
+) {
+    if patterns.is_empty() {
+        return;
+    }
+    sql.push_str(" AND (");
+    for (index, pattern) in patterns.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        match pattern {
+            crate::model::MimePattern::Exact(mime_type) => {
+                sql.push_str("f.mime_type = ?");
+                values.push(Value::Text(mime_type.clone()));
+            }
+            crate::model::MimePattern::Prefix(prefix) => {
+                sql.push_str("f.mime_type LIKE ? ESCAPE '\\'");
+                values.push(Value::Text(escaped_like_prefix(prefix)));
+            }
+        }
+    }
+    sql.push(')');
+}
+
+fn escaped_like_prefix(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 1);
+    for character in prefix.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
 }
 
 fn append_time_filter(
@@ -277,17 +324,46 @@ fn search_match_expression(terms: &str) -> Option<String> {
 }
 
 fn match_source_for_hit(terms: &str, display_name: &str) -> MatchSource {
+    let terms = terms.split_whitespace().collect::<Vec<_>>();
+    if terms.is_empty() {
+        return MatchSource::Metadata;
+    }
     let display_name = display_name.as_bytes();
-    if terms.split_whitespace().any(|term| {
+    if terms.iter().all(|term| {
         let term = term.as_bytes();
         display_name
             .windows(term.len())
             .any(|candidate| candidate.eq_ignore_ascii_case(term))
     }) {
         MatchSource::Name
-    } else if terms.trim().is_empty() {
-        MatchSource::Metadata
     } else {
         MatchSource::Content
     }
+}
+
+fn normalize_content_snippet(snippet: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(snippet.len());
+    let mut pending_space = false;
+    for character in snippet.chars() {
+        if character.is_whitespace() || character.is_control() {
+            pending_space = !normalized.is_empty();
+            continue;
+        }
+        if pending_space {
+            normalized.push(' ');
+            pending_space = false;
+        }
+        normalized.push(character);
+    }
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.chars().count() > SEARCH_SNIPPET_CHARACTER_LIMIT {
+        normalized = normalized
+            .chars()
+            .take(SEARCH_SNIPPET_CHARACTER_LIMIT.saturating_sub(3))
+            .collect::<String>();
+        normalized.push_str("...");
+    }
+    Some(normalized)
 }

@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, ErrorCode};
 use tempfile::tempdir;
 
 use crate::extractor::ExtractionStatus;
-use crate::model::{MatchSource, SearchFileKind, SearchQuery, SearchScope, TimeRange};
+use crate::model::{MatchSource, MimePattern, SearchFileKind, SearchQuery, SearchScope, TimeRange};
 
 use super::{
     path_from_storage_bytes, path_to_storage, DirectorySignature, DirectorySnapshot,
@@ -286,44 +286,75 @@ fn hidden_query_rows_use_the_partial_visibility_index() {
 }
 
 #[test]
-fn search_hits_leave_snippets_unpopulated_by_default() {
+fn search_hits_expose_only_content_snippets() {
     let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/alpha-beta-name.txt",
+            "alpha-beta-name.txt",
+            "other content",
+        ))
+        .unwrap();
     database
         .upsert_file(&indexed_file(
             "/tmp/content-match.txt",
             "content-match.txt",
-            "needle in the indexed body",
+            "prefix alpha\nneedle <tag> suffix",
         ))
         .unwrap();
     database
         .upsert_file(&indexed_file(
-            "/tmp/needle-name.txt",
-            "Needle-name.txt",
-            "other content",
+            "/tmp/alpha-mixed.txt",
+            "alpha-mixed.txt",
+            "beta body",
         ))
         .unwrap();
 
-    let batch = database.search(&SearchQuery::global(1, "needle")).unwrap();
-    assert_eq!(batch.hits.len(), 2);
-    assert!(batch.hits.iter().all(|hit| hit.snippet.is_none()));
-    assert_eq!(
-        batch
-            .hits
-            .iter()
-            .find(|hit| hit.path == Path::new("/tmp/needle-name.txt"))
-            .unwrap()
-            .match_source,
-        MatchSource::Name
-    );
-    assert_eq!(
-        batch
-            .hits
-            .iter()
-            .find(|hit| hit.path == Path::new("/tmp/content-match.txt"))
-            .unwrap()
-            .match_source,
-        MatchSource::Content
-    );
+    let name_hit = database
+        .search(&SearchQuery::global(1, "alpha beta"))
+        .unwrap()
+        .hits
+        .into_iter()
+        .find(|hit| hit.path == Path::new("/tmp/alpha-beta-name.txt"))
+        .unwrap();
+    assert_eq!(name_hit.match_source, MatchSource::Name);
+    assert!(name_hit.snippet.is_none());
+
+    let content_hit = database
+        .search(&SearchQuery::global(2, "needle"))
+        .unwrap()
+        .hits
+        .into_iter()
+        .find(|hit| hit.path == Path::new("/tmp/content-match.txt"))
+        .unwrap();
+    assert_eq!(content_hit.match_source, MatchSource::Content);
+    let snippet = content_hit.snippet.unwrap();
+    assert!(snippet.contains("needle"));
+    assert!(!snippet.chars().any(char::is_control));
+    assert!(snippet.chars().count() <= 240);
+
+    let mixed_hit = database
+        .search(&SearchQuery::global(3, "alpha beta"))
+        .unwrap()
+        .hits
+        .into_iter()
+        .find(|hit| hit.path == Path::new("/tmp/alpha-mixed.txt"))
+        .unwrap();
+    assert_eq!(mixed_hit.match_source, MatchSource::Content);
+    assert!(mixed_hit
+        .snippet
+        .as_deref()
+        .is_some_and(|snippet| snippet.contains("beta")));
+
+    let metadata_hit = database
+        .search(&SearchQuery::global(4, ""))
+        .unwrap()
+        .hits
+        .into_iter()
+        .find(|hit| hit.path == Path::new("/tmp/content-match.txt"))
+        .unwrap();
+    assert_eq!(metadata_hit.match_source, MatchSource::Metadata);
+    assert!(metadata_hit.snippet.is_none());
 }
 
 #[test]
@@ -500,6 +531,97 @@ fn filters_by_time_range() {
     assert_eq!(batch.hits[0].path, Path::new("/tmp/new.txt"));
 }
 
+#[test]
+fn mime_patterns_are_or_with_each_other_and_and_with_other_filters() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for (path, mime_type, modified_ms, kind) in [
+        ("/tmp/image.png", "image/png", 30, SearchFileKind::File),
+        ("/tmp/vector.svg", "image/svg+xml", 10, SearchFileKind::File),
+        (
+            "/tmp/report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            35,
+            SearchFileKind::File,
+        ),
+        (
+            "/tmp/image-directory",
+            "image/png",
+            30,
+            SearchFileKind::Directory,
+        ),
+    ] {
+        let mut file = indexed_file(
+            path,
+            Path::new(path).file_name().unwrap().to_str().unwrap(),
+            "",
+        );
+        file.mime_type = Some(mime_type.to_owned());
+        file.modified_ms = Some(modified_ms);
+        file.kind = kind;
+        database.upsert_file(&file).unwrap();
+    }
+    let mut query = SearchQuery::global(1, "");
+    query.filters.kind = Some(SearchFileKind::File);
+    query.filters.mime_patterns = vec![
+        MimePattern::Prefix("image/".to_owned()),
+        MimePattern::Prefix("application/vnd.openxmlformats-officedocument.".to_owned()),
+    ];
+    query.filters.modified = Some(TimeRange {
+        start_ms: 20,
+        end_ms: 40,
+    });
+
+    let paths = database
+        .search(&query)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            Path::new("/tmp/image.png").to_path_buf(),
+            Path::new("/tmp/report.docx").to_path_buf(),
+        ])
+    );
+}
+
+#[test]
+fn search_window_reports_more_rows_only_when_an_extra_row_exists() {
+    fn search_count(file_count: usize) -> crate::model::SearchResultBatch {
+        let database = SearchDatabase::in_memory().unwrap();
+        for index in 0..file_count {
+            database
+                .upsert_file(&indexed_file(
+                    &format!("/tmp/needle-{index:03}.txt"),
+                    &format!("needle-{index:03}.txt"),
+                    "needle",
+                ))
+                .unwrap();
+        }
+        let mut query = SearchQuery::global(1, "needle");
+        query.limit = 100;
+        database.search(&query).unwrap()
+    }
+
+    let below_window = search_count(99);
+    assert_eq!(below_window.hits.len(), 99);
+    assert!(below_window.finished);
+    assert!(below_window.next_cursor.is_none());
+
+    let exact_window = search_count(100);
+    assert_eq!(exact_window.hits.len(), 100);
+    assert!(exact_window.finished);
+    assert!(exact_window.next_cursor.is_none());
+
+    let above_window = search_count(101);
+    assert_eq!(above_window.hits.len(), 100);
+    assert!(!above_window.finished);
+    assert_eq!(above_window.next_cursor.unwrap().offset, 100);
+}
+
 fn indexed_file(path: &str, display_name: &str, content: &str) -> IndexedFile {
     let path = Path::new(path).to_path_buf();
     IndexedFile {
@@ -609,13 +731,16 @@ fn inaccessible_content_stays_retained_hidden_and_retryable_until_recovery() {
         inaccessible_entry.observation_state,
         EntryObservationState::Inaccessible
     );
-    assert!(!inaccessible_entry.allows_signature_skip(FileSignature {
-        device: Some(1),
-        inode: Some(42),
-        mtime_ns: Some(99),
-        ctime_ns: Some(99),
-        size: file.size,
-    }));
+    assert!(!inaccessible_entry.allows_signature_skip(
+        FileSignature {
+            device: Some(1),
+            inode: Some(42),
+            mtime_ns: Some(99),
+            ctime_ns: Some(99),
+            size: file.size,
+        },
+        Some("text/plain"),
+    ));
     database.upsert_file(&file).unwrap();
     assert_eq!(
         database
@@ -988,34 +1113,56 @@ fn signatures_round_trip_and_detect_changes() {
     );
     let signature = stored.signature;
 
-    assert!(stored.allows_signature_skip(FileSignature {
-        device: Some(7),
-        inode: Some(42),
-        mtime_ns: Some(1_000),
-        ctime_ns: Some(1_000),
-        size: file.size,
-    }));
-    assert!(!stored.allows_signature_skip(FileSignature {
-        device: Some(7),
-        inode: Some(42),
-        mtime_ns: Some(2_000),
-        ctime_ns: Some(1_000),
-        size: file.size,
-    }));
-    assert!(!stored.allows_signature_skip(FileSignature {
-        device: Some(7),
-        inode: Some(42),
-        mtime_ns: Some(1_000),
-        ctime_ns: Some(2_000),
-        size: file.size,
-    }));
-    assert!(!stored.allows_signature_skip(FileSignature {
-        device: Some(8),
-        inode: Some(42),
-        mtime_ns: Some(1_000),
-        ctime_ns: Some(1_000),
-        size: file.size,
-    }));
+    assert!(stored.allows_signature_skip(
+        FileSignature {
+            device: Some(7),
+            inode: Some(42),
+            mtime_ns: Some(1_000),
+            ctime_ns: Some(1_000),
+            size: file.size,
+        },
+        Some("text/plain"),
+    ));
+    assert!(!stored.allows_signature_skip(
+        FileSignature {
+            device: Some(7),
+            inode: Some(42),
+            mtime_ns: Some(2_000),
+            ctime_ns: Some(1_000),
+            size: file.size,
+        },
+        Some("text/plain"),
+    ));
+    assert!(!stored.allows_signature_skip(
+        FileSignature {
+            device: Some(7),
+            inode: Some(42),
+            mtime_ns: Some(1_000),
+            ctime_ns: Some(2_000),
+            size: file.size,
+        },
+        Some("text/plain"),
+    ));
+    assert!(!stored.allows_signature_skip(
+        FileSignature {
+            device: Some(8),
+            inode: Some(42),
+            mtime_ns: Some(1_000),
+            ctime_ns: Some(1_000),
+            size: file.size,
+        },
+        Some("text/plain"),
+    ));
+    assert!(!stored.allows_signature_skip(
+        FileSignature {
+            device: Some(7),
+            inode: Some(42),
+            mtime_ns: Some(1_000),
+            ctime_ns: Some(1_000),
+            size: file.size,
+        },
+        Some("image/png"),
+    ));
     assert_eq!(signature.device, Some(7));
     assert_eq!(signature.inode, Some(42));
 }

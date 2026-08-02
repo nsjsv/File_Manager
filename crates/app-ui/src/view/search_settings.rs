@@ -63,7 +63,7 @@ fn content_indexing_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
 }
 
 fn status_overview_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
-    let service = &browser.search.service;
+    let service = &browser.search_service;
     let mut rows = Vec::new();
 
     match &service.endpoint {
@@ -190,7 +190,7 @@ fn summary_value_row(label: &'static str, value: impl Into<String>) -> Element<'
 }
 
 fn index_progress_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
-    let Some(status) = browser.search.service.confirmed_status.as_ref() else {
+    let Some(status) = browser.search_service.confirmed_status.as_ref() else {
         return vec![status_notice(
             "Index progress will appear after the service responds.",
         )];
@@ -254,15 +254,14 @@ fn index_phase_label(phase: &IndexPhase) -> &'static str {
 }
 
 fn recent_issue_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
-    if browser.search.service.incidents.is_empty() {
+    if browser.search_service.incidents.is_empty() {
         return vec![status_notice(
             "No search service issues detected during this app session.",
         )];
     }
 
     browser
-        .search
-        .service
+        .search_service
         .incidents
         .iter()
         .map(issue_row)
@@ -326,7 +325,7 @@ fn issue_row(incident: &SearchServiceIncident) -> Element<'_, Message> {
 }
 
 fn service_recovery_rows(browser: &FileBrowser) -> Vec<Element<'static, Message>> {
-    let recovery = &browser.search.service.recovery;
+    let recovery = &browser.search_service.recovery;
     let recovery_is_running = recovery.is_running();
     let restart_row = action_setting_row(
         "Restart Index Service",
@@ -484,9 +483,9 @@ mod tests {
     #[test]
     fn routine_background_refresh_does_not_change_overview_row_count() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        browser.search.service = SearchServiceState::new();
-        let initial_request = browser.search.service.begin_initial_status_request();
-        browser.search.service.accept_status_request(
+        browser.search_service = SearchServiceState::new();
+        let initial_request = browser.search_service.begin_initial_status_request();
+        browser.search_service.accept_status_request(
             initial_request,
             Ok(SearchServiceStatus {
                 phase: SearchServicePhase::Ready,
@@ -496,7 +495,7 @@ mod tests {
         );
         let settled_row_count = status_overview_rows(&browser).len();
 
-        let refresh_request = browser.search.service.request_status_refresh();
+        let refresh_request = browser.search_service.request_status_refresh();
 
         assert!(refresh_request.is_some());
         assert_eq!(status_overview_rows(&browser).len(), settled_row_count);

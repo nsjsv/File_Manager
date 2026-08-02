@@ -286,7 +286,7 @@ impl FileBrowser {
             crate::localization::translate_current("Properties - File Manager")
         } else if self.preview_window == Some(window) {
             crate::localization::translate_current("Preview - File Manager")
-        } else if self.search.is_active() {
+        } else if self.search_workspace.is_some() {
             crate::localization::translate_current("Search - File Manager")
         } else {
             crate::localization::translate_current("File Manager")
@@ -324,7 +324,7 @@ impl FileBrowser {
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
         self.cancel_window_control_reorder();
         self.shortcut_capture = None;
-        self.search.cancel_force_restart_confirmation();
+        self.search_service.cancel_force_restart_confirmation();
         if category != SettingsCategory::General {
             self.invalidate_startup_directory_validation();
         }
@@ -354,7 +354,7 @@ impl FileBrowser {
     pub(super) fn close_settings_window(&mut self) -> Task<Message> {
         self.cancel_window_control_reorder();
         self.shortcut_capture = None;
-        self.search.cancel_force_restart_confirmation();
+        self.search_service.cancel_force_restart_confirmation();
         self.invalidate_startup_directory_validation();
         let Some(window) = self.settings_window.take() else {
             return Task::none();
@@ -508,7 +508,7 @@ impl FileBrowser {
 
     pub(super) fn handle_focused_window_escape_pressed(&mut self) -> Task<Message> {
         if self.settings_window == Some(self.focused_window) {
-            if self.search.cancel_force_restart_confirmation() {
+            if self.search_service.cancel_force_restart_confirmation() {
                 return Task::none();
             }
             return self.close_settings_window();
@@ -662,7 +662,7 @@ impl FileBrowser {
         self.is_shutting_down = true;
         self.system_focused_window = None;
         self.maximized_windows.clear();
-        self.search.abandon_and_clear_input();
+        self.discard_search_workspace();
         self.invalidate_startup_directory_validation();
         let _ = self.operation_queue.prepare_for_shutdown();
         self.clear_file_properties_state();

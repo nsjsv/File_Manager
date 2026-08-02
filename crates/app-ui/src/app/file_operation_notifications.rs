@@ -19,6 +19,7 @@ struct DesktopNotificationText {
 
 enum FileOperationNotificationCompletion<'a> {
     Completed,
+    CompletedWithWarning(String),
     Failed(&'a str),
 }
 
@@ -35,7 +36,16 @@ impl FileBrowser {
 
         let notification_completion = match terminal_status {
             FileOperationTerminalStatus::Completed => {
-                FileOperationNotificationCompletion::Completed
+                let warning = match completion {
+                    FileOperationCompletion::Succeeded(outcome) => outcome.completion_warning(),
+                    _ => None,
+                };
+                match warning {
+                    Some(warning) => {
+                        FileOperationNotificationCompletion::CompletedWithWarning(warning)
+                    }
+                    None => FileOperationNotificationCompletion::Completed,
+                }
             }
             FileOperationTerminalStatus::Failed => {
                 let error = match completion {
@@ -89,8 +99,9 @@ fn file_operation_notification_text(
         return None;
     }
 
-    let summary_source = match completion {
-        FileOperationNotificationCompletion::Completed => {
+    let summary_source = match &completion {
+        FileOperationNotificationCompletion::Completed
+        | FileOperationNotificationCompletion::CompletedWithWarning(_) => {
             format!("{} completed", operation.title())
         }
         FileOperationNotificationCompletion::Failed(_) => {
@@ -108,6 +119,13 @@ fn file_operation_notification_text(
     };
     let body = match completion {
         FileOperationNotificationCompletion::Completed => item_summary,
+        FileOperationNotificationCompletion::CompletedWithWarning(warning) => {
+            let warning = localization::trash_tracking_warning(language, &warning);
+            format!(
+                "{item_summary}\n{}",
+                format_middle_ellipsized_text(&warning, NOTIFICATION_FAILURE_REASON_MAX_CHARS,)
+            )
+        }
         FileOperationNotificationCompletion::Failed(error) => format!(
             "{item_summary}\n{}",
             notification_failure_reason(error, language)
@@ -190,11 +208,11 @@ mod tests {
     }
 
     fn restore_entry() -> TrashRestoreEntry {
-        TrashRestoreEntry {
-            trash_path: PathBuf::from("/trash/report.txt"),
-            info_path: PathBuf::from("/trash/report.trashinfo"),
-            original_path: PathBuf::from("/home/user/report.txt"),
-        }
+        TrashRestoreEntry::from_historical_paths(
+            PathBuf::from("/trash/report.txt"),
+            PathBuf::from("/trash/report.trashinfo"),
+            PathBuf::from("/home/user/report.txt"),
+        )
     }
 
     fn notifying_operations() -> Vec<QueuedFileOperation> {
@@ -307,6 +325,34 @@ mod tests {
         )
         .expect("empty trash notification");
         assert_eq!(empty_trash.body, "回收站");
+    }
+
+    #[test]
+    fn completed_tracking_warning_is_localized_without_changing_the_success_summary() {
+        let operation = QueuedFileOperation::Trash {
+            paths: vec![PathBuf::from("/tmp/report.txt")],
+        };
+        let warning = "Moved to Trash, but undo information could not be recorded. 1 item";
+
+        let english = file_operation_notification_text(
+            &operation,
+            FileOperationNotificationCompletion::CompletedWithWarning(warning.to_owned()),
+            UiLanguage::English,
+        )
+        .expect("English warning notification");
+        let chinese = file_operation_notification_text(
+            &operation,
+            FileOperationNotificationCompletion::CompletedWithWarning(warning.to_owned()),
+            UiLanguage::Chinese,
+        )
+        .expect("Chinese warning notification");
+
+        assert_eq!(english.summary, "Move to Trash completed");
+        assert!(english
+            .body
+            .contains("undo information could not be recorded"));
+        assert_eq!(chinese.summary, "移到回收站已完成");
+        assert!(chinese.body.contains("无法记录精确的撤销信息"));
     }
 
     #[test]

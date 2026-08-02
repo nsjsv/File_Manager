@@ -190,7 +190,7 @@ fn repeated_overflow_while_recovering_keeps_one_follow_up() {
 
     pending.request_dirty_roots(vec![root.clone()], now + DIRTY_ROOT_QUIET_WINDOW);
     let first_finished_at = now + DIRTY_ROOT_QUIET_WINDOW;
-    pending.finish_dirty_root_recovery(&[root.clone()], true, first_finished_at);
+    pending.finish_dirty_root_recovery(std::slice::from_ref(&root), true, first_finished_at);
 
     assert!(pending
         .take_next_work(first_finished_at + DIRTY_ROOT_RETRY_BASE - Duration::from_millis(1))
@@ -213,7 +213,7 @@ fn new_overflow_does_not_shorten_an_existing_recovery_backoff() {
         Some(DaemonWorkRequest::DirtyRootRecovery { .. })
     ));
     pending.request_dirty_roots(vec![root.clone()], first_started_at);
-    pending.finish_dirty_root_recovery(&[root.clone()], true, first_started_at);
+    pending.finish_dirty_root_recovery(std::slice::from_ref(&root), true, first_started_at);
 
     pending.request_dirty_roots(
         vec![root.clone()],

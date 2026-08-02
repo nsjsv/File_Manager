@@ -190,6 +190,24 @@ pub(crate) async fn entry_from_path(
         false
     };
 
+    Ok(entry_from_metadata(
+        path,
+        name,
+        is_hidden,
+        &symlink_metadata,
+        is_broken_symlink,
+    ))
+}
+
+pub(crate) fn entry_from_metadata(
+    path: PathBuf,
+    name: OsString,
+    is_hidden: bool,
+    symlink_metadata: &std::fs::Metadata,
+    is_broken_symlink: bool,
+) -> DirectoryEntry {
+    let file_type = symlink_metadata.file_type();
+    let is_symlink = file_type.is_symlink();
     let kind = if file_type.is_dir() {
         FileKind::Directory
     } else if file_type.is_file() {
@@ -200,9 +218,9 @@ pub(crate) async fn entry_from_path(
         FileKind::Other
     };
 
-    let metadata = entry_metadata_from_fs_metadata(&symlink_metadata);
+    let metadata = entry_metadata_from_fs_metadata(symlink_metadata);
 
-    Ok(DirectoryEntry::with_file_name(
+    DirectoryEntry::with_file_name(
         path,
         name,
         kind,
@@ -210,7 +228,7 @@ pub(crate) async fn entry_from_path(
         is_hidden,
         is_symlink,
         is_broken_symlink,
-    ))
+    )
 }
 
 fn entry_metadata_from_fs_metadata(metadata: &std::fs::Metadata) -> EntryMetadata {

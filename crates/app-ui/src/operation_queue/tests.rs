@@ -642,6 +642,30 @@ fn finished_tasks_stay_until_queue_is_cleared() {
 }
 
 #[test]
+fn completed_warning_keeps_completed_status_and_marks_the_task_for_attention() {
+    let mut queue = FileOperationQueue::new();
+    queue.enqueue(sample_operation());
+    let task_id = queue.tasks()[0].id;
+
+    let (terminal_status, error) = queue.finish(
+        task_id,
+        FileOperationFinish::SucceededWithWarning("undo tracking failed".to_owned()),
+    );
+
+    assert_eq!(
+        terminal_status,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    assert!(error.is_none());
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Completed);
+    assert_eq!(
+        queue.tasks()[0].completion_warning.as_deref(),
+        Some("undo tracking failed")
+    );
+    assert!(queue.has_unread_warning_task());
+}
+
+#[test]
 fn pending_and_terminal_tasks_reject_completion_messages() {
     let mut queue = FileOperationQueue::new();
     queue.enqueue(sample_operation());

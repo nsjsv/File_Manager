@@ -1,5 +1,4 @@
 use std::num::NonZeroU32;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -17,8 +16,27 @@ use super::{
 };
 use crate::model::{SearchServiceDiagnosticKind, SearchServiceRecoveryAction};
 
+const SEARCH_ENDPOINT_SERVER_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn valid_snapshot_text() -> &'static str {
     "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\nFragmentPath=/home/test/.config/systemd/user/file-manager-search.service\nDropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/override.conf\nExecStart={ path=/home/test/.local/share/file-manager-dev/file-searchd ; argv[]=/home/test/.local/share/file-manager-dev/file-searchd ; }\n"
+}
+
+fn create_systemctl_test_peer(
+    temporary_directory: &Path,
+    executable_name: &str,
+    behavior_script: &str,
+) -> PathBuf {
+    let systemctl_path = temporary_directory.join(executable_name);
+    let fixture_executable =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search-systemctl");
+    std::os::unix::fs::symlink(fixture_executable, &systemctl_path).unwrap();
+    std::fs::write(
+        temporary_directory.join(format!("{executable_name}.behavior")),
+        behavior_script,
+    )
+    .unwrap();
+    systemctl_path
 }
 
 async fn create_valid_search_cgroup(cgroup_root: &Path) -> PathBuf {
@@ -39,14 +57,13 @@ async fn create_valid_search_cgroup(cgroup_root: &Path) -> PathBuf {
     cgroup_directory
 }
 
-async fn create_sequenced_recovery_systemctl(
+fn create_sequenced_recovery_systemctl(
     temporary_directory: &Path,
     initial_snapshot: &str,
     replacement_snapshot: &str,
 ) -> (PathBuf, PathBuf) {
     let systemctl_log_path = temporary_directory.join("recovery-systemctl.log");
     let show_count_path = temporary_directory.join("recovery-show-count");
-    let systemctl_path = temporary_directory.join("recovery-systemctl");
     let systemctl_script = format!(
         "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"{}\"\nif [[ \"$*\" == *\" show file-manager-search.service\" ]]; then\n    if [[ -f \"{}\" ]]; then\n        read -r show_count <\"{}\"\n    else\n        show_count=0\n    fi\n    if (( show_count == 0 )); then\n        printf '%s' '{}'\n    else\n        printf '%s' '{}'\n    fi\n    printf '%s' \"$((show_count + 1))\" >\"{}\"\nfi\n",
         systemctl_log_path.display(),
@@ -56,12 +73,8 @@ async fn create_sequenced_recovery_systemctl(
         replacement_snapshot,
         show_count_path.display(),
     );
-    tokio::fs::write(&systemctl_path, systemctl_script)
-        .await
-        .unwrap();
-    let mut permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&systemctl_path, permissions).unwrap();
+    let systemctl_path =
+        create_systemctl_test_peer(temporary_directory, "recovery-systemctl", &systemctl_script);
     (systemctl_path, systemctl_log_path)
 }
 
@@ -92,6 +105,44 @@ fn spawn_compatible_endpoint(
             .await
             .unwrap();
     })
+}
+
+async fn assert_search_endpoint_server_completed(endpoint_server: tokio::task::JoinHandle<()>) {
+    assert_search_endpoint_server_completed_within(endpoint_server, SEARCH_ENDPOINT_SERVER_TIMEOUT)
+        .await;
+}
+
+async fn assert_search_endpoint_server_completed_within(
+    mut endpoint_server: tokio::task::JoinHandle<()>,
+    completion_timeout: Duration,
+) {
+    match tokio::time::timeout(completion_timeout, &mut endpoint_server).await {
+        Ok(server_result) => server_result
+            .unwrap_or_else(|error| panic!("fake search endpoint server failed: {error}")),
+        Err(_) => {
+            endpoint_server.abort();
+            let cleanup_outcome = endpoint_server.await;
+            panic!(
+                "fake search endpoint server did not complete within {completion_timeout:?}; cleanup outcome: {cleanup_outcome:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "fake search endpoint server did not complete within 1ms")]
+async fn endpoint_server_completion_aborts_an_unresponsive_server() {
+    let endpoint_server = tokio::spawn(std::future::pending());
+
+    assert_search_endpoint_server_completed_within(endpoint_server, Duration::from_millis(1)).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "fake search endpoint server failed:")]
+async fn endpoint_server_completion_reports_server_failure() {
+    let endpoint_server = tokio::spawn(async { panic!("server protocol failed") });
+
+    assert_search_endpoint_server_completed(endpoint_server).await;
 }
 
 #[test]
@@ -267,16 +318,11 @@ fn unit_snapshot_rejects_missing_and_invalid_properties() {
 #[tokio::test]
 async fn systemctl_output_is_drained_with_a_hard_size_limit() {
     let temporary_directory = tempdir().unwrap();
-    let systemctl_path = temporary_directory.path().join("oversized-systemctl");
-    tokio::fs::write(
-        &systemctl_path,
+    let systemctl_path = create_systemctl_test_peer(
+        temporary_directory.path(),
+        "oversized-systemctl",
         "#!/usr/bin/env bash\nprintf '%070000d' 0\n",
-    )
-    .await
-    .unwrap();
-    let mut permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&systemctl_path, permissions).unwrap();
+    );
     let unit_controller = SearchUnitController {
         runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable: systemctl_path,
@@ -288,7 +334,10 @@ async fn systemctl_output_is_drained_with_a_hard_size_limit() {
         .await
         .expect_err("oversized stdout must be rejected");
 
-    assert!(error.contains("stdout exceeded"));
+    assert!(
+        error.contains("stdout exceeded"),
+        "unexpected bounded-output diagnostic: {error}"
+    );
 }
 
 #[test]
@@ -490,7 +539,7 @@ async fn endpoint_probe_uses_one_connection_for_owner_version_and_status() {
             .unwrap();
 
     assert_eq!(inspected_status, expected_status);
-    endpoint_server.await.unwrap();
+    assert_search_endpoint_server_completed(endpoint_server).await;
 }
 
 #[tokio::test]
@@ -532,7 +581,7 @@ async fn endpoint_probe_reports_expected_and_actual_identity() {
             daemon_build_id()
         )
     );
-    endpoint_server.await.unwrap();
+    assert_search_endpoint_server_completed(endpoint_server).await;
 }
 
 #[tokio::test]
@@ -541,7 +590,6 @@ async fn incompatible_endpoint_is_restarted_only_once_before_compatibility() {
     let cgroup_root = temporary_directory.path().join("cgroup");
     create_valid_search_cgroup(&cgroup_root).await;
     let systemctl_log_path = temporary_directory.path().join("systemctl.log");
-    let systemctl_path = temporary_directory.path().join("systemctl");
     let snapshot_text =
         valid_snapshot_text().replace("MainPID=42", &format!("MainPID={}", std::process::id()));
     let systemctl_script = format!(
@@ -549,12 +597,8 @@ async fn incompatible_endpoint_is_restarted_only_once_before_compatibility() {
         systemctl_log_path.display(),
         snapshot_text
     );
-    tokio::fs::write(&systemctl_path, systemctl_script)
-        .await
-        .unwrap();
-    let mut systemctl_permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
-    systemctl_permissions.set_mode(0o755);
-    std::fs::set_permissions(&systemctl_path, systemctl_permissions).unwrap();
+    let systemctl_path =
+        create_systemctl_test_peer(temporary_directory.path(), "systemctl", &systemctl_script);
 
     let socket_path = temporary_directory.path().join("search.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
@@ -614,7 +658,7 @@ async fn incompatible_endpoint_is_restarted_only_once_before_compatibility() {
         .unwrap();
 
     assert_eq!(service_status, expected_status);
-    endpoint_server.await.unwrap();
+    assert_search_endpoint_server_completed(endpoint_server).await;
     let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
     assert_eq!(
         systemctl_log
@@ -640,8 +684,7 @@ async fn graceful_recovery_retries_a_transient_disconnect_without_sending_sigkil
         temporary_directory.path(),
         &initial_snapshot,
         &replacement_snapshot,
-    )
-    .await;
+    );
     let socket_path = temporary_directory.path().join("recovery.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
     let expected_status = SearchServiceStatus {
@@ -672,7 +715,7 @@ async fn graceful_recovery_retries_a_transient_disconnect_without_sending_sigkil
     .unwrap();
 
     assert_eq!(status, expected_status);
-    endpoint_server.await.unwrap();
+    assert_search_endpoint_server_completed(endpoint_server).await;
     let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
     let mutation_actions = systemctl_log
         .lines()
@@ -702,8 +745,7 @@ async fn force_recovery_kills_the_whole_control_group_before_restart() {
         temporary_directory.path(),
         &initial_snapshot,
         &replacement_snapshot,
-    )
-    .await;
+    );
     let socket_path = temporary_directory.path().join("force-recovery.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
     let expected_status = SearchServiceStatus {
@@ -727,7 +769,7 @@ async fn force_recovery_kills_the_whole_control_group_before_restart() {
     .unwrap();
 
     assert_eq!(status, expected_status);
-    endpoint_server.await.unwrap();
+    assert_search_endpoint_server_completed(endpoint_server).await;
     let systemctl_log = tokio::fs::read_to_string(systemctl_log_path).await.unwrap();
     let mutation_actions = systemctl_log
         .lines()
@@ -748,18 +790,16 @@ async fn force_recovery_kills_the_whole_control_group_before_restart() {
 async fn force_recovery_stops_after_a_systemctl_kill_failure() {
     let temporary_directory = tempdir().unwrap();
     let systemctl_log_path = temporary_directory.path().join("failed-systemctl.log");
-    let systemctl_path = temporary_directory.path().join("failed-systemctl");
     let systemctl_script = format!(
         "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"{}\"\nif [[ \"$*\" == *\" show file-manager-search.service\" ]]; then\n    printf '%s' '{}'\nelif [[ \"$*\" == *\" kill file-manager-search.service\" ]]; then\n    printf '%s\\n' 'permission denied' >&2\n    exit 17\nfi\n",
         systemctl_log_path.display(),
         valid_snapshot_text(),
     );
-    tokio::fs::write(&systemctl_path, systemctl_script)
-        .await
-        .unwrap();
-    let mut permissions = std::fs::metadata(&systemctl_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&systemctl_path, permissions).unwrap();
+    let systemctl_path = create_systemctl_test_peer(
+        temporary_directory.path(),
+        "failed-systemctl",
+        &systemctl_script,
+    );
     let unit_controller = SearchUnitController {
         runtime_identity: SearchRuntimeIdentity::Release,
         systemctl_executable: systemctl_path,
@@ -805,8 +845,7 @@ async fn recovery_immediately_reports_an_incompatible_replacement_endpoint() {
         temporary_directory.path(),
         &initial_snapshot,
         &replacement_snapshot,
-    )
-    .await;
+    );
     let socket_path = temporary_directory
         .path()
         .join("incompatible-recovery.sock");
@@ -845,10 +884,11 @@ async fn recovery_immediately_reports_an_incompatible_replacement_endpoint() {
     .expect("a stable incompatible replacement is not a transient readiness failure")
     .unwrap_err();
 
-    endpoint_server.await.unwrap();
     assert_eq!(
         error.kind,
-        SearchServiceDiagnosticKind::ComponentIncompatible
+        SearchServiceDiagnosticKind::ComponentIncompatible,
+        "unexpected recovery diagnostic: {}",
+        error.technical_detail
     );
     assert!(error
         .technical_detail
@@ -865,4 +905,5 @@ async fn recovery_immediately_reports_an_incompatible_replacement_endpoint() {
     assert!(error
         .technical_detail
         .contains("reinstall the search service components"));
+    assert_search_endpoint_server_completed(endpoint_server).await;
 }

@@ -12,7 +12,7 @@ use crate::config::SearchIndexConfig;
 use crate::database::{EntryStageProgress, IndexedEntryStageState, SearchDatabase};
 use crate::error::SearchError;
 use crate::extractor::{CommandSpec, ExtractionExecutionMode, ExtractionStatus};
-use crate::model::SearchQuery;
+use crate::model::{MimePattern, SearchQuery};
 use crate::writer::IndexWriter;
 
 use super::{collapse_affected_prefixes, observed_file_signature, SearchIndexer};
@@ -170,6 +170,37 @@ async fn indexes_text_and_skips_hidden_directories() {
     let batch = reader.search(&SearchQuery::global(1, "needle")).unwrap();
     assert_eq!(batch.hits.len(), 1);
     assert_eq!(batch.hits[0].display_name, "visible.txt");
+}
+
+#[tokio::test]
+async fn warm_check_reclassifies_unchanged_files_when_mime_semantics_changed() {
+    let content = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let path = content.path().join("legacy-image.png");
+    fs::write(&path, "image payload").unwrap();
+
+    let writer = writer_in(&db_dir);
+    let indexer = SearchIndexer::new(Arc::clone(&writer), config_for(content.path()));
+    indexer.rebuild().await.unwrap();
+    let database_path = db_dir.path().join("search.sqlite");
+    Connection::open(&database_path)
+        .unwrap()
+        .execute(
+            "UPDATE files SET mime_type = NULL WHERE display_name = 'legacy-image.png'",
+            [],
+        )
+        .unwrap();
+
+    let refreshed = indexer.rebuild().await.unwrap();
+    assert_eq!(refreshed.reindexed, 1);
+    let reader = SearchDatabase::open_read_only(&database_path).unwrap();
+    let mut image_query = SearchQuery::global(1, "");
+    image_query.filters.mime_patterns = vec![MimePattern::Prefix("image/".to_owned())];
+    assert_eq!(reader.search(&image_query).unwrap().hits.len(), 1);
+    drop(reader);
+
+    let converged = indexer.rebuild().await.unwrap();
+    assert_eq!(converged.reindexed, 0);
 }
 
 #[tokio::test]
@@ -525,7 +556,7 @@ async fn permission_ctime_change_hides_and_recovers_an_unchanged_file() {
     let indexer = SearchIndexer::new(Arc::clone(&writer), config_for(content.path()));
     indexer.rebuild().await.unwrap();
 
-    fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
     let hidden = indexer.rebuild_paths(vec![path.clone()]).await.unwrap();
     assert_eq!(hidden.reindexed, 1);
     let reader = SearchDatabase::open_read_only(&db_dir.path().join("search.sqlite")).unwrap();

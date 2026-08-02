@@ -218,6 +218,44 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_unavailable_directories_recover_to_the_first_available_ancestor() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let available_ancestor = PathBuf::from("/workspace");
+        let unavailable_parent = available_ancestor.join("project");
+        let unavailable_directory = unavailable_parent.join("removed");
+        browser.current_dir = unavailable_directory.clone();
+        browser.directory_load_generation = 7;
+        browser.is_loading = true;
+        reset_recorded_global_errors();
+
+        drop(browser.accept_directory_load_failure(
+            DirectoryLoadRequest {
+                pane_id: BrowserPaneId::PRIMARY,
+                path: unavailable_directory.clone(),
+                generation: 7,
+            },
+            unavailable_failure(&unavailable_directory),
+        ));
+        assert_eq!(browser.current_dir, unavailable_parent.clone());
+        assert_eq!(browser.directory_load_generation, 8);
+
+        drop(browser.accept_directory_load_failure(
+            DirectoryLoadRequest {
+                pane_id: BrowserPaneId::PRIMARY,
+                path: unavailable_parent.clone(),
+                generation: 8,
+            },
+            unavailable_failure(&unavailable_parent),
+        ));
+
+        assert_eq!(browser.current_dir, available_ancestor);
+        assert_eq!(browser.directory_load_generation, 9);
+        assert!(browser.is_loading);
+        assert_eq!(browser.current_error(), None);
+        assert_eq!(recorded_global_error_count(), 0);
+    }
+
+    #[test]
     fn stale_unavailable_directory_failure_does_not_change_navigation_state() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let current_directory = PathBuf::from("/workspace/current");

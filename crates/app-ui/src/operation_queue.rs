@@ -198,6 +198,7 @@ impl FileOperationStatus {
 
 pub(crate) enum FileOperationFinish {
     Succeeded,
+    SucceededWithWarning(String),
     Canceled,
     Failed(String),
     RecoveryInterrupted(String),
@@ -225,6 +226,7 @@ pub(crate) struct FileOperationTask {
     pub(crate) operation: QueuedFileOperation,
     pub(crate) status: FileOperationStatus,
     pub(crate) progress: FileOperationProgress,
+    pub(crate) completion_warning: Option<String>,
     pub(crate) error: Option<String>,
     is_read: bool,
     cancel: CancellationToken,
@@ -319,6 +321,12 @@ impl FileOperationQueue {
         self.tasks.iter().filter(|task| !task.is_read).count()
     }
 
+    pub(crate) fn has_unread_warning_task(&self) -> bool {
+        self.tasks
+            .iter()
+            .any(|task| !task.is_read && task.completion_warning.is_some())
+    }
+
     pub(crate) fn has_unread_failed_task(&self) -> bool {
         self.tasks
             .iter()
@@ -366,6 +374,7 @@ impl FileOperationQueue {
             operation,
             status: FileOperationStatus::Pending,
             progress: FileOperationProgress::pending(),
+            completion_warning: None,
             error: None,
             is_read,
             cancel: CancellationToken::new(),
@@ -451,6 +460,16 @@ impl FileOperationQueue {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Completed;
                 task.progress.mark_complete();
+                task.completion_warning = None;
+                task.error = None;
+                task.is_read = self.is_panel_open;
+                self.persist_task_state(position)
+            }
+            FileOperationFinish::SucceededWithWarning(warning) => {
+                let task = &mut self.tasks[position];
+                task.status = FileOperationStatus::Completed;
+                task.progress.mark_complete();
+                task.completion_warning = Some(warning);
                 task.error = None;
                 task.is_read = self.is_panel_open;
                 self.persist_task_state(position)

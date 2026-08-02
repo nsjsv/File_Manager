@@ -1,15 +1,16 @@
 use file_search::{
     default_socket_path, search_directory_fallback, search_via_socket_with_cancellation,
-    SearchError, SearchExcludeRules, SearchProviderFailure, SearchQuery,
+    DirectoryFallbackLimits, SearchError, SearchExcludeRules, SearchProviderFailure, SearchQuery,
 };
 use iced::futures::SinkExt;
 use iced::Task;
 use tokio_util::sync::CancellationToken;
 
-use crate::model::{DirectoryFallbackCompletion, IndexedSearchOutcome, Message};
+use crate::model::{DirectoryFallbackOutcome, IndexedSearchOutcome, Message};
 
 const DIRECTORY_FALLBACK_STREAM_CAPACITY: usize = 8;
 const DIRECTORY_FALLBACK_WORKER_CAPACITY: usize = 4;
+pub(crate) const DIRECTORY_FALLBACK_ENTRY_BUDGET: usize = 50_000;
 
 pub(crate) fn search_command(
     generation: u64,
@@ -34,11 +35,19 @@ pub(crate) fn directory_fallback_search_command(
                 tokio::sync::mpsc::channel(DIRECTORY_FALLBACK_WORKER_CAPACITY);
             let worker_cancellation = cancellation.clone();
             let fallback_worker = tokio::task::spawn_blocking(move || {
-                search_directory_fallback(&query, &rules, &worker_cancellation, |hits| {
-                    if batch_sender.blocking_send(hits).is_err() {
-                        worker_cancellation.cancel();
-                    }
-                })
+                search_directory_fallback(
+                    &query,
+                    &rules,
+                    DirectoryFallbackLimits {
+                        max_inspected_entries: DIRECTORY_FALLBACK_ENTRY_BUDGET,
+                    },
+                    &worker_cancellation,
+                    |hits| {
+                        if batch_sender.blocking_send(hits).is_err() {
+                            worker_cancellation.cancel();
+                        }
+                    },
+                )
             });
 
             while let Some(hits) = batch_receiver.recv().await {
@@ -55,10 +64,10 @@ pub(crate) fn directory_fallback_search_command(
             drop(batch_receiver);
 
             let completion = match fallback_worker.await {
-                Ok(Ok(())) => DirectoryFallbackCompletion::Completed,
-                Ok(Err(SearchError::Cancelled)) => DirectoryFallbackCompletion::Cancelled,
-                Ok(Err(error)) => DirectoryFallbackCompletion::Failed(error.to_string()),
-                Err(error) => DirectoryFallbackCompletion::Failed(format!(
+                Ok(Ok(completion)) => DirectoryFallbackOutcome::Completed(completion),
+                Ok(Err(SearchError::Cancelled)) => DirectoryFallbackOutcome::Cancelled,
+                Ok(Err(error)) => DirectoryFallbackOutcome::Failed(error.to_string()),
+                Err(error) => DirectoryFallbackOutcome::Failed(format!(
                     "directory fallback worker failed: {error}"
                 )),
             };

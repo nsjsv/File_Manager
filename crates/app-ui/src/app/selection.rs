@@ -729,6 +729,11 @@ impl FileBrowser {
         paths
     }
 
+    pub(super) fn active_file_selection(&self) -> Vec<PathBuf> {
+        self.active_search_selection()
+            .unwrap_or_else(|| self.selected_paths_for_operation())
+    }
+
     fn file_delete_action_for_selection(&self) -> FileDeleteAction {
         let paths = self.selected_paths_for_operation();
         let has_remote_path = paths.iter().any(|path| self.path_is_remote_mount(path));

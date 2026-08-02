@@ -3,7 +3,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use desktop_linux::{WaylandDndController, WaylandDndEvent, WaylandDndWindowHandle};
+use desktop_linux::{
+    DesktopActivationRuntime, WaylandDndController, WaylandDndEvent, WaylandDndWindowHandle,
+};
 use file_core::watch_directory;
 use iced::futures::SinkExt;
 use iced::{Subscription, Task, Theme};
@@ -19,9 +21,19 @@ const DIRECTORY_WATCH_CHANNEL_SIZE: usize = 8;
 const SIDEBAR_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
-pub(crate) fn run(application_launch_request: ApplicationLaunchRequest) -> iced::Result {
+pub(crate) fn run(
+    application_launch_request: ApplicationLaunchRequest,
+    file_manager_activation: Arc<DesktopActivationRuntime>,
+    initial_desktop_activation: Option<desktop_linux::DesktopActivationEvent>,
+) -> iced::Result {
     iced::daemon(
-        move || FileBrowser::boot(application_launch_request.clone()),
+        move || {
+            FileBrowser::boot(
+                application_launch_request.clone(),
+                Arc::clone(&file_manager_activation),
+                initial_desktop_activation.clone(),
+            )
+        },
         FileBrowser::update,
         FileBrowser::view,
     )
@@ -29,6 +41,64 @@ pub(crate) fn run(application_launch_request: ApplicationLaunchRequest) -> iced:
     .theme(FileBrowser::theme)
     .title(FileBrowser::title)
     .run()
+}
+
+pub(super) fn desktop_activation_subscription(
+    runtime: Arc<DesktopActivationRuntime>,
+) -> Subscription<Message> {
+    Subscription::run_with(
+        DesktopActivationSubscriptionState { runtime },
+        desktop_activation_stream,
+    )
+}
+
+#[derive(Debug, Clone)]
+struct DesktopActivationSubscriptionState {
+    runtime: Arc<DesktopActivationRuntime>,
+}
+
+impl PartialEq for DesktopActivationSubscriptionState {
+    fn eq(&self, other: &Self) -> bool {
+        self.runtime.identity() == other.runtime.identity()
+    }
+}
+
+impl Eq for DesktopActivationSubscriptionState {}
+
+impl std::hash::Hash for DesktopActivationSubscriptionState {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.runtime.identity().hash(state);
+    }
+}
+
+fn desktop_activation_stream(
+    state: &DesktopActivationSubscriptionState,
+) -> impl iced::futures::Stream<Item = Message> + 'static {
+    let runtime = Arc::clone(&state.runtime);
+    iced::stream::channel(16, async move |mut output| {
+        let Some(mut receiver) = runtime.take_event_receiver() else {
+            let _ = output
+                .send(Message::DesktopActivationRuntimeFailed(
+                    "desktop activation receiver was already taken".to_owned(),
+                ))
+                .await;
+            return;
+        };
+        while let Some(event) = receiver.recv().await {
+            if output
+                .send(Message::DesktopActivationReceived(event))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+        let _ = output
+            .send(Message::DesktopActivationRuntimeFailed(
+                "desktop activation channel closed".to_owned(),
+            ))
+            .await;
+    })
 }
 
 pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Message> {

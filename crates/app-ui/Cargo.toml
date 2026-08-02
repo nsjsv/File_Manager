@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 blake3.workspace = true
+chrono.workspace = true
 dark-light = "2.0.0"
 desktop-linux = { path = "../desktop-linux" }
 dirs.workspace = true
@@ -20,6 +21,7 @@ pulldown-cmark = "0.13.4"
 regex = "1.12.3"
 resvg.workspace = true
 rodio = "0.22.2"
+rustix.workspace = true
 serde_json.workspace = true
 thumbnails = { path = "../thumbnails" }
 time.workspace = true
@@ -31,5 +33,6 @@ tracing-journald.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+chrono-tz = "0.10.4"
 iced_runtime = "0.14"
 tempfile.workspace = true

@@ -5,8 +5,11 @@ use crate::config::UiLanguage;
 
 mod file_operation_notifications;
 mod index_status;
+mod properties;
 mod search_service_recovery;
 mod search_service_status;
+mod search_workspace;
+mod trash;
 
 static CURRENT_LANGUAGE: AtomicU8 = AtomicU8::new(UiLanguage::English.as_u8());
 
@@ -35,6 +38,10 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
         return Cow::Owned(translated);
     }
 
+    if let Some(translated) = properties::translate(text) {
+        return Cow::Owned(translated);
+    }
+
     if let Some(translated) = search_service_recovery::translate(text) {
         return Cow::Owned(translated);
     }
@@ -47,6 +54,10 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
         return Cow::Owned(translated);
     }
 
+    if let Some(translated) = search_workspace::translate(text) {
+        return Cow::Owned(translated);
+    }
+
     if let Some(translated) = exact_translation(text) {
         return Cow::Borrowed(translated);
     }
@@ -56,6 +67,26 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
     }
 
     Cow::Borrowed(text)
+}
+
+pub(crate) fn trash_refresh_failed(error: &str) -> String {
+    trash::refresh_failed(current_language(), error)
+}
+
+pub(crate) fn trash_additional_warning_count(count: usize) -> String {
+    trash::additional_warning_count(current_language(), count)
+}
+
+pub(crate) fn trash_warning_summary(count: usize) -> String {
+    trash::warning_summary(current_language(), count)
+}
+
+pub(crate) fn trash_tracking_warning(language: UiLanguage, warning: &str) -> String {
+    trash::tracking_warning(language, warning)
+}
+
+pub(crate) fn current_trash_tracking_warning(warning: &str) -> String {
+    trash::tracking_warning(current_language(), warning)
 }
 
 pub(crate) fn detect_system_language() -> UiLanguage {
@@ -132,17 +163,11 @@ fn dynamic_translation(text: &str) -> Option<String> {
     if let Some(size) = text.strip_prefix("Maximum content extraction: ") {
         return Some(format!("最大内容提取大小：{size}"));
     }
-    if let Some(error) = text.strip_prefix("Search endpoint unavailable: ") {
-        return Some(format!("搜索端点不可用：{error}"));
-    }
     if let Some(error) = text.strip_prefix("Service degraded: ") {
         return Some(format!("服务已降级：{error}"));
     }
     if let Some(error) = text.strip_prefix("Service failed: ") {
         return Some(format!("服务失败：{error}"));
-    }
-    if let Some(error) = text.strip_prefix("Indexed queries unavailable: ") {
-        return Some(format!("索引查询不可用：{error}"));
     }
     if let Some(size) = text.strip_prefix("Duration unknown · ") {
         return Some(format!("时长未知 · {size}"));
@@ -271,12 +296,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Settings - File Manager" => Some("设置 - 文件管理器"),
         "Properties - File Manager" => Some("属性 - 文件管理器"),
         "Preview - File Manager" => Some("预览 - 文件管理器"),
-        "Search - File Manager" => Some("搜索 - 文件管理器"),
         "Closing window..." => Some("正在关闭窗口..."),
         "Settings" => Some("设置"),
-        "Search" => Some("搜索"),
-        "Searching..." => Some("正在搜索..."),
-        "No search results" => Some("没有搜索结果"),
         "General" => Some("通用"),
         "Appearance" => Some("外观"),
         "Files" => Some("文件"),
@@ -287,10 +308,11 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "No logs for this level." => Some("当前级别没有日志。"),
         "Error" => Some("错误"),
         "Warning" => Some("警告"),
+        "Show warning details" => Some("显示警告详情"),
+        "Hide warning details" => Some("隐藏警告详情"),
         "Info" => Some("信息"),
         "Debug" => Some("调试"),
         "App" => Some("应用"),
-        "Search Service" => Some("搜索服务"),
         "File display" => Some("文件显示"),
         "Window controls" => Some("窗口控制"),
         "Main window layout" => Some("主窗口布局"),
@@ -310,14 +332,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Restore defaults" => Some("恢复默认"),
         "Startup" => Some("启动"),
         "Terminal" => Some("终端"),
-        "Service and Index" => Some("服务与索引"),
-        "Search endpoint connected" => Some("搜索端点已连接"),
-        "Search endpoint is starting…" => Some("搜索端点正在启动…"),
-        "Service: starting" => Some("服务：正在启动"),
-        "Service: ready" => Some("服务：就绪"),
-        "Service: shutting down" => Some("服务：正在关闭"),
-        "Indexed queries: available" => Some("索引查询：可用"),
-        "Index File Contents" => Some("索引文件内容"),
         "File Operations" => Some("文件操作"),
         "Verification" => Some("校验"),
         "Rendering" => Some("渲染"),
@@ -395,6 +409,9 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Restore" => Some("恢复"),
         "Delete Permanently" => Some("永久删除"),
         "Empty Trash" => Some("清空回收站"),
+        "Moved to Trash, but undo information could not be recorded." => {
+            Some("项目已移到回收站，但无法记录精确的撤销信息。")
+        }
         "Copy" => Some("复制"),
         "Move" => Some("移动"),
         "Create Archive" => Some("创建归档"),
@@ -732,82 +749,5 @@ fn exact_translation(text: &str) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_chinese_from_lang_prefix() {
-        let language = detect_system_language_with(|key| match key {
-            "LANG" => Some("zh_CN.UTF-8".to_owned()),
-            _ => None,
-        });
-        assert_eq!(language, UiLanguage::Chinese);
-    }
-
-    #[test]
-    fn detects_chinese_from_language_fallback() {
-        let language = detect_system_language_with(|key| match key {
-            "LANGUAGE" => Some("en_US:zh_CN".to_owned()),
-            _ => None,
-        });
-        assert_eq!(language, UiLanguage::Chinese);
-    }
-
-    #[test]
-    fn defaults_to_english_for_non_chinese_locale() {
-        let language = detect_system_language_with(|key| match key {
-            "LANG" => Some("en_US.UTF-8".to_owned()),
-            _ => None,
-        });
-        assert_eq!(language, UiLanguage::English);
-    }
-
-    #[test]
-    fn translates_known_static_text() {
-        for text in [
-            "Search",
-            "Logs",
-            "Appearance",
-            "Files",
-            "Startup location",
-            "Service and Index",
-            "Index File Contents",
-            "Discrete GPU",
-            "Audio preview",
-            "Text preview is not ready",
-            "No pending conflicts",
-            "File",
-            "Symbolic Link",
-            "No compression",
-            "Open Terminal Here",
-        ] {
-            assert_ne!(translate(UiLanguage::Chinese, text), text);
-        }
-    }
-
-    #[test]
-    fn translates_known_dynamic_text() {
-        for (text, expected) in [
-            (
-                "Progress: 12,345 items scanned",
-                "进度：已扫描 12,345 个项目",
-            ),
-            ("Indexed: 98,765 items", "已索引：98,765 个项目"),
-            (
-                "Index maintenance: Degraded (watch gap)",
-                "索引维护：已降级（watch gap）",
-            ),
-            (
-                "Search endpoint unavailable: socket closed",
-                "搜索端点不可用：socket closed",
-            ),
-            (
-                "Maximum content extraction: 8 MiB",
-                "最大内容提取大小：8 MiB",
-            ),
-            ("Volume 75%", "音量 75%"),
-        ] {
-            assert_eq!(translate(UiLanguage::Chinese, text), expected);
-        }
-    }
-}
+#[path = "localization/tests.rs"]
+mod tests;

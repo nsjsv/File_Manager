@@ -1,4 +1,4 @@
-use file_core::{DirectoryEntry, DirectoryScan, FileKind, TrashScan};
+use file_core::{DirectoryEntry, DirectoryScan, FileKind};
 use iced::Task;
 use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
@@ -6,7 +6,6 @@ use tokio_util::sync::CancellationToken;
 use super::FileBrowser;
 use crate::commands::{
     delayed_thumbnail_refresh_command, load_directory_command, load_expanded_directory_command,
-    load_trash_command,
 };
 use crate::model::{
     trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext,
@@ -218,74 +217,8 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn accept_trash_scan(
-        &mut self,
-        pane_id: crate::model::BrowserPaneId,
-        scan: TrashScan,
-    ) -> Task<Message> {
-        if pane_id != self.active_pane_id() {
-            let Some(pane) = self.pane_by_id_mut(pane_id) else {
-                return Task::none();
-            };
-            if !pane.is_trash_view {
-                return Task::none();
-            }
-
-            pane.current_dir = trash_location_path();
-            pane.trash_entries = scan.entries;
-            pane.entries = pane
-                .trash_entries
-                .iter()
-                .map(|trash_entry| trash_entry.entry.clone())
-                .collect();
-            if pane.view_mode == crate::model::BrowserViewMode::Icons {
-                crate::model::retain_direct_entry_selection(
-                    &pane.entries,
-                    &mut pane.selected,
-                    &mut pane.selected_paths,
-                    &mut pane.selection_anchor,
-                );
-            }
-            pane.directory_loading_placeholder_entries.clear();
-            pane.deepest_open_column_directory = None;
-            pane.expanded_directories.clear();
-            pane.is_loading = false;
-            pane.sync_active_tab_state();
-            return Task::batch([
-                delayed_thumbnail_refresh_command(pane_id, pane.current_dir.clone()),
-                self.reveal_address_bar_current_segment(pane_id),
-            ]);
-        }
-
-        if !self.is_trash_view {
-            return Task::none();
-        }
-
-        self.current_dir = trash_location_path();
-        self.trash_entries = scan.entries;
-        self.entries = self
-            .trash_entries
-            .iter()
-            .map(|trash_entry| trash_entry.entry.clone())
-            .collect();
-        if self.view_mode == crate::model::BrowserViewMode::Icons {
-            self.retain_direct_entry_selection();
-        }
-        self.directory_loading_placeholder_entries.clear();
-        self.deepest_open_column_directory = None;
-        self.expanded_directories.clear();
-        self.is_loading = false;
-        self.clear_global_error();
-        self.sync_active_tab_state();
-        Task::batch([
-            delayed_thumbnail_refresh_command(pane_id, self.current_dir.clone()),
-            self.request_browser_session_save(),
-        ])
-    }
-
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
         let cancel_address_editing = self.cancel_address_editing();
-        self.search.abandon_and_clear_input();
         let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
         {
@@ -319,9 +252,16 @@ impl FileBrowser {
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
         let cancel_address_editing = self.cancel_address_editing();
-        self.search.abandon_and_clear_input();
         let pane_id = self.active_pane_id();
-        let placeholder_entries = self.capture_directory_loading_placeholder_entries();
+        let cached_entries = self
+            .trash_refresh
+            .snapshot()
+            .map(|snapshot| snapshot.entries.clone());
+        let placeholder_entries = if cached_entries.is_some() {
+            Vec::new()
+        } else {
+            self.capture_directory_loading_placeholder_entries()
+        };
         if mode == NavigationMode::RecordHistory && !self.is_trash_view {
             self.back_stack.push(self.current_dir.clone());
             self.forward_stack.clear();
@@ -329,22 +269,27 @@ impl FileBrowser {
         self.clear_icon_grid_expansion();
         self.current_dir = trash_location_path();
         self.is_trash_view = true;
-        self.entries.clear();
+        let has_cached_entries = cached_entries.is_some();
+        self.trash_entries = cached_entries.unwrap_or_default();
+        self.entries = self
+            .trash_entries
+            .iter()
+            .map(|trash_entry| trash_entry.entry.clone())
+            .collect();
         self.directory_loading_placeholder_entries = placeholder_entries;
-        self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.cancel_active_expanded_directory_loads();
         self.expanded_directories.clear();
         self.column_browser_viewport = Default::default();
         self.column_viewports.clear();
         self.clear_selection_context();
-        self.is_loading = true;
+        self.is_loading = !has_cached_entries;
         self.clear_global_error();
         self.cancel_active_directory_load();
         self.sync_active_tab_state();
         Task::batch([
             cancel_address_editing,
-            load_trash_command(pane_id, self.options.clone()),
+            self.request_trash_snapshot_refresh(),
             self.request_browser_session_save(),
             self.reveal_address_bar_current_segment(pane_id),
         ])
@@ -352,6 +297,9 @@ impl FileBrowser {
 
     pub(super) fn reload_current(&mut self) -> Task<Message> {
         self.invalidate_list_directory_summaries_for_pane(self.active_pane_id());
+        if self.is_trash_view {
+            self.invalidate_trash_snapshot_refresh();
+        }
         self.reload_current_preserving_list_directory_summaries()
     }
 
@@ -366,13 +314,13 @@ impl FileBrowser {
         if self.is_trash_view {
             self.clear_icon_grid_expansion();
             self.directory_loading_placeholder_entries.clear();
-            self.is_loading = true;
+            self.is_loading = self.trash_refresh.snapshot().is_none();
             self.clear_global_error();
             self.cancel_active_directory_load();
             self.deepest_open_column_directory = None;
             self.cancel_active_expanded_directory_loads();
             self.expanded_directories.clear();
-            return load_trash_command(self.active_pane_id(), self.options.clone());
+            return self.request_trash_snapshot_refresh();
         }
 
         self.directory_loading_placeholder_entries.clear();
@@ -405,8 +353,10 @@ impl FileBrowser {
         &mut self,
     ) -> Task<Message> {
         let active_pane_id = self.active_pane_id();
-        let mut commands =
-            vec![self.schedule_current_directory_reload_preserving_list_directory_summaries()];
+        let mut commands = vec![
+            self.refresh_trash_snapshot_for_visible_panes(),
+            self.schedule_current_directory_reload_preserving_list_directory_summaries(),
+        ];
         self.sync_active_pane_state();
 
         for pane_id in self.pane_layout.visible_pane_ids() {
@@ -441,12 +391,17 @@ impl FileBrowser {
         pane_id: BrowserPaneId,
     ) -> Task<Message> {
         let options = self.options.clone();
+        let has_trash_snapshot = self.trash_refresh.snapshot().is_some();
         let Some(pane) = self.pane_by_id_mut(pane_id) else {
             return Task::none();
         };
 
         pane.directory_loading_placeholder_entries.clear();
-        pane.is_loading = true;
+        pane.is_loading = if pane.is_trash_view {
+            !has_trash_snapshot
+        } else {
+            true
+        };
 
         if pane.is_trash_view {
             pane.deepest_open_column_directory = None;
@@ -455,7 +410,7 @@ impl FileBrowser {
             }
             pane.expanded_directories.clear();
             pane.sync_active_tab_state();
-            return load_trash_command(pane_id, options);
+            return self.request_trash_snapshot_refresh();
         }
 
         let current_dir = pane.current_dir.clone();
@@ -627,7 +582,7 @@ impl FileBrowser {
         self.selection_marquee = None;
     }
 
-    fn clear_transient_interaction_state(&mut self) {
+    pub(super) fn clear_transient_interaction_state(&mut self) {
         self.drag_selection_anchor = None;
         self.column_resize_drag = None;
         self.file_drag = None;

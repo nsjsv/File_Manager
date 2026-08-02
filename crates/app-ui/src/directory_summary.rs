@@ -25,40 +25,92 @@ impl DirectoryContentsSummary {
 pub(crate) enum DirectorySummaryError {
     Cancelled,
     Io(std::io::Error),
+    Overflow(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectorySummaryScope {
+    DirectChildren,
+    Descendants,
 }
 
 pub(crate) fn read_directory_contents_summary(
     path: &Path,
     cancellation: CancellationToken,
+    progress: impl FnMut(DirectoryContentsSummary),
+) -> Result<DirectoryContentsSummary, DirectorySummaryError> {
+    read_directory_summary(
+        path,
+        cancellation,
+        DirectorySummaryScope::DirectChildren,
+        progress,
+    )
+}
+
+pub(crate) fn read_directory_tree_summary(
+    path: &Path,
+    cancellation: CancellationToken,
+    progress: impl FnMut(DirectoryContentsSummary),
+) -> Result<DirectoryContentsSummary, DirectorySummaryError> {
+    read_directory_summary(
+        path,
+        cancellation,
+        DirectorySummaryScope::Descendants,
+        progress,
+    )
+}
+
+fn read_directory_summary(
+    path: &Path,
+    cancellation: CancellationToken,
+    scope: DirectorySummaryScope,
     mut progress: impl FnMut(DirectoryContentsSummary),
 ) -> Result<DirectoryContentsSummary, DirectorySummaryError> {
     let mut summary = DirectoryContentsSummary::default();
+    let mut pending = vec![PathBuf::from(path)];
     let mut processed_entries = 0usize;
 
-    if cancellation.is_cancelled() {
-        return Err(DirectorySummaryError::Cancelled);
-    }
-
-    for entry in std::fs::read_dir(path).map_err(DirectorySummaryError::Io)? {
+    while let Some(directory) = pending.pop() {
         if cancellation.is_cancelled() {
             return Err(DirectorySummaryError::Cancelled);
         }
 
-        let entry = entry.map_err(DirectorySummaryError::Io)?;
-        let file_type = entry.file_type().map_err(DirectorySummaryError::Io)?;
-        let metadata = entry.metadata().map_err(DirectorySummaryError::Io)?;
-        if file_type.is_dir() {
-            summary.directory_count += 1;
-        } else {
-            summary.file_count += 1;
-        }
-        summary.total_size_bytes = summary.total_size_bytes.saturating_add(metadata.len());
-        summary.total_disk_size_bytes = summary
-            .total_disk_size_bytes
-            .saturating_add(metadata_disk_size(&metadata));
-        processed_entries = processed_entries.saturating_add(1);
-        if processed_entries % DIRECTORY_CONTENTS_PROGRESS_INTERVAL == 0 {
-            progress(summary.clone());
+        for entry in std::fs::read_dir(directory).map_err(DirectorySummaryError::Io)? {
+            if cancellation.is_cancelled() {
+                return Err(DirectorySummaryError::Cancelled);
+            }
+
+            let entry = entry.map_err(DirectorySummaryError::Io)?;
+            let file_type = entry.file_type().map_err(DirectorySummaryError::Io)?;
+            let metadata = entry.metadata().map_err(DirectorySummaryError::Io)?;
+            if file_type.is_dir() {
+                summary.directory_count = summary
+                    .directory_count
+                    .checked_add(1)
+                    .ok_or(DirectorySummaryError::Overflow("directory count"))?;
+                if scope == DirectorySummaryScope::Descendants {
+                    pending.push(entry.path());
+                }
+            } else {
+                summary.file_count = summary
+                    .file_count
+                    .checked_add(1)
+                    .ok_or(DirectorySummaryError::Overflow("file count"))?;
+            }
+            summary.total_size_bytes = summary
+                .total_size_bytes
+                .checked_add(metadata.len())
+                .ok_or(DirectorySummaryError::Overflow("logical size"))?;
+            summary.total_disk_size_bytes = summary
+                .total_disk_size_bytes
+                .checked_add(metadata_disk_size(&metadata))
+                .ok_or(DirectorySummaryError::Overflow("disk size"))?;
+            processed_entries = processed_entries
+                .checked_add(1)
+                .ok_or(DirectorySummaryError::Overflow("processed entry count"))?;
+            if processed_entries % DIRECTORY_CONTENTS_PROGRESS_INTERVAL == 0 {
+                progress(summary.clone());
+            }
         }
     }
 
@@ -123,6 +175,27 @@ pub(crate) fn metadata_disk_size(metadata: &std::fs::Metadata) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_and_recursive_summaries_keep_distinct_scopes() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let child = temp_dir.path().join("child");
+        std::fs::create_dir(&child).expect("create child");
+        std::fs::write(temp_dir.path().join("top.txt"), b"top").expect("write top file");
+        std::fs::write(child.join("nested.txt"), b"nested").expect("write nested file");
+
+        let direct =
+            read_directory_contents_summary(temp_dir.path(), CancellationToken::new(), |_| {})
+                .expect("direct summary");
+        let recursive =
+            read_directory_tree_summary(temp_dir.path(), CancellationToken::new(), |_| {})
+                .expect("recursive summary");
+
+        assert_eq!(direct.file_count, 1);
+        assert_eq!(direct.directory_count, 1);
+        assert_eq!(recursive.file_count, 2);
+        assert_eq!(recursive.directory_count, 1);
+    }
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;

@@ -10,15 +10,19 @@ pub enum NoReplaceRenameError {
 }
 
 impl NoReplaceRenameError {
-    pub fn into_transfer_error(self, from: &Path, to: &Path) -> super::RecoverableTransferError {
-        let source = match self {
+    pub fn into_io_error(self) -> io::Error {
+        match self {
             Self::TargetExists => io::Error::new(io::ErrorKind::AlreadyExists, "target exists"),
             Self::CrossDevice => io::Error::new(
                 io::ErrorKind::CrossesDevices,
                 "source and target are on different filesystems",
             ),
             Self::Unsupported(source) | Self::Failed(source) => source,
-        };
+        }
+    }
+
+    pub fn into_transfer_error(self, from: &Path, to: &Path) -> super::RecoverableTransferError {
+        let source = self.into_io_error();
         super::RecoverableTransferError::SafeRename {
             from: from.to_path_buf(),
             to: to.to_path_buf(),

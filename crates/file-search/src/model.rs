@@ -36,10 +36,16 @@ pub enum SearchScope {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SearchFilters {
     pub kind: Option<SearchFileKind>,
-    pub mime_type: Option<String>,
+    pub mime_patterns: Vec<MimePattern>,
     pub modified: Option<TimeRange>,
     pub accessed: Option<TimeRange>,
     pub created: Option<TimeRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MimePattern {
+    Exact(String),
+    Prefix(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,7 +196,7 @@ pub enum SearchProviderFailure {
 }
 
 /// 协议 payload 含义变化时提升版本，让新客户端能退休仍在运行的旧 daemon。
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// app 更新后用构建标识识别遗留 daemon；本任务保留现有包版本策略。
 pub fn daemon_build_id() -> String {

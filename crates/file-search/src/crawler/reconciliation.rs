@@ -5,11 +5,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::database::{
     DirectorySnapshot, EntryObservationState, KnownFileEntry, ObservedFile, ScanFileMutation,
-    MAX_CLASSIFICATION_BATCH_ENTRIES, MAX_KNOWN_ENTRY_PAGE_ENTRIES,
+    MAX_KNOWN_ENTRY_PAGE_ENTRIES,
 };
 use crate::error::{SearchError, SearchResult};
 use crate::filesystem::{
-    ensure_not_cancelled, observe_path, FilesystemEntry, FilesystemObservation,
+    ensure_not_cancelled, mime_type_for_path, observe_path, FilesystemEntry, FilesystemObservation,
     LocalFilesystemBoundary, TraversalDepth, TraversalEvent,
 };
 use crate::model::SearchFileKind;
@@ -17,8 +17,8 @@ use crate::writer::{scan_file_mutation_bytes, MAX_WRITER_FILE_PAYLOAD_BYTES};
 
 use super::{
     collapse_affected_prefixes, directory_signature, extraction_plan_reads_content,
-    observed_file_signature, push_pending_entry, report_checking_if_needed, report_crawling,
-    report_crawling_if_needed, ChangedFilePipelineOutcome, IndexMaintenanceProgress, RebuildStats,
+    observed_file_signature, report_checking_if_needed, report_crawling, report_crawling_if_needed,
+    ChangedFilePipelineOutcome, IndexMaintenanceProgress, PendingClassificationBatch, RebuildStats,
     SearchIndexer,
 };
 
@@ -215,7 +215,11 @@ impl SearchIndexer {
         match self.observe_index_path(&known_file.path)? {
             FilesystemObservation::Complete(entry) if entry.kind() == SearchFileKind::File => {
                 let observed_signature = observed_file_signature(entry.metadata());
-                if known_file.state.allows_signature_skip(observed_signature) {
+                let current_mime_type = mime_type_for_path(&known_file.path);
+                if known_file
+                    .state
+                    .allows_signature_skip(observed_signature, current_mime_type.as_deref())
+                {
                     stats.skipped += 1;
                 } else {
                     self.index_observed_batch(
@@ -302,36 +306,26 @@ impl SearchIndexer {
                     return Ok(());
                 }
             };
-        let mut pending_entries = Vec::with_capacity(MAX_CLASSIFICATION_BATCH_ENTRIES);
-        let mut pending_bytes = 0_usize;
+        let mut pending_batch = PendingClassificationBatch::new();
 
         while let Some(event) = walker.next_event()? {
             ensure_not_cancelled(cancellation)?;
             match event {
                 TraversalEvent::Entry(entry) if entry.kind() == SearchFileKind::File => {
-                    push_pending_entry(
-                        self,
-                        entry,
-                        scope,
-                        &mut pending_entries,
-                        &mut pending_bytes,
-                        stats,
-                        cancellation,
-                        on_progress,
-                    )
-                    .await?;
+                    pending_batch
+                        .push(self, entry, scope, stats, cancellation, on_progress)
+                        .await?;
                 }
                 TraversalEvent::Entry(_) => {}
                 TraversalEvent::Observation(FilesystemObservation::Complete(directory)) => {
                     self.index_observed_batch(
-                        std::mem::take(&mut pending_entries),
+                        pending_batch.take_entries(),
                         scope,
                         stats,
                         cancellation,
                         on_progress,
                     )
                     .await?;
-                    pending_bytes = 0;
                     stats.directories_enumerated += 1;
                     self.reconcile_known_direct_children(&directory, stats, on_progress)?;
                     self.persist_directory_snapshot(
@@ -360,8 +354,14 @@ impl SearchIndexer {
             }
         }
 
-        self.index_observed_batch(pending_entries, scope, stats, cancellation, on_progress)
-            .await
+        self.index_observed_batch(
+            pending_batch.into_entries(),
+            scope,
+            stats,
+            cancellation,
+            on_progress,
+        )
+        .await
     }
 
     async fn reconcile_directory(
@@ -390,8 +390,7 @@ impl SearchIndexer {
                 return Ok(());
             }
         };
-        let mut pending_entries = Vec::with_capacity(MAX_CLASSIFICATION_BATCH_ENTRIES);
-        let mut pending_bytes = 0_usize;
+        let mut pending_batch = PendingClassificationBatch::new();
 
         while let Some(event) = walker.next_event()? {
             ensure_not_cancelled(cancellation)?;
@@ -404,17 +403,9 @@ impl SearchIndexer {
                     {
                         self.delete_scope(entry.path(), true, stats, on_progress)?;
                     }
-                    push_pending_entry(
-                        self,
-                        entry,
-                        directory,
-                        &mut pending_entries,
-                        &mut pending_bytes,
-                        stats,
-                        cancellation,
-                        on_progress,
-                    )
-                    .await?;
+                    pending_batch
+                        .push(self, entry, directory, stats, cancellation, on_progress)
+                        .await?;
                 }
                 TraversalEvent::Entry(entry) if entry.kind() == SearchFileKind::Directory => {
                     if self
@@ -437,14 +428,13 @@ impl SearchIndexer {
                 TraversalEvent::Entry(_) => {}
                 TraversalEvent::Observation(FilesystemObservation::Complete(scope)) => {
                     self.index_observed_batch(
-                        std::mem::take(&mut pending_entries),
+                        pending_batch.take_entries(),
                         directory,
                         stats,
                         cancellation,
                         on_progress,
                     )
                     .await?;
-                    pending_bytes = 0;
                     stats.directories_enumerated += 1;
                     self.reconcile_known_direct_children(&scope, stats, on_progress)?;
                     self.persist_directory_snapshot(
@@ -465,8 +455,14 @@ impl SearchIndexer {
             }
         }
 
-        self.index_observed_batch(pending_entries, directory, stats, cancellation, on_progress)
-            .await
+        self.index_observed_batch(
+            pending_batch.into_entries(),
+            directory,
+            stats,
+            cancellation,
+            on_progress,
+        )
+        .await
     }
 
     fn reconcile_known_direct_children(
@@ -552,11 +548,15 @@ impl SearchIndexer {
         for (entry, classification) in entries.into_iter().zip(classifications) {
             ensure_not_cancelled(cancellation)?;
             let observed_signature = observed_file_signature(entry.metadata());
+            let current_mime_type = mime_type_for_path(entry.path());
             stats.scanned += 1;
             if classification
                 .known_entry
                 .as_ref()
-                .is_some_and(|known_entry| known_entry.allows_signature_skip(observed_signature))
+                .is_some_and(|known_entry| {
+                    known_entry
+                        .allows_signature_skip(observed_signature, current_mime_type.as_deref())
+                })
             {
                 stats.skipped += 1;
                 report_crawling_if_needed(stats, current_scope, on_progress);

@@ -36,16 +36,12 @@ impl FileBrowser {
             Message::Loaded(request, Err(failure)) => {
                 self.accept_directory_load_failure(request, failure)
             }
-            Message::TrashLoaded(pane_id, Ok(scan)) => self.accept_trash_scan(pane_id, scan),
-            Message::TrashLoaded(pane_id, Err(error)) => {
-                if pane_id == self.active_pane_id() {
-                    self.is_loading = false;
-                    self.directory_loading_placeholder_entries.clear();
-                } else if let Some(pane) = self.pane_by_id_mut(pane_id) {
-                    pane.is_loading = false;
-                    pane.directory_loading_placeholder_entries.clear();
-                }
-                self.show_global_error(error);
+            Message::TrashLoaded(generation, outcome) => {
+                self.accept_trash_refresh_completion(generation, outcome)
+            }
+            Message::TrashRefreshTick => self.refresh_trash_snapshot_on_tick(),
+            Message::TrashWarningsToggled => {
+                self.trash_refresh.toggle_warning_details();
                 Task::none()
             }
             Message::OpenFileFinished(_, Ok(())) => {
@@ -85,29 +81,8 @@ impl FileBrowser {
             Message::AnimatedImagePreviewLoaded(path, generation, preview_outcome) => {
                 self.accept_animated_image_preview_loaded(path, generation, preview_outcome)
             }
-            Message::FilePropertiesLoaded(request, properties_outcome) => {
-                self.accept_file_properties(request, properties_outcome)
-            }
-            Message::FilePropertiesDirectoryContentsUpdated(request, contents) => {
-                self.accept_file_properties_directory_contents_progress(request, contents)
-            }
-            Message::FilePropertiesDirectoryContentsLoaded(request, contents_outcome) => {
-                self.accept_file_properties_directory_contents(request, contents_outcome)
-            }
-            Message::FilePropertiesCategorySelected(category) => {
-                self.select_file_properties_category(category)
-            }
-            Message::FilePropertiesPermissionToggled(class, access) => {
-                self.toggle_file_properties_permission(class, access)
-            }
-            Message::FilePropertiesApplyPermissionsToEnclosedItems => {
-                self.apply_file_properties_permissions_to_enclosed_items()
-            }
-            Message::FilePropertiesPermissionsUpdated(request, permissions_outcome) => {
-                self.accept_file_properties_permissions(request, permissions_outcome)
-            }
-            Message::FilePropertiesEnclosedPermissionsUpdated(request, permissions_outcome) => {
-                self.accept_file_properties_enclosed_permissions(request, permissions_outcome)
+            Message::FileProperties(properties_message) => {
+                self.accept_file_properties_message(properties_message)
             }
             Message::PreviewDirectoryChildrenLoaded(parent_path, children_outcome) => {
                 self.accept_preview_directory_children(parent_path, children_outcome)
@@ -499,6 +474,17 @@ impl FileBrowser {
             ]),
             Message::SearchInputChanged(value) => self.update_search_input(value),
             Message::SearchSubmitted => self.submit_search(),
+            Message::SearchObjectTypeSelected(object_type) => {
+                self.select_search_object_type(object_type)
+            }
+            Message::SearchContentCategorySelected(content_category) => {
+                self.select_search_content_category(content_category)
+            }
+            Message::SearchModifiedTimeSelected(modified_time) => {
+                self.select_search_modified_time(modified_time)
+            }
+            Message::SearchKeywordCleared => self.clear_search_keyword(),
+            Message::SearchWorkspaceClosed => self.close_search_workspace(),
             Message::SearchResultsLoaded(generation, outcome) => {
                 self.accept_search_results(generation, outcome)
             }
@@ -508,8 +494,12 @@ impl FileBrowser {
             Message::SearchDirectoryFinished(generation, completion) => {
                 self.accept_directory_search_finished(generation, completion)
             }
-            Message::SearchResultPressed(hit) => self.activate_search_hit(hit),
-            Message::SearchCleared => self.clear_search(),
+            Message::SearchResultPressed(path) => self.press_search_result(path),
+            Message::SearchResultRightClicked(path) => self.right_click_search_result(path),
+            Message::SearchOpenContainingDirectory(path) => {
+                self.open_search_containing_directory(path)
+            }
+            Message::SearchDeletePermanentlySelected => self.delete_search_selection_permanently(),
             Message::SearchResultsScrolled => {
                 self.show_scrollbars_temporarily(Region::SearchResults)
             }
@@ -744,7 +734,6 @@ impl FileBrowser {
             Message::RenameInputUndoRequested => self.undo_rename_input_change(),
             Message::RenameInputRedoRequested => self.redo_rename_input_change(),
             Message::BeginRename(path) => self.begin_rename(path),
-            Message::FilePropertiesRequested(path) => self.open_file_properties(path),
             Message::OpenTerminalHere(directory) => self.open_terminal_here(directory),
             Message::RenameSelected => self.commit_rename(),
             Message::CreateDirectory(directory) => self.create_directory_in(directory),
@@ -762,6 +751,10 @@ impl FileBrowser {
                 content,
             } => self.accept_desktop_clipboard_paste(paste_directory, fallback_operation, content),
             Message::ClipboardFileCreated(result) => self.accept_clipboard_file_created(result),
+            Message::DesktopActivationReceived(event) => self.accept_desktop_activation(event),
+            Message::DesktopActivationRuntimeFailed(error) => {
+                self.accept_desktop_activation_runtime_failure(error)
+            }
             Message::WaylandDndWindowHandleLoaded(handle) => self.accept_wayland_dnd_handle(handle),
             Message::WaylandFilesDropped(result) => self.accept_wayland_file_drop(result),
             Message::WaylandFileDragSourceEvent(event) => {

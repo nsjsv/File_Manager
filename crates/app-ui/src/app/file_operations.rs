@@ -61,7 +61,10 @@ impl FileBrowser {
     ) -> Task<Message> {
         let completed_operation = self.operation_queue.operation(task_id).cloned();
         let queue_outcome = match &completion {
-            FileOperationCompletion::Succeeded(_) => FileOperationFinish::Succeeded,
+            FileOperationCompletion::Succeeded(outcome) => match outcome.completion_warning() {
+                Some(warning) => FileOperationFinish::SucceededWithWarning(warning),
+                None => FileOperationFinish::Succeeded,
+            },
             FileOperationCompletion::Canceled(_) => FileOperationFinish::Canceled,
             FileOperationCompletion::Failed { error, .. } => {
                 FileOperationFinish::Failed(error.clone())
@@ -101,7 +104,7 @@ impl FileBrowser {
             }
             None => Task::none(),
         };
-        let search_refresh_task = self.migrate_paths_after_file_operation(&completion);
+        let path_migration_task = self.migrate_paths_after_file_operation(&completion);
         if completed_successfully {
             if let Some(removed_paths) =
                 completed_operation
@@ -141,8 +144,14 @@ impl FileBrowser {
         } else {
             self.reload_visible_panes_after_file_operation()
         };
+        let search_refresh_task = if self.search_workspace.is_some() {
+            self.submit_search()
+        } else {
+            Task::none()
+        };
         Task::batch([
             desktop_notification_task,
+            path_migration_task,
             search_refresh_task,
             pane_reload_task,
         ])
@@ -196,11 +205,7 @@ impl FileBrowser {
             }
         }
 
-        if self.search.is_active() && !self.search.input.trim().is_empty() {
-            self.submit_search()
-        } else {
-            Task::none()
-        }
+        Task::none()
     }
 
     pub(super) fn commit_rename(&mut self) -> Task<Message> {

@@ -144,6 +144,14 @@ fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<
         body = body.push(readable_text(detail).size(11).width(Length::Fill));
     }
 
+    if let Some(warning) = task.completion_warning.as_deref() {
+        body = body.push(
+            readable_text(crate::localization::current_trash_tracking_warning(warning))
+                .size(11)
+                .width(Length::Fill),
+        );
+    }
+
     if let Some(error) = task.error.as_deref() {
         let error = crate::localization::translate_current(error);
         body = body.push(
@@ -294,6 +302,7 @@ enum QueueIndicatorBadge {
     Hidden,
     Count(usize),
     Error,
+    Warning,
     Paused,
 }
 
@@ -322,6 +331,8 @@ fn queue_indicator_badge(queue: &FileOperationQueue) -> QueueIndicatorBadge {
         QueueIndicatorBadge::Count(queue.unread_count().min(99))
     } else if queue.has_unread_failed_task() {
         QueueIndicatorBadge::Error
+    } else if queue.has_unread_warning_task() {
+        QueueIndicatorBadge::Warning
     } else if queue.is_active_paused() {
         QueueIndicatorBadge::Paused
     } else {
@@ -356,6 +367,7 @@ fn indicator_svg(ring: QueueIndicatorRing, badge: QueueIndicatorBadge) -> String
         QueueIndicatorBadge::Hidden => (None, "#2563eb"),
         QueueIndicatorBadge::Count(count) => (Some(count.to_string()), "#2563eb"),
         QueueIndicatorBadge::Error => (Some("!".to_owned()), "#ef4444"),
+        QueueIndicatorBadge::Warning => (Some("!".to_owned()), "#f59e0b"),
         QueueIndicatorBadge::Paused => (Some("||".to_owned()), "#f59e0b"),
     };
     let badge_svg = badge_label

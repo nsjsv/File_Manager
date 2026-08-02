@@ -1,47 +1,181 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+use chrono::Local;
 use file_search::{SearchExcludeRules, SearchHit, SearchQuery, SearchScope};
 use iced::Task;
 
-use super::FileBrowser;
+use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
     directory_fallback_search_command, open_file_command, search_command,
     search_service_recovery_command, search_service_status_command,
 };
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
-    DirectoryFallbackCompletion, IndexedSearchOutcome, Message, NavigationMode,
-    SearchServiceDiagnostic, SearchServiceDiagnosticKind, SearchServiceRecoveryAction,
-    SearchServiceStatusRequest,
+    ContextMenuState, DestructiveActionConfirmation, DirectoryFallbackOutcome,
+    IndexedSearchOutcome, LastActivationClick, Message, ModifiedTimePreset, NavigationMode,
+    SearchContentCategory, SearchContextMenuState, SearchKeyboardSelection, SearchObjectType,
+    SearchSelectionGesture, SearchSelectionStep, SearchServiceDiagnostic,
+    SearchServiceDiagnosticKind, SearchServiceRecoveryAction, SearchServiceStatusRequest,
+    SearchWorkspaceState,
 };
+use crate::shortcuts::{FileSelectionDirection, ShortcutAction};
 
 impl FileBrowser {
+    pub(crate) fn invoke_search_workspace_shortcut(
+        &mut self,
+        action: ShortcutAction,
+    ) -> Task<Message> {
+        match action {
+            ShortcutAction::OpenSelected => self.activate_selected_search_result(),
+            ShortcutAction::MoveSelection(direction) => {
+                self.move_search_result_selection(direction)
+            }
+            ShortcutAction::SelectAll => self.select_all_search_results(),
+            ShortcutAction::Copy => self.copy_selected(),
+            ShortcutAction::Cut => self.move_selected(),
+            ShortcutAction::Delete => self.trash_selected(),
+            ShortcutAction::Refresh => self.submit_search(),
+            ShortcutAction::Undo => self.undo_file_operation(),
+            ShortcutAction::Redo => self.redo_file_operation(),
+            ShortcutAction::Escape if !self.file_browser_content_shortcuts_enabled() => {
+                self.handle_focused_window_escape_pressed()
+            }
+            ShortcutAction::Escape => self.close_search_workspace(),
+            ShortcutAction::RenameSelected
+            | ShortcutAction::FocusPathInput
+            | ShortcutAction::NavigateBack
+            | ShortcutAction::NavigateForward
+            | ShortcutAction::NavigateUp
+            | ShortcutAction::FileProperties
+            | ShortcutAction::Preview
+            | ShortcutAction::Paste => Task::none(),
+        }
+    }
+
     pub(super) fn update_search_input(&mut self, value: String) -> Task<Message> {
-        self.search.input = value;
-        if self.search.input.trim().is_empty() {
-            self.search.abandon_query();
+        if let Err(message) = self.ensure_search_workspace() {
+            self.show_global_error(message);
             return Task::none();
         }
-        self.submit_search()
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.input = value;
+        self.restart_search_workspace()
     }
 
     pub(super) fn submit_search(&mut self) -> Task<Message> {
-        let terms = self.search.input.trim().to_owned();
-        if terms.is_empty() {
-            self.search.abandon_query();
+        if let Err(message) = self.ensure_search_workspace() {
+            self.show_global_error(message);
             return Task::none();
         }
-        let generation = self.search.generation.saturating_add(1);
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn clear_search_keyword(&mut self) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.input.clear();
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn select_search_object_type(
+        &mut self,
+        object_type: SearchObjectType,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.select_object_type(object_type);
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn select_search_content_category(
+        &mut self,
+        content_category: SearchContentCategory,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.select_content_category(content_category);
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn select_search_modified_time(
+        &mut self,
+        modified_time: ModifiedTimePreset,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.modified_time = modified_time;
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn close_search_workspace(&mut self) -> Task<Message> {
+        self.discard_search_workspace();
+        Task::none()
+    }
+
+    pub(super) fn discard_search_workspace(&mut self) {
+        self.search_workspace = None;
+        self.last_activation_click = None;
+        if matches!(self.context_menu, Some(ContextMenuState::Search(_))) {
+            self.context_menu = None;
+        }
+    }
+
+    fn ensure_search_workspace(&mut self) -> Result<(), String> {
+        if self.search_workspace.is_some() {
+            return Ok(());
+        }
+        if self.is_trash_view {
+            return Err("Search is available from a local folder".to_owned());
+        }
+        let root = self.current_search_directory();
+        if self.path_is_remote_mount(&root) {
+            return Err("Search is unavailable for remote folders".to_owned());
+        }
+        self.search_workspace = Some(SearchWorkspaceState::new(root));
+        Ok(())
+    }
+
+    fn restart_search_workspace(&mut self) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_ref() else {
+            return Task::none();
+        };
+        let generation = workspace.next_generation();
+        let root = workspace.root.path().to_path_buf();
+        if !std::fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
+            if let Some(workspace) = self.search_workspace.as_mut() {
+                workspace.reject_query(format!("Search root is unavailable: {}", root.display()));
+            }
+            return Task::none();
+        }
+        let filters = match workspace.filters.query_filters_at(Local::now()) {
+            Ok(filters) => filters,
+            Err(message) => {
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.reject_query(message);
+                }
+                return Task::none();
+            }
+        };
         let query = SearchQuery {
             query_id: generation,
-            terms,
-            scope: SearchScope::Directory(self.current_search_directory()),
+            terms: workspace.input.trim().to_owned(),
+            scope: SearchScope::Directory(root),
             recursive: true,
-            filters: Default::default(),
+            filters,
             limit: SEARCH_RESULT_WINDOW,
             cursor: None,
         };
-        let cancellation = self.search.begin_indexed_query(generation, query.clone());
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        let cancellation = workspace.begin_indexed_query(query.clone());
         search_command(generation, query, cancellation)
     }
 
@@ -50,19 +184,26 @@ impl FileBrowser {
         generation: u64,
         outcome: IndexedSearchOutcome,
     ) -> Task<Message> {
-        if !self.search.accepts_indexed_outcome(generation) {
+        if !self
+            .search_workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.accepts_indexed_outcome(generation))
+        {
             return Task::none();
         }
         match outcome {
             IndexedSearchOutcome::Cancelled => {
-                self.search.apply_indexed_cancellation();
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.apply_indexed_cancellation();
+                }
             }
             IndexedSearchOutcome::Batch(batch) => {
-                self.search.apply_indexed_batch(batch);
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.apply_indexed_batch(batch);
+                }
             }
             IndexedSearchOutcome::TransportUnavailable(message) => {
-                self.search
-                    .service
+                self.search_service
                     .observe_query_transport_failure(&message);
                 return self.switch_to_directory_fallback(message);
             }
@@ -70,7 +211,9 @@ impl FileBrowser {
                 return self.switch_to_directory_fallback(message);
             }
             IndexedSearchOutcome::InvalidQuery(message) | IndexedSearchOutcome::Fatal(message) => {
-                self.search.apply_indexed_failure(message);
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.apply_indexed_failure(message);
+                }
             }
         }
         Task::none()
@@ -81,8 +224,12 @@ impl FileBrowser {
         generation: u64,
         hits: Vec<SearchHit>,
     ) -> Task<Message> {
-        if self.search.accepts_directory_fallback(generation) {
-            self.search.apply_directory_batch(hits);
+        if let Some(workspace) = self
+            .search_workspace
+            .as_mut()
+            .filter(|workspace| workspace.accepts_directory_fallback(generation))
+        {
+            workspace.apply_directory_batch(hits);
         }
         Task::none()
     }
@@ -90,36 +237,218 @@ impl FileBrowser {
     pub(super) fn accept_directory_search_finished(
         &mut self,
         generation: u64,
-        completion: DirectoryFallbackCompletion,
+        completion: DirectoryFallbackOutcome,
     ) -> Task<Message> {
-        if self.search.accepts_directory_fallback(generation) {
-            self.search.finish_directory_fallback(completion);
+        if let Some(workspace) = self
+            .search_workspace
+            .as_mut()
+            .filter(|workspace| workspace.accepts_directory_fallback(generation))
+        {
+            workspace.finish_directory_fallback(completion);
         }
         Task::none()
     }
 
-    pub(super) fn activate_search_hit(&mut self, hit: SearchHit) -> Task<Message> {
+    pub(super) fn press_search_result(&mut self, path: PathBuf) -> Task<Message> {
+        let has_selection_modifier =
+            self.keyboard_modifiers.control() || self.keyboard_modifiers.shift();
+        let now = Instant::now();
+        let is_double_click = !has_selection_modifier
+            && self
+                .last_activation_click
+                .as_ref()
+                .is_some_and(|last_click| {
+                    last_click.path == path
+                        && now.duration_since(last_click.at) <= DOUBLE_CLICK_THRESHOLD
+                });
+        let gesture = match (
+            self.keyboard_modifiers.control(),
+            self.keyboard_modifiers.shift(),
+        ) {
+            (true, true) => SearchSelectionGesture::AdditiveRange,
+            (false, true) => SearchSelectionGesture::Range,
+            (true, false) => SearchSelectionGesture::Toggle,
+            (false, false) => SearchSelectionGesture::Plain,
+        };
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace
+            .selection
+            .select(&workspace.window.hits, &path, gesture);
+        self.context_menu = None;
+        self.last_activation_click = if has_selection_modifier {
+            None
+        } else {
+            Some(LastActivationClick {
+                path: path.clone(),
+                at: now,
+            })
+        };
+
+        if is_double_click {
+            self.activate_search_path(path)
+        } else {
+            Task::none()
+        }
+    }
+
+    pub(super) fn right_click_search_result(&mut self, path: PathBuf) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        if !workspace.selection.is_selected(&path) {
+            workspace.selection.select(
+                &workspace.window.hits,
+                &path,
+                SearchSelectionGesture::Plain,
+            );
+        }
+        self.context_menu = Some(ContextMenuState::Search(SearchContextMenuState {
+            target: path,
+            position: self.cursor_position,
+        }));
+        Task::none()
+    }
+
+    pub(crate) fn activate_selected_search_result(&mut self) -> Task<Message> {
+        let Some(path) = self
+            .search_workspace
+            .as_ref()
+            .and_then(|workspace| workspace.selection.focused_path())
+            .map(Path::to_path_buf)
+        else {
+            return Task::none();
+        };
+        self.activate_search_path(path)
+    }
+
+    pub(crate) fn move_search_result_selection(
+        &mut self,
+        direction: FileSelectionDirection,
+    ) -> Task<Message> {
+        let step = match direction {
+            FileSelectionDirection::Up => SearchSelectionStep::Previous,
+            FileSelectionDirection::Down => SearchSelectionStep::Next,
+            FileSelectionDirection::Left | FileSelectionDirection::Right => return Task::none(),
+        };
+        let keyboard_selection = if self.keyboard_modifiers.shift() {
+            SearchKeyboardSelection::Extend
+        } else {
+            SearchKeyboardSelection::Replace
+        };
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        let Some(target) =
+            workspace
+                .selection
+                .move_focus(&workspace.window.hits, step, keyboard_selection)
+        else {
+            return Task::none();
+        };
+        let Some(index) = workspace
+            .window
+            .hits
+            .iter()
+            .position(|hit| hit.path == target)
+        else {
+            return Task::none();
+        };
+        Task::batch([
+            iced::widget::operation::scroll_to(
+                crate::app::smooth_scroll::smooth_scroll_id(
+                    &crate::model::ScrollbarRegion::SearchResults,
+                ),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: 0.0,
+                    y: index as f32 * crate::view::SEARCH_RESULT_ROW_HEIGHT,
+                },
+            ),
+            self.show_scrollbars_temporarily(crate::model::ScrollbarRegion::SearchResults),
+        ])
+    }
+
+    pub(crate) fn select_all_search_results(&mut self) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.selection.select_all(&workspace.window.hits);
+        Task::none()
+    }
+
+    pub(crate) fn active_search_selection(&self) -> Option<Vec<PathBuf>> {
+        self.search_workspace
+            .as_ref()
+            .map(SearchWorkspaceState::selected_paths_in_result_order)
+    }
+
+    pub(super) fn delete_search_selection_permanently(&mut self) -> Task<Message> {
+        self.context_menu = None;
+        let Some(paths) = self.active_search_selection() else {
+            return Task::none();
+        };
+        if paths.is_empty() {
+            return Task::none();
+        }
+        self.request_destructive_action_confirmation(
+            DestructiveActionConfirmation::DeletePermanently { paths },
+        );
+        Task::none()
+    }
+
+    pub(super) fn open_search_containing_directory(&mut self, path: PathBuf) -> Task<Message> {
+        let Some(parent) = path.parent().map(Path::to_path_buf) else {
+            self.fail_search_workspace("The result has no containing directory".to_owned());
+            return Task::none();
+        };
+        if !parent.is_dir() {
+            self.fail_search_workspace(format!(
+                "Containing directory is unavailable: {}",
+                parent.display()
+            ));
+            return Task::none();
+        }
+
+        self.discard_search_workspace();
+        let navigation = self.navigate_to(parent, NavigationMode::RecordHistory);
+        self.select_path(path);
+        Task::batch([navigation, self.request_browser_session_save()])
+    }
+
+    fn activate_search_path(&mut self, path: PathBuf) -> Task<Message> {
+        let Some(hit) = self
+            .search_workspace
+            .as_ref()
+            .and_then(|workspace| workspace.hit_for_path(&path))
+            .cloned()
+        else {
+            return Task::none();
+        };
         if hit.kind == file_search::SearchFileKind::Directory {
+            self.discard_search_workspace();
             self.navigate_to(hit.path, NavigationMode::RecordHistory)
         } else {
             open_file_command(hit.path, self.terminal_emulator)
         }
     }
 
-    pub(super) fn clear_search(&mut self) -> Task<Message> {
-        self.search.abandon_and_clear_input();
-        Task::none()
+    fn fail_search_workspace(&mut self, message: String) {
+        if let Some(workspace) = self.search_workspace.as_mut() {
+            workspace.window.failure = Some(message);
+            workspace.window.is_loading = false;
+        }
     }
 
     pub(super) fn restart_search_service(&mut self) -> Task<Message> {
-        self.search
-            .begin_service_restart()
+        self.search_service
+            .begin_restart()
             .map(search_service_recovery_command)
             .unwrap_or_else(Task::none)
     }
 
     pub(super) fn press_force_restart_search_service(&mut self) -> Task<Message> {
-        self.search
+        self.search_service
             .press_force_restart()
             .map(search_service_recovery_command)
             .unwrap_or_else(Task::none)
@@ -130,19 +459,13 @@ impl FileBrowser {
         action: SearchServiceRecoveryAction,
         outcome: Result<file_search::SearchServiceStatus, SearchServiceDiagnostic>,
     ) -> Task<Message> {
-        if self
-            .search
-            .accept_service_recovery_completion(action, outcome)
-        {
-            Task::none()
-        } else {
-            Task::none()
-        }
+        self.search_service
+            .accept_recovery_completion(action, outcome);
+        Task::none()
     }
 
     pub(super) fn refresh_search_service_status(&mut self) -> Task<Message> {
-        self.search
-            .service
+        self.search_service
             .request_status_refresh()
             .map(search_service_status_command)
             .unwrap_or_else(Task::none)
@@ -153,7 +476,7 @@ impl FileBrowser {
         request: SearchServiceStatusRequest,
         outcome: Result<file_search::SearchServiceStatus, SearchServiceDiagnostic>,
     ) -> Task<Message> {
-        self.search.service.accept_status_request(request, outcome);
+        self.search_service.accept_status_request(request, outcome);
         Task::none()
     }
 
@@ -161,7 +484,7 @@ impl FileBrowser {
         &mut self,
         kind: SearchServiceDiagnosticKind,
     ) -> Task<Message> {
-        self.search.service.toggle_incident_technical_detail(kind);
+        self.search_service.toggle_incident_technical_detail(kind);
         Task::none()
     }
 
@@ -169,8 +492,7 @@ impl FileBrowser {
         &self,
         kind: SearchServiceDiagnosticKind,
     ) -> Task<Message> {
-        self.search
-            .service
+        self.search_service
             .incident_technical_detail(kind)
             .map(iced::clipboard::write)
             .unwrap_or_else(Task::none)
@@ -183,30 +505,37 @@ impl FileBrowser {
     }
 
     fn switch_to_directory_fallback(&mut self, unavailable_message: String) -> Task<Message> {
-        if self.search.indexed_batch_seen {
-            self.search.apply_indexed_failure(unavailable_message);
+        let Some(workspace) = self.search_workspace.as_ref() else {
+            return Task::none();
+        };
+        if workspace.run.indexed_batch_seen {
+            if let Some(workspace) = self.search_workspace.as_mut() {
+                workspace.apply_indexed_failure(unavailable_message);
+            }
             return Task::none();
         }
-
-        let Some(query) = self.search.active_query.clone() else {
-            self.search.apply_indexed_failure(unavailable_message);
+        let Some(query) = workspace.run.active_query.clone() else {
+            self.fail_search_workspace(unavailable_message);
             return Task::none();
         };
         if !query.recursive {
-            self.search.apply_indexed_failure(unavailable_message);
+            self.fail_search_workspace(unavailable_message);
             return Task::none();
         }
         let SearchScope::Directory(directory) = &query.scope else {
-            self.search.apply_indexed_failure(unavailable_message);
+            self.fail_search_workspace(unavailable_message);
             return Task::none();
         };
         if query.cursor.is_some() || self.path_is_remote_mount(directory) {
-            self.search.apply_indexed_failure(unavailable_message);
+            self.fail_search_workspace(unavailable_message);
             return Task::none();
         }
 
-        let generation = self.search.generation;
-        let cancellation = self.search.begin_directory_fallback();
+        let generation = workspace.run.generation;
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        let cancellation = workspace.begin_directory_fallback();
         directory_fallback_search_command(
             generation,
             query,
@@ -223,435 +552,9 @@ impl FileBrowser {
 }
 
 #[cfg(test)]
-mod tests {
-    #[cfg(unix)]
-    use std::ffi::OsString;
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStringExt;
-    use std::path::PathBuf;
+#[path = "search_operations_tests.rs"]
+mod operation_tests;
 
-    use desktop_linux::{
-        MountedNetworkConnection, NetworkConnection, NetworkConnectionId, NetworkProtocol,
-    };
-    use file_search::{
-        MatchSource, SearchCursor, SearchFileKind, SearchHit, SearchQuery, SearchResultBatch,
-    };
-
-    use super::FileBrowser;
-    use crate::config;
-    use crate::model::search::{SearchProvider, SEARCH_RESULT_WINDOW};
-    use crate::model::{
-        DirectoryFallbackCompletion, IndexedSearchOutcome, SearchServiceRecoveryAction,
-        SearchServiceRecoveryState, SettingsCategory,
-    };
-
-    fn browser_for_search_tests() -> FileBrowser {
-        let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        browser.current_dir = PathBuf::from("/workspace");
-        browser.is_loading = false;
-        browser
-    }
-
-    fn search_hit(path: &str) -> SearchHit {
-        SearchHit {
-            path: PathBuf::from(path),
-            display_name: PathBuf::from(path)
-                .file_name()
-                .expect("search hit path should contain a file name")
-                .to_string_lossy()
-                .into_owned(),
-            kind: SearchFileKind::File,
-            size: 0,
-            modified_ms: None,
-            accessed_ms: None,
-            created_ms: None,
-            rank: 1.0,
-            snippet: None,
-            match_source: MatchSource::Name,
-        }
-    }
-
-    #[test]
-    fn indexed_search_keeps_only_the_first_result_window() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::Batch(SearchResultBatch {
-                query_id: generation,
-                hits: vec![search_hit("/workspace/report-1.txt")],
-                next_cursor: Some(SearchCursor { offset: 1 }),
-                finished: false,
-            }),
-        ));
-
-        assert_eq!(browser.search.results.len(), 1);
-        assert_eq!(
-            browser.search.results[0].path,
-            PathBuf::from("/workspace/report-1.txt")
-        );
-        assert!(!browser.search.is_loading);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn activating_non_utf8_directory_hit_preserves_the_native_path() {
-        let mut browser = browser_for_search_tests();
-        let path = PathBuf::from(OsString::from_vec(b"/workspace/\x80".to_vec()));
-        let mut hit = search_hit("/workspace/placeholder");
-        hit.path = path.clone();
-        hit.kind = SearchFileKind::Directory;
-
-        drop(browser.activate_search_hit(hit));
-
-        assert_eq!(browser.current_dir, path);
-    }
-
-    #[test]
-    fn oversized_indexed_batch_is_truncated_at_the_result_window() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-        let hits = (0..=SEARCH_RESULT_WINDOW)
-            .map(|index| search_hit(&format!("/workspace/report-{index}.txt")))
-            .collect();
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::Batch(SearchResultBatch {
-                query_id: generation,
-                hits,
-                next_cursor: Some(SearchCursor { offset: 1 }),
-                finished: false,
-            }),
-        ));
-
-        assert_eq!(browser.search.results.len(), SEARCH_RESULT_WINDOW);
-    }
-
-    #[test]
-    fn unavailable_before_first_batch_switches_to_directory_fallback() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::ProviderUnavailable("index is starting".to_owned()),
-        ));
-
-        assert_eq!(
-            browser.search.provider,
-            Some(SearchProvider::DirectoryFallback)
-        );
-        assert!(browser.search.is_loading);
-        assert!(browser.search.error.is_none());
-    }
-
-    #[test]
-    fn unavailable_after_indexed_batch_does_not_mix_providers() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::Batch(SearchResultBatch {
-                query_id: generation,
-                hits: vec![search_hit("/workspace/report-1.txt")],
-                next_cursor: Some(SearchCursor { offset: 1 }),
-                finished: false,
-            }),
-        ));
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::TransportUnavailable("socket closed".to_owned()),
-        ));
-
-        assert_eq!(browser.search.provider, Some(SearchProvider::Indexed));
-        assert_eq!(browser.search.results.len(), 1);
-        assert_eq!(browser.search.error.as_deref(), Some("socket closed"));
-    }
-
-    #[test]
-    fn invalid_query_does_not_start_fallback() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::InvalidQuery("bad filter".to_owned()),
-        ));
-
-        assert_eq!(browser.search.provider, Some(SearchProvider::Indexed));
-        assert_eq!(browser.search.error.as_deref(), Some("bad filter"));
-    }
-
-    #[test]
-    fn global_scope_does_not_start_directory_fallback() {
-        let mut browser = browser_for_search_tests();
-        let generation = 1;
-        browser
-            .search
-            .begin_indexed_query(generation, SearchQuery::global(generation, "report"));
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::ProviderUnavailable("index is unavailable".to_owned()),
-        ));
-
-        assert_eq!(browser.search.provider, Some(SearchProvider::Indexed));
-        assert_eq!(
-            browser.search.error.as_deref(),
-            Some("index is unavailable")
-        );
-    }
-
-    #[test]
-    fn mounted_network_scope_does_not_start_directory_fallback() {
-        let mut browser = browser_for_search_tests();
-        let connection = NetworkConnection::new(
-            NetworkConnectionId::new("nas"),
-            "NAS",
-            NetworkProtocol::Smb,
-            "smb://server/share",
-        )
-        .unwrap();
-        browser.network_connections =
-            crate::network_connections::NetworkConnectionState::from_connections(vec![
-                connection.clone()
-            ]);
-        browser
-            .network_connections
-            .accept_mounted(MountedNetworkConnection {
-                connection,
-                mount_path: PathBuf::from("/run/user/1000/gvfs/nas"),
-            });
-        let generation = 1;
-        browser.search.begin_indexed_query(
-            generation,
-            SearchQuery {
-                query_id: generation,
-                terms: "report".to_owned(),
-                scope: file_search::SearchScope::Directory(PathBuf::from(
-                    "/run/user/1000/gvfs/nas/reports",
-                )),
-                recursive: true,
-                filters: Default::default(),
-                limit: 100,
-                cursor: None,
-            },
-        );
-
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::ProviderUnavailable("index is unavailable".to_owned()),
-        ));
-
-        assert_eq!(browser.search.provider, Some(SearchProvider::Indexed));
-        assert_eq!(
-            browser.search.error.as_deref(),
-            Some("index is unavailable")
-        );
-    }
-
-    #[test]
-    fn fallback_batches_append_and_completion_finishes_search() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-        drop(browser.accept_search_results(
-            generation,
-            IndexedSearchOutcome::ProviderUnavailable("index is starting".to_owned()),
-        ));
-
-        drop(browser.accept_directory_search_batch(
-            generation,
-            vec![search_hit("/workspace/report-1.txt")],
-        ));
-        drop(browser.accept_directory_search_batch(
-            generation,
-            vec![search_hit("/workspace/report-2.txt")],
-        ));
-        drop(
-            browser.accept_directory_search_finished(
-                generation,
-                DirectoryFallbackCompletion::Completed,
-            ),
-        );
-
-        assert_eq!(browser.search.results.len(), 2);
-        assert!(!browser.search.is_loading);
-        assert!(browser.search.error.is_none());
-    }
-
-    #[test]
-    fn fallback_result_window_cancels_the_directory_walk() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let generation = browser.search.generation;
-        let cancellation = browser.search.begin_directory_fallback();
-        let hits = (0..=SEARCH_RESULT_WINDOW)
-            .map(|index| search_hit(&format!("/workspace/report-{index}.txt")))
-            .collect();
-
-        drop(browser.accept_directory_search_batch(generation, hits));
-
-        assert_eq!(browser.search.results.len(), SEARCH_RESULT_WINDOW);
-        assert!(cancellation.is_cancelled());
-    }
-
-    #[test]
-    fn stale_generation_does_not_pollute_current_results() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "first".to_owned();
-        drop(browser.submit_search());
-        let stale_generation = browser.search.generation;
-
-        browser.search.input = "second".to_owned();
-        drop(browser.submit_search());
-        let current_generation = browser.search.generation;
-
-        drop(browser.accept_search_results(
-            stale_generation,
-            IndexedSearchOutcome::Batch(SearchResultBatch {
-                query_id: stale_generation,
-                hits: vec![search_hit("/workspace/stale.txt")],
-                next_cursor: None,
-                finished: true,
-            }),
-        ));
-        assert!(browser.search.results.is_empty());
-
-        drop(browser.accept_search_results(
-            current_generation,
-            IndexedSearchOutcome::Batch(SearchResultBatch {
-                query_id: current_generation,
-                hits: vec![search_hit("/workspace/current.txt")],
-                next_cursor: None,
-                finished: true,
-            }),
-        ));
-        assert_eq!(browser.search.results.len(), 1);
-    }
-
-    #[test]
-    fn clearing_search_invalidates_inflight_generation() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let stale_generation = browser.search.generation;
-
-        drop(browser.clear_search());
-        drop(browser.accept_search_results(
-            stale_generation,
-            IndexedSearchOutcome::Batch(SearchResultBatch {
-                query_id: stale_generation,
-                hits: vec![search_hit("/workspace/stale.txt")],
-                next_cursor: None,
-                finished: true,
-            }),
-        ));
-
-        assert!(browser.search.results.is_empty());
-        assert!(browser.search.input.is_empty());
-        assert!(browser.search.active_query.is_none());
-        assert!(!browser.search.is_active());
-    }
-
-    #[test]
-    fn navigating_away_cancels_directory_fallback() {
-        let mut browser = browser_for_search_tests();
-        browser.search.input = "report".to_owned();
-        drop(browser.submit_search());
-        let cancellation = browser.search.begin_directory_fallback();
-
-        drop(browser.navigate_to(
-            PathBuf::from("/workspace/other"),
-            crate::model::NavigationMode::RecordHistory,
-        ));
-
-        assert!(cancellation.is_cancelled());
-        assert!(browser.search.input.is_empty());
-        assert!(!browser.search.is_active());
-    }
-
-    #[test]
-    fn settings_escape_cancels_force_confirmation_before_closing_the_window() {
-        let mut browser = browser_for_search_tests();
-        browser.selected_settings_category = SettingsCategory::Search;
-        drop(browser.ensure_settings_window());
-        drop(browser.press_force_restart_search_service());
-
-        drop(browser.handle_focused_window_escape_pressed());
-
-        assert_eq!(
-            browser.search.service.recovery,
-            SearchServiceRecoveryState::Idle
-        );
-        assert!(browser.settings_window.is_some());
-    }
-
-    #[test]
-    fn leaving_search_settings_cancels_only_a_pending_confirmation() {
-        let mut browser = browser_for_search_tests();
-        browser.selected_settings_category = SettingsCategory::Search;
-        drop(browser.press_force_restart_search_service());
-
-        drop(browser.select_settings_category(SettingsCategory::General));
-
-        assert_eq!(
-            browser.search.service.recovery,
-            SearchServiceRecoveryState::Idle
-        );
-        assert_eq!(
-            browser.selected_settings_category,
-            SettingsCategory::General
-        );
-    }
-
-    #[test]
-    fn closing_settings_cancels_a_pending_force_confirmation() {
-        let mut browser = browser_for_search_tests();
-        drop(browser.ensure_settings_window());
-        drop(browser.press_force_restart_search_service());
-
-        drop(browser.close_settings_window());
-
-        assert_eq!(
-            browser.search.service.recovery,
-            SearchServiceRecoveryState::Idle
-        );
-        assert!(browser.settings_window.is_none());
-    }
-
-    #[test]
-    fn closing_settings_does_not_cancel_running_recovery() {
-        let mut browser = browser_for_search_tests();
-        drop(browser.ensure_settings_window());
-        assert_eq!(
-            browser.search.begin_service_restart(),
-            Some(SearchServiceRecoveryAction::Restart)
-        );
-
-        drop(browser.close_settings_window());
-
-        assert_eq!(
-            browser.search.service.recovery,
-            SearchServiceRecoveryState::Running(SearchServiceRecoveryAction::Restart)
-        );
-        assert!(browser.settings_window.is_none());
-    }
-}
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

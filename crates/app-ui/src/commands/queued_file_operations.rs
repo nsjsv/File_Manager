@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 
 use file_core::{
     create_archive_with_controls_and_progress, create_directory, create_empty_file,
-    delete_path_permanently, delete_trash_entry, empty_trash,
-    extract_archive_with_controls_and_progress, persist_recoverable_source_manifest, rename_path,
-    restore_trash_entry, run_recoverable_transfer, trash_path_with_restore_entry,
+    delete_path_permanently, delete_trash_entry, extract_archive_with_controls_and_progress,
+    persist_recoverable_source_manifest, rename_path, restore_trash_entry,
+    run_recoverable_transfer, trash_path_with_restore_entry_and_cancellation,
     ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileOperationControls,
     FileOperationVerification, FileTransferOptions, RecoverableTransferError,
     RecoverableTransferOperation, RecoverableTransferOutcome, TransferConflictStrategy,
@@ -401,16 +401,24 @@ async fn run_queued_trash(
 ) -> Result<FileOperationOutcome, String> {
     let total = paths.len();
     let mut entries = Vec::new();
+    let mut tracked_paths = Vec::new();
+    let mut tracking_warnings = Vec::new();
     for (index, path) in paths.iter().cloned().enumerate() {
         controls
             .wait_until_running()
             .await
             .map_err(|error| error.to_string())?;
-        if let Some(entry) = trash_path_with_restore_entry(path)
+        match trash_path_with_restore_entry_and_cancellation(&path, controls.cancellation_token())
             .await
             .map_err(|error| error.to_string())?
         {
-            entries.push(entry);
+            file_core::TrashCommitOutcome::Tracked(entry) => {
+                tracked_paths.push(entry.original_path.clone());
+                entries.push(*entry);
+            }
+            file_core::TrashCommitOutcome::CommittedWithoutRestoreEntry(warning) => {
+                tracking_warnings.push(warning);
+            }
         }
         send_file_operation_progress(
             output,
@@ -423,11 +431,11 @@ async fn run_queued_trash(
         .await;
     }
 
-    if entries.len() == total {
-        Ok(FileOperationOutcome::Trash { paths, entries })
-    } else {
-        Ok(FileOperationOutcome::NoHistory)
-    }
+    Ok(FileOperationOutcome::Trash {
+        paths: tracked_paths,
+        entries,
+        tracking_warnings,
+    })
 }
 
 async fn run_queued_restore(
@@ -529,7 +537,9 @@ async fn run_queued_empty_trash(
         .wait_until_running()
         .await
         .map_err(|error| error.to_string())?;
-    empty_trash().await.map_err(|error| error.to_string())?;
+    file_core::empty_trash_with_cancellation(controls.cancellation_token())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(FileOperationOutcome::NoHistory)
 }
 

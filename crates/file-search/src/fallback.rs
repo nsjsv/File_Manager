@@ -8,12 +8,24 @@ use crate::filesystem::{
 };
 use crate::model::{MatchSource, SearchFileKind, SearchHit, SearchQuery, SearchScope, TimeRange};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryFallbackLimits {
+    pub max_inspected_entries: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectoryFallbackCompletion {
+    TraversalComplete { inspected_entries: usize },
+    EntryBudgetReached { inspected_entries: usize },
+}
+
 pub fn search_directory_fallback(
     query: &SearchQuery,
     rules: &SearchExcludeRules,
+    limits: DirectoryFallbackLimits,
     cancellation: &CancellationToken,
     mut emit_batch: impl FnMut(Vec<SearchHit>),
-) -> SearchResult<()> {
+) -> SearchResult<DirectoryFallbackCompletion> {
     let SearchScope::Directory(root) = &query.scope else {
         return Err(SearchError::InvalidQuery(
             "directory fallback requires a directory scope".to_owned(),
@@ -86,11 +98,25 @@ pub fn search_directory_fallback(
         .collect::<Vec<_>>();
     let batch_size = query.limit.clamp(1, 200);
     let mut batch = Vec::with_capacity(batch_size);
+    let mut first_window_emitted = false;
+    let mut inspected_entries = 0;
 
-    while let Some(event) = walker.next_event()? {
+    loop {
+        ensure_not_cancelled(cancellation)?;
+        if inspected_entries == limits.max_inspected_entries {
+            if !batch.is_empty() {
+                emit_batch(batch);
+                ensure_not_cancelled(cancellation)?;
+            }
+            return Ok(DirectoryFallbackCompletion::EntryBudgetReached { inspected_entries });
+        }
+        let Some(event) = walker.next_event()? else {
+            break;
+        };
         let TraversalEvent::Entry(entry) = event else {
             continue;
         };
+        inspected_entries += 1;
         let name = display_name(entry.path());
         let folded_name = name.to_ascii_lowercase();
         if !terms.iter().all(|term| folded_name.contains(term)) {
@@ -134,12 +160,13 @@ pub fn search_directory_fallback(
             },
         });
 
-        if batch.len() == batch_size {
+        if batch.len() == batch_size || first_window_emitted {
             ensure_not_cancelled(cancellation)?;
             emit_batch(std::mem::replace(
                 &mut batch,
                 Vec::with_capacity(batch_size),
             ));
+            first_window_emitted = true;
             ensure_not_cancelled(cancellation)?;
         }
     }
@@ -149,7 +176,7 @@ pub fn search_directory_fallback(
         emit_batch(batch);
         ensure_not_cancelled(cancellation)?;
     }
-    Ok(())
+    Ok(DirectoryFallbackCompletion::TraversalComplete { inspected_entries })
 }
 
 fn matches_filters(
@@ -161,14 +188,25 @@ fn matches_filters(
     created_ms: Option<i64>,
 ) -> bool {
     query.filters.kind.is_none_or(|expected| expected == kind)
-        && query
-            .filters
-            .mime_type
-            .as_deref()
-            .is_none_or(|expected| mime_type == Some(expected))
+        && (query.filters.mime_patterns.is_empty()
+            || query
+                .filters
+                .mime_patterns
+                .iter()
+                .any(|pattern| mime_pattern_matches(pattern, mime_type)))
         && time_matches(modified_ms, query.filters.modified)
         && time_matches(accessed_ms, query.filters.accessed)
         && time_matches(created_ms, query.filters.created)
+}
+
+fn mime_pattern_matches(pattern: &crate::model::MimePattern, mime_type: Option<&str>) -> bool {
+    let Some(mime_type) = mime_type else {
+        return false;
+    };
+    match pattern {
+        crate::model::MimePattern::Exact(expected) => mime_type == expected,
+        crate::model::MimePattern::Prefix(prefix) => mime_type.starts_with(prefix),
+    }
 }
 
 fn time_matches(value: Option<i64>, range: Option<TimeRange>) -> bool {
@@ -193,7 +231,13 @@ mod tests {
         SearchCursor, SearchFileKind, SearchFilters, SearchQuery, SearchScope, TimeRange,
     };
 
-    use super::search_directory_fallback;
+    use super::{search_directory_fallback, DirectoryFallbackCompletion, DirectoryFallbackLimits};
+
+    fn complete_traversal_limits() -> DirectoryFallbackLimits {
+        DirectoryFallbackLimits {
+            max_inspected_entries: usize::MAX,
+        }
+    }
 
     fn directory_query(root: PathBuf, terms: &str) -> SearchQuery {
         SearchQuery {
@@ -220,6 +264,7 @@ mod tests {
         search_directory_fallback(
             &query,
             &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
             &CancellationToken::new(),
             |batch| batches.push(batch),
         )
@@ -249,6 +294,7 @@ mod tests {
         search_directory_fallback(
             &query,
             &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
             &CancellationToken::new(),
             |batch| batch_lengths.push(batch.len()),
         )
@@ -258,33 +304,175 @@ mod tests {
     }
 
     #[test]
+    fn emits_the_first_overflow_hit_immediately_for_cancellation() {
+        let content = tempdir().unwrap();
+        for index in 0..300 {
+            fs::write(content.path().join(format!("match-{index}.bin")), "match").unwrap();
+        }
+        let mut query = directory_query(content.path().to_path_buf(), "match");
+        query.limit = 100;
+        let cancellation = CancellationToken::new();
+        let cancellation_after_overflow = cancellation.clone();
+        let mut batch_lengths = Vec::new();
+
+        let error = search_directory_fallback(
+            &query,
+            &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
+            &cancellation,
+            |batch| {
+                batch_lengths.push(batch.len());
+                if batch_lengths.len() == 2 {
+                    cancellation_after_overflow.cancel();
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, SearchError::Cancelled));
+        assert_eq!(batch_lengths, vec![100, 1]);
+    }
+
+    #[test]
     fn applies_kind_mime_and_time_filters_without_reading_content() {
         let content = tempdir().unwrap();
         let path = content.path().join("large.txt");
+        let pdf_path = content.path().join("large.pdf");
         fs::write(&path, vec![b'x'; 4096]).unwrap();
+        fs::write(&pdf_path, vec![b'y'; 2048]).unwrap();
         fs::create_dir(content.path().join("large-directory.txt")).unwrap();
         let modified_ms = file_time_ms(fs::metadata(&path).unwrap().modified().ok()).unwrap();
+        let pdf_modified_ms =
+            file_time_ms(fs::metadata(&pdf_path).unwrap().modified().ok()).unwrap();
         let mut query = directory_query(content.path().to_path_buf(), "large");
         query.filters.kind = Some(SearchFileKind::File);
-        query.filters.mime_type = Some("text/plain".to_owned());
+        query.filters.mime_patterns = vec![
+            crate::model::MimePattern::Prefix("text/".to_owned()),
+            crate::model::MimePattern::Exact("application/pdf".to_owned()),
+        ];
         query.filters.modified = Some(TimeRange {
-            start_ms: modified_ms,
-            end_ms: modified_ms,
+            start_ms: modified_ms.min(pdf_modified_ms),
+            end_ms: modified_ms.max(pdf_modified_ms),
         });
         let mut hits = Vec::new();
 
         search_directory_fallback(
             &query,
             &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
             &CancellationToken::new(),
             |batch| hits.extend(batch),
         )
         .unwrap();
 
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, path);
-        assert_eq!(hits[0].size, 4096);
-        assert!(hits[0].snippet.is_none());
+        let hits_by_path = hits
+            .into_iter()
+            .map(|hit| (hit.path.clone(), hit))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(hits_by_path.len(), 2);
+        assert_eq!(hits_by_path[&path].size, 4096);
+        assert_eq!(hits_by_path[&pdf_path].size, 2048);
+        assert!(hits_by_path.values().all(|hit| hit.snippet.is_none()));
+    }
+
+    #[test]
+    fn fallback_applies_each_common_content_category_mime_pattern() {
+        let content = tempdir().unwrap();
+        let cases = [
+            (
+                "document.pdf",
+                crate::model::MimePattern::Exact("application/pdf".to_owned()),
+            ),
+            (
+                "image.png",
+                crate::model::MimePattern::Prefix("image/".to_owned()),
+            ),
+            (
+                "audio.flac",
+                crate::model::MimePattern::Prefix("audio/".to_owned()),
+            ),
+            (
+                "video.mp4",
+                crate::model::MimePattern::Prefix("video/".to_owned()),
+            ),
+            (
+                "archive.zip",
+                crate::model::MimePattern::Exact("application/zip".to_owned()),
+            ),
+        ];
+        for (file_name, _) in &cases {
+            fs::write(content.path().join(file_name), "payload").unwrap();
+        }
+
+        for (expected_file_name, pattern) in cases {
+            let mut query = directory_query(content.path().to_path_buf(), "");
+            query.filters.kind = Some(SearchFileKind::File);
+            query.filters.mime_patterns = vec![pattern];
+            let mut hits = Vec::new();
+            search_directory_fallback(
+                &query,
+                &SearchExcludeRules::new(Vec::new()),
+                complete_traversal_limits(),
+                &CancellationToken::new(),
+                |batch| hits.extend(batch),
+            )
+            .unwrap();
+
+            assert_eq!(hits.len(), 1, "unexpected hits for {expected_file_name}");
+            assert_eq!(
+                hits[0].path.file_name().and_then(std::ffi::OsStr::to_str),
+                Some(expected_file_name)
+            );
+        }
+    }
+
+    #[test]
+    fn entry_budget_keeps_found_hits_and_has_a_distinct_completion() {
+        let content = tempdir().unwrap();
+        for index in 0..3 {
+            fs::write(content.path().join(format!("entry-{index}.txt")), "entry").unwrap();
+        }
+        let query = directory_query(content.path().to_path_buf(), "");
+        let rules = SearchExcludeRules::new(Vec::new());
+        let mut hits = Vec::new();
+
+        let completion = search_directory_fallback(
+            &query,
+            &rules,
+            DirectoryFallbackLimits {
+                max_inspected_entries: 2,
+            },
+            &CancellationToken::new(),
+            |batch| hits.extend(batch),
+        )
+        .unwrap();
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(
+            completion,
+            DirectoryFallbackCompletion::EntryBudgetReached {
+                inspected_entries: 2,
+            }
+        );
+
+        let mut complete_hits = Vec::new();
+        let complete = search_directory_fallback(
+            &query,
+            &rules,
+            DirectoryFallbackLimits {
+                max_inspected_entries: 4,
+            },
+            &CancellationToken::new(),
+            |batch| complete_hits.extend(batch),
+        )
+        .unwrap();
+        assert_eq!(complete_hits.len(), 3);
+        assert_eq!(
+            complete,
+            DirectoryFallbackCompletion::TraversalComplete {
+                inspected_entries: 3,
+            }
+        );
     }
 
     #[test]
@@ -300,17 +488,29 @@ mod tests {
         let pre_cancelled = CancellationToken::new();
         pre_cancelled.cancel();
         assert!(matches!(
-            search_directory_fallback(&query, &rules, &pre_cancelled, |_| {}),
+            search_directory_fallback(
+                &query,
+                &rules,
+                complete_traversal_limits(),
+                &pre_cancelled,
+                |_| {}
+            ),
             Err(SearchError::Cancelled)
         ));
 
         let cancellation = CancellationToken::new();
         let cancellation_from_batch = cancellation.clone();
         let mut batches = 0;
-        let error = search_directory_fallback(&query, &rules, &cancellation, |_| {
-            batches += 1;
-            cancellation_from_batch.cancel();
-        })
+        let error = search_directory_fallback(
+            &query,
+            &rules,
+            complete_traversal_limits(),
+            &cancellation,
+            |_| {
+                batches += 1;
+                cancellation_from_batch.cancel();
+            },
+        )
         .unwrap_err();
 
         assert!(matches!(error, SearchError::Cancelled));
@@ -325,6 +525,7 @@ mod tests {
             search_directory_fallback(
                 &SearchQuery::global(1, "name"),
                 &rules,
+                complete_traversal_limits(),
                 &cancellation,
                 |_| {}
             ),
@@ -335,7 +536,13 @@ mod tests {
         let mut query = directory_query(content.path().to_path_buf(), "name");
         query.cursor = Some(SearchCursor { offset: 1 });
         assert!(matches!(
-            search_directory_fallback(&query, &rules, &cancellation, |_| {}),
+            search_directory_fallback(
+                &query,
+                &rules,
+                complete_traversal_limits(),
+                &cancellation,
+                |_| {}
+            ),
             Err(SearchError::InvalidQuery(_))
         ));
     }
@@ -349,6 +556,7 @@ mod tests {
         let error = search_directory_fallback(
             &query,
             &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
             &CancellationToken::new(),
             |_| {},
         )

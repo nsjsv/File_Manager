@@ -17,6 +17,7 @@ impl FileOperationQueue {
             let task = &mut self.tasks[position];
             task.status = FileOperationStatus::Running;
             task.progress = FileOperationProgress::pending();
+            task.completion_warning = None;
             task.error = None;
             let _ = task.run_state_sender.send(FileOperationRunState::Running);
             return self.persist_task_state(position);
@@ -84,6 +85,7 @@ impl FileOperationQueue {
             operation,
             status: task_status,
             progress: FileOperationProgress::pending(),
+            completion_warning: None,
             error: None,
             is_read,
             cancel,

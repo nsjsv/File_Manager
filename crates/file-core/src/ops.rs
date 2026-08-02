@@ -15,6 +15,7 @@ mod batch_rename;
 mod copy;
 mod copy_verification;
 mod recoverable_transfer;
+pub(crate) use recoverable_transfer::rename_noreplace;
 pub use recoverable_transfer::{
     persist_recoverable_source_manifest, run_recoverable_transfer, ArtifactOwner, ArtifactToken,
     CommitPayload, CommitTransfer, CommittedTransfer, CompletedTarget, FileIdentity,
@@ -113,21 +114,6 @@ pub async fn create_file_with_contents(
     Ok(path)
 }
 
-pub async fn trash_path(path: impl AsRef<Path>) -> Result<(), FileError> {
-    let path = path.as_ref().to_path_buf();
-    let path_for_task = path.clone();
-    tokio::task::spawn_blocking(move || trash::delete(&path_for_task))
-        .await
-        .map_err(|source| FileError::Trash {
-            path: path.clone(),
-            message: source.to_string(),
-        })?
-        .map_err(|source| FileError::Trash {
-            path,
-            message: source.to_string(),
-        })
-}
-
 pub async fn delete_path_permanently(path: impl AsRef<Path>) -> Result<(), FileError> {
     let path = path.as_ref().to_path_buf();
     let metadata = fs::symlink_metadata(&path)
@@ -142,20 +128,6 @@ pub async fn delete_path_permanently(path: impl AsRef<Path>) -> Result<(), FileE
         fs::remove_file(&path).await
     };
     outcome.map_err(|source| FileError::Delete { path, source })
-}
-
-pub async fn trash_path_with_restore_entry(
-    path: impl AsRef<Path>,
-) -> Result<Option<crate::TrashRestoreEntry>, FileError> {
-    let path = path.as_ref().to_path_buf();
-    let before = crate::trash_bin::restore_entries_for_original_path(&path)
-        .await
-        .unwrap_or_default();
-    trash_path(&path).await?;
-    let after = crate::trash_bin::restore_entries_for_original_path(&path)
-        .await
-        .unwrap_or_default();
-    Ok(after.into_iter().find(|entry| !before.contains(entry)))
 }
 
 fn already_exists_error() -> io::Error {

@@ -534,7 +534,11 @@ mod tests {
             IndexedQueryAvailability::Available
         );
         let index_status = status.index_status.unwrap();
-        assert_eq!(index_status.phase, IndexPhase::Starting);
+        assert!(
+            !matches!(index_status.phase, IndexPhase::Failed { .. }),
+            "maintenance progress must stay independent from backend health: {:?}",
+            index_status.phase
+        );
         assert!(matches!(index_status.health, IndexHealth::Error { .. }));
         assert!(runtime
             .open_query_reader()

@@ -84,13 +84,19 @@ pub(crate) struct KnownDirectChild {
 pub struct KnownEntryState {
     pub signature: FileSignature,
     pub stage_state: IndexedEntryStageState,
+    pub(crate) mime_type: Option<String>,
     pub(crate) observation_state: EntryObservationState,
 }
 
 impl KnownEntryState {
-    pub fn allows_signature_skip(&self, observed: FileSignature) -> bool {
+    pub fn allows_signature_skip(
+        &self,
+        observed: FileSignature,
+        current_mime_type: Option<&str>,
+    ) -> bool {
         self.observation_state == EntryObservationState::Observable
             && self.stage_state.allows_signature_skip()
+            && self.mime_type.as_deref() == current_mime_type
             && self.signature.matches(observed)
     }
 }

@@ -4,6 +4,8 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use desktop_linux::{LocalRequestError, LocalWorkspaceRequest};
+
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
     BrowserTabSession, BrowserViewMode, ColumnBrowserViewport,
@@ -15,6 +17,7 @@ pub(crate) const VERSION_TEXT: &str = concat!("file-manager ", env!("CARGO_PKG_V
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CommandLineAction {
     Launch(ApplicationLaunchRequest),
+    ActivationService,
     PrintHelp,
     PrintVersion,
 }
@@ -30,6 +33,13 @@ impl ApplicationLaunchRequest {
         matches!(self, Self::ConfiguredStartup)
     }
 
+    pub(crate) fn activation_paths(&self) -> Vec<PathBuf> {
+        match self {
+            Self::ConfiguredStartup => Vec::new(),
+            Self::ExplicitWorkspace(workspace) => workspace.activation_paths.clone(),
+        }
+    }
+
     pub(crate) fn explicit_browser_session(
         &self,
         view_mode: BrowserViewMode,
@@ -43,21 +53,30 @@ impl ApplicationLaunchRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExplicitWorkspace {
-    tabs: Vec<ExplicitWorkspaceTab>,
+    workspace: LocalWorkspaceRequest,
+    activation_paths: Vec<PathBuf>,
 }
 
 impl ExplicitWorkspace {
+    pub(crate) fn from_desktop_workspace(workspace: LocalWorkspaceRequest) -> Self {
+        Self {
+            workspace,
+            activation_paths: Vec::new(),
+        }
+    }
+
     fn browser_session(&self, view_mode: BrowserViewMode) -> BrowserSessionSnapshot {
         let tabs = self
-            .tabs
+            .workspace
+            .tabs()
             .iter()
             .enumerate()
             .map(|(id, tab)| BrowserTabSession {
                 id,
-                directory: tab.directory.clone(),
+                directory: tab.directory().to_path_buf(),
                 is_trash_view: false,
-                selected: tab.selected_paths.first().cloned(),
-                selected_paths: tab.selected_paths.iter().cloned().collect(),
+                selected: tab.selected_paths().first().cloned(),
+                selected_paths: tab.selected_paths().iter().cloned().collect(),
                 deepest_open_column_directory: None,
                 expanded_directories: Vec::new(),
                 view_mode,
@@ -78,12 +97,6 @@ impl ExplicitWorkspace {
             },
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExplicitWorkspaceTab {
-    directory: PathBuf,
-    selected_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -156,6 +169,7 @@ pub(crate) fn parse_arguments(
 
     let mut parser = lexopt::Parser::from_args(arguments);
     let mut path_arguments = Vec::new();
+    let mut activation_service = false;
     while let Some(argument) = parser
         .next()
         .map_err(|error| CommandLineError::Arguments(error.to_string()))?
@@ -163,6 +177,7 @@ pub(crate) fn parse_arguments(
         match argument {
             Short('h') | Long("help") => return Ok(CommandLineAction::PrintHelp),
             Short('V') | Long("version") => return Ok(CommandLineAction::PrintVersion),
+            Long("activation-service") => activation_service = true,
             Value(path) => path_arguments.push(path),
             unexpected => {
                 return Err(CommandLineError::Arguments(
@@ -170,6 +185,15 @@ pub(crate) fn parse_arguments(
                 ));
             }
         }
+    }
+
+    if activation_service {
+        if path_arguments.is_empty() {
+            return Ok(CommandLineAction::ActivationService);
+        }
+        return Err(CommandLineError::Arguments(
+            "--activation-service does not accept path arguments".to_owned(),
+        ));
     }
 
     if path_arguments.is_empty() {
@@ -188,9 +212,7 @@ fn classify_explicit_workspace(
     path_arguments: Vec<OsString>,
     current_directory: &Path,
 ) -> Result<ExplicitWorkspace, CommandLineError> {
-    let mut tabs = Vec::<ExplicitWorkspaceTab>::new();
-    let mut tab_indices = HashMap::<PathBuf, usize>::new();
-
+    let mut activation_paths = Vec::with_capacity(path_arguments.len());
     for argument in path_arguments {
         let argument_path = PathBuf::from(argument);
         let path = if argument_path.is_absolute() {
@@ -198,52 +220,28 @@ fn classify_explicit_workspace(
         } else {
             current_directory.join(argument_path)
         };
-        let metadata =
-            std::fs::metadata(&path).map_err(|source| CommandLineError::PathUnavailable {
-                path: path.clone(),
-                source,
-            })?;
-        let (directory, selected_path) = if metadata.is_dir() {
-            (path, None)
-        } else if metadata.is_file() {
-            let directory = path
-                .parent()
-                .map(Path::to_path_buf)
-                .ok_or_else(|| CommandLineError::MissingParent { path: path.clone() })?;
-            (directory, Some(path))
-        } else {
-            return Err(CommandLineError::UnsupportedPath { path });
-        };
+        activation_paths.push(path);
+    }
+    let workspace = LocalWorkspaceRequest::from_cli_paths(activation_paths.clone())
+        .map_err(command_line_error_from_local_request)?;
+    Ok(ExplicitWorkspace {
+        workspace,
+        activation_paths,
+    })
+}
 
-        let tab_index = if let Some(index) = tab_indices.get(&directory) {
-            *index
-        } else {
-            let index = tabs.len();
-            tab_indices.insert(directory.clone(), index);
-            tabs.push(ExplicitWorkspaceTab {
-                directory,
-                selected_paths: Vec::new(),
-            });
-            index
-        };
-        if let Some(selected_path) = selected_path {
-            let selected_paths = &mut tabs[tab_index].selected_paths;
-            if !selected_paths.contains(&selected_path) {
-                selected_paths.push(selected_path);
-            }
+fn command_line_error_from_local_request(error: LocalRequestError) -> CommandLineError {
+    match error {
+        LocalRequestError::PathUnavailable { path, source } => {
+            CommandLineError::PathUnavailable { path, source }
         }
+        LocalRequestError::UnsupportedPath { path } => CommandLineError::UnsupportedPath { path },
+        LocalRequestError::MissingParent { path } => CommandLineError::MissingParent { path },
+        LocalRequestError::DirectoryUnreadable { path, source } => {
+            CommandLineError::DirectoryUnreadable { path, source }
+        }
+        other => CommandLineError::Arguments(other.to_string()),
     }
-
-    for tab in &tabs {
-        std::fs::read_dir(&tab.directory).map_err(|source| {
-            CommandLineError::DirectoryUnreadable {
-                path: tab.directory.clone(),
-                source,
-            }
-        })?;
-    }
-
-    Ok(ExplicitWorkspace { tabs })
 }
 
 #[cfg(test)]
@@ -285,6 +283,26 @@ mod tests {
             action,
             CommandLineAction::Launch(ApplicationLaunchRequest::ConfiguredStartup)
         );
+    }
+
+    #[test]
+    fn hidden_activation_service_rejects_path_operands() {
+        let root = TempDir::new().expect("create temp directory");
+
+        assert_eq!(
+            parse([OsString::from("--activation-service")], root.path())
+                .expect("parse activation service"),
+            CommandLineAction::ActivationService
+        );
+        let error = parse(
+            [
+                OsString::from("--activation-service"),
+                root.path().as_os_str().to_owned(),
+            ],
+            root.path(),
+        )
+        .expect_err("activation service must reject paths");
+        assert!(matches!(error, CommandLineError::Arguments(_)));
     }
 
     #[test]
@@ -344,14 +362,14 @@ mod tests {
             .expect("parse workspace"),
         );
 
-        assert_eq!(workspace.tabs.len(), 2);
-        assert_eq!(workspace.tabs[0].directory, first);
+        assert_eq!(workspace.workspace.tabs().len(), 2);
+        assert_eq!(workspace.workspace.tabs()[0].directory(), first);
         assert_eq!(
-            workspace.tabs[0].selected_paths,
-            vec![first_file, second_file]
+            workspace.workspace.tabs()[0].selected_paths(),
+            &[first_file, second_file]
         );
-        assert_eq!(workspace.tabs[1].directory, second);
-        assert!(workspace.tabs[1].selected_paths.is_empty());
+        assert_eq!(workspace.workspace.tabs()[1].directory(), second);
+        assert!(workspace.workspace.tabs()[1].selected_paths().is_empty());
     }
 
     #[test]
@@ -364,7 +382,7 @@ mod tests {
             parse([OsString::from("relative")], root.path()).expect("parse relative directory"),
         );
 
-        assert_eq!(workspace.tabs[0].directory, directory);
+        assert_eq!(workspace.workspace.tabs()[0].directory(), directory);
     }
 
     #[test]
@@ -400,7 +418,7 @@ mod tests {
             .expect("parse dash-prefixed path"),
         );
 
-        assert_eq!(workspace.tabs[0].directory, directory);
+        assert_eq!(workspace.workspace.tabs()[0].directory(), directory);
     }
 
     #[test]
@@ -468,9 +486,9 @@ mod tests {
             .expect("parse symlink paths"),
         );
 
-        assert_eq!(workspace.tabs[0].directory, directory_link);
-        assert_eq!(workspace.tabs[1].directory, root.path());
-        assert_eq!(workspace.tabs[1].selected_paths, vec![file_link]);
+        assert_eq!(workspace.workspace.tabs()[0].directory(), directory_link);
+        assert_eq!(workspace.workspace.tabs()[1].directory(), root.path());
+        assert_eq!(workspace.workspace.tabs()[1].selected_paths(), &[file_link]);
     }
 
     #[cfg(unix)]
@@ -508,7 +526,7 @@ mod tests {
             parse([file.clone().into_os_string()], root.path()).expect("parse non-UTF-8 file"),
         );
 
-        assert_eq!(workspace.tabs[0].directory, directory);
-        assert_eq!(workspace.tabs[0].selected_paths, vec![file]);
+        assert_eq!(workspace.workspace.tabs()[0].directory(), directory);
+        assert_eq!(workspace.workspace.tabs()[0].selected_paths(), &[file]);
     }
 }

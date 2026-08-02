@@ -93,7 +93,7 @@ journalctl --user -u file-manager-search.service -f
 file-manager
 ```
 
-传入本地目录会按参数顺序在同一个窗格中打开多个标签；传入文件会打开其父目录并选中文件。同一父目录下的多个文件会合并到一个多选标签：
+传入本地目录会按参数顺序在同一个窗格中打开多个标签；传入文件会打开其父目录并选中文件。同一父目录下的多个文件会合并到一个多选标签。应用已经运行时，后续 `file-manager [PATH]...` 会复用已有实例：无路径只聚焦主窗口，有路径则复用同目录标签并追加缺失目录，不清空其它标签或分栏。
 
 ```bash
 file-manager .
@@ -149,7 +149,9 @@ cargo build --release --locked -p app-ui -p file-search
 ./target/release/app-ui
 ```
 
-源码构建的 App 二进制名为 `app-ui`，搜索 daemon 二进制名为 `file-searchd`。以上命令不会安装 systemd user unit；没有兼容的已安装搜索服务时，索引搜索不可用，本地当前目录搜索仍可回退到目录扫描。
+源码构建的 App 二进制名为 `app-ui`，搜索 daemon 二进制名为 `file-searchd`。以上命令不会安装 systemd user unit 或品牌 D-Bus service；没有兼容的已安装搜索服务时，索引搜索不可用，本地当前目录搜索仍可回退到目录扫描。正式发行包会安装 `io.github.nsjsv.FileManager` 品牌激活服务，供 CLI 和桌面组件复用已有实例。
+
+运行中的应用会以 `DoNotQueue` 尝试提供标准 `org.freedesktop.FileManager1` 接口。若 Nautilus、Dolphin、Thunar 等文件管理器已经占用标准名称，本应用不会替换或排队抢占；品牌单实例端点和普通 GUI 仍正常工作。发行包不会安装另一个声明标准名称的 D-Bus service 文件。
 
 ## 平台说明
 

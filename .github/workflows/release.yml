@@ -19,6 +19,7 @@ env:
   DAEMON_CARGO_PACKAGE: file-search
   DAEMON_BINARY: file-searchd
   SEARCH_SERVICE_UNIT: file-manager-search.service
+  ACTIVATION_SERVICE_FILE: io.github.nsjsv.FileManager.service
   ARCH: x86_64
 
 jobs:
@@ -97,10 +98,12 @@ jobs:
           install -Dm644 "packaging/linux/${SEARCH_SERVICE_UNIT}" "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
           install -Dm644 LICENSE "${payload}/usr/share/licenses/${APP_NAME}/LICENSE"
           install -Dm644 packaging/linux/file-manager.desktop "${payload}/usr/share/applications/${APP_NAME}.desktop"
+          install -Dm644 "packaging/linux/${ACTIVATION_SERVICE_FILE}" "${payload}/usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"
 
           test -x "${payload}/usr/bin/${APP_NAME}"
           test -x "${payload}/usr/lib/${APP_NAME}/${DAEMON_BINARY}"
           test -f "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
+          test -f "${payload}/usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"
 
           tar -C dist -czf "${asset_name}" "${package_dir}"
           sha256sum "${asset_name}" > SHA256SUMS

@@ -11,11 +11,12 @@ use crate::appearance::{
     selected_sidebar_item_style,
 };
 use crate::formatting::{format_file_size, format_system_time};
-use crate::icons::file_entry_icon_symbol;
+use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::model::{
-    FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
-    FilePropertiesLoadState, FilePropertiesPermissionAccess, FilePropertiesPermissionClass,
-    FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesSnapshot,
+    FilePropertiesAggregateSnapshot, FilePropertiesCategory, FilePropertiesDirectoryContents,
+    FilePropertiesDirectoryContentsState, FilePropertiesLoadState, FilePropertiesMessage,
+    FilePropertiesPermissionAccess, FilePropertiesPermissionClass, FilePropertiesPermissionUpdate,
+    FilePropertiesPermissions, FilePropertiesPresentation, FilePropertiesSnapshot,
     FilePropertiesState, Message, ScrollbarRegion, ScrollbarVisibility,
 };
 use crate::typography::{localized_text, readable_text};
@@ -38,19 +39,33 @@ pub(crate) fn view_properties_window(
         return auxiliary_window_message("No properties are available.");
     };
 
+    let target_label = properties_target_label(properties);
     match &properties.load_state {
-        FilePropertiesLoadState::Loading => properties_loading_view(&properties.path),
-        FilePropertiesLoadState::Loaded(snapshot) => {
-            properties_split_view(properties, snapshot, scrollbar_visibility)
+        FilePropertiesLoadState::Loading => properties_loading_view(target_label),
+        FilePropertiesLoadState::LoadingAggregate(snapshot) => {
+            aggregate_properties_loading_view(snapshot, scrollbar_visibility)
         }
-        FilePropertiesLoadState::Failed(error) => properties_error_view(&properties.path, error),
+        FilePropertiesLoadState::Loaded(presentation) => {
+            properties_split_view(properties, presentation, scrollbar_visibility)
+        }
+        FilePropertiesLoadState::Failed(error) => properties_error_view(target_label, error),
     }
 }
 
-fn properties_loading_view(path: &Path) -> Element<'_, Message> {
+fn properties_target_label(properties: &FilePropertiesState) -> String {
+    match properties.targets.single_path() {
+        Some(path) => display_path(path),
+        None => crate::localization::translate_current(&format!(
+            "{} items",
+            properties.targets.paths().len()
+        )),
+    }
+}
+
+fn properties_loading_view(target_label: String) -> Element<'static, Message> {
     let content = column![
         readable_text("Loading properties...").size(16),
-        readable_text(display_path(path)).size(13)
+        readable_text(target_label).size(13)
     ]
     .spacing(8)
     .padding(24)
@@ -63,10 +78,30 @@ fn properties_loading_view(path: &Path) -> Element<'_, Message> {
         .into()
 }
 
-fn properties_error_view<'a>(path: &'a Path, error: &'a str) -> Element<'a, Message> {
+fn aggregate_properties_loading_view(
+    snapshot: &FilePropertiesAggregateSnapshot,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
+    let content = column![
+        readable_text("Calculating...").size(13),
+        aggregate_properties_information_detail(snapshot, scrollbar_visibility),
+    ]
+    .spacing(8)
+    .padding(16)
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(app_content_style)
+        .into()
+}
+
+fn properties_error_view<'a>(target_label: String, error: &'a str) -> Element<'a, Message> {
     let content = column![
         readable_text("Could not load properties").size(16),
-        readable_text(display_path(path)).size(13),
+        readable_text(target_label).size(13),
         localized_text(error).size(13)
     ]
     .spacing(8)
@@ -82,16 +117,21 @@ fn properties_error_view<'a>(path: &'a Path, error: &'a str) -> Element<'a, Mess
 
 fn properties_split_view<'a>(
     properties: &'a FilePropertiesState,
-    snapshot: &'a FilePropertiesSnapshot,
+    presentation: &'a FilePropertiesPresentation,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     let sidebar = properties_category_sidebar(properties.selected_category);
     let detail = match properties.selected_category {
-        FilePropertiesCategory::Information => {
-            properties_information_detail(snapshot, scrollbar_visibility)
-        }
+        FilePropertiesCategory::Information => match presentation {
+            FilePropertiesPresentation::Single(snapshot) => {
+                properties_information_detail(snapshot, scrollbar_visibility)
+            }
+            FilePropertiesPresentation::Aggregate(snapshot) => {
+                aggregate_properties_information_detail(snapshot, scrollbar_visibility)
+            }
+        },
         FilePropertiesCategory::Permissions => {
-            properties_permissions_detail(properties, snapshot, scrollbar_visibility)
+            properties_permissions_detail(properties, presentation, scrollbar_visibility)
         }
     };
 
@@ -118,7 +158,7 @@ fn properties_category_button(
     auxiliary_sidebar_button(
         category.label(),
         category == selected,
-        Message::FilePropertiesCategorySelected(category),
+        Message::FileProperties(FilePropertiesMessage::CategorySelected(category)),
     )
 }
 
@@ -194,13 +234,109 @@ fn properties_information_detail(
     )
 }
 
+fn aggregate_properties_information_detail(
+    snapshot: &FilePropertiesAggregateSnapshot,
+    scrollbar_visibility: ScrollbarVisibility,
+) -> Element<'_, Message> {
+    let header = row![
+        themed_icon(IconSymbol::File, IconTone::Normal, PROPERTIES_ICON_SIZE),
+        column![
+            localized_text(format!("{} items", snapshot.target_count)).size(18),
+            readable_text(aggregate_type_label(snapshot)).size(13)
+        ]
+        .spacing(4)
+        .width(Length::Fill)
+    ]
+    .spacing(14)
+    .align_y(Alignment::Center);
+    let location = snapshot
+        .common_parent
+        .as_deref()
+        .map(display_path)
+        .unwrap_or_else(|| crate::localization::translate_current("Multiple locations"));
+    let counts = aggregate_target_counts(snapshot);
+    let contents = aggregate_contents_counts(snapshot);
+    let details = column![
+        property_row("Selected", snapshot.target_count.to_string()),
+        property_row("Types", counts),
+        property_row("Location", location),
+        property_row("Created", aggregate_optional_time(snapshot.common_created)),
+        property_row(
+            "Modified",
+            aggregate_optional_time(snapshot.common_modified)
+        ),
+        property_row(
+            "Accessed",
+            aggregate_optional_time(snapshot.common_accessed)
+        ),
+        property_row("Size", display_size(snapshot.total_size_bytes)),
+        property_row("Size on disk", display_size(snapshot.total_disk_size_bytes)),
+        property_row("Contents", contents),
+    ]
+    .spacing(10);
+
+    properties_detail_scroller(
+        column![header, details].spacing(22).width(Length::Fill),
+        scrollbar_visibility,
+    )
+}
+
+fn aggregate_target_counts(snapshot: &FilePropertiesAggregateSnapshot) -> String {
+    if crate::localization::current_language_is_chinese() {
+        format!(
+            "{} 个文件，{} 个文件夹，{} 个链接，{} 个其它项目",
+            snapshot.file_count,
+            snapshot.directory_count,
+            snapshot.symlink_count,
+            snapshot.other_count
+        )
+    } else {
+        format!(
+            "{} files, {} folders, {} links, {} other",
+            snapshot.file_count,
+            snapshot.directory_count,
+            snapshot.symlink_count,
+            snapshot.other_count
+        )
+    }
+}
+
+fn aggregate_contents_counts(snapshot: &FilePropertiesAggregateSnapshot) -> String {
+    if crate::localization::current_language_is_chinese() {
+        format!(
+            "{} 个文件，{} 个文件夹",
+            snapshot.recursive_contents.file_count, snapshot.recursive_contents.directory_count
+        )
+    } else {
+        format!(
+            "{} files, {} folders",
+            snapshot.recursive_contents.file_count, snapshot.recursive_contents.directory_count
+        )
+    }
+}
+
+fn aggregate_type_label(snapshot: &FilePropertiesAggregateSnapshot) -> &'static str {
+    match snapshot.common_kind {
+        Some(FileKind::Directory) => "Folders",
+        Some(FileKind::File) => "Files",
+        Some(FileKind::Symlink) => "Symbolic Links",
+        Some(FileKind::Other) => "Other Items",
+        None => "Multiple Item Types",
+    }
+}
+
+fn aggregate_optional_time(time: Option<SystemTime>) -> String {
+    time.map(format_system_time)
+        .unwrap_or_else(|| crate::localization::translate_current("Mixed or unavailable"))
+}
+
 fn properties_permissions_detail<'a>(
     properties: &'a FilePropertiesState,
-    snapshot: &'a FilePropertiesSnapshot,
+    presentation: &'a FilePropertiesPresentation,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     let displayed_permissions =
-        displayed_permissions(snapshot.permissions, &properties.permission_update);
+        displayed_permissions(presentation.permissions(), &properties.permission_update);
     let mut content = Column::new()
         .spacing(18)
         .push(permissions_header(displayed_permissions));
@@ -210,7 +346,11 @@ fn properties_permissions_detail<'a>(
             current_permissions,
             &properties.permission_update,
         ));
-        if snapshot.kind == FileKind::Directory {
+        if matches!(
+            presentation,
+            FilePropertiesPresentation::Single(snapshot)
+                if snapshot.kind == FileKind::Directory
+        ) {
             content = content.push(apply_permissions_to_enclosed_items_button(
                 &properties.permission_update,
             ));
@@ -391,7 +531,9 @@ fn permission_access_button(
     if update.is_in_progress() {
         button
     } else {
-        button.on_press(Message::FilePropertiesPermissionToggled(class, access))
+        button.on_press(Message::FileProperties(
+            FilePropertiesMessage::PermissionToggled(class, access),
+        ))
     }
 }
 
@@ -409,7 +551,9 @@ fn apply_permissions_to_enclosed_items_button(
         button.into()
     } else {
         button
-            .on_press(Message::FilePropertiesApplyPermissionsToEnclosedItems)
+            .on_press(Message::FileProperties(
+                FilePropertiesMessage::ApplyPermissionsToEnclosedItems,
+            ))
             .into()
     }
 }
@@ -436,8 +580,29 @@ fn permissions_status_panel(
         FilePropertiesPermissionUpdate::SavingCurrentItem { .. } => {
             "Saving permissions...".to_owned()
         }
+        FilePropertiesPermissionUpdate::SavingTargetSet { .. } => {
+            "Saving permissions for selected items...".to_owned()
+        }
         FilePropertiesPermissionUpdate::ApplyingToEnclosedItems { .. } => {
             "Applying permissions to enclosed items...".to_owned()
+        }
+        FilePropertiesPermissionUpdate::TargetSetCompleted {
+            succeeded_count,
+            failures,
+        } => {
+            if failures.is_empty() {
+                format!("Updated permissions for {succeeded_count} items.")
+            } else {
+                format!(
+                    "Updated {succeeded_count} items; {} items failed. {}",
+                    failures.len(),
+                    failures
+                        .iter()
+                        .map(|failure| format!("{:?}: {}", failure.path, failure.error))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            }
         }
         FilePropertiesPermissionUpdate::Failed(error) => {
             format!("Could not update permissions: {error}")

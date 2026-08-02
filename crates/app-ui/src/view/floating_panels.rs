@@ -15,9 +15,9 @@ use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
-    FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, ListColumnConfig,
-    ListColumnKind, ListViewPreferences, Message, ScrollbarRegion, ScrollbarVisibility,
-    SidebarBookmarkContextMenuState,
+    FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, FilePropertiesMessage,
+    ListColumnConfig, ListColumnKind, ListViewPreferences, Message, ScrollbarRegion,
+    ScrollbarVisibility, SearchContextMenuState, SidebarBookmarkContextMenuState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
@@ -315,11 +315,44 @@ pub(super) fn context_menu_panel<'a>(
         ContextMenuState::FileArea(menu) => {
             file_context_menu_panel(menu, is_trash_view, active_pane_id)
         }
+        ContextMenuState::Search(menu) => search_context_menu_panel(menu),
         ContextMenuState::ListColumns(_) => list_column_context_menu_panel(list_view_preferences),
         ContextMenuState::SidebarBookmark(menu) => sidebar_bookmark_context_menu_panel(menu),
         ContextMenuState::SidebarDevice(menu) => sidebar_device_context_menu_panel(menu),
         ContextMenuState::NetworkConnection(menu) => network_connection_context_menu_panel(menu),
     }
+}
+
+fn search_context_menu_panel(menu: &SearchContextMenuState) -> Element<'_, Message> {
+    let content = Column::new()
+        .spacing(CONTEXT_MENU_ITEM_SPACING)
+        .padding(CONTEXT_MENU_PADDING)
+        .push(menu_item(
+            IconSymbol::FolderOpen,
+            "Open Containing Folder",
+            Message::SearchOpenContainingDirectory(menu.target.clone()),
+        ))
+        .push(menu_item(IconSymbol::Copy, "Copy", Message::CopySelected))
+        .push(menu_item(
+            IconSymbol::ArrowRight,
+            "Cut",
+            Message::MoveSelected,
+        ))
+        .push(menu_item(
+            IconSymbol::Trash,
+            "Move to Trash",
+            Message::TrashSelected,
+        ))
+        .push(menu_item(
+            IconSymbol::Trash,
+            "Delete Permanently",
+            Message::SearchDeletePermanentlySelected,
+        ));
+
+    container(content)
+        .width(Length::Fixed(CONTEXT_MENU_WIDTH))
+        .style(context_menu_style)
+        .into()
 }
 
 fn list_column_context_menu_panel(preferences: &ListViewPreferences) -> Element<'_, Message> {
@@ -449,7 +482,7 @@ fn file_context_menu_panel(
             .push(menu_item(
                 IconSymbol::FileText,
                 "Properties",
-                Message::FilePropertiesRequested(path.clone()),
+                Message::FileProperties(FilePropertiesMessage::Requested(path.clone())),
             ));
     }
 
@@ -603,7 +636,7 @@ fn trash_context_menu_panel(menu: &FileContextMenuState) -> Element<'_, Message>
             .push(menu_button(
                 IconSymbol::FileText,
                 "Properties",
-                Message::FilePropertiesRequested(path.clone()),
+                Message::FileProperties(FilePropertiesMessage::Requested(path.clone())),
             ));
     }
     menu_content = menu_content.push(menu_button(

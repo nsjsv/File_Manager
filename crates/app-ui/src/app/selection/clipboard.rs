@@ -19,10 +19,10 @@ use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 impl FileBrowser {
     pub(in crate::app) fn copy_selected(&mut self) -> Task<Message> {
         self.context_menu = None;
-        if self.is_trash_view {
+        if self.search_workspace.is_none() && self.is_trash_view {
             return Task::none();
         }
-        let paths = self.selected_paths_for_operation();
+        let paths = self.active_file_selection();
         if paths.is_empty() {
             return Task::none();
         }
@@ -35,10 +35,10 @@ impl FileBrowser {
 
     pub(in crate::app) fn move_selected(&mut self) -> Task<Message> {
         self.context_menu = None;
-        if self.is_trash_view {
+        if self.search_workspace.is_none() && self.is_trash_view {
             return Task::none();
         }
-        let paths = self.selected_paths_for_operation();
+        let paths = self.active_file_selection();
         if paths.is_empty() {
             return Task::none();
         }
@@ -51,10 +51,10 @@ impl FileBrowser {
 
     pub(in crate::app) fn trash_selected(&mut self) -> Task<Message> {
         self.context_menu = None;
-        if self.is_trash_view {
+        if self.search_workspace.is_none() && self.is_trash_view {
             return self.delete_selected_trash_entries();
         }
-        let paths = self.selected_paths_for_operation();
+        let paths = self.active_file_selection();
         if paths.is_empty() {
             return Task::none();
         }
@@ -150,7 +150,7 @@ impl FileBrowser {
         Task::none()
     }
 
-    fn request_destructive_action_confirmation(
+    pub(in crate::app) fn request_destructive_action_confirmation(
         &mut self,
         confirmation: DestructiveActionConfirmation,
     ) {

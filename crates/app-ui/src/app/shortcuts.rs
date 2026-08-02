@@ -93,6 +93,9 @@ impl FileBrowser {
     }
 
     pub(super) fn invoke_shortcut(&mut self, action: ShortcutAction) -> Task<Message> {
+        if self.search_workspace.is_some() {
+            return self.invoke_search_workspace_shortcut(action);
+        }
         match action {
             ShortcutAction::OpenSelected => self.activate_selected_path(),
             ShortcutAction::RenameSelected => self.begin_rename_selected(),
@@ -251,13 +254,13 @@ mod tests {
         let trash_path = PathBuf::from("/home/user/.local/share/Trash/files/report.txt");
         let info_path = PathBuf::from("/home/user/.local/share/Trash/info/report.txt.trashinfo");
         let original_path = PathBuf::from("/home/user/report.txt");
-        let trash_entry = TrashEntry {
-            trash_path: trash_path.clone(),
-            info_path: info_path.clone(),
-            original_path: original_path.clone(),
-            deletion_date: None,
-            entry: test_entry(&trash_path),
-        };
+        let trash_entry = TrashEntry::from_historical_entry(
+            trash_path.clone(),
+            info_path.clone(),
+            original_path.clone(),
+            None,
+            test_entry(&trash_path),
+        );
         let expected_restore_entry = trash_entry.restore_entry();
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         browser.current_dir = trash_location_path();

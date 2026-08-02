@@ -31,6 +31,7 @@ const CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_QUERY_TERMS_BYTES: usize = 4_096;
 const MAX_QUERY_PATH_BYTES: usize = 4_096;
 const MAX_QUERY_MIME_BYTES: usize = 255;
+const MAX_QUERY_MIME_PATTERNS: usize = 32;
 const MAX_QUERY_OFFSET: usize = 1_000_000;
 
 #[path = "protocol_client_session.rs"]
@@ -340,9 +341,8 @@ pub async fn status_via_socket(socket_path: &Path) -> SearchResult<SearchService
     let mut stream = UnixStream::connect(socket_path).await?;
     write_service_request(&mut stream, &SearchServiceRequest::Status).await?;
     loop {
-        match read_service_event(&mut stream).await? {
-            SearchServiceEvent::Status(status) => return Ok(status),
-            _ => {}
+        if let SearchServiceEvent::Status(status) = read_service_event(&mut stream).await? {
+            return Ok(status);
         }
     }
 }
@@ -352,9 +352,10 @@ pub async fn version_via_socket(socket_path: &Path) -> SearchResult<(u32, String
     let mut stream = UnixStream::connect(socket_path).await?;
     write_service_request(&mut stream, &SearchServiceRequest::Version).await?;
     loop {
-        match read_service_event(&mut stream).await? {
-            SearchServiceEvent::Version { protocol, build } => return Ok((protocol, build)),
-            _ => {}
+        if let SearchServiceEvent::Version { protocol, build } =
+            read_service_event(&mut stream).await?
+        {
+            return Ok((protocol, build));
         }
     }
 }
@@ -532,15 +533,24 @@ fn validate_wire_query(query: &SearchQuery) -> Result<(), String> {
             ));
         }
     }
-    if query
-        .filters
-        .mime_type
-        .as_ref()
-        .is_some_and(|mime_type| mime_type.len() > MAX_QUERY_MIME_BYTES)
-    {
+    if query.filters.mime_patterns.len() > MAX_QUERY_MIME_PATTERNS {
         return Err(format!(
-            "search MIME filter exceeds the {MAX_QUERY_MIME_BYTES} byte limit"
+            "search MIME filter exceeds the {MAX_QUERY_MIME_PATTERNS} pattern limit"
         ));
+    }
+    for pattern in &query.filters.mime_patterns {
+        let (value, permits_empty_subtype) = match pattern {
+            crate::model::MimePattern::Exact(value) => (value.as_str(), false),
+            crate::model::MimePattern::Prefix(value) => (value.as_str(), true),
+        };
+        if value.len() > MAX_QUERY_MIME_BYTES {
+            return Err(format!(
+                "search MIME filter exceeds the {MAX_QUERY_MIME_BYTES} byte limit"
+            ));
+        }
+        if !is_valid_mime_pattern_value(value, permits_empty_subtype) {
+            return Err("search MIME filter contains an invalid media type pattern".to_owned());
+        }
     }
     if !(1..=200).contains(&query.limit) {
         return Err("search result limit must be between 1 and 200".to_owned());
@@ -566,6 +576,25 @@ fn validate_wire_query(query: &SearchQuery) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn is_valid_mime_pattern_value(value: &str, permits_empty_subtype: bool) -> bool {
+    let Some((top_level, subtype)) = value.split_once('/') else {
+        return false;
+    };
+    !top_level.is_empty()
+        && (permits_empty_subtype || !subtype.is_empty())
+        && !subtype.contains('/')
+        && top_level.bytes().all(is_mime_name_byte)
+        && subtype.bytes().all(is_mime_name_byte)
+}
+
+fn is_mime_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#' | b'$' | b'&' | b'-' | b'^' | b'_' | b'.' | b'+'
+        )
 }
 
 async fn read_service_request_before(

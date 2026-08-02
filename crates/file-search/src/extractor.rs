@@ -386,7 +386,7 @@ async fn extract_with_system_command_cancelled(
         let stderr_output = completed_pipe_output(stderr_result, "stderr", &tool_name)?;
         return Ok(outcome_from_completed_process(
             tool_name,
-            status.clone(),
+            *status,
             stdout_output,
             stderr_output,
             limits.max_stderr_bytes,

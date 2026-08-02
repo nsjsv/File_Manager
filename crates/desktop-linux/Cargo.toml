@@ -11,7 +11,9 @@ tokio.workspace = true
 tracing.workspace = true
 udisks2 = "0.3.1"
 gio = "=0.22.8"
+url.workspace = true
 wayland-client = { version = "0.31.14", features = ["system"] }
+zbus.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,6 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=File Manager
-Exec=file-manager
+Exec=file-manager %F
+MimeType=inode/directory;
 Categories=System;FileManager;
 Terminal=false

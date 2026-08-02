@@ -11,11 +11,13 @@ use desktop_linux::{
 };
 use file_core::{
     available_transfer_target_path, check_transfer_conflicts as check_core_transfer_conflicts,
-    create_file_with_contents, scan_trash, ScanOptions, TransferConflictCheck,
+    create_file_with_contents, scan_trash_with_cancellation, ScanOptions, TransferConflictCheck,
     TransferConflictItem, TrashScan,
 };
 use file_operation_store::{StoreError, TaskQueueStore};
 use iced::Task;
+
+use tokio_util::sync::CancellationToken;
 
 use crate::config;
 use crate::model::{
@@ -63,7 +65,7 @@ pub(crate) use preview::{
 mod properties;
 pub(crate) use properties::{
     apply_file_properties_permissions_to_enclosed_items_command, file_properties_command,
-    set_file_properties_permissions_command,
+    set_file_properties_permissions_command, FilePropertiesPermissionTargets,
 };
 mod queued_file_operations;
 pub(crate) use queued_file_operations::file_operation_subscription;
@@ -145,9 +147,13 @@ pub(crate) fn save_browser_session_command(
     )
 }
 
-pub(crate) fn load_trash_command(pane_id: BrowserPaneId, options: ScanOptions) -> Task<Message> {
-    Task::perform(load_trash(options), move |scan| {
-        Message::TrashLoaded(pane_id, scan)
+pub(crate) fn load_trash_command(
+    generation: u64,
+    options: ScanOptions,
+    cancellation: CancellationToken,
+) -> Task<Message> {
+    Task::perform(load_trash(options, cancellation), move |scan| {
+        Message::TrashLoaded(generation, scan)
     })
 }
 
@@ -299,8 +305,13 @@ async fn check_transfer_conflicts(transfers: Vec<QueuedTransfer>) -> Vec<Transfe
     check_core_transfer_conflicts(conflict_checks).await
 }
 
-async fn load_trash(options: ScanOptions) -> Result<TrashScan, String> {
-    scan_trash(options).await.map_err(|error| error.to_string())
+async fn load_trash(
+    options: ScanOptions,
+    cancellation: CancellationToken,
+) -> Result<TrashScan, String> {
+    scan_trash_with_cancellation(options, cancellation)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn load_startup_environment() -> StartupEnvironment {

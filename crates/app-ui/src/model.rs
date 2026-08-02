@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use desktop_linux::{
-    DesktopClipboardContent, FileClipboardOperation, OpenWithApplicationList, StorageDeviceId,
-    StorageDeviceSnapshot, TerminalEmulator, WaylandDndFileDrop, WaylandDndWindowHandle,
-    WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
+    DesktopActivationEvent, DesktopClipboardContent, FileClipboardOperation,
+    OpenWithApplicationList, StorageDeviceId, StorageDeviceSnapshot, TerminalEmulator,
+    WaylandDndFileDrop, WaylandDndWindowHandle, WaylandFileDragSelfTargetEvent,
+    WaylandFileDragSourceEvent,
 };
 use file_core::FileOperationVerification;
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
@@ -52,6 +53,8 @@ pub(crate) use browser_panes::{
     ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridExpansionSessionId,
     IconGridViewport, SplitAxis, SplitRegion,
 };
+mod trash;
+pub(crate) use trash::{TrashRefreshCompletionDecision, TrashRefreshState};
 mod selection;
 pub(crate) use selection::{
     ColumnEntryBounds, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
@@ -83,10 +86,13 @@ pub(crate) use batch_rename::{
 };
 mod properties;
 pub(crate) use properties::{
-    FilePropertiesCategory, FilePropertiesDirectoryContents, FilePropertiesDirectoryContentsState,
-    FilePropertiesLoadState, FilePropertiesPermissionAccess, FilePropertiesPermissionClass,
-    FilePropertiesPermissionUpdate, FilePropertiesPermissions, FilePropertiesRequest,
-    FilePropertiesSnapshot, FilePropertiesState,
+    FilePropertiesAggregateSnapshot, FilePropertiesCategory, FilePropertiesDirectoryContents,
+    FilePropertiesDirectoryContentsState, FilePropertiesIdentity, FilePropertiesLoadState,
+    FilePropertiesMessage, FilePropertiesPermissionAccess, FilePropertiesPermissionBaseline,
+    FilePropertiesPermissionClass, FilePropertiesPermissionUpdate,
+    FilePropertiesPermissionWriteOutcome, FilePropertiesPermissions, FilePropertiesPresentation,
+    FilePropertiesRequest, FilePropertiesSnapshot, FilePropertiesState, FilePropertiesTargetSet,
+    PermissionBatchOutcome, PermissionBatchPathFailure,
 };
 mod preview;
 pub(crate) use preview::{
@@ -110,7 +116,11 @@ pub(crate) use application_logs::{
     APPLICATION_LOG_ENTRY_LIMIT, APP_JOURNAL_IDENTIFIER, SEARCH_JOURNAL_IDENTIFIER,
 };
 pub(crate) mod search;
-pub(crate) use search::{DirectoryFallbackCompletion, IndexedSearchOutcome};
+pub(crate) use search::{
+    DirectoryFallbackOutcome, IndexedSearchOutcome, ModifiedTimePreset, SearchContentCategory,
+    SearchKeyboardSelection, SearchObjectType, SearchResultCompletion, SearchSelectionGesture,
+    SearchSelectionStep, SearchWorkspaceState,
+};
 mod search_service;
 pub(crate) use search_service::{
     SearchEndpointState, SearchServiceDiagnostic, SearchServiceDiagnosticKind,
@@ -226,7 +236,9 @@ pub(crate) enum Message {
         DirectoryLoadRequest,
         Result<DirectoryScan, DirectoryLoadFailure>,
     ),
-    TrashLoaded(BrowserPaneId, Result<TrashScan, String>),
+    TrashLoaded(u64, Result<TrashScan, String>),
+    TrashRefreshTick,
+    TrashWarningsToggled,
     OpenFileFinished(PathBuf, Result<(), String>),
     OpenWithRequested(PathBuf),
     OpenWithApplicationsLoaded(PathBuf, Result<OpenWithApplicationList, String>),
@@ -237,29 +249,7 @@ pub(crate) enum Message {
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
     RemotePreviewCache(RemotePreviewCacheMessage),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
-    FilePropertiesLoaded(
-        FilePropertiesRequest,
-        Result<FilePropertiesSnapshot, String>,
-    ),
-    FilePropertiesDirectoryContentsUpdated(FilePropertiesRequest, FilePropertiesDirectoryContents),
-    FilePropertiesDirectoryContentsLoaded(
-        FilePropertiesRequest,
-        Result<FilePropertiesDirectoryContents, String>,
-    ),
-    FilePropertiesPermissionToggled(
-        FilePropertiesPermissionClass,
-        FilePropertiesPermissionAccess,
-    ),
-    FilePropertiesApplyPermissionsToEnclosedItems,
-    FilePropertiesCategorySelected(FilePropertiesCategory),
-    FilePropertiesPermissionsUpdated(
-        FilePropertiesRequest,
-        Result<FilePropertiesPermissions, String>,
-    ),
-    FilePropertiesEnclosedPermissionsUpdated(
-        FilePropertiesRequest,
-        Result<FilePropertiesPermissions, String>,
-    ),
+    FileProperties(FilePropertiesMessage),
     PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
     TextPreviewAction {
         action: text_editor::Action,
@@ -400,11 +390,18 @@ pub(crate) enum Message {
     AddressBarScrolled(BrowserPaneId),
     SearchInputChanged(String),
     SearchSubmitted,
+    SearchObjectTypeSelected(SearchObjectType),
+    SearchContentCategorySelected(SearchContentCategory),
+    SearchModifiedTimeSelected(ModifiedTimePreset),
+    SearchKeywordCleared,
+    SearchWorkspaceClosed,
     SearchResultsLoaded(u64, IndexedSearchOutcome),
     SearchDirectoryBatchLoaded(u64, Vec<SearchHit>),
-    SearchDirectoryFinished(u64, DirectoryFallbackCompletion),
-    SearchResultPressed(SearchHit),
-    SearchCleared,
+    SearchDirectoryFinished(u64, DirectoryFallbackOutcome),
+    SearchResultPressed(PathBuf),
+    SearchResultRightClicked(PathBuf),
+    SearchOpenContainingDirectory(PathBuf),
+    SearchDeletePermanentlySelected,
     SearchResultsScrolled,
     SearchServiceEnsured(
         SearchServiceStatusRequest,
@@ -507,7 +504,6 @@ pub(crate) enum Message {
     RenameInputUndoRequested,
     RenameInputRedoRequested,
     BeginRename(PathBuf),
-    FilePropertiesRequested(PathBuf),
     OpenTerminalHere(PathBuf),
     RenameSelected,
     CreateDirectory(PathBuf),
@@ -525,6 +521,8 @@ pub(crate) enum Message {
         content: Result<Option<DesktopClipboardContent>, String>,
     },
     ClipboardFileCreated(Result<PathBuf, String>),
+    DesktopActivationReceived(DesktopActivationEvent),
+    DesktopActivationRuntimeFailed(String),
     WaylandDndWindowHandleLoaded(Result<Option<WaylandDndWindowHandle>, String>),
     WaylandFilesDropped(Result<WaylandDndFileDrop, String>),
     WaylandFileDragSourceEvent(WaylandFileDragSourceEvent),
@@ -629,6 +627,7 @@ pub(crate) struct StartupEnvironment {
 #[derive(Debug, Clone)]
 pub(crate) enum ContextMenuState {
     FileArea(FileContextMenuState),
+    Search(SearchContextMenuState),
     ListColumns(ListColumnMenuState),
     SidebarBookmark(SidebarBookmarkContextMenuState),
     SidebarDevice(SidebarDeviceContextMenuState),
@@ -639,6 +638,7 @@ impl ContextMenuState {
     pub(crate) fn position(&self) -> Point {
         match self {
             Self::FileArea(menu) => menu.position,
+            Self::Search(menu) => menu.position,
             Self::ListColumns(menu) => menu.position,
             Self::SidebarBookmark(menu) => menu.position,
             Self::SidebarDevice(menu) => menu.position,
@@ -649,12 +649,19 @@ impl ContextMenuState {
     pub(crate) fn paste_directory(&self) -> Option<&PathBuf> {
         match self {
             Self::FileArea(menu) => Some(&menu.paste_directory),
+            Self::Search(_) => None,
             Self::ListColumns(_) => None,
             Self::SidebarBookmark(_) => None,
             Self::SidebarDevice(_) => None,
             Self::NetworkConnection(_) => None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SearchContextMenuState {
+    pub(crate) target: PathBuf,
+    pub(crate) position: Point,
 }
 
 #[derive(Debug, Clone)]

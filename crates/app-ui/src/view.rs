@@ -24,6 +24,7 @@ mod text_preview_panel;
 mod toggle_switch;
 mod toolbar_controls;
 mod transfer_conflict;
+mod trash_warning;
 mod window_chrome;
 mod window_control_settings;
 mod window_drag_region;
@@ -36,6 +37,7 @@ pub(crate) use window_chrome::{
 pub(crate) use address_bar::address_input_id;
 pub(crate) use preview_panel::view_preview_window;
 pub(crate) use properties_window::view_properties_window;
+pub(crate) use search_panel::SEARCH_RESULT_ROW_HEIGHT;
 pub(crate) use settings_window::view_settings_window;
 pub(crate) use tab_motion::translated_with_width_overflow;
 
@@ -411,6 +413,12 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         main_content = main_content.push(tab_bar(pane));
     }
 
+    if pane.is_trash_view {
+        if let Some(warning_panel) = trash_warning::trash_warning_panel(browser) {
+            main_content = main_content.push(warning_panel);
+        }
+    }
+
     let pane_content = main_content
         .push(browser_content_view(browser, pane))
         .width(Length::Fill)
@@ -512,13 +520,10 @@ fn browser_content_view<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
 ) -> Element<'a, Message> {
-    if browser.search.is_active() {
+    if browser.search_workspace.is_some() {
         return track_file_drag_hit_test_marker(
             search_results_view(browser),
-            FileDragHitTestMarker::DirectoryTarget {
-                pane_id: pane.id,
-                directory: pane.current_dir.clone(),
-            },
+            FileDragHitTestMarker::BlockedDirectoryTarget { pane_id: pane.id },
         );
     }
 

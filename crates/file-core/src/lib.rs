@@ -31,18 +31,18 @@ pub use media::{
 pub use ops::{
     batch_rename_paths, copy_path, copy_path_with_options, create_directory, create_empty_file,
     create_file_with_contents, delete_path_permanently, move_path, move_path_with_options,
-    persist_recoverable_source_manifest, rename_path, run_recoverable_transfer, trash_path,
-    trash_path_with_restore_entry, ArtifactOwner, ArtifactToken, BatchRenameItem, CommitPayload,
-    CommitTransfer, CommittedTransfer, CompletedBatchRename, CompletedTarget, CopyProgress,
-    FileIdentity, FileObjectKind, FileOperationControls, FileOperationRunState,
-    FileOperationVerification, FileTransferOptions, MergeChildCompletion, MergeChildOutcome,
-    MergeTransfer, ObjectFingerprint, OwnedArtifact, OwnedArtifactKind, OwnedArtifactPlan,
-    PreparedTransfer, ProgressSender, RecoverableTransferError, RecoverableTransferOperation,
-    RecoverableTransferOutcome, RecoverableTransferRequest, RetiredSource, SourceDisposition,
-    SourceManifest, SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation,
-    StagingTransfer, TransferCheckpoint, TransferConflictStrategy, TransferExecutionKind,
-    TransferJournal, TransferJournalError, TransferJournalFuture, TransferJournalMutation,
-    TransferJournalRecord, TransferWorkKey,
+    persist_recoverable_source_manifest, rename_path, run_recoverable_transfer, ArtifactOwner,
+    ArtifactToken, BatchRenameItem, CommitPayload, CommitTransfer, CommittedTransfer,
+    CompletedBatchRename, CompletedTarget, CopyProgress, FileIdentity, FileObjectKind,
+    FileOperationControls, FileOperationRunState, FileOperationVerification, FileTransferOptions,
+    MergeChildCompletion, MergeChildOutcome, MergeTransfer, ObjectFingerprint, OwnedArtifact,
+    OwnedArtifactKind, OwnedArtifactPlan, PreparedTransfer, ProgressSender,
+    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
+    RecoverableTransferRequest, RetiredSource, SourceDisposition, SourceManifest,
+    SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation, StagingTransfer,
+    TransferCheckpoint, TransferConflictStrategy, TransferExecutionKind, TransferJournal,
+    TransferJournalError, TransferJournalFuture, TransferJournalMutation, TransferJournalRecord,
+    TransferWorkKey,
 };
 pub use scan::{
     scan_directory, scan_directory_with_progress, DirectoryScan, DirectoryScanBatch, FileError,
@@ -56,8 +56,10 @@ pub use transfer_conflict::{
     TransferConflictCheck, TransferConflictItem, TransferConflictMetadata,
 };
 pub use trash_bin::{
-    delete_trash_entry, empty_trash, restore_trash_entry, scan_trash, TrashEntry,
-    TrashRestoreEntry, TrashScan,
+    delete_trash_entry, empty_trash, empty_trash_with_cancellation, restore_trash_entry,
+    scan_trash, scan_trash_with_cancellation, trash_path, trash_path_with_restore_entry,
+    trash_path_with_restore_entry_and_cancellation, TrashCommitOutcome, TrashEntry,
+    TrashRestoreEntry, TrashScan, TrashTrackingWarning,
 };
 pub use watch::{watch_directory, DirectoryChange, DirectoryWatcher};
 

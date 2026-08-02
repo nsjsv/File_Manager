@@ -269,36 +269,61 @@ fn duplicate_completion_is_rejected_before_history_side_effects() {
 }
 
 #[test]
-fn completed_path_migration_updates_inline_rename_and_restarts_search() {
+fn completed_path_migration_updates_inline_rename_and_restarts_frozen_root_search() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
-    let source = PathBuf::from("/workspace/old");
-    let destination = PathBuf::from("/workspace/new");
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("old");
+    let destination = workspace.path().join("new");
+    std::fs::create_dir_all(source.join("nested")).unwrap();
     browser.current_dir = source.join("nested");
     browser.renaming = Some(source.join("nested/report.txt"));
-    browser.search.input = "report".to_owned();
-    drop(browser.submit_search());
-    let previous_search_generation = browser.search.generation;
     browser.sync_active_tab_state();
+    drop(browser.update_search_input("report".to_owned()));
+    let previous_search_generation = browser.search_workspace.as_ref().unwrap().run.generation;
 
-    finish_queued_rename(&mut browser, source, destination.clone());
+    finish_queued_rename(&mut browser, source.clone(), destination.clone());
 
     assert_eq!(
         browser.renaming,
         Some(destination.join("nested/report.txt"))
     );
-    assert!(browser.search.generation > previous_search_generation);
-    assert!(!browser
-        .search
-        .accepts_indexed_outcome(previous_search_generation));
-    let active_query = browser
-        .search
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert!(workspace.run.generation > previous_search_generation);
+    assert!(!workspace.accepts_indexed_outcome(previous_search_generation));
+    let active_query = workspace
+        .run
         .active_query
         .as_ref()
         .expect("restarted query");
     assert_eq!(
         active_query.scope,
-        SearchScope::Directory(destination.join("nested"))
+        SearchScope::Directory(source.join("nested"))
     );
+}
+
+#[test]
+fn completed_non_migration_operation_restarts_active_search_workspace() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let root = tempfile::tempdir().unwrap();
+    browser.current_dir = root.path().to_path_buf();
+    browser.sync_active_tab_state();
+    drop(browser.submit_search());
+    let first_generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    assert!(browser
+        .operation_queue
+        .enqueue(QueuedFileOperation::DeletePermanently {
+            paths: vec![root.path().join("obsolete.txt")],
+        })
+        .error()
+        .is_none());
+    let task_id = browser.operation_queue.tasks().last().unwrap().id;
+
+    drop(browser.accept_file_operation_finished(
+        task_id,
+        FileOperationCompletion::Succeeded(FileOperationOutcome::NoHistory),
+    ));
+
+    assert!(browser.search_workspace.as_ref().unwrap().run.generation > first_generation);
 }
 
 #[test]

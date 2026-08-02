@@ -54,6 +54,7 @@ pub(crate) enum FileOperationOutcome {
     Trash {
         paths: Vec<PathBuf>,
         entries: Vec<TrashRestoreEntry>,
+        tracking_warnings: Vec<file_core::TrashTrackingWarning>,
     },
     Restore {
         entries: Vec<TrashRestoreEntry>,
@@ -127,6 +128,35 @@ impl FileOperationCompletion {
 }
 
 impl FileOperationOutcome {
+    pub(crate) fn completion_warning(&self) -> Option<String> {
+        const MAX_TRACKING_WARNING_DETAILS: usize = 5;
+
+        let Self::Trash {
+            tracking_warnings, ..
+        } = self
+        else {
+            return None;
+        };
+        if tracking_warnings.is_empty() {
+            return None;
+        }
+        let mut details = tracking_warnings
+            .iter()
+            .take(MAX_TRACKING_WARNING_DETAILS)
+            .map(|warning| format!("{}: {}", warning.path.display(), warning.message))
+            .collect::<Vec<_>>();
+        let remaining = tracking_warnings
+            .len()
+            .saturating_sub(MAX_TRACKING_WARNING_DETAILS);
+        if remaining > 0 {
+            details.push(format!("... (+{remaining})"));
+        }
+        Some(format!(
+            "Moved to Trash, but undo information could not be recorded. {}",
+            details.join("; ")
+        ))
+    }
+
     pub(crate) fn completed_path_migrations(&self) -> Vec<CompletedPathMigration> {
         match self {
             Self::Rename { from, to } => {
@@ -419,7 +449,13 @@ impl FileOperationHistoryItem {
             FileOperationOutcome::CreateEmptyFile { path } => {
                 Some(Self::CreateEmptyFile { path: path.clone() })
             }
-            FileOperationOutcome::Trash { paths, entries } if paths.len() == entries.len() => {
+            FileOperationOutcome::Trash { paths, entries, .. }
+                if !entries.is_empty()
+                    && paths.len() == entries.len()
+                    && paths.iter().zip(entries).all(|(path, entry)| {
+                        entry.has_verified_identity() && path == &entry.original_path
+                    }) =>
+            {
                 Some(Self::Trash {
                     original_paths: paths.clone(),
                     restore_entries: entries.clone(),
@@ -597,203 +633,5 @@ fn transfer_targets(transfers: &[CompletedTransfer]) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn transfer(source: &str, target: &str) -> CompletedTransfer {
-        CompletedTransfer {
-            source: PathBuf::from(source),
-            target: PathBuf::from(target),
-        }
-    }
-
-    #[test]
-    fn completed_path_migrations_are_component_aware_longest_and_single_pass() {
-        let outcome = FileOperationOutcome::BatchRename {
-            renames: vec![
-                CompletedBatchRename {
-                    from: PathBuf::from("/workspace/old"),
-                    to: PathBuf::from("/workspace/new"),
-                },
-                CompletedBatchRename {
-                    from: PathBuf::from("/workspace/new"),
-                    to: PathBuf::from("/workspace/final"),
-                },
-                CompletedBatchRename {
-                    from: PathBuf::from("/workspace/old/nested"),
-                    to: PathBuf::from("/workspace/special"),
-                },
-            ],
-        };
-        let migrations = outcome.completed_path_migrations();
-
-        assert_eq!(
-            path_after_completed_migrations(Path::new("/workspace/old"), &migrations),
-            PathBuf::from("/workspace/new")
-        );
-        assert_eq!(
-            path_after_completed_migrations(Path::new("/workspace/old/file.txt"), &migrations),
-            PathBuf::from("/workspace/new/file.txt")
-        );
-        assert_eq!(
-            path_after_completed_migrations(Path::new("/workspace/old-copy"), &migrations),
-            PathBuf::from("/workspace/old-copy")
-        );
-        assert_eq!(
-            path_after_completed_migrations(
-                Path::new("/workspace/old/nested/file.txt"),
-                &migrations,
-            ),
-            PathBuf::from("/workspace/special/file.txt")
-        );
-        assert_eq!(
-            path_after_completed_migrations(Path::new("/workspace/new/file.txt"), &migrations),
-            PathBuf::from("/workspace/final/file.txt")
-        );
-    }
-
-    #[test]
-    fn non_replayable_move_still_reports_completed_path_migration() {
-        let outcome = FileOperationOutcome::Move {
-            transfers: vec![transfer("/workspace/old", "/archive/old")],
-            history_eligibility: FileOperationHistoryEligibility::NotReplayable,
-        };
-        let migrations = outcome.completed_path_migrations();
-        let mut history = FileOperationHistory::new();
-
-        history.accept_completed(1, &outcome);
-
-        assert_eq!(
-            path_after_completed_migrations(Path::new("/workspace/old/child"), &migrations),
-            PathBuf::from("/archive/old/child")
-        );
-        assert!(history.take_undo_operation().is_none());
-    }
-
-    #[test]
-    fn undo_move_reverses_completed_transfers() {
-        let item = FileOperationHistoryItem::Move {
-            transfers: vec![transfer("/a/one", "/b/one"), transfer("/a/two", "/b/two")],
-        };
-
-        let operation = item.undo_operation().expect("undo operation");
-
-        let QueuedFileOperation::Move { transfers, .. } = operation else {
-            panic!("expected move");
-        };
-        assert_eq!(transfers[0].source, PathBuf::from("/b/two"));
-        assert_eq!(transfers[0].target, PathBuf::from("/a/two"));
-        assert_eq!(transfers[1].source, PathBuf::from("/b/one"));
-        assert_eq!(transfers[1].target, PathBuf::from("/a/one"));
-    }
-
-    #[test]
-    fn failed_undo_move_splits_completed_and_remaining_transfers() {
-        let mut history = FileOperationHistory::new();
-        history.undo_stack.push(FileOperationHistoryItem::Move {
-            transfers: vec![transfer("/a/one", "/b/one"), transfer("/a/two", "/b/two")],
-        });
-        let (_operation, pending) = history.take_undo_operation().expect("undo move");
-        history.track_pending(1, pending);
-
-        history.accept_failed(1, &[transfer("/b/two", "/a/two")]);
-
-        let (remaining_undo, _) = history
-            .take_undo_operation()
-            .expect("remaining undo transfer");
-        let QueuedFileOperation::Move {
-            transfers: remaining_undo_transfers,
-            ..
-        } = remaining_undo
-        else {
-            panic!("expected remaining undo move");
-        };
-        assert_eq!(remaining_undo_transfers.len(), 1);
-        assert_eq!(remaining_undo_transfers[0].source, PathBuf::from("/b/one"));
-        assert_eq!(remaining_undo_transfers[0].target, PathBuf::from("/a/one"));
-
-        let (completed_redo, _) = history
-            .take_redo_operation()
-            .expect("completed transfer redo");
-        let QueuedFileOperation::Move {
-            transfers: completed_redo_transfers,
-            ..
-        } = completed_redo
-        else {
-            panic!("expected completed transfer redo move");
-        };
-        assert_eq!(completed_redo_transfers.len(), 1);
-        assert_eq!(completed_redo_transfers[0].source, PathBuf::from("/a/two"));
-        assert_eq!(completed_redo_transfers[0].target, PathBuf::from("/b/two"));
-    }
-
-    #[test]
-    fn failed_redo_move_splits_completed_and_remaining_transfers() {
-        let mut history = FileOperationHistory::new();
-        history.redo_stack.push(FileOperationHistoryItem::Move {
-            transfers: vec![transfer("/a/one", "/b/one"), transfer("/a/two", "/b/two")],
-        });
-        let (_operation, pending) = history.take_redo_operation().expect("redo move");
-        history.track_pending(1, pending);
-
-        history.accept_failed(1, &[transfer("/a/one", "/b/one")]);
-
-        let (remaining_redo, _) = history
-            .take_redo_operation()
-            .expect("remaining redo transfer");
-        let QueuedFileOperation::Move {
-            transfers: remaining_redo_transfers,
-            ..
-        } = remaining_redo
-        else {
-            panic!("expected remaining redo move");
-        };
-        assert_eq!(remaining_redo_transfers.len(), 1);
-        assert_eq!(remaining_redo_transfers[0].source, PathBuf::from("/a/two"));
-        assert_eq!(remaining_redo_transfers[0].target, PathBuf::from("/b/two"));
-
-        let (completed_undo, _) = history
-            .take_undo_operation()
-            .expect("completed transfer undo");
-        let QueuedFileOperation::Move {
-            transfers: completed_undo_transfers,
-            ..
-        } = completed_undo
-        else {
-            panic!("expected completed transfer undo move");
-        };
-        assert_eq!(completed_undo_transfers.len(), 1);
-        assert_eq!(completed_undo_transfers[0].source, PathBuf::from("/b/one"));
-        assert_eq!(completed_undo_transfers[0].target, PathBuf::from("/a/one"));
-    }
-
-    #[test]
-    fn normal_operation_clears_redo_stack() {
-        let mut history = FileOperationHistory::new();
-        history
-            .undo_stack
-            .push(FileOperationHistoryItem::CreateEmptyFile {
-                path: PathBuf::from("/tmp/New File"),
-            });
-        let (_operation, pending) = history.take_undo_operation().expect("undo");
-        history.track_pending(1, pending);
-        history.accept_completed(
-            1,
-            &FileOperationOutcome::Trash {
-                paths: vec![PathBuf::from("/tmp/New File")],
-                entries: Vec::new(),
-            },
-        );
-        assert_eq!(history.redo_stack.len(), 1);
-
-        history.accept_completed(
-            2,
-            &FileOperationOutcome::CreateDirectory {
-                path: PathBuf::from("/tmp/New Folder"),
-            },
-        );
-
-        assert!(history.redo_stack.is_empty());
-        assert_eq!(history.undo_stack.len(), 1);
-    }
-}
+#[path = "operation_history_tests.rs"]
+mod tests;

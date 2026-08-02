@@ -52,6 +52,7 @@ impl SearchDatabase {
                 f.mtime_ns,
                 f.ctime_ns,
                 f.size,
+                f.mime_type,
                 s.metadata_stage_state,
                 s.content_stage_state,
                 f.observation_state
@@ -88,6 +89,7 @@ impl SearchDatabase {
                 f.mtime_ns,
                 f.ctime_ns,
                 f.size,
+                f.mime_type,
                 s.metadata_stage_state,
                 s.content_stage_state,
                 f.observation_state
@@ -119,42 +121,16 @@ impl SearchDatabase {
             |row| {
                 Ok((
                     row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Option<i64>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, String>(8)?,
+                    StoredKnownEntryFields::read(row, 1)?,
                 ))
             },
         )?;
 
         rows.map(|row| {
-            let (
-                path,
-                device,
-                inode,
-                mtime_ns,
-                ctime_ns,
-                size,
-                metadata_stage_state,
-                content_stage_state,
-                observation_state,
-            ) = row?;
+            let (path, stored_fields) = row?;
             Ok(KnownFileEntry {
                 path: path_from_storage_bytes(path),
-                state: known_entry_state(
-                    device,
-                    inode,
-                    mtime_ns,
-                    ctime_ns,
-                    size,
-                    metadata_stage_state.as_deref(),
-                    content_stage_state.as_deref(),
-                    &observation_state,
-                )?,
+                state: stored_fields.into_known_entry_state()?,
             })
         })
         .collect()
@@ -442,76 +418,65 @@ fn read_known_entry(
     statement: &mut rusqlite::Statement<'_>,
     storage_path: &[u8],
 ) -> SearchResult<Option<KnownEntryState>> {
-    let stored_row = statement
+    let stored_fields = statement
         .query_row(params![storage_path], |row| {
-            Ok((
-                row.get::<_, Option<i64>>(0)?,
-                row.get::<_, Option<i64>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, String>(7)?,
-            ))
+            StoredKnownEntryFields::read(row, 0)
         })
         .optional()?;
 
-    stored_row
-        .map(
-            |(
-                device,
-                inode,
-                mtime_ns,
-                ctime_ns,
-                size,
-                metadata_stage_state,
-                content_stage_state,
-                observation_state,
-            )| {
-                known_entry_state(
-                    device,
-                    inode,
-                    mtime_ns,
-                    ctime_ns,
-                    size,
-                    metadata_stage_state.as_deref(),
-                    content_stage_state.as_deref(),
-                    &observation_state,
-                )
-            },
-        )
+    stored_fields
+        .map(StoredKnownEntryFields::into_known_entry_state)
         .transpose()
 }
 
-fn known_entry_state(
+struct StoredKnownEntryFields {
     device: Option<i64>,
     inode: Option<i64>,
     mtime_ns: Option<i64>,
     ctime_ns: Option<i64>,
     size: i64,
-    metadata_stage_state: Option<&str>,
-    content_stage_state: Option<&str>,
-    observation_state: &str,
-) -> SearchResult<KnownEntryState> {
-    let stage_state = match (metadata_stage_state, content_stage_state) {
-        (Some(metadata), Some(content)) => IndexedEntryStageState {
-            metadata: EntryStageProgress::from_storage_value(metadata)?,
-            content: EntryStageProgress::from_storage_value(content)?,
-        },
-        _ => IndexedEntryStageState::pending(),
-    };
-    Ok(KnownEntryState {
-        signature: FileSignature {
-            device: device.map(|value| value as u64),
-            inode: inode.map(|value| value as u64),
-            mtime_ns,
-            ctime_ns,
-            size: size.max(0) as u64,
-        },
-        stage_state,
-        observation_state: EntryObservationState::from_storage_value(observation_state)?,
-    })
+    mime_type: Option<String>,
+    metadata_stage_state: Option<String>,
+    content_stage_state: Option<String>,
+    observation_state: String,
+}
+
+impl StoredKnownEntryFields {
+    fn read(row: &rusqlite::Row<'_>, first_column: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            device: row.get(first_column)?,
+            inode: row.get(first_column + 1)?,
+            mtime_ns: row.get(first_column + 2)?,
+            ctime_ns: row.get(first_column + 3)?,
+            size: row.get(first_column + 4)?,
+            mime_type: row.get(first_column + 5)?,
+            metadata_stage_state: row.get(first_column + 6)?,
+            content_stage_state: row.get(first_column + 7)?,
+            observation_state: row.get(first_column + 8)?,
+        })
+    }
+
+    fn into_known_entry_state(self) -> SearchResult<KnownEntryState> {
+        let stage_state = match (self.metadata_stage_state, self.content_stage_state) {
+            (Some(metadata), Some(content)) => IndexedEntryStageState {
+                metadata: EntryStageProgress::from_storage_value(&metadata)?,
+                content: EntryStageProgress::from_storage_value(&content)?,
+            },
+            _ => IndexedEntryStageState::pending(),
+        };
+        Ok(KnownEntryState {
+            signature: FileSignature {
+                device: self.device.map(|value| value as u64),
+                inode: self.inode.map(|value| value as u64),
+                mtime_ns: self.mtime_ns,
+                ctime_ns: self.ctime_ns,
+                size: self.size.max(0) as u64,
+            },
+            stage_state,
+            mime_type: self.mime_type,
+            observation_state: EntryObservationState::from_storage_value(&self.observation_state)?,
+        })
+    }
 }
 
 fn read_directory_snapshot_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DirectorySnapshot> {
