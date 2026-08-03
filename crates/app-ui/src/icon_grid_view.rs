@@ -21,6 +21,8 @@ use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::file_entry_view::{entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryVisualState};
 use crate::icon_grid_geometry::{
     row_height, tile_visual_height, tile_width, ICON_GRID_CONTENT_PADDING, ICON_GRID_GAP,
+    ICON_GRID_ICON_LABEL_SPACING, ICON_GRID_LABEL_HEIGHT, ICON_GRID_LABEL_LINE_HEIGHT_PX,
+    ICON_GRID_LABEL_SIZE, ICON_GRID_TILE_HORIZONTAL_PADDING, ICON_GRID_TILE_VERTICAL_PADDING,
 };
 use crate::icon_grid_layout::{
     IconGridBandLayout, IconGridFlowSegment, IconGridPanelLayout, IconGridPanelStatus,
@@ -28,19 +30,21 @@ use crate::icon_grid_layout::{
 };
 use crate::icons::rotated_chevron_right_view;
 use crate::input_blocking_space::input_blocking_space;
+use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_wrapped_text;
 use crate::model::{IconGridExpansionAnchor, IconGridViewport, Message, ScrollbarRegion};
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
 
 const GRID_GAP: f32 = ICON_GRID_GAP;
 const GRID_PADDING: f32 = ICON_GRID_CONTENT_PADDING;
-const ICON_GRID_TILE_PADDING: [u16; 2] = [4, 8];
-const ICON_GRID_ICON_LABEL_SPACING: u32 = 8;
-const ICON_LABEL_HEIGHT: f32 = 36.0;
-const ICON_LABEL_SIZE: f32 = 14.0;
+const ICON_GRID_TILE_PADDING: [u16; 2] = [
+    ICON_GRID_TILE_VERTICAL_PADDING,
+    ICON_GRID_TILE_HORIZONTAL_PADDING,
+];
 const DISCLOSURE_BUTTON_SIZE: f32 = 24.0;
 const DISCLOSURE_ICON_SIZE: f32 = 14.0;
 const PANEL_INDICATOR_SIZE: f32 = 14.0;
+const ICON_GRID_NAME_TOOLTIP_WIDTH: f32 = 320.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IconGridPanelInput {
@@ -378,26 +382,33 @@ fn icon_grid_entry<'a>(
             .on_input(Message::RenameInputChanged)
             .on_submit(Message::RenameSelected)
             .padding(4)
-            .size(ICON_LABEL_SIZE)
+            .size(ICON_GRID_LABEL_SIZE)
             .width(Length::Fill),
         )
-        .height(Length::Fixed(ICON_LABEL_HEIGHT))
+        .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT))
         .clip(true)
         .into()
     } else {
-        container(
-            readable_text(entry.name().to_string_lossy())
-                .size(ICON_LABEL_SIZE)
-                .line_height(text::LineHeight::Relative(1.2))
-                .wrapping(text::Wrapping::WordOrGlyph)
-                .align_x(Horizontal::Center)
-                .align_y(Vertical::Top)
-                .width(Length::Fill)
-                .height(Length::Fixed(ICON_LABEL_HEIGHT)),
+        let full_name = entry.name().to_string_lossy().into_owned();
+        tooltip(
+            container(measured_middle_ellipsized_wrapped_text(
+                full_name.clone(),
+                ICON_GRID_LABEL_SIZE,
+                ICON_GRID_LABEL_LINE_HEIGHT_PX,
+            ))
+            .width(Length::Fill)
+            .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT)),
+            container(
+                readable_text(full_name)
+                    .size(12)
+                    .wrapping(text::Wrapping::WordOrGlyph)
+                    .width(Length::Fill),
+            )
+            .padding([5, 7])
+            .width(Length::Fixed(ICON_GRID_NAME_TOOLTIP_WIDTH))
+            .style(context_menu_style),
+            tooltip::Position::Bottom,
         )
-        .width(Length::Fill)
-        .height(Length::Fixed(ICON_LABEL_HEIGHT))
-        .clip(true)
         .into()
     };
 
@@ -444,7 +455,7 @@ fn panel_status(status: IconGridPanelStatus) -> Element<'static, Message> {
         IconGridPanelStatus::Error => "Could not load folder",
         IconGridPanelStatus::Loaded => "",
     };
-    container(readable_text(label).size(ICON_LABEL_SIZE))
+    container(readable_text(label).size(ICON_GRID_LABEL_SIZE))
         .width(Length::Fill)
         .height(Length::Fixed(ICON_GRID_STATUS_HEIGHT))
         .center_x(Length::Fill)
@@ -453,7 +464,7 @@ fn panel_status(status: IconGridPanelStatus) -> Element<'static, Message> {
 }
 
 fn grid_message(message: &'static str) -> Element<'static, Message> {
-    container(readable_text(message).size(ICON_LABEL_SIZE))
+    container(readable_text(message).size(ICON_GRID_LABEL_SIZE))
         .padding(GRID_PADDING)
         .width(Length::Fill)
         .into()

@@ -9,8 +9,15 @@ use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 pub(crate) const ICON_GRID_CONTENT_PADDING: f32 = 12.0;
 pub(crate) const ICON_GRID_GAP: f32 = 12.0;
 pub(crate) const ICON_GRID_OVERSCAN_ROWS: usize = 3;
+pub(crate) const ICON_GRID_TILE_VERTICAL_PADDING: u16 = 4;
+pub(crate) const ICON_GRID_TILE_HORIZONTAL_PADDING: u16 = 8;
+pub(crate) const ICON_GRID_ICON_LABEL_SPACING: u32 = 8;
+pub(crate) const ICON_GRID_LABEL_LINES: usize = 3;
+pub(crate) const ICON_GRID_LABEL_SIZE: f32 = 14.0;
+pub(crate) const ICON_GRID_LABEL_LINE_HEIGHT_PX: f32 = 17.0;
+pub(crate) const ICON_GRID_LABEL_HEIGHT: f32 =
+    ICON_GRID_LABEL_LINE_HEIGHT_PX * ICON_GRID_LABEL_LINES as f32;
 const ICON_GRID_TILE_EXTRA_WIDTH: f32 = 32.0;
-const ICON_GRID_TILE_EXTRA_HEIGHT: f32 = 52.0;
 #[cfg(test)]
 const ICON_GRID_INITIAL_ROWS: usize = ICON_GRID_OVERSCAN_ROWS * 2 + 1;
 
@@ -44,7 +51,10 @@ pub(crate) fn tile_width(icon_edge: u32) -> f32 {
 }
 
 pub(crate) fn tile_visual_height(icon_edge: u32) -> f32 {
-    icon_edge as f32 + ICON_GRID_TILE_EXTRA_HEIGHT
+    icon_edge as f32
+        + f32::from(ICON_GRID_TILE_VERTICAL_PADDING) * 2.0
+        + ICON_GRID_ICON_LABEL_SPACING as f32
+        + ICON_GRID_LABEL_HEIGHT
 }
 
 pub(crate) fn row_height(icon_edge: u32) -> f32 {
@@ -184,6 +194,21 @@ mod tests {
     fn incomplete_last_row_is_counted_once() {
         assert_eq!(row_count_for_entries(7, 3), 3);
         assert_eq!(row_count_for_entries(0, 3), 0);
+    }
+
+    #[test]
+    fn tile_height_is_derived_from_the_shared_three_line_label_geometry() {
+        assert_eq!(
+            ICON_GRID_LABEL_HEIGHT,
+            ICON_GRID_LABEL_LINE_HEIGHT_PX * ICON_GRID_LABEL_LINES as f32
+        );
+        assert_eq!(
+            tile_visual_height(96),
+            96.0 + f32::from(ICON_GRID_TILE_VERTICAL_PADDING) * 2.0
+                + ICON_GRID_ICON_LABEL_SPACING as f32
+                + ICON_GRID_LABEL_HEIGHT
+        );
+        assert_eq!(row_height(96), tile_visual_height(96) + ICON_GRID_GAP);
     }
 
     #[test]
