@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Local;
-use file_search::{SearchExcludeRules, SearchHit, SearchQuery, SearchScope};
+use file_search::{SearchExcludeRules, SearchHit, SearchQuery, SearchScope, SearchTextScope};
 use iced::Task;
 
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
@@ -13,13 +13,16 @@ use crate::commands::{
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
     ContextMenuState, DestructiveActionConfirmation, DirectoryFallbackOutcome,
-    IndexedSearchOutcome, LastActivationClick, Message, ModifiedTimePreset, NavigationMode,
-    SearchContentCategory, SearchContextMenuState, SearchKeyboardSelection, SearchObjectType,
-    SearchSelectionGesture, SearchSelectionStep, SearchServiceDiagnostic,
-    SearchServiceDiagnosticKind, SearchServiceRecoveryAction, SearchServiceStatusRequest,
+    IndexedSearchOutcome, LastActivationClick, Message, NavigationMode, SearchContextMenuState,
+    SearchDateField, SearchDatePreset, SearchEntryTypeMenuState, SearchEntryTypePreset,
+    SearchInputStabilizationRequest, SearchKeyboardSelection, SearchSelectionGesture,
+    SearchSelectionStep, SearchServiceDiagnostic, SearchServiceDiagnosticKind,
+    SearchServiceRecoveryAction, SearchServiceStatusRequest, SearchWorkspaceSessionId,
     SearchWorkspaceState,
 };
 use crate::shortcuts::{FileSelectionDirection, ShortcutAction};
+
+const SEARCH_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(120);
 
 impl FileBrowser {
     pub(crate) fn invoke_search_workspace_shortcut(
@@ -61,7 +64,21 @@ impl FileBrowser {
         let Some(workspace) = self.search_workspace.as_mut() else {
             return Task::none();
         };
-        workspace.input = value;
+        let request = workspace.replace_input(value);
+        search_input_stabilization_command(request)
+    }
+
+    pub(super) fn accept_search_input_stabilization(
+        &mut self,
+        request: SearchInputStabilizationRequest,
+    ) -> Task<Message> {
+        if !self
+            .search_workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.accepts_input_stabilization(&request))
+        {
+            return Task::none();
+        }
         self.restart_search_workspace()
     }
 
@@ -81,36 +98,67 @@ impl FileBrowser {
         self.restart_search_workspace()
     }
 
-    pub(super) fn select_search_object_type(
+    pub(super) fn open_search_entry_types_menu(&mut self) -> Task<Message> {
+        if self.search_workspace.is_none() {
+            return Task::none();
+        }
+        self.context_menu = Some(ContextMenuState::SearchEntryTypes(
+            SearchEntryTypeMenuState {
+                position: self.cursor_position,
+            },
+        ));
+        Task::none()
+    }
+
+    pub(super) fn toggle_search_entry_type(
         &mut self,
-        object_type: SearchObjectType,
+        entry_type: SearchEntryTypePreset,
     ) -> Task<Message> {
         let Some(workspace) = self.search_workspace.as_mut() else {
             return Task::none();
         };
-        workspace.filters.select_object_type(object_type);
+        workspace.filters.toggle_entry_type(entry_type);
         self.restart_search_workspace()
     }
 
-    pub(super) fn select_search_content_category(
+    pub(super) fn select_search_text_scope(
         &mut self,
-        content_category: SearchContentCategory,
+        text_scope: SearchTextScope,
     ) -> Task<Message> {
         let Some(workspace) = self.search_workspace.as_mut() else {
             return Task::none();
         };
-        workspace.filters.select_content_category(content_category);
+        workspace.filters.text_scope = text_scope;
         self.restart_search_workspace()
     }
 
-    pub(super) fn select_search_modified_time(
+    pub(super) fn select_search_date_field(
         &mut self,
-        modified_time: ModifiedTimePreset,
+        date_field: SearchDateField,
     ) -> Task<Message> {
         let Some(workspace) = self.search_workspace.as_mut() else {
             return Task::none();
         };
-        workspace.filters.modified_time = modified_time;
+        workspace.filters.date_field = date_field;
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn select_search_date_preset(
+        &mut self,
+        date_preset: SearchDatePreset,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.date_preset = date_preset;
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn reset_search_filters(&mut self) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.reset();
         self.restart_search_workspace()
     }
 
@@ -122,7 +170,10 @@ impl FileBrowser {
     pub(super) fn discard_search_workspace(&mut self) {
         self.search_workspace = None;
         self.last_activation_click = None;
-        if matches!(self.context_menu, Some(ContextMenuState::Search(_))) {
+        if matches!(
+            self.context_menu,
+            Some(ContextMenuState::Search(_) | ContextMenuState::SearchEntryTypes(_))
+        ) {
             self.context_menu = None;
         }
     }
@@ -138,11 +189,17 @@ impl FileBrowser {
         if self.path_is_remote_mount(&root) {
             return Err("Search is unavailable for remote folders".to_owned());
         }
-        self.search_workspace = Some(SearchWorkspaceState::new(root));
+        let session_id = SearchWorkspaceSessionId(self.next_search_workspace_session_id);
+        self.next_search_workspace_session_id =
+            self.next_search_workspace_session_id.wrapping_add(1);
+        self.search_workspace = Some(SearchWorkspaceState::new(root, session_id));
         Ok(())
     }
 
     fn restart_search_workspace(&mut self) -> Task<Message> {
+        if let Some(workspace) = self.search_workspace.as_mut() {
+            workspace.invalidate_input_stabilization();
+        }
         let Some(workspace) = self.search_workspace.as_ref() else {
             return Task::none();
         };
@@ -166,6 +223,7 @@ impl FileBrowser {
         let query = SearchQuery {
             query_id: generation,
             terms: workspace.input.trim().to_owned(),
+            text_scope: workspace.filters.text_scope,
             scope: SearchScope::Directory(root),
             recursive: true,
             filters,
@@ -549,6 +607,16 @@ impl FileBrowser {
             .map(|pane| pane.current_dir.clone())
             .unwrap_or_else(|| self.current_dir.clone())
     }
+}
+
+fn search_input_stabilization_command(request: SearchInputStabilizationRequest) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::time::sleep(SEARCH_INPUT_STABILIZATION_DELAY).await;
+            request
+        },
+        Message::SearchInputStabilized,
+    )
 }
 
 #[cfg(test)]

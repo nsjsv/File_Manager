@@ -232,12 +232,18 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     } else if let Some(context_menu) = &browser.context_menu {
         floating_input = BrowserFloatingInput::ContextMenuReplacement;
+        let selected_search_entry_types = browser
+            .search_workspace
+            .as_ref()
+            .map(|workspace| workspace.filters.selected_entry_types.as_slice())
+            .unwrap_or_default();
         floating.push(FloatingContent {
             element: context_menu_panel(
                 context_menu,
                 browser.is_trash_view,
                 browser.active_pane_id(),
                 &browser.user_config().list_view_preferences,
+                selected_search_entry_types,
             ),
             placement: FloatingPlacement::At(context_menu.position()),
         });

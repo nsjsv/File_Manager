@@ -1,15 +1,25 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use file_search::{SearchHit, SearchQuery, SearchResultBatch};
+use file_search::{SearchHit, SearchQuery, SearchResultBatch, SearchTextScope};
 use tokio_util::sync::CancellationToken;
 
 mod filters;
 pub(crate) use filters::{
-    ModifiedTimePreset, SearchContentCategory, SearchFilterPresetState, SearchObjectType,
+    SearchDateField, SearchDatePreset, SearchEntryTypePreset, SearchFilterPresetState,
 };
 
 pub(crate) const SEARCH_RESULT_WINDOW: usize = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SearchWorkspaceSessionId(pub(crate) u64);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchInputStabilizationRequest {
+    workspace_session_id: SearchWorkspaceSessionId,
+    input_revision: u64,
+    input: String,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum IndexedSearchOutcome {
@@ -269,6 +279,8 @@ impl SearchResultSelection {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SearchWorkspaceState {
+    session_id: SearchWorkspaceSessionId,
+    input_revision: u64,
     pub(crate) root: SearchRootSnapshot,
     pub(crate) input: String,
     pub(crate) filters: SearchFilterPresetState,
@@ -278,8 +290,10 @@ pub(crate) struct SearchWorkspaceState {
 }
 
 impl SearchWorkspaceState {
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub(crate) fn new(root: PathBuf, session_id: SearchWorkspaceSessionId) -> Self {
         Self {
+            session_id,
+            input_revision: 0,
             root: SearchRootSnapshot::new(root),
             input: String::new(),
             filters: SearchFilterPresetState::default(),
@@ -291,6 +305,29 @@ impl SearchWorkspaceState {
 
     pub(crate) fn next_generation(&self) -> u64 {
         self.run.generation.saturating_add(1)
+    }
+
+    pub(crate) fn replace_input(&mut self, input: String) -> SearchInputStabilizationRequest {
+        self.input = input;
+        self.input_revision = self.input_revision.wrapping_add(1);
+        SearchInputStabilizationRequest {
+            workspace_session_id: self.session_id,
+            input_revision: self.input_revision,
+            input: self.input.clone(),
+        }
+    }
+
+    pub(crate) fn accepts_input_stabilization(
+        &self,
+        request: &SearchInputStabilizationRequest,
+    ) -> bool {
+        self.session_id == request.workspace_session_id
+            && self.input_revision == request.input_revision
+            && self.input == request.input
+    }
+
+    pub(crate) fn invalidate_input_stabilization(&mut self) {
+        self.input_revision = self.input_revision.wrapping_add(1);
     }
 
     pub(crate) fn begin_indexed_query(&mut self, query: SearchQuery) -> CancellationToken {
@@ -419,6 +456,15 @@ impl SearchWorkspaceState {
     pub(crate) fn hit_for_path(&self, path: &Path) -> Option<&SearchHit> {
         self.window.hits.iter().find(|hit| hit.path == path)
     }
+
+    pub(crate) fn content_search_is_degraded(&self) -> bool {
+        self.run.provider == Some(SearchProvider::DirectoryFallback)
+            && self
+                .run
+                .active_query
+                .as_ref()
+                .is_some_and(|query| query.text_scope == SearchTextScope::NameAndContent)
+    }
 }
 
 impl Drop for SearchWorkspaceState {
@@ -433,6 +479,7 @@ mod tests {
 
     use file_search::{
         MatchSource, SearchFileKind, SearchHit, SearchQuery, SearchResultBatch, SearchScope,
+        SearchTextScope,
     };
 
     use super::*;
@@ -441,6 +488,7 @@ mod tests {
         SearchQuery {
             query_id,
             terms: terms.to_owned(),
+            text_scope: SearchTextScope::NameAndContent,
             scope: SearchScope::Directory(PathBuf::from("/workspace")),
             recursive: true,
             filters: Default::default(),
@@ -466,7 +514,8 @@ mod tests {
 
     #[test]
     fn workspace_root_is_frozen_while_empty_input_is_a_valid_state() {
-        let workspace = SearchWorkspaceState::new(PathBuf::from("/workspace-a"));
+        let workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace-a"), SearchWorkspaceSessionId(1));
 
         assert_eq!(workspace.root.path(), Path::new("/workspace-a"));
         assert!(workspace.input.is_empty());
@@ -474,7 +523,8 @@ mod tests {
 
     #[test]
     fn replacing_or_dropping_workspace_cancels_inflight_work() {
-        let mut workspace = SearchWorkspaceState::new(PathBuf::from("/workspace"));
+        let mut workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
         let first = workspace.begin_indexed_query(directory_query(1, "first"));
         let second = workspace.begin_indexed_query(directory_query(2, "second"));
 
@@ -485,8 +535,50 @@ mod tests {
     }
 
     #[test]
+    fn input_stabilization_accepts_only_the_current_revision() {
+        let mut workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+        let stale = workspace.replace_input("rep".to_owned());
+        let current = workspace.replace_input("report".to_owned());
+
+        assert!(!workspace.accepts_input_stabilization(&stale));
+        assert!(workspace.accepts_input_stabilization(&current));
+
+        workspace.invalidate_input_stabilization();
+        assert!(!workspace.accepts_input_stabilization(&current));
+    }
+
+    #[test]
+    fn input_stabilization_cannot_cross_workspace_sessions() {
+        let mut first =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+        let stale = first.replace_input("report".to_owned());
+        let mut reopened =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(2));
+        let _ = reopened.replace_input("report".to_owned());
+
+        assert!(!reopened.accepts_input_stabilization(&stale));
+    }
+
+    #[test]
+    fn content_degradation_is_derived_from_provider_and_active_text_scope() {
+        let mut workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+        workspace.begin_indexed_query(directory_query(1, "report"));
+        workspace.begin_directory_fallback();
+        assert!(workspace.content_search_is_degraded());
+
+        let mut name_only = directory_query(2, "report");
+        name_only.text_scope = SearchTextScope::NameOnly;
+        workspace.begin_indexed_query(name_only);
+        workspace.begin_directory_fallback();
+        assert!(!workspace.content_search_is_degraded());
+    }
+
+    #[test]
     fn indexed_completion_distinguishes_exact_window_from_real_overflow() {
-        let mut workspace = SearchWorkspaceState::new(PathBuf::from("/workspace"));
+        let mut workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
         workspace.begin_indexed_query(directory_query(1, ""));
         workspace.apply_indexed_batch(SearchResultBatch {
             query_id: 1,
@@ -516,7 +608,8 @@ mod tests {
 
     #[test]
     fn fallback_needs_the_extra_hit_before_marking_the_window_truncated() {
-        let mut workspace = SearchWorkspaceState::new(PathBuf::from("/workspace"));
+        let mut workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
         workspace.begin_indexed_query(directory_query(1, ""));
         let cancellation = workspace.begin_directory_fallback();
         workspace.apply_directory_batch((0..SEARCH_RESULT_WINDOW).map(hit).collect());
@@ -534,7 +627,8 @@ mod tests {
 
     #[test]
     fn fallback_budget_completion_preserves_hits_as_partial_results() {
-        let mut workspace = SearchWorkspaceState::new(PathBuf::from("/workspace"));
+        let mut workspace =
+            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
         workspace.begin_indexed_query(directory_query(1, "rare"));
         workspace.begin_directory_fallback();
         workspace.apply_directory_batch(vec![hit(1)]);

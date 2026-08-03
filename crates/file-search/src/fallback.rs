@@ -187,16 +187,28 @@ fn matches_filters(
     accessed_ms: Option<i64>,
     created_ms: Option<i64>,
 ) -> bool {
-    query.filters.kind.is_none_or(|expected| expected == kind)
-        && (query.filters.mime_patterns.is_empty()
-            || query
-                .filters
-                .mime_patterns
-                .iter()
-                .any(|pattern| mime_pattern_matches(pattern, mime_type)))
+    (query.filters.entry_type_rules.is_empty()
+        || query
+            .filters
+            .entry_type_rules
+            .iter()
+            .any(|rule| entry_type_rule_matches(rule, kind, mime_type)))
         && time_matches(modified_ms, query.filters.modified)
         && time_matches(accessed_ms, query.filters.accessed)
         && time_matches(created_ms, query.filters.created)
+}
+
+fn entry_type_rule_matches(
+    rule: &crate::model::SearchEntryTypeRule,
+    kind: SearchFileKind,
+    mime_type: Option<&str>,
+) -> bool {
+    match rule {
+        crate::model::SearchEntryTypeRule::Kind(expected) => *expected == kind,
+        crate::model::SearchEntryTypeRule::Mime(pattern) => {
+            mime_pattern_matches(pattern, mime_type)
+        }
+    }
 }
 
 fn mime_pattern_matches(pattern: &crate::model::MimePattern, mime_type: Option<&str>) -> bool {
@@ -228,7 +240,8 @@ mod tests {
     use crate::error::SearchError;
     use crate::filesystem::file_time_ms;
     use crate::model::{
-        SearchCursor, SearchFileKind, SearchFilters, SearchQuery, SearchScope, TimeRange,
+        SearchCursor, SearchEntryTypeRule, SearchFileKind, SearchFilters, SearchQuery, SearchScope,
+        SearchTextScope, TimeRange,
     };
 
     use super::{search_directory_fallback, DirectoryFallbackCompletion, DirectoryFallbackLimits};
@@ -243,6 +256,7 @@ mod tests {
         SearchQuery {
             query_id: 1,
             terms: terms.to_owned(),
+            text_scope: SearchTextScope::NameAndContent,
             scope: SearchScope::Directory(root),
             recursive: true,
             filters: SearchFilters::default(),
@@ -334,25 +348,30 @@ mod tests {
     }
 
     #[test]
-    fn applies_kind_mime_and_time_filters_without_reading_content() {
+    fn applies_entry_type_or_and_time_filters_without_reading_content() {
         let content = tempdir().unwrap();
         let path = content.path().join("large.txt");
         let pdf_path = content.path().join("large.pdf");
+        let directory_path = content.path().join("large-directory.txt");
         fs::write(&path, vec![b'x'; 4096]).unwrap();
         fs::write(&pdf_path, vec![b'y'; 2048]).unwrap();
-        fs::create_dir(content.path().join("large-directory.txt")).unwrap();
+        fs::create_dir(&directory_path).unwrap();
         let modified_ms = file_time_ms(fs::metadata(&path).unwrap().modified().ok()).unwrap();
         let pdf_modified_ms =
             file_time_ms(fs::metadata(&pdf_path).unwrap().modified().ok()).unwrap();
+        let directory_modified_ms =
+            file_time_ms(fs::metadata(&directory_path).unwrap().modified().ok()).unwrap();
         let mut query = directory_query(content.path().to_path_buf(), "large");
-        query.filters.kind = Some(SearchFileKind::File);
-        query.filters.mime_patterns = vec![
-            crate::model::MimePattern::Prefix("text/".to_owned()),
-            crate::model::MimePattern::Exact("application/pdf".to_owned()),
+        query.filters.entry_type_rules = vec![
+            SearchEntryTypeRule::Kind(SearchFileKind::Directory),
+            SearchEntryTypeRule::Mime(crate::model::MimePattern::Prefix("text/".to_owned())),
+            SearchEntryTypeRule::Mime(crate::model::MimePattern::Exact(
+                "application/pdf".to_owned(),
+            )),
         ];
         query.filters.modified = Some(TimeRange {
-            start_ms: modified_ms.min(pdf_modified_ms),
-            end_ms: modified_ms.max(pdf_modified_ms),
+            start_ms: modified_ms.min(pdf_modified_ms).min(directory_modified_ms),
+            end_ms: modified_ms.max(pdf_modified_ms).max(directory_modified_ms),
         });
         let mut hits = Vec::new();
 
@@ -369,14 +388,18 @@ mod tests {
             .into_iter()
             .map(|hit| (hit.path.clone(), hit))
             .collect::<std::collections::BTreeMap<_, _>>();
-        assert_eq!(hits_by_path.len(), 2);
+        assert_eq!(hits_by_path.len(), 3);
         assert_eq!(hits_by_path[&path].size, 4096);
         assert_eq!(hits_by_path[&pdf_path].size, 2048);
+        assert_eq!(
+            hits_by_path[&directory_path].kind,
+            SearchFileKind::Directory
+        );
         assert!(hits_by_path.values().all(|hit| hit.snippet.is_none()));
     }
 
     #[test]
-    fn fallback_applies_each_common_content_category_mime_pattern() {
+    fn fallback_applies_each_common_mime_pattern() {
         let content = tempdir().unwrap();
         let cases = [
             (
@@ -406,8 +429,7 @@ mod tests {
 
         for (expected_file_name, pattern) in cases {
             let mut query = directory_query(content.path().to_path_buf(), "");
-            query.filters.kind = Some(SearchFileKind::File);
-            query.filters.mime_patterns = vec![pattern];
+            query.filters.entry_type_rules = vec![SearchEntryTypeRule::Mime(pattern)];
             let mut hits = Vec::new();
             search_directory_fallback(
                 &query,
@@ -424,6 +446,17 @@ mod tests {
                 Some(expected_file_name)
             );
         }
+    }
+
+    #[test]
+    fn missing_time_value_does_not_match_a_selected_range() {
+        assert!(!super::time_matches(
+            None,
+            Some(TimeRange {
+                start_ms: 10,
+                end_ms: 20,
+            })
+        ));
     }
 
     #[test]

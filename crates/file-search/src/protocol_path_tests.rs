@@ -11,7 +11,7 @@ use crate::extractor::ExtractionStatus;
 use crate::model::{
     IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, MatchSource, SearchFileKind,
     SearchHit, SearchQuery, SearchResultBatch, SearchScope, SearchServiceEvent, SearchServicePhase,
-    SearchServiceRequest, SearchServiceStatus,
+    SearchServiceRequest, SearchServiceStatus, SearchTextScope,
 };
 
 use super::{
@@ -69,6 +69,7 @@ async fn non_utf8_scope_hit_and_phase_round_trip_through_protocol_frames() {
     let request = SearchServiceRequest::Search(SearchQuery {
         query_id: 9,
         terms: "needle".to_owned(),
+        text_scope: SearchTextScope::NameAndContent,
         scope: SearchScope::Directory(scope.clone()),
         recursive: true,
         filters: Default::default(),
@@ -177,6 +178,7 @@ async fn socket_search_preserves_two_lossy_colliding_path_identities() {
         SearchQuery {
             query_id: 2,
             terms: "needle".to_owned(),
+            text_scope: SearchTextScope::NameAndContent,
             scope: SearchScope::Directory(first_root),
             recursive: true,
             filters: Default::default(),

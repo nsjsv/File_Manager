@@ -17,7 +17,8 @@ use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
     FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, FilePropertiesMessage,
     ListColumnConfig, ListColumnKind, ListViewPreferences, Message, ScrollbarRegion,
-    ScrollbarVisibility, SearchContextMenuState, SidebarBookmarkContextMenuState,
+    ScrollbarVisibility, SearchContextMenuState, SearchEntryTypePreset,
+    SidebarBookmarkContextMenuState,
 };
 use crate::open_with::OpenWithState;
 use crate::sidebar_devices::SidebarDeviceContextMenuState;
@@ -310,17 +311,44 @@ pub(super) fn context_menu_panel<'a>(
     is_trash_view: bool,
     active_pane_id: BrowserPaneId,
     list_view_preferences: &'a ListViewPreferences,
+    selected_search_entry_types: &'a [SearchEntryTypePreset],
 ) -> Element<'a, Message> {
     match menu {
         ContextMenuState::FileArea(menu) => {
             file_context_menu_panel(menu, is_trash_view, active_pane_id)
         }
         ContextMenuState::Search(menu) => search_context_menu_panel(menu),
+        ContextMenuState::SearchEntryTypes(_) => {
+            search_entry_types_menu_panel(selected_search_entry_types)
+        }
         ContextMenuState::ListColumns(_) => list_column_context_menu_panel(list_view_preferences),
         ContextMenuState::SidebarBookmark(menu) => sidebar_bookmark_context_menu_panel(menu),
         ContextMenuState::SidebarDevice(menu) => sidebar_device_context_menu_panel(menu),
         ContextMenuState::NetworkConnection(menu) => network_connection_context_menu_panel(menu),
     }
+}
+
+fn search_entry_types_menu_panel(
+    selected_entry_types: &[SearchEntryTypePreset],
+) -> Element<'_, Message> {
+    let mut content = Column::new()
+        .spacing(CONTEXT_MENU_ITEM_SPACING + 2.0)
+        .padding(CONTEXT_MENU_PADDING + 2.0);
+    for entry_type in SearchEntryTypePreset::MORE {
+        content = content.push(
+            checkbox(selected_entry_types.contains(&entry_type))
+                .label(crate::localization::translate_current(entry_type.label()))
+                .on_toggle(move |_| Message::SearchEntryTypeToggled(entry_type))
+                .size(16)
+                .text_size(13)
+                .spacing(8),
+        );
+    }
+
+    container(content)
+        .width(Length::Fixed(190.0))
+        .style(context_menu_style)
+        .into()
 }
 
 fn search_context_menu_panel(menu: &SearchContextMenuState) -> Element<'_, Message> {

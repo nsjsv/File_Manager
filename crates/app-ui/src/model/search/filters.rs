@@ -1,76 +1,65 @@
-use chrono::{DateTime, Datelike, Duration, TimeZone};
-use file_search::{MimePattern, SearchFileKind, SearchFilters, TimeRange};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
+use file_search::{
+    MimePattern, SearchEntryTypeRule, SearchFileKind, SearchFilters, SearchTextScope, TimeRange,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchObjectType {
-    Any,
-    File,
-    Directory,
-    Symlink,
-}
-
-impl SearchObjectType {
-    pub(crate) const ALL: [Self; 4] = [Self::Any, Self::File, Self::Directory, Self::Symlink];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Any => "Any type",
-            Self::File => "Files",
-            Self::Directory => "Folders",
-            Self::Symlink => "Links",
-        }
-    }
-
-    fn query_kind(self) -> Option<SearchFileKind> {
-        match self {
-            Self::Any => None,
-            Self::File => Some(SearchFileKind::File),
-            Self::Directory => Some(SearchFileKind::Directory),
-            Self::Symlink => Some(SearchFileKind::Symlink),
-        }
-    }
-
-    fn accepts_content_category(self) -> bool {
-        matches!(self, Self::Any | Self::File)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SearchContentCategory {
-    Any,
-    Documents,
-    Images,
-    Audio,
+pub(crate) enum SearchEntryTypePreset {
+    Spreadsheets,
     Video,
+    Images,
+    Text,
+    Documents,
+    Folders,
+    Audio,
+    Pdf,
+    Files,
     Archives,
+    Links,
 }
 
-impl SearchContentCategory {
-    pub(crate) const ALL: [Self; 6] = [
-        Self::Any,
-        Self::Documents,
-        Self::Images,
-        Self::Audio,
+impl SearchEntryTypePreset {
+    pub(crate) const COMMON: [Self; 8] = [
+        Self::Spreadsheets,
         Self::Video,
-        Self::Archives,
+        Self::Images,
+        Self::Text,
+        Self::Documents,
+        Self::Folders,
+        Self::Audio,
+        Self::Pdf,
     ];
+    pub(crate) const MORE: [Self; 3] = [Self::Files, Self::Archives, Self::Links];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Any => "Any content",
-            Self::Documents => "Documents",
-            Self::Images => "Images",
-            Self::Audio => "Audio",
+            Self::Spreadsheets => "Spreadsheets",
             Self::Video => "Video",
+            Self::Images => "Images",
+            Self::Text => "Text",
+            Self::Documents => "Documents",
+            Self::Folders => "Folders",
+            Self::Audio => "Audio",
+            Self::Pdf => "PDF",
+            Self::Files => "Files",
             Self::Archives => "Archives",
+            Self::Links => "Links",
         }
     }
 
-    fn mime_patterns(self) -> Vec<MimePattern> {
-        let exact = |value: &str| MimePattern::Exact(value.to_owned());
-        let prefix = |value: &str| MimePattern::Prefix(value.to_owned());
+    fn query_rules(self) -> Vec<SearchEntryTypeRule> {
+        let kind = |value| SearchEntryTypeRule::Kind(value);
+        let exact = |value: &str| SearchEntryTypeRule::Mime(MimePattern::Exact(value.to_owned()));
+        let prefix = |value: &str| SearchEntryTypeRule::Mime(MimePattern::Prefix(value.to_owned()));
         match self {
-            Self::Any => Vec::new(),
+            Self::Spreadsheets => vec![
+                exact("application/vnd.ms-excel"),
+                exact("application/vnd.oasis.opendocument.spreadsheet"),
+                exact("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            ],
+            Self::Video => vec![prefix("video/")],
+            Self::Images => vec![prefix("image/")],
+            Self::Text => vec![prefix("text/")],
             Self::Documents => vec![
                 prefix("text/"),
                 exact("application/pdf"),
@@ -85,9 +74,10 @@ impl SearchContentCategory {
                 exact("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
                 exact("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
             ],
-            Self::Images => vec![prefix("image/")],
+            Self::Folders => vec![kind(SearchFileKind::Directory)],
             Self::Audio => vec![prefix("audio/")],
-            Self::Video => vec![prefix("video/")],
+            Self::Pdf => vec![exact("application/pdf")],
+            Self::Files => vec![kind(SearchFileKind::File)],
             Self::Archives => vec![
                 exact("application/zip"),
                 exact("application/x-7z-compressed"),
@@ -99,87 +89,143 @@ impl SearchContentCategory {
                 exact("application/x-xz"),
                 exact("application/zstd"),
             ],
+            Self::Links => vec![kind(SearchFileKind::Symlink)],
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModifiedTimePreset {
-    Any,
-    Today,
-    PastSevenDays,
-    PastThirtyDays,
-    ThisYear,
+pub(crate) enum SearchDateField {
+    Accessed,
+    Modified,
+    Created,
 }
 
-impl ModifiedTimePreset {
-    pub(crate) const ALL: [Self; 5] = [
+impl SearchDateField {
+    pub(crate) const ALL: [Self; 3] = [Self::Accessed, Self::Modified, Self::Created];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Accessed => "Accessed",
+            Self::Modified => "Modified",
+            Self::Created => "Created",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchDatePreset {
+    Any,
+    Today,
+    Yesterday,
+    PastSevenDays,
+    PastThirtyDays,
+    PastYear,
+}
+
+impl SearchDatePreset {
+    pub(crate) const ALL: [Self; 6] = [
         Self::Any,
         Self::Today,
+        Self::Yesterday,
         Self::PastSevenDays,
         Self::PastThirtyDays,
-        Self::ThisYear,
+        Self::PastYear,
     ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Any => "Any time",
             Self::Today => "Today",
+            Self::Yesterday => "Yesterday",
             Self::PastSevenDays => "Past 7 days",
             Self::PastThirtyDays => "Past 30 days",
-            Self::ThisYear => "This year",
+            Self::PastYear => "Past year",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchFilterPresetState {
-    pub(crate) object_type: SearchObjectType,
-    pub(crate) content_category: SearchContentCategory,
-    pub(crate) modified_time: ModifiedTimePreset,
+    pub(crate) selected_entry_types: Vec<SearchEntryTypePreset>,
+    pub(crate) text_scope: SearchTextScope,
+    pub(crate) date_field: SearchDateField,
+    pub(crate) date_preset: SearchDatePreset,
 }
 
 impl Default for SearchFilterPresetState {
     fn default() -> Self {
         Self {
-            object_type: SearchObjectType::Any,
-            content_category: SearchContentCategory::Any,
-            modified_time: ModifiedTimePreset::Any,
+            selected_entry_types: Vec::new(),
+            text_scope: SearchTextScope::NameAndContent,
+            date_field: SearchDateField::Modified,
+            date_preset: SearchDatePreset::Any,
         }
     }
 }
 
 impl SearchFilterPresetState {
-    pub(crate) fn select_object_type(&mut self, object_type: SearchObjectType) {
-        self.object_type = object_type;
-        if !object_type.accepts_content_category() {
-            self.content_category = SearchContentCategory::Any;
+    pub(crate) fn toggle_entry_type(&mut self, entry_type: SearchEntryTypePreset) {
+        if let Some(index) = self
+            .selected_entry_types
+            .iter()
+            .position(|selected| *selected == entry_type)
+        {
+            self.selected_entry_types.remove(index);
+        } else {
+            self.selected_entry_types.push(entry_type);
         }
     }
 
-    pub(crate) fn select_content_category(&mut self, content_category: SearchContentCategory) {
-        self.content_category = content_category;
-        if content_category != SearchContentCategory::Any {
-            self.object_type = SearchObjectType::File;
-        }
+    pub(crate) fn entry_type_is_selected(&self, entry_type: SearchEntryTypePreset) -> bool {
+        self.selected_entry_types.contains(&entry_type)
     }
 
-    pub(crate) fn query_filters_at<Tz>(self, now: DateTime<Tz>) -> Result<SearchFilters, String>
+    pub(crate) fn selected_more_type_count(&self) -> usize {
+        SearchEntryTypePreset::MORE
+            .iter()
+            .filter(|entry_type| self.entry_type_is_selected(**entry_type))
+            .count()
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(crate) fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub(crate) fn query_filters_at<Tz>(&self, now: DateTime<Tz>) -> Result<SearchFilters, String>
     where
         Tz: TimeZone,
     {
+        let mut entry_type_rules = Vec::new();
+        for entry_type in &self.selected_entry_types {
+            for rule in entry_type.query_rules() {
+                if !entry_type_rules.contains(&rule) {
+                    entry_type_rules.push(rule);
+                }
+            }
+        }
+        let date_range = date_range_at(self.date_preset, now)?;
+        let (accessed, modified, created) = match (self.date_field, date_range) {
+            (_, None) => (None, None, None),
+            (SearchDateField::Accessed, range) => (range, None, None),
+            (SearchDateField::Modified, range) => (None, range, None),
+            (SearchDateField::Created, range) => (None, None, range),
+        };
         Ok(SearchFilters {
-            kind: self.object_type.query_kind(),
-            mime_patterns: self.content_category.mime_patterns(),
-            modified: modified_time_range_at(self.modified_time, now)?,
-            accessed: None,
-            created: None,
+            entry_type_rules,
+            modified,
+            accessed,
+            created,
         })
     }
 }
 
-fn modified_time_range_at<Tz>(
-    preset: ModifiedTimePreset,
+fn date_range_at<Tz>(
+    preset: SearchDatePreset,
     now: DateTime<Tz>,
 ) -> Result<Option<TimeRange>, String>
 where
@@ -187,33 +233,35 @@ where
 {
     let end_ms = now.timestamp_millis();
     let start_ms = match preset {
-        ModifiedTimePreset::Any => return Ok(None),
-        ModifiedTimePreset::PastSevenDays => (now - Duration::days(7)).timestamp_millis(),
-        ModifiedTimePreset::PastThirtyDays => (now - Duration::days(30)).timestamp_millis(),
-        ModifiedTimePreset::Today => {
-            local_calendar_start(&now, now.year(), now.month(), now.day())?
+        SearchDatePreset::Any => return Ok(None),
+        SearchDatePreset::PastSevenDays => (now - Duration::days(7)).timestamp_millis(),
+        SearchDatePreset::PastThirtyDays => (now - Duration::days(30)).timestamp_millis(),
+        SearchDatePreset::PastYear => (now - Duration::days(365)).timestamp_millis(),
+        SearchDatePreset::Today => local_calendar_start(&now, now.date_naive())?,
+        SearchDatePreset::Yesterday => {
+            let today = now.date_naive();
+            let yesterday = today
+                .pred_opt()
+                .ok_or_else(|| "previous local calendar day is unavailable".to_owned())?;
+            let today_start_ms = local_calendar_start(&now, today)?;
+            return Ok(Some(TimeRange {
+                start_ms: local_calendar_start(&now, yesterday)?,
+                end_ms: today_start_ms.saturating_sub(1),
+            }));
         }
-        ModifiedTimePreset::ThisYear => local_calendar_start(&now, now.year(), 1, 1)?,
     };
     Ok(Some(TimeRange { start_ms, end_ms }))
 }
 
-fn local_calendar_start<Tz>(
-    now: &DateTime<Tz>,
-    year: i32,
-    month: u32,
-    day: u32,
-) -> Result<i64, String>
+fn local_calendar_start<Tz>(now: &DateTime<Tz>, date: NaiveDate) -> Result<i64, String>
 where
     Tz: TimeZone,
 {
     now.timezone()
-        .with_ymd_and_hms(year, month, day, 0, 0, 0)
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
         .earliest()
         .map(|start| start.timestamp_millis())
-        .ok_or_else(|| {
-            format!("local calendar boundary is unavailable for {year:04}-{month:02}-{day:02}")
-        })
+        .ok_or_else(|| format!("local calendar boundary is unavailable for {date}"))
 }
 
 #[cfg(test)]
@@ -224,54 +272,173 @@ mod tests {
     use super::*;
 
     #[test]
-    fn content_category_and_object_type_normalize_to_a_valid_query() {
-        let mut filters = SearchFilterPresetState::default();
-        filters.select_content_category(SearchContentCategory::Images);
-        assert_eq!(filters.object_type, SearchObjectType::File);
-        assert_eq!(
-            filters
-                .query_filters_at(New_York.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap())
-                .unwrap()
-                .mime_patterns,
-            vec![MimePattern::Prefix("image/".to_owned())]
-        );
+    fn entry_types_compose_across_kind_and_mime_without_mutating_each_other() {
+        let mut presets = SearchFilterPresetState::default();
+        presets.toggle_entry_type(SearchEntryTypePreset::Folders);
+        presets.toggle_entry_type(SearchEntryTypePreset::Images);
+        presets.toggle_entry_type(SearchEntryTypePreset::Pdf);
 
-        filters.select_object_type(SearchObjectType::Directory);
-        assert_eq!(filters.content_category, SearchContentCategory::Any);
+        let filters = presets
+            .query_filters_at(New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap())
+            .unwrap();
+
         assert!(filters
-            .query_filters_at(New_York.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap())
-            .unwrap()
-            .mime_patterns
-            .is_empty());
+            .entry_type_rules
+            .contains(&SearchEntryTypeRule::Kind(SearchFileKind::Directory)));
+        assert!(filters
+            .entry_type_rules
+            .contains(&SearchEntryTypeRule::Mime(MimePattern::Prefix(
+                "image/".to_owned()
+            ))));
+        assert!(filters
+            .entry_type_rules
+            .contains(&SearchEntryTypeRule::Mime(MimePattern::Exact(
+                "application/pdf".to_owned()
+            ))));
+        presets.toggle_entry_type(SearchEntryTypePreset::Images);
+        assert!(!presets.entry_type_is_selected(SearchEntryTypePreset::Images));
+        assert!(presets.entry_type_is_selected(SearchEntryTypePreset::Folders));
     }
 
     #[test]
-    fn every_content_category_maps_to_its_representative_mime_type() {
-        let cases = [
-            (SearchContentCategory::Documents, "application/pdf"),
-            (SearchContentCategory::Images, "image/png"),
-            (SearchContentCategory::Audio, "audio/flac"),
-            (SearchContentCategory::Video, "video/mp4"),
-            (SearchContentCategory::Archives, "application/zip"),
-        ];
-        let now = New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
-
-        for (category, representative) in cases {
-            let mut presets = SearchFilterPresetState::default();
-            presets.select_content_category(category);
-            let filters = presets.query_filters_at(now.clone()).unwrap();
-            assert!(filters.mime_patterns.iter().any(|pattern| match pattern {
-                MimePattern::Exact(expected) => expected == representative,
-                MimePattern::Prefix(expected) => representative.starts_with(expected),
-            }));
-            assert_eq!(filters.kind, Some(SearchFileKind::File));
+    fn overlapping_type_presets_deduplicate_query_rules() {
+        let mut presets = SearchFilterPresetState::default();
+        for entry_type in [
+            SearchEntryTypePreset::Documents,
+            SearchEntryTypePreset::Spreadsheets,
+            SearchEntryTypePreset::Text,
+            SearchEntryTypePreset::Pdf,
+        ] {
+            presets.toggle_entry_type(entry_type);
         }
+
+        let filters = presets
+            .query_filters_at(New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap())
+            .unwrap();
+
+        for expected in [
+            SearchEntryTypeRule::Mime(MimePattern::Prefix("text/".to_owned())),
+            SearchEntryTypeRule::Mime(MimePattern::Exact("application/pdf".to_owned())),
+            SearchEntryTypeRule::Mime(MimePattern::Exact("application/vnd.ms-excel".to_owned())),
+        ] {
+            assert_eq!(
+                filters
+                    .entry_type_rules
+                    .iter()
+                    .filter(|rule| **rule == expected)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn every_entry_type_preset_maps_to_an_expected_query_rule() {
+        let cases = [
+            (
+                SearchEntryTypePreset::Spreadsheets,
+                SearchEntryTypeRule::Mime(MimePattern::Exact(
+                    "application/vnd.ms-excel".to_owned(),
+                )),
+            ),
+            (
+                SearchEntryTypePreset::Video,
+                SearchEntryTypeRule::Mime(MimePattern::Prefix("video/".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Images,
+                SearchEntryTypeRule::Mime(MimePattern::Prefix("image/".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Text,
+                SearchEntryTypeRule::Mime(MimePattern::Prefix("text/".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Documents,
+                SearchEntryTypeRule::Mime(MimePattern::Exact("application/pdf".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Folders,
+                SearchEntryTypeRule::Kind(SearchFileKind::Directory),
+            ),
+            (
+                SearchEntryTypePreset::Audio,
+                SearchEntryTypeRule::Mime(MimePattern::Prefix("audio/".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Pdf,
+                SearchEntryTypeRule::Mime(MimePattern::Exact("application/pdf".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Files,
+                SearchEntryTypeRule::Kind(SearchFileKind::File),
+            ),
+            (
+                SearchEntryTypePreset::Archives,
+                SearchEntryTypeRule::Mime(MimePattern::Exact("application/zip".to_owned())),
+            ),
+            (
+                SearchEntryTypePreset::Links,
+                SearchEntryTypeRule::Kind(SearchFileKind::Symlink),
+            ),
+        ];
+
+        for (preset, expected_rule) in cases {
+            assert!(preset.query_rules().contains(&expected_rule), "{preset:?}");
+        }
+    }
+
+    #[test]
+    fn selected_date_field_is_the_only_time_constraint() {
+        let now = New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        for date_field in SearchDateField::ALL {
+            let presets = SearchFilterPresetState {
+                date_field,
+                date_preset: SearchDatePreset::Today,
+                ..SearchFilterPresetState::default()
+            };
+            let filters = presets.query_filters_at(now).unwrap();
+
+            assert_eq!(
+                filters.accessed.is_some(),
+                date_field == SearchDateField::Accessed
+            );
+            assert_eq!(
+                filters.modified.is_some(),
+                date_field == SearchDateField::Modified
+            );
+            assert_eq!(
+                filters.created.is_some(),
+                date_field == SearchDateField::Created
+            );
+        }
+    }
+
+    #[test]
+    fn reset_restores_one_default_query_state() {
+        let mut presets = SearchFilterPresetState {
+            selected_entry_types: vec![SearchEntryTypePreset::Folders],
+            text_scope: SearchTextScope::NameOnly,
+            date_field: SearchDateField::Created,
+            date_preset: SearchDatePreset::PastYear,
+        };
+
+        presets.reset();
+
+        assert!(presets.is_default());
+        let filters = presets
+            .query_filters_at(New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap())
+            .unwrap();
+        assert!(filters.entry_type_rules.is_empty());
+        assert!(filters.modified.is_none());
+        assert!(filters.accessed.is_none());
+        assert!(filters.created.is_none());
     }
 
     #[test]
     fn today_uses_local_midnight_across_a_dst_transition() {
         let now = New_York.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
-        let range = modified_time_range_at(ModifiedTimePreset::Today, now)
+        let range = date_range_at(SearchDatePreset::Today, now)
             .unwrap()
             .unwrap();
 
@@ -282,27 +449,35 @@ mod tests {
     }
 
     #[test]
-    fn rolling_days_use_fixed_elapsed_duration_across_dst() {
-        let now = New_York.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap();
-        let range = modified_time_range_at(ModifiedTimePreset::PastSevenDays, now)
+    fn yesterday_uses_the_complete_local_calendar_day_across_dst() {
+        let now = New_York.with_ymd_and_hms(2026, 3, 9, 12, 0, 0).unwrap();
+        let expected_start = New_York.with_ymd_and_hms(2026, 3, 8, 0, 0, 0).unwrap();
+        let expected_end = New_York
+            .with_ymd_and_hms(2026, 3, 9, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis()
+            - 1;
+        let range = date_range_at(SearchDatePreset::Yesterday, now)
             .unwrap()
             .unwrap();
 
-        assert_eq!(
-            range.end_ms - range.start_ms,
-            Duration::days(7).num_milliseconds()
-        );
+        assert_eq!(range.start_ms, expected_start.timestamp_millis());
+        assert_eq!(range.end_ms, expected_end);
     }
 
     #[test]
-    fn this_year_starts_at_the_local_calendar_year_boundary() {
-        let now = New_York.with_ymd_and_hms(2026, 7, 1, 12, 0, 0).unwrap();
-        let expected = New_York.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let range = modified_time_range_at(ModifiedTimePreset::ThisYear, now)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(range.start_ms, expected.timestamp_millis());
-        assert_eq!(range.end_ms, now.timestamp_millis());
+    fn rolling_presets_use_fixed_elapsed_duration_across_dst() {
+        let now = New_York.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).unwrap();
+        for (preset, days) in [
+            (SearchDatePreset::PastSevenDays, 7),
+            (SearchDatePreset::PastThirtyDays, 30),
+            (SearchDatePreset::PastYear, 365),
+        ] {
+            let range = date_range_at(preset, now).unwrap().unwrap();
+            assert_eq!(
+                range.end_ms - range.start_ms,
+                Duration::days(days).num_milliseconds()
+            );
+        }
     }
 }

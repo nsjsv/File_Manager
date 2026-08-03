@@ -11,7 +11,7 @@ use desktop_linux::{
 use file_core::FileOperationVerification;
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
 use file_operation_store::TaskQueueStore;
-use file_search::{SearchHit, SearchServiceStatus};
+use file_search::{SearchHit, SearchServiceStatus, SearchTextScope};
 use iced::keyboard;
 use iced::widget::text_editor;
 use iced::{event, mouse, window, Point, Theme};
@@ -117,9 +117,10 @@ pub(crate) use application_logs::{
 };
 pub(crate) mod search;
 pub(crate) use search::{
-    DirectoryFallbackOutcome, IndexedSearchOutcome, ModifiedTimePreset, SearchContentCategory,
-    SearchKeyboardSelection, SearchObjectType, SearchResultCompletion, SearchSelectionGesture,
-    SearchSelectionStep, SearchWorkspaceState,
+    DirectoryFallbackOutcome, IndexedSearchOutcome, SearchDateField, SearchDatePreset,
+    SearchEntryTypePreset, SearchInputStabilizationRequest, SearchKeyboardSelection,
+    SearchResultCompletion, SearchSelectionGesture, SearchSelectionStep, SearchWorkspaceSessionId,
+    SearchWorkspaceState,
 };
 mod search_service;
 pub(crate) use search_service::{
@@ -389,10 +390,14 @@ pub(crate) enum Message {
     AddressSuggestionsLoaded(AddressSuggestionRequest, Vec<PathBuf>),
     AddressBarScrolled(BrowserPaneId),
     SearchInputChanged(String),
+    SearchInputStabilized(SearchInputStabilizationRequest),
     SearchSubmitted,
-    SearchObjectTypeSelected(SearchObjectType),
-    SearchContentCategorySelected(SearchContentCategory),
-    SearchModifiedTimeSelected(ModifiedTimePreset),
+    SearchEntryTypesMenuOpened,
+    SearchEntryTypeToggled(SearchEntryTypePreset),
+    SearchTextScopeSelected(SearchTextScope),
+    SearchDateFieldSelected(SearchDateField),
+    SearchDatePresetSelected(SearchDatePreset),
+    SearchFiltersReset,
     SearchKeywordCleared,
     SearchWorkspaceClosed,
     SearchResultsLoaded(u64, IndexedSearchOutcome),
@@ -628,6 +633,7 @@ pub(crate) struct StartupEnvironment {
 pub(crate) enum ContextMenuState {
     FileArea(FileContextMenuState),
     Search(SearchContextMenuState),
+    SearchEntryTypes(SearchEntryTypeMenuState),
     ListColumns(ListColumnMenuState),
     SidebarBookmark(SidebarBookmarkContextMenuState),
     SidebarDevice(SidebarDeviceContextMenuState),
@@ -639,6 +645,7 @@ impl ContextMenuState {
         match self {
             Self::FileArea(menu) => menu.position,
             Self::Search(menu) => menu.position,
+            Self::SearchEntryTypes(menu) => menu.position,
             Self::ListColumns(menu) => menu.position,
             Self::SidebarBookmark(menu) => menu.position,
             Self::SidebarDevice(menu) => menu.position,
@@ -650,6 +657,7 @@ impl ContextMenuState {
         match self {
             Self::FileArea(menu) => Some(&menu.paste_directory),
             Self::Search(_) => None,
+            Self::SearchEntryTypes(_) => None,
             Self::ListColumns(_) => None,
             Self::SidebarBookmark(_) => None,
             Self::SidebarDevice(_) => None,
@@ -661,6 +669,11 @@ impl ContextMenuState {
 #[derive(Debug, Clone)]
 pub(crate) struct SearchContextMenuState {
     pub(crate) target: PathBuf,
+    pub(crate) position: Point,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SearchEntryTypeMenuState {
     pub(crate) position: Point,
 }
 

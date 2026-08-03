@@ -473,16 +473,24 @@ impl FileBrowser {
                 self.request_breadcrumb_drop_target_bounds_measurement(),
             ]),
             Message::SearchInputChanged(value) => self.update_search_input(value),
+            Message::SearchInputStabilized(request) => {
+                self.accept_search_input_stabilization(request)
+            }
             Message::SearchSubmitted => self.submit_search(),
-            Message::SearchObjectTypeSelected(object_type) => {
-                self.select_search_object_type(object_type)
+            Message::SearchEntryTypesMenuOpened => self.open_search_entry_types_menu(),
+            Message::SearchEntryTypeToggled(entry_type) => {
+                self.toggle_search_entry_type(entry_type)
             }
-            Message::SearchContentCategorySelected(content_category) => {
-                self.select_search_content_category(content_category)
+            Message::SearchTextScopeSelected(text_scope) => {
+                self.select_search_text_scope(text_scope)
             }
-            Message::SearchModifiedTimeSelected(modified_time) => {
-                self.select_search_modified_time(modified_time)
+            Message::SearchDateFieldSelected(date_field) => {
+                self.select_search_date_field(date_field)
             }
+            Message::SearchDatePresetSelected(date_preset) => {
+                self.select_search_date_preset(date_preset)
+            }
+            Message::SearchFiltersReset => self.reset_search_filters(),
             Message::SearchKeywordCleared => self.clear_search_keyword(),
             Message::SearchWorkspaceClosed => self.close_search_workspace(),
             Message::SearchResultsLoaded(generation, outcome) => {

@@ -31,7 +31,7 @@ const CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_QUERY_TERMS_BYTES: usize = 4_096;
 const MAX_QUERY_PATH_BYTES: usize = 4_096;
 const MAX_QUERY_MIME_BYTES: usize = 255;
-const MAX_QUERY_MIME_PATTERNS: usize = 32;
+const MAX_QUERY_ENTRY_TYPE_RULES: usize = 32;
 const MAX_QUERY_OFFSET: usize = 1_000_000;
 
 #[path = "protocol_client_session.rs"]
@@ -533,12 +533,20 @@ fn validate_wire_query(query: &SearchQuery) -> Result<(), String> {
             ));
         }
     }
-    if query.filters.mime_patterns.len() > MAX_QUERY_MIME_PATTERNS {
+    if query.filters.entry_type_rules.len() > MAX_QUERY_ENTRY_TYPE_RULES {
         return Err(format!(
-            "search MIME filter exceeds the {MAX_QUERY_MIME_PATTERNS} pattern limit"
+            "search entry type filter exceeds the {MAX_QUERY_ENTRY_TYPE_RULES} rule limit"
         ));
     }
-    for pattern in &query.filters.mime_patterns {
+    for pattern in query
+        .filters
+        .entry_type_rules
+        .iter()
+        .filter_map(|rule| match rule {
+            crate::model::SearchEntryTypeRule::Kind(_) => None,
+            crate::model::SearchEntryTypeRule::Mime(pattern) => Some(pattern),
+        })
+    {
         let (value, permits_empty_subtype) = match pattern {
             crate::model::MimePattern::Exact(value) => (value.as_str(), false),
             crate::model::MimePattern::Prefix(value) => (value.as_str(), true),

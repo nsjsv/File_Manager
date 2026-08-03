@@ -31,10 +31,10 @@ pub use fallback::{
 };
 pub use model::{
     daemon_build_id, ExtractorCapability, IndexHealth, IndexPhase, IndexStatus,
-    IndexedQueryAvailability, MatchSource, MimePattern, SearchCursor, SearchFileKind,
-    SearchFilters, SearchHit, SearchProviderFailure, SearchQuery, SearchResultBatch, SearchScope,
-    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus, TimeRange,
-    PROTOCOL_VERSION,
+    IndexedQueryAvailability, MatchSource, MimePattern, SearchCursor, SearchEntryTypeRule,
+    SearchFileKind, SearchFilters, SearchHit, SearchProviderFailure, SearchQuery,
+    SearchResultBatch, SearchScope, SearchServiceEvent, SearchServicePhase, SearchServiceRequest,
+    SearchServiceStatus, SearchTextScope, TimeRange, PROTOCOL_VERSION,
 };
 pub use protocol::{
     default_socket_path, read_service_event, read_service_request, search_via_socket,

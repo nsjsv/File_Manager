@@ -8,7 +8,10 @@ use rusqlite::{params, Connection, ErrorCode};
 use tempfile::tempdir;
 
 use crate::extractor::ExtractionStatus;
-use crate::model::{MatchSource, MimePattern, SearchFileKind, SearchQuery, SearchScope, TimeRange};
+use crate::model::{
+    MatchSource, MimePattern, SearchEntryTypeRule, SearchFileKind, SearchQuery, SearchScope,
+    SearchTextScope, TimeRange,
+};
 
 use super::{
     path_from_storage_bytes, path_to_storage, DirectorySignature, DirectorySnapshot,
@@ -35,6 +38,34 @@ fn searches_file_name_and_content() {
 
     assert_eq!(batch.hits.len(), 2);
     assert!(batch.finished);
+}
+
+#[test]
+fn name_only_search_excludes_content_matches_and_marks_name_hits() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/needle.txt",
+            "needle.txt",
+            "unrelated body",
+        ))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/report.txt",
+            "report.txt",
+            "needle in content",
+        ))
+        .unwrap();
+    let mut query = SearchQuery::global(1, "needle");
+    query.text_scope = SearchTextScope::NameOnly;
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/needle.txt"));
+    assert_eq!(batch.hits[0].match_source, MatchSource::Name);
+    assert!(batch.hits[0].snippet.is_none());
 }
 
 #[test]
@@ -407,7 +438,7 @@ fn filters_by_directory_and_kind() {
         .unwrap();
     let mut query = SearchQuery::global(1, "alpha");
     query.scope = SearchScope::Directory(Path::new("/tmp/a").to_path_buf());
-    query.filters.kind = Some(SearchFileKind::File);
+    query.filters.entry_type_rules = vec![SearchEntryTypeRule::Kind(SearchFileKind::File)];
 
     let batch = database.search(&query).unwrap();
 
@@ -517,8 +548,11 @@ fn filters_by_time_range() {
     old.modified_ms = Some(10);
     let mut new = indexed_file("/tmp/new.txt", "new.txt", "alpha");
     new.modified_ms = Some(30);
+    let mut missing = indexed_file("/tmp/missing.txt", "missing.txt", "alpha");
+    missing.modified_ms = None;
     database.upsert_file(&old).unwrap();
     database.upsert_file(&new).unwrap();
+    database.upsert_file(&missing).unwrap();
     let mut query = SearchQuery::global(1, "alpha");
     query.filters.modified = Some(TimeRange {
         start_ms: 20,
@@ -532,7 +566,7 @@ fn filters_by_time_range() {
 }
 
 #[test]
-fn mime_patterns_are_or_with_each_other_and_and_with_other_filters() {
+fn entry_type_rules_are_or_with_each_other_and_and_with_other_filters() {
     let database = SearchDatabase::in_memory().unwrap();
     for (path, mime_type, modified_ms, kind) in [
         ("/tmp/image.png", "image/png", 30, SearchFileKind::File),
@@ -561,10 +595,12 @@ fn mime_patterns_are_or_with_each_other_and_and_with_other_filters() {
         database.upsert_file(&file).unwrap();
     }
     let mut query = SearchQuery::global(1, "");
-    query.filters.kind = Some(SearchFileKind::File);
-    query.filters.mime_patterns = vec![
-        MimePattern::Prefix("image/".to_owned()),
-        MimePattern::Prefix("application/vnd.openxmlformats-officedocument.".to_owned()),
+    query.filters.entry_type_rules = vec![
+        SearchEntryTypeRule::Kind(SearchFileKind::Directory),
+        SearchEntryTypeRule::Mime(MimePattern::Prefix("image/".to_owned())),
+        SearchEntryTypeRule::Mime(MimePattern::Prefix(
+            "application/vnd.openxmlformats-officedocument.".to_owned(),
+        )),
     ];
     query.filters.modified = Some(TimeRange {
         start_ms: 20,
@@ -583,6 +619,7 @@ fn mime_patterns_are_or_with_each_other_and_and_with_other_filters() {
         paths,
         BTreeSet::from([
             Path::new("/tmp/image.png").to_path_buf(),
+            Path::new("/tmp/image-directory").to_path_buf(),
             Path::new("/tmp/report.docx").to_path_buf(),
         ])
     );

@@ -116,7 +116,7 @@ fn segmented_choice_group_style(theme: &Theme) -> container::Style {
     }
 }
 
-fn segmented_choice_button_style(
+pub(super) fn segmented_choice_button_style(
     selected: bool,
 ) -> impl Fn(&Theme, button::Status) -> button::Style + Clone {
     move |theme, status| {

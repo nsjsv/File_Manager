@@ -3,8 +3,8 @@ use rusqlite::types::Value;
 
 use crate::error::SearchResult;
 use crate::model::{
-    MatchSource, SearchCursor, SearchFileKind, SearchHit, SearchQuery, SearchResultBatch,
-    SearchScope,
+    MatchSource, SearchCursor, SearchEntryTypeRule, SearchFileKind, SearchHit, SearchQuery,
+    SearchResultBatch, SearchScope, SearchTextScope,
 };
 
 use super::{
@@ -39,7 +39,8 @@ impl SearchDatabase {
                     let kind = SearchFileKind::from_storage_value(row.get_ref(2)?.as_str()?);
                     let score: f64 = row.get(7)?;
                     let raw_snippet: Option<String> = row.get(8)?;
-                    let match_source = match_source_for_hit(&query.terms, &display_name);
+                    let match_source =
+                        match_source_for_hit(query.text_scope, &query.terms, &display_name);
                     let snippet = if match_source == MatchSource::Content {
                         raw_snippet.and_then(|snippet| normalize_content_snippet(&snippet))
                     } else {
@@ -105,8 +106,7 @@ fn full_text_query_plan(
 ) -> SearchResult<FullTextQueryPlan> {
     let unrestricted_full_text_query = query.terms.split_whitespace().next().is_some()
         && matches!(query.scope, SearchScope::Global)
-        && query.filters.kind.is_none()
-        && query.filters.mime_patterns.is_empty()
+        && query.filters.entry_type_rules.is_empty()
         && query.filters.modified.is_none()
         && query.filters.accessed.is_none()
         && query.filters.created.is_none();
@@ -134,7 +134,7 @@ fn search_sql(
     offset: usize,
     full_text_plan: FullTextQueryPlan,
 ) -> (String, Vec<Value>) {
-    let match_expression = search_match_expression(&query.terms);
+    let match_expression = search_match_expression(&query.terms, query.text_scope);
     if let (Some(match_expression), FullTextQueryPlan::RankBeforeMetadata) =
         (match_expression.as_ref(), full_text_plan)
     {
@@ -248,35 +248,35 @@ fn append_recursive_path_range(
 }
 
 fn append_filters(sql: &mut String, values: &mut Vec<Value>, query: &SearchQuery) {
-    if let Some(kind) = query.filters.kind {
-        sql.push_str(" AND f.kind = ?");
-        values.push(Value::Text(kind.as_storage_value().to_owned()));
-    }
-    append_mime_patterns(sql, values, &query.filters.mime_patterns);
+    append_entry_type_rules(sql, values, &query.filters.entry_type_rules);
     append_time_filter(sql, values, "f.modified_ms", query.filters.modified);
     append_time_filter(sql, values, "f.accessed_ms", query.filters.accessed);
     append_time_filter(sql, values, "f.created_ms", query.filters.created);
 }
 
-fn append_mime_patterns(
+fn append_entry_type_rules(
     sql: &mut String,
     values: &mut Vec<Value>,
-    patterns: &[crate::model::MimePattern],
+    rules: &[SearchEntryTypeRule],
 ) {
-    if patterns.is_empty() {
+    if rules.is_empty() {
         return;
     }
     sql.push_str(" AND (");
-    for (index, pattern) in patterns.iter().enumerate() {
+    for (index, rule) in rules.iter().enumerate() {
         if index > 0 {
             sql.push_str(" OR ");
         }
-        match pattern {
-            crate::model::MimePattern::Exact(mime_type) => {
+        match rule {
+            SearchEntryTypeRule::Kind(kind) => {
+                sql.push_str("f.kind = ?");
+                values.push(Value::Text(kind.as_storage_value().to_owned()));
+            }
+            SearchEntryTypeRule::Mime(crate::model::MimePattern::Exact(mime_type)) => {
                 sql.push_str("f.mime_type = ?");
                 values.push(Value::Text(mime_type.clone()));
             }
-            crate::model::MimePattern::Prefix(prefix) => {
+            SearchEntryTypeRule::Mime(crate::model::MimePattern::Prefix(prefix)) => {
                 sql.push_str("f.mime_type LIKE ? ESCAPE '\\'");
                 values.push(Value::Text(escaped_like_prefix(prefix)));
             }
@@ -314,19 +314,33 @@ fn append_time_filter(
     }
 }
 
-fn search_match_expression(terms: &str) -> Option<String> {
+fn search_match_expression(terms: &str, text_scope: SearchTextScope) -> Option<String> {
     let tokens = terms
         .split_whitespace()
         .filter(|token| !token.is_empty())
         .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
         .collect::<Vec<_>>();
-    (!tokens.is_empty()).then(|| tokens.join(" AND "))
+    if tokens.is_empty() {
+        return None;
+    }
+    let expression = tokens.join(" AND ");
+    Some(match text_scope {
+        SearchTextScope::NameAndContent => expression,
+        SearchTextScope::NameOnly => format!("name : ({expression})"),
+    })
 }
 
-fn match_source_for_hit(terms: &str, display_name: &str) -> MatchSource {
+fn match_source_for_hit(
+    text_scope: SearchTextScope,
+    terms: &str,
+    display_name: &str,
+) -> MatchSource {
     let terms = terms.split_whitespace().collect::<Vec<_>>();
     if terms.is_empty() {
         return MatchSource::Metadata;
+    }
+    if text_scope == SearchTextScope::NameOnly {
+        return MatchSource::Name;
     }
     let display_name = display_name.as_bytes();
     if terms.iter().all(|term| {

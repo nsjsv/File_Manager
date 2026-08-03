@@ -11,9 +11,9 @@ use crate::database::{IndexedFile, SearchDatabase};
 use crate::error::SearchError;
 use crate::extractor::ExtractionStatus;
 use crate::model::{
-    IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, MimePattern, SearchFileKind,
-    SearchProviderFailure, SearchQuery, SearchServiceEvent, SearchServicePhase,
-    SearchServiceRequest, SearchServiceStatus, PROTOCOL_VERSION,
+    IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, MimePattern,
+    SearchEntryTypeRule, SearchFileKind, SearchProviderFailure, SearchQuery, SearchServiceEvent,
+    SearchServicePhase, SearchServiceRequest, SearchServiceStatus, PROTOCOL_VERSION,
 };
 
 use super::{
@@ -21,7 +21,7 @@ use super::{
     search_via_socket_with_cancellation, serve_bound_search_socket, serve_search_socket,
     shutdown_via_socket, status_via_socket, validate_wire_query, version_via_socket,
     write_service_event, write_service_request, BoundSearchSocket, SearchSocketService,
-    MAX_ACTIVE_CLIENTS, MAX_QUERY_MIME_PATTERNS, MAX_QUERY_TERMS_BYTES, MAX_REQUEST_FRAME_BYTES,
+    MAX_ACTIVE_CLIENTS, MAX_QUERY_ENTRY_TYPE_RULES, MAX_QUERY_TERMS_BYTES, MAX_REQUEST_FRAME_BYTES,
 };
 
 struct UnavailableSearchService;
@@ -119,9 +119,9 @@ async fn consecutive_request_frames_round_trip_without_trailing_payload() {
     let (mut client, mut server) = duplex(2048);
     let first = SearchServiceRequest::Version;
     let mut search_query = SearchQuery::global(7, "needle");
-    search_query.filters.mime_patterns = vec![
-        MimePattern::Exact("application/pdf".to_owned()),
-        MimePattern::Prefix("image/".to_owned()),
+    search_query.filters.entry_type_rules = vec![
+        SearchEntryTypeRule::Mime(MimePattern::Exact("application/pdf".to_owned())),
+        SearchEntryTypeRule::Mime(MimePattern::Prefix("image/".to_owned())),
     ];
     let second = SearchServiceRequest::Search(search_query);
 
@@ -173,23 +173,33 @@ fn wire_query_validation_rejects_resource_amplifying_fields() {
     assert!(validate_wire_query(&query).is_err());
 
     query.filters.modified = None;
-    query.filters.mime_patterns = vec![MimePattern::Exact(String::new())];
+    query.filters.entry_type_rules =
+        vec![SearchEntryTypeRule::Mime(MimePattern::Exact(String::new()))];
     assert!(validate_wire_query(&query).is_err());
 
-    query.filters.mime_patterns = vec![MimePattern::Prefix("ímage/".to_owned())];
+    query.filters.entry_type_rules = vec![SearchEntryTypeRule::Mime(MimePattern::Prefix(
+        "ímage/".to_owned(),
+    ))];
     assert!(validate_wire_query(&query).is_err());
 
-    query.filters.mime_patterns = vec![MimePattern::Exact("text/plain' OR 1=1 --".to_owned())];
+    query.filters.entry_type_rules = vec![SearchEntryTypeRule::Mime(MimePattern::Exact(
+        "text/plain' OR 1=1 --".to_owned(),
+    ))];
     assert!(validate_wire_query(&query).is_err());
 
-    query.filters.mime_patterns = (0..=MAX_QUERY_MIME_PATTERNS)
-        .map(|index| MimePattern::Exact(format!("application/x-{index}")))
+    query.filters.entry_type_rules = (0..=MAX_QUERY_ENTRY_TYPE_RULES)
+        .map(|index| {
+            SearchEntryTypeRule::Mime(MimePattern::Exact(format!("application/x-{index}")))
+        })
         .collect();
     assert!(validate_wire_query(&query).is_err());
 
-    query.filters.mime_patterns = vec![
-        MimePattern::Exact("application/pdf".to_owned()),
-        MimePattern::Prefix("application/vnd.openxmlformats-officedocument.".to_owned()),
+    query.filters.entry_type_rules = vec![
+        SearchEntryTypeRule::Kind(SearchFileKind::Directory),
+        SearchEntryTypeRule::Mime(MimePattern::Exact("application/pdf".to_owned())),
+        SearchEntryTypeRule::Mime(MimePattern::Prefix(
+            "application/vnd.openxmlformats-officedocument.".to_owned(),
+        )),
     ];
     assert!(validate_wire_query(&query).is_ok());
 }

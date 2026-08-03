@@ -1,8 +1,9 @@
 use std::fmt;
 
-use file_search::SearchFileKind;
+use file_search::{SearchFileKind, SearchTextScope};
 use iced::widget::{
-    button, container, mouse_area, pick_list, responsive, row, scrollable, tooltip, Column,
+    button, container, mouse_area, pick_list, responsive, row, scrollable, tooltip, Button, Column,
+    Row,
 };
 use iced::{Alignment, Element, Length};
 
@@ -15,45 +16,69 @@ use crate::appearance::{
 };
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
+use crate::model::search::SearchFilterPresetState;
 use crate::model::{
-    Message, ModifiedTimePreset, ScrollbarRegion, SearchContentCategory, SearchObjectType,
+    Message, ScrollbarRegion, SearchDateField, SearchDatePreset, SearchEntryTypePreset,
     SearchResultCompletion,
 };
 use crate::typography::{localized_text, readable_text};
 
+use super::option_controls::{
+    segmented_choice_button_style, segmented_choice_row, SegmentedChoice,
+};
 use super::{themed_icon, IconTone};
 
 const SEARCH_INPUT_WIDTH: f32 = 140.0;
-const SEARCH_FILTER_WIDTH: f32 = 116.0;
-const WIDE_SEARCH_TOOLBAR_HEIGHT: f32 = 108.0;
-const NARROW_SEARCH_TOOLBAR_HEIGHT: f32 = 158.0;
-const NARROW_SEARCH_TOOLBAR_WIDTH: f32 = 390.0;
+const WIDE_SEARCH_TOOLBAR_WIDTH: f32 = 1_000.0;
+const MEDIUM_SEARCH_TOOLBAR_WIDTH: f32 = 560.0;
+const SEARCH_DATE_FIELD_WIDTH: f32 = 122.0;
+const SEARCH_DATE_PRESET_WIDTH: f32 = 138.0;
+const SEARCH_TEXT_SCOPE_WIDTH: f32 = 274.0;
+const SEARCH_FILTER_BUTTON_HEIGHT: f32 = 30.0;
 pub(crate) const SEARCH_RESULT_ROW_HEIGHT: f32 = 78.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SearchObjectTypeOption(SearchObjectType);
+struct SearchDateFieldOption(SearchDateField);
 
-impl fmt::Display for SearchObjectTypeOption {
+impl fmt::Display for SearchDateFieldOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&crate::localization::translate_current(self.0.label()))
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SearchContentCategoryOption(SearchContentCategory);
+struct SearchDatePresetOption(SearchDatePreset);
 
-impl fmt::Display for SearchContentCategoryOption {
+impl fmt::Display for SearchDatePresetOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&crate::localization::translate_current(self.0.label()))
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ModifiedTimePresetOption(ModifiedTimePreset);
+enum SearchToolbarDensity {
+    Wide,
+    Medium,
+    Narrow,
+}
 
-impl fmt::Display for ModifiedTimePresetOption {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&crate::localization::translate_current(self.0.label()))
+impl SearchToolbarDensity {
+    fn for_width(width: f32) -> Self {
+        if width >= WIDE_SEARCH_TOOLBAR_WIDTH {
+            Self::Wide
+        } else if width >= MEDIUM_SEARCH_TOOLBAR_WIDTH {
+            Self::Medium
+        } else {
+            Self::Narrow
+        }
+    }
+
+    fn entry_type_columns(self) -> usize {
+        match self {
+            Self::Wide => 8,
+            Self::Medium => 4,
+            Self::Narrow => 2,
+        }
     }
 }
 
@@ -134,8 +159,11 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
         .height(Length::Fill)
         .on_scroll(|_| Message::SearchResultsScrolled);
 
-    Column::new()
-        .push(search_workspace_toolbar(browser))
+    let mut content = Column::new().push(search_workspace_toolbar(browser));
+    if workspace.content_search_is_degraded() {
+        content = content.push(search_content_degraded_notice());
+    }
+    content
         .push(
             container(results)
                 .padding([4, 6])
@@ -157,19 +185,15 @@ fn search_workspace_toolbar(browser: &FileBrowser) -> Element<'_, Message> {
         "Search in {}",
         format_middle_ellipsized_text(&workspace.root.path().to_string_lossy(), 72)
     );
-    let object_type = workspace.filters.object_type;
-    let content_category = workspace.filters.content_category;
-    let modified_time = workspace.filters.modified_time;
+    let filters = workspace.filters.clone();
     let selected = browser.active_search_selection().unwrap_or_default();
 
     responsive(move |viewport_size| {
         search_workspace_toolbar_layout(
             root_label.clone(),
-            object_type,
-            content_category,
-            modified_time,
+            filters.clone(),
             selected.clone(),
-            viewport_size.width < NARROW_SEARCH_TOOLBAR_WIDTH,
+            SearchToolbarDensity::for_width(viewport_size.width),
         )
     })
     .width(Length::Fill)
@@ -179,11 +203,9 @@ fn search_workspace_toolbar(browser: &FileBrowser) -> Element<'_, Message> {
 
 fn search_workspace_toolbar_layout(
     root_label: String,
-    object_type: SearchObjectType,
-    content_category: SearchContentCategory,
-    modified_time: ModifiedTimePreset,
+    filters: SearchFilterPresetState,
     selected: Vec<std::path::PathBuf>,
-    narrow: bool,
+    density: SearchToolbarDensity,
 ) -> Element<'static, Message> {
     let header = row![
         themed_icon(IconSymbol::Search, IconTone::Normal, 15.0),
@@ -200,53 +222,153 @@ fn search_workspace_toolbar_layout(
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let filters: Element<'static, Message> = if narrow {
-        Column::new()
+    let entry_types = search_entry_type_grid(&filters, density.entry_type_columns());
+    let controls = search_filter_controls(&filters, density);
+    let mut toolbar = Column::new()
+        .push(header)
+        .push(entry_types)
+        .push(controls)
+        .spacing(6);
+    if !selected.is_empty() {
+        toolbar = toolbar.push(search_selection_actions(selected));
+    }
+
+    container(toolbar)
+        .padding([7, 10])
+        .width(Length::Fill)
+        .height(Length::Shrink)
+        .style(list_panel_style)
+        .into()
+}
+
+fn search_entry_type_grid(
+    filters: &SearchFilterPresetState,
+    column_count: usize,
+) -> Element<'static, Message> {
+    let mut rows = Column::new().spacing(5).width(Length::Fill);
+    for entry_types in SearchEntryTypePreset::COMMON.chunks(column_count) {
+        let mut type_row = Row::new().spacing(6).width(Length::Fill);
+        for entry_type in entry_types {
+            type_row = type_row.push(search_entry_type_button(*entry_type, filters));
+        }
+        rows = rows.push(type_row);
+    }
+    rows.into()
+}
+
+fn search_entry_type_button(
+    entry_type: SearchEntryTypePreset,
+    filters: &SearchFilterPresetState,
+) -> Element<'static, Message> {
+    let selected = filters.entry_type_is_selected(entry_type);
+    search_filter_button(
+        search_entry_type_icon(entry_type),
+        if selected {
+            IconTone::Selected
+        } else {
+            IconTone::Normal
+        },
+        crate::localization::translate_current(entry_type.label()),
+        Message::SearchEntryTypeToggled(entry_type),
+    )
+    .width(Length::FillPortion(1))
+    .style(segmented_choice_button_style(selected))
+    .into()
+}
+
+fn search_entry_type_icon(entry_type: SearchEntryTypePreset) -> IconSymbol {
+    match entry_type {
+        SearchEntryTypePreset::Spreadsheets => IconSymbol::Grid,
+        SearchEntryTypePreset::Video => IconSymbol::Video,
+        SearchEntryTypePreset::Images => IconSymbol::FileImage,
+        SearchEntryTypePreset::Text => IconSymbol::FileText,
+        SearchEntryTypePreset::Documents => IconSymbol::File,
+        SearchEntryTypePreset::Folders => IconSymbol::Folder,
+        SearchEntryTypePreset::Audio => IconSymbol::Music,
+        SearchEntryTypePreset::Pdf => IconSymbol::FileText,
+        SearchEntryTypePreset::Files => IconSymbol::File,
+        SearchEntryTypePreset::Archives => IconSymbol::FileArchive,
+        SearchEntryTypePreset::Links => IconSymbol::Link,
+    }
+}
+
+fn search_filter_controls(
+    filters: &SearchFilterPresetState,
+    density: SearchToolbarDensity,
+) -> Element<'static, Message> {
+    match density {
+        SearchToolbarDensity::Wide => {
+            row![
+                container(search_text_scope_filter(filters.text_scope))
+                    .width(Length::Fixed(SEARCH_TEXT_SCOPE_WIDTH)),
+                search_date_field_filter(
+                    filters.date_field,
+                    Length::Fixed(SEARCH_DATE_FIELD_WIDTH),
+                ),
+                search_date_preset_filter(
+                    filters.date_preset,
+                    Length::Fixed(SEARCH_DATE_PRESET_WIDTH),
+                ),
+                search_filter_commands(filters),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+        }
+        SearchToolbarDensity::Medium => Column::new()
+            .push(search_text_scope_filter(filters.text_scope))
             .push(
                 row![
-                    object_type_filter(object_type, Length::Fill),
-                    content_category_filter(content_category, Length::Fill),
+                    search_date_field_filter(
+                        filters.date_field,
+                        Length::Fixed(SEARCH_DATE_FIELD_WIDTH),
+                    ),
+                    search_date_preset_filter(
+                        filters.date_preset,
+                        Length::Fixed(SEARCH_DATE_PRESET_WIDTH),
+                    ),
+                    search_filter_commands(filters),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .spacing(5)
+            .into(),
+        SearchToolbarDensity::Narrow => Column::new()
+            .push(search_text_scope_filter(filters.text_scope))
+            .push(
+                row![
+                    search_date_field_filter(filters.date_field, Length::FillPortion(1)),
+                    search_date_preset_filter(filters.date_preset, Length::FillPortion(1)),
                 ]
                 .spacing(6),
             )
-            .push(modified_time_filter(modified_time, Length::Fill))
+            .push(search_filter_commands(filters))
             .spacing(5)
-            .into()
-    } else {
-        row![
-            object_type_filter(object_type, Length::Fixed(SEARCH_FILTER_WIDTH)),
-            content_category_filter(content_category, Length::Fixed(SEARCH_FILTER_WIDTH)),
-            modified_time_filter(modified_time, Length::Fixed(SEARCH_FILTER_WIDTH)),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    };
-
-    container(
-        Column::new()
-            .push(header)
-            .push(filters)
-            .push(search_selection_actions(selected))
-            .spacing(6),
-    )
-    .padding([7, 10])
-    .width(Length::Fill)
-    .height(Length::Fixed(if narrow {
-        NARROW_SEARCH_TOOLBAR_HEIGHT
-    } else {
-        WIDE_SEARCH_TOOLBAR_HEIGHT
-    }))
-    .align_y(Alignment::Center)
-    .style(list_panel_style)
-    .into()
+            .into(),
+    }
 }
 
-fn object_type_filter(selected: SearchObjectType, width: Length) -> Element<'static, Message> {
+fn search_text_scope_filter(selected: SearchTextScope) -> Element<'static, Message> {
+    segmented_choice_row(vec![
+        SegmentedChoice {
+            label: "Name & content",
+            selected: selected == SearchTextScope::NameAndContent,
+            message: Message::SearchTextScopeSelected(SearchTextScope::NameAndContent),
+        },
+        SegmentedChoice {
+            label: "Name only",
+            selected: selected == SearchTextScope::NameOnly,
+            message: Message::SearchTextScopeSelected(SearchTextScope::NameOnly),
+        },
+    ])
+}
+
+fn search_date_field_filter(selected: SearchDateField, width: Length) -> Element<'static, Message> {
     pick_list(
-        SearchObjectType::ALL.map(SearchObjectTypeOption),
-        Some(SearchObjectTypeOption(selected)),
-        |selected| Message::SearchObjectTypeSelected(selected.0),
+        SearchDateField::ALL.map(SearchDateFieldOption),
+        Some(SearchDateFieldOption(selected)),
+        |selected| Message::SearchDateFieldSelected(selected.0),
     )
     .width(width)
     .text_size(12)
@@ -254,14 +376,14 @@ fn object_type_filter(selected: SearchObjectType, width: Length) -> Element<'sta
     .into()
 }
 
-fn content_category_filter(
-    selected: SearchContentCategory,
+fn search_date_preset_filter(
+    selected: SearchDatePreset,
     width: Length,
 ) -> Element<'static, Message> {
     pick_list(
-        SearchContentCategory::ALL.map(SearchContentCategoryOption),
-        Some(SearchContentCategoryOption(selected)),
-        |selected| Message::SearchContentCategorySelected(selected.0),
+        SearchDatePreset::ALL.map(SearchDatePresetOption),
+        Some(SearchDatePresetOption(selected)),
+        |selected| Message::SearchDatePresetSelected(selected.0),
     )
     .width(width)
     .text_size(12)
@@ -269,23 +391,60 @@ fn content_category_filter(
     .into()
 }
 
-fn modified_time_filter(selected: ModifiedTimePreset, width: Length) -> Element<'static, Message> {
-    pick_list(
-        ModifiedTimePreset::ALL.map(ModifiedTimePresetOption),
-        Some(ModifiedTimePresetOption(selected)),
-        |selected| Message::SearchModifiedTimeSelected(selected.0),
+fn search_filter_commands(filters: &SearchFilterPresetState) -> Element<'static, Message> {
+    let selected_more_type_count = filters.selected_more_type_count();
+    let more_label = if selected_more_type_count == 0 {
+        crate::localization::translate_current("More")
+    } else {
+        format!(
+            "{} ({selected_more_type_count})",
+            crate::localization::translate_current("More")
+        )
+    };
+    let mut commands = row![search_filter_button(
+        IconSymbol::Plus,
+        if selected_more_type_count == 0 {
+            IconTone::Normal
+        } else {
+            IconTone::Selected
+        },
+        more_label,
+        Message::SearchEntryTypesMenuOpened,
     )
-    .width(width)
-    .text_size(12)
-    .padding([5, 6])
-    .into()
+    .style(segmented_choice_button_style(selected_more_type_count > 0))]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    if !filters.is_default() {
+        commands = commands.push(
+            search_filter_button(
+                IconSymbol::Close,
+                IconTone::Normal,
+                crate::localization::translate_current("Reset filters"),
+                Message::SearchFiltersReset,
+            )
+            .style(segmented_choice_button_style(false)),
+        );
+    }
+    commands.into()
+}
+
+fn search_filter_button(
+    icon: IconSymbol,
+    tone: IconTone,
+    label: String,
+    message: Message,
+) -> Button<'static, Message> {
+    button(
+        row![themed_icon(icon, tone, 13.0), readable_text(label)]
+            .spacing(6)
+            .align_y(Alignment::Center),
+    )
+    .on_press(message)
+    .height(Length::Fixed(SEARCH_FILTER_BUTTON_HEIGHT))
+    .padding([4, 8])
 }
 
 fn search_selection_actions(selected: Vec<std::path::PathBuf>) -> Element<'static, Message> {
-    if selected.is_empty() {
-        return container(readable_text("")).width(Length::Fill).into();
-    }
-
     let mut actions = row![
         search_action_button(IconSymbol::Copy, "Copy", Message::CopySelected),
         search_action_button(IconSymbol::ArrowRight, "Cut", Message::MoveSelected),
@@ -326,6 +485,23 @@ fn search_action_button(
         tooltip_label(label),
         tooltip::Position::Bottom,
     )
+    .into()
+}
+
+fn search_content_degraded_notice() -> Element<'static, Message> {
+    container(
+        row![
+            themed_icon(IconSymbol::TriangleAlert, IconTone::Warning, 14.0),
+            localized_text("Content indexing is unavailable; matching file names only.")
+                .size(12)
+                .width(Length::Fill),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding([7, 10])
+    .width(Length::Fill)
+    .style(list_panel_style)
     .into()
 }
 
@@ -413,5 +589,21 @@ mod tests {
             panic!("navigation search input must not participate in Fill layout");
         };
         assert_eq!(width, 140.0);
+    }
+
+    #[test]
+    fn search_toolbar_density_keeps_stable_type_column_counts() {
+        assert_eq!(
+            SearchToolbarDensity::for_width(1_000.0).entry_type_columns(),
+            8
+        );
+        assert_eq!(
+            SearchToolbarDensity::for_width(700.0).entry_type_columns(),
+            4
+        );
+        assert_eq!(
+            SearchToolbarDensity::for_width(420.0).entry_type_columns(),
+            2
+        );
     }
 }

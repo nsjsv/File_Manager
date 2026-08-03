@@ -4,7 +4,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use crate::extractor::ExtractionStatus;
-use crate::model::{SearchFileKind, SearchQuery, SearchScope};
+use crate::model::{SearchFileKind, SearchQuery, SearchScope, SearchTextScope};
 
 use super::{
     DirectorySignature, DirectorySnapshot, EntryObservationState, EntryStageProgress,
@@ -167,6 +167,7 @@ fn recursive_non_utf8_scope_uses_raw_component_boundaries() {
     let query = SearchQuery {
         query_id: 1,
         terms: String::new(),
+        text_scope: SearchTextScope::NameAndContent,
         scope: SearchScope::Directory(scope.clone()),
         recursive: true,
         filters: Default::default(),

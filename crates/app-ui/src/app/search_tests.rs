@@ -11,8 +11,8 @@ use super::FileBrowser;
 use crate::config;
 use crate::model::search::{SearchProvider, SEARCH_RESULT_WINDOW};
 use crate::model::{
-    DirectoryFallbackOutcome, IndexedSearchOutcome, SearchResultCompletion,
-    SearchServiceDiagnosticKind,
+    ContextMenuState, DirectoryFallbackOutcome, IndexedSearchOutcome, SearchEntryTypeMenuState,
+    SearchEntryTypePreset, SearchResultCompletion, SearchServiceDiagnosticKind,
 };
 
 fn browser_for_search_tests(root: PathBuf) -> FileBrowser {
@@ -57,6 +57,18 @@ fn indexed_batch(query_id: u64, hits: Vec<SearchHit>, finished: bool) -> SearchR
         }),
         finished,
     }
+}
+
+fn stabilize_search_input(browser: &mut FileBrowser, value: &str) {
+    if browser.search_workspace.is_none() {
+        drop(browser.submit_search());
+    }
+    let request = browser
+        .search_workspace
+        .as_mut()
+        .unwrap()
+        .replace_input(value.to_owned());
+    drop(browser.accept_search_input_stabilization(request));
 }
 
 #[test]
@@ -117,7 +129,7 @@ fn indexed_window_truth_comes_from_provider_completion() {
 #[test]
 fn unavailable_before_first_batch_switches_to_directory_fallback() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
-    drop(browser.update_search_input("report".to_owned()));
+    stabilize_search_input(&mut browser, "report");
     let generation = browser.search_workspace.as_ref().unwrap().run.generation;
 
     drop(browser.accept_search_results(
@@ -137,7 +149,7 @@ fn unavailable_before_first_batch_switches_to_directory_fallback() {
 #[test]
 fn unavailable_after_indexed_batch_does_not_mix_providers() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
-    drop(browser.update_search_input("report".to_owned()));
+    stabilize_search_input(&mut browser, "report");
     let generation = browser.search_workspace.as_ref().unwrap().run.generation;
     drop(browser.accept_search_results(
         generation,
@@ -221,7 +233,12 @@ fn unavailable_frozen_root_cancels_the_run_without_switching_scope() {
     let first_generation = browser.search_workspace.as_ref().unwrap().run.generation;
     std::fs::remove_dir(&root).unwrap();
 
-    drop(browser.update_search_input("later".to_owned()));
+    let request = browser
+        .search_workspace
+        .as_mut()
+        .unwrap()
+        .replace_input("later".to_owned());
+    drop(browser.accept_search_input_stabilization(request));
 
     let workspace = browser.search_workspace.as_ref().unwrap();
     assert_eq!(workspace.root.path(), root);
@@ -238,9 +255,9 @@ fn unavailable_frozen_root_cancels_the_run_without_switching_scope() {
 #[test]
 fn stale_generation_cannot_pollute_restarted_or_closed_workspace() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
-    drop(browser.update_search_input("first".to_owned()));
+    stabilize_search_input(&mut browser, "first");
     let stale = browser.search_workspace.as_ref().unwrap().run.generation;
-    drop(browser.update_search_input("second".to_owned()));
+    stabilize_search_input(&mut browser, "second");
     drop(browser.accept_search_results(
         stale,
         IndexedSearchOutcome::Batch(indexed_batch(
@@ -266,6 +283,78 @@ fn stale_generation_cannot_pollute_restarted_or_closed_workspace() {
         IndexedSearchOutcome::Batch(indexed_batch(stale, Vec::new(), true)),
     ));
     assert!(browser.search_workspace.is_none());
+}
+
+#[test]
+fn immediate_search_actions_invalidate_pending_input_stabilization() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    drop(browser.submit_search());
+
+    let submit_request = browser
+        .search_workspace
+        .as_mut()
+        .unwrap()
+        .replace_input("submit".to_owned());
+    drop(browser.submit_search());
+    let submit_generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    drop(browser.accept_search_input_stabilization(submit_request));
+    assert_eq!(
+        browser.search_workspace.as_ref().unwrap().run.generation,
+        submit_generation
+    );
+
+    let filter_request = browser
+        .search_workspace
+        .as_mut()
+        .unwrap()
+        .replace_input("filter".to_owned());
+    drop(browser.toggle_search_entry_type(SearchEntryTypePreset::Images));
+    let filter_generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    drop(browser.accept_search_input_stabilization(filter_request));
+    assert_eq!(
+        browser.search_workspace.as_ref().unwrap().run.generation,
+        filter_generation
+    );
+
+    let reset_request = browser
+        .search_workspace
+        .as_mut()
+        .unwrap()
+        .replace_input("reset".to_owned());
+    drop(browser.reset_search_filters());
+    let reset_generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    drop(browser.accept_search_input_stabilization(reset_request));
+    assert_eq!(
+        browser.search_workspace.as_ref().unwrap().run.generation,
+        reset_generation
+    );
+}
+
+#[test]
+fn reopening_workspace_rejects_old_session_and_clears_type_menu() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    drop(browser.submit_search());
+    let stale = browser
+        .search_workspace
+        .as_mut()
+        .unwrap()
+        .replace_input("old session".to_owned());
+    browser.context_menu = Some(ContextMenuState::SearchEntryTypes(
+        SearchEntryTypeMenuState {
+            position: iced::Point::ORIGIN,
+        },
+    ));
+
+    drop(browser.close_search_workspace());
+    assert!(browser.context_menu.is_none());
+    drop(browser.submit_search());
+    let reopened_generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    drop(browser.accept_search_input_stabilization(stale));
+
+    assert_eq!(
+        browser.search_workspace.as_ref().unwrap().run.generation,
+        reopened_generation
+    );
 }
 
 #[test]
