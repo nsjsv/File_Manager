@@ -61,6 +61,7 @@ mod wayland_dnd;
 mod window_chrome;
 mod window_control_settings;
 mod windows;
+mod x11_dnd;
 
 pub(crate) use runtime::run;
 
@@ -71,7 +72,7 @@ use std::time::Duration;
 
 use desktop_linux::{
     DesktopActivationEvent, DesktopActivationRuntime, NetworkConnectionId, StorageDeviceId,
-    TerminalEmulator, WaylandDndFileDrop,
+    TerminalEmulator,
 };
 use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
 use iced::event;
@@ -87,6 +88,7 @@ use crate::app::events::global_event_message;
 use crate::app::runtime::{
     desktop_activation_subscription, directory_watch_subscription,
     sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
+    x11_file_dnd_subscription,
 };
 use crate::app::scrollbar::{ScrollbarState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
@@ -100,7 +102,7 @@ use crate::app::windows::{
 use crate::command_line::ApplicationLaunchRequest;
 use crate::commands::{
     ensure_search_service_command, file_operation_subscription, startup_environment_command,
-    wayland_dnd_window_handle_command,
+    wayland_dnd_window_handle_command, x11_dnd_window_handle_command,
 };
 use crate::config;
 use crate::config::UiLanguage;
@@ -111,10 +113,11 @@ use crate::model::{
     BatchRenameState, BreadcrumbDropTargetBounds, BrowserPane, BrowserPaneId, BrowserPaneLayout,
     BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
     DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    FileDragState, FileDropPrompt, FilePropertiesState, IconGridExpansionState, IconGridViewport,
-    ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowProfile, ScrollbarRegion, SearchServiceState, SelectionMarquee,
-    SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
+    FileDragState, FileDropPrompt, FileDropSessionState, FilePropertiesState,
+    IconGridExpansionState, IconGridViewport, ListColumnKind, Message, PaneDragPointerPress,
+    PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
+    ScrollbarRegion, SearchServiceState, SelectionMarquee, SettingsCategory,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
     TrashRefreshState, VideoPreviewPlayback,
 };
@@ -173,6 +176,7 @@ pub(crate) struct FileBrowser {
     main_window: window::Id,
     maximized_windows: HashSet<window::Id>,
     wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
+    x11_dnd: Option<x11_dnd::X11DndRuntime>,
     file_manager_activation: Option<Arc<DesktopActivationRuntime>>,
     preview_window: Option<window::Id>,
     focused_window: window::Id,
@@ -182,6 +186,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_viewports: HashMap<PathBuf, ColumnViewport>,
     icon_grid_viewports: HashMap<BrowserPaneId, PaneIconGridViewport>,
     pub(crate) icon_grid_expansion: Option<IconGridExpansionState>,
+    list_expansion_follow: Option<view_modes::ListExpansionFollowPlan>,
     pub(crate) context_menu: Option<ContextMenuState>,
     pub(crate) open_with: Option<OpenWithState>,
     pub(crate) file_drop_prompt: Option<FileDropPrompt>,
@@ -217,11 +222,12 @@ pub(crate) struct FileBrowser {
     pane_drag_pointer_press: Option<PaneDragPointerPress>,
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
+    pub(crate) file_drop_session: Option<FileDropSessionState>,
+    next_file_drag_gesture_id: u64,
+    file_drop_layout_generation: u64,
     file_entry_bounds: Vec<ColumnEntryBounds>,
     breadcrumb_drop_target_bounds: Vec<BreadcrumbDropTargetBounds>,
     breadcrumb_drop_target_measurement_generation: u64,
-    native_file_drag_target_measurement_generation: u64,
-    pending_wayland_file_drop: Option<PendingWaylandFileDrop>,
     pub(crate) options: ScanOptions,
     application_launch_request: ApplicationLaunchRequest,
     user_config: config::UserConfig,
@@ -285,13 +291,9 @@ pub(crate) struct FileBrowser {
     next_tab_id: usize,
     next_pane_id: u64,
     next_icon_grid_expansion_session_id: u64,
+    next_list_expansion_follow_session_id: u64,
     theme: Theme,
     is_shutting_down: bool,
-}
-
-struct PendingWaylandFileDrop {
-    measurement_generation: u64,
-    drop: WaylandDndFileDrop,
 }
 
 #[derive(Debug, Clone)]
@@ -361,7 +363,12 @@ impl FileBrowser {
             Some(file_manager_activation),
         );
 
-        let open_main_window = open_main_window.then(wayland_dnd_window_handle_command);
+        let open_main_window = open_main_window.then(|window_id| {
+            Task::batch([
+                wayland_dnd_window_handle_command(window_id),
+                x11_dnd_window_handle_command(window_id),
+            ])
+        });
 
         let initial_desktop_activation = initial_desktop_activation
             .map(Message::DesktopActivationReceived)
@@ -460,6 +467,7 @@ impl FileBrowser {
             main_window,
             maximized_windows: HashSet::new(),
             wayland_dnd: None,
+            x11_dnd: None,
             file_manager_activation,
             preview_window: None,
             focused_window: main_window,
@@ -469,6 +477,7 @@ impl FileBrowser {
             column_viewports: HashMap::new(),
             icon_grid_viewports: HashMap::new(),
             icon_grid_expansion: None,
+            list_expansion_follow: None,
             context_menu: None,
             open_with: None,
             file_drop_prompt: None,
@@ -506,11 +515,12 @@ impl FileBrowser {
             pane_drag_pointer_press: None,
             selection_marquee: None,
             file_drag: None,
+            file_drop_session: None,
+            next_file_drag_gesture_id: 0,
+            file_drop_layout_generation: 0,
             file_entry_bounds: Vec::new(),
             breadcrumb_drop_target_bounds: Vec::new(),
             breadcrumb_drop_target_measurement_generation: 0,
-            native_file_drag_target_measurement_generation: 0,
-            pending_wayland_file_drop: None,
             options: options.clone(),
             application_launch_request,
             user_config: user_config.clone(),
@@ -580,6 +590,7 @@ impl FileBrowser {
             next_tab_id: 1,
             next_pane_id: 1,
             next_icon_grid_expansion_session_id: 1,
+            next_list_expansion_follow_session_id: 1,
             theme: Theme::Light,
             is_shutting_down: false,
         };
@@ -612,6 +623,12 @@ impl FileBrowser {
         }
         if let Some(runtime) = &self.wayland_dnd {
             subscriptions.push(wayland_file_dnd_subscription(
+                runtime.window_handle,
+                runtime.controller.clone(),
+            ));
+        }
+        if let Some(runtime) = &self.x11_dnd {
+            subscriptions.push(x11_file_dnd_subscription(
                 runtime.window_handle,
                 runtime.controller.clone(),
             ));

@@ -65,17 +65,30 @@ pub(crate) enum FileDragStationaryAction {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileDragState {
+    pub(crate) gesture_id: super::FileDragGestureId,
+    pub(crate) source_pane_id: super::BrowserPaneId,
+    pub(crate) source_tab_id: usize,
     pub(crate) sources: Vec<PathBuf>,
     pub(crate) pressed_path: PathBuf,
+    pub(crate) bookmark_source: Option<PathBuf>,
     pub(crate) stationary_action: FileDragStationaryAction,
-    pub(crate) target: Option<FileDragTarget>,
     pub(crate) phase: FileDragPhase,
     pub(crate) native_dnd: FileDragNativeDndState,
-    pub(crate) wayland_target: Option<WaylandFileDragTargetSnapshot>,
     pub(crate) column_directories_snapshot: Vec<PathBuf>,
 }
 
 impl FileDragState {
+    pub(crate) fn source_column_directories(
+        &self,
+        pane_id: super::BrowserPaneId,
+        tab_id: usize,
+    ) -> Option<&[PathBuf]> {
+        (self.source_pane_id == pane_id
+            && self.source_tab_id == tab_id
+            && !self.column_directories_snapshot.is_empty())
+        .then_some(self.column_directories_snapshot.as_slice())
+    }
+
     pub(crate) fn is_dragging(&self) -> bool {
         matches!(self.phase, FileDragPhase::Dragging)
     }
@@ -88,21 +101,14 @@ impl FileDragState {
         self.is_dragging()
             && matches!(
                 self.native_dnd,
-                FileDragNativeDndState::NotRequested
-                    | FileDragNativeDndState::MeasuringTargets(_)
-                    | FileDragNativeDndState::Requested(_)
+                FileDragNativeDndState::NotRequested | FileDragNativeDndState::Requested(_)
             )
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FileDragTarget {
-    Directory(PathBuf),
-    SidebarBookmarkSlot(SidebarBookmarkDropSlot),
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FileDragHitTestBounds {
+    pub(crate) tabs: Vec<super::TabFileDropTargetBounds>,
     pub(crate) entries: Vec<super::ColumnEntryBounds>,
     pub(crate) breadcrumbs: Vec<BreadcrumbDropTargetBounds>,
     pub(crate) directory_targets: Vec<DirectoryFileDragTargetBounds>,
@@ -132,29 +138,21 @@ pub(crate) struct SidebarFileDragTargetBounds {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WaylandFileDragEntryTargetBounds {
+pub(crate) struct FileDropEntryTargetBounds {
     pub(crate) directory: PathBuf,
     pub(crate) path: PathBuf,
     pub(crate) bounds: Rectangle,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct WaylandFileDragHitTestBounds {
-    pub(crate) entries: Vec<WaylandFileDragEntryTargetBounds>,
+pub(crate) struct FileDropHitTestBounds {
+    pub(crate) tabs: Vec<super::TabFileDropTargetBounds>,
+    pub(crate) entries: Vec<FileDropEntryTargetBounds>,
     pub(crate) breadcrumbs: Vec<BreadcrumbDropTargetBounds>,
     pub(crate) directory_targets: Vec<DirectoryFileDragTargetBounds>,
     pub(crate) blocked_directories: Vec<FileDragBlockedDirectoryBounds>,
     pub(crate) sidebar_directories: Vec<SidebarFileDragTargetBounds>,
     pub(crate) empty_sidebar_bookmarks: Option<Rectangle>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct WaylandFileDragTargetSnapshot {
-    pub(crate) session_id: WaylandFileDragSessionId,
-    pub(crate) hit_test_bounds: WaylandFileDragHitTestBounds,
-    pub(crate) bookmark_source: Option<PathBuf>,
-    pub(crate) position: Option<Point>,
-    pub(crate) target: Option<FileDragTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -168,7 +166,6 @@ pub(crate) struct BreadcrumbDropTargetBounds {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileDragNativeDndState {
     NotRequested,
-    MeasuringTargets(u64),
     Requested(WaylandFileDragSessionId),
     Started(WaylandFileDragSessionId),
     Dropped(WaylandFileDragSessionId),
@@ -177,7 +174,7 @@ pub(crate) enum FileDragNativeDndState {
 impl FileDragNativeDndState {
     pub(crate) fn session_id(self) -> Option<WaylandFileDragSessionId> {
         match self {
-            Self::NotRequested | Self::MeasuringTargets(_) => None,
+            Self::NotRequested => None,
             Self::Requested(session_id) | Self::Started(session_id) | Self::Dropped(session_id) => {
                 Some(session_id)
             }

@@ -8,7 +8,7 @@ impl FileBrowser {
         self.tab_drag = None;
         self.pane_drag = None;
         self.pane_drag_pointer_press = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.selection_marquee = None;
         self.drag_selection_anchor = None;
         self.sidebar_bookmark_drag = None;

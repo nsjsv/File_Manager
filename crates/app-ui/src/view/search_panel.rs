@@ -14,6 +14,7 @@ use crate::appearance::{
     list_panel_style, list_row_style, navigation_icon_button_style, navigation_text_input_style,
     selected_row_style,
 };
+use crate::file_entry_view::{file_entry_symbol_icon, FileEntryIconTone, FileEntryVisualState};
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::search::SearchFilterPresetState;
@@ -138,6 +139,7 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
             index,
             workspace.selection.is_selected(&hit.path),
             workspace.selection.focused_path() == Some(hit.path.as_path()),
+            browser.file_entry_content_modifier(&hit.path),
         ));
     }
     if workspace.window.is_loading {
@@ -530,6 +532,7 @@ fn search_result_row(
     row_index: usize,
     selected: bool,
     focused: bool,
+    modifier: crate::model::FileEntryContentModifier,
 ) -> Element<'static, Message> {
     let metadata = format!(
         "{} · {}",
@@ -539,6 +542,11 @@ fn search_result_row(
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default()
     );
+    let visual_state = if selected || focused {
+        FileEntryVisualState::Selected
+    } else {
+        FileEntryVisualState::Normal
+    };
     let mut content = Column::new()
         .spacing(3)
         .push(readable_text(hit.display_name.clone()).size(15))
@@ -546,6 +554,7 @@ fn search_result_row(
     if let Some(snippet) = hit.snippet.clone().filter(|snippet| !snippet.is_empty()) {
         content = content.push(readable_text(snippet).size(12));
     }
+    let content = container(content).style(visual_state.content_style(modifier));
     let result_icon = match hit.kind {
         SearchFileKind::File => IconSymbol::File,
         SearchFileKind::Directory => IconSymbol::Folder,
@@ -553,9 +562,12 @@ fn search_result_row(
         SearchFileKind::Other => IconSymbol::File,
     };
     let path = hit.path;
-    let content = row![themed_icon(result_icon, IconTone::Normal, 18.0), content]
-        .spacing(10)
-        .align_y(Alignment::Center);
+    let content = row![
+        file_entry_symbol_icon(result_icon, FileEntryIconTone::Normal, 18.0, modifier),
+        content
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
     let row = container(content)
         .padding([8, 12])
         .width(Length::Fill)

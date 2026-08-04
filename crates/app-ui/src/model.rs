@@ -5,8 +5,8 @@ use std::time::Duration;
 use desktop_linux::{
     DesktopActivationEvent, DesktopClipboardContent, FileClipboardOperation,
     OpenWithApplicationList, StorageDeviceId, StorageDeviceSnapshot, TerminalEmulator,
-    WaylandDndFileDrop, WaylandDndWindowHandle, WaylandFileDragSelfTargetEvent,
-    WaylandFileDragSourceEvent,
+    WaylandDndFileDrop, WaylandDndWindowHandle, WaylandFileDragSourceEvent,
+    WaylandFileDropTargetEvent, WaylandFileDropTargetSessionId,
 };
 use file_core::FileOperationVerification;
 use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
@@ -51,7 +51,7 @@ pub(crate) use browser_panes::{
     BrowserViewMode, ColumnBrowserViewport, DirectoryExpansionLoadContext, DirectoryLoadFailure,
     DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
     ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridExpansionSessionId,
-    IconGridViewport, SplitAxis, SplitRegion,
+    IconGridViewport, ListExpansionFollowSessionId, SplitAxis, SplitRegion,
 };
 mod trash;
 pub(crate) use trash::{TrashRefreshCompletionDecision, TrashRefreshState};
@@ -64,8 +64,8 @@ mod icon_grid_expansion;
 mod icon_grid_expansion_tests;
 pub(crate) use icon_grid_expansion::{
     IconGridAnchorReconciliation, IconGridChildSwitch, IconGridExpandedDirectory,
-    IconGridExpansionAnchor, IconGridExpansionContext, IconGridExpansionMigration,
-    IconGridExpansionState, IconGridRemovedPathReconciliation,
+    IconGridExpansionAnchor, IconGridExpansionContext, IconGridExpansionFollowAdvance,
+    IconGridExpansionMigration, IconGridExpansionState, IconGridRemovedPathReconciliation,
 };
 mod list_view_preferences;
 pub(crate) use list_view_preferences::{
@@ -77,6 +77,8 @@ pub(crate) use list_directory_summary::{
     ListDirectorySizeDisplayMode, ListDirectorySummary, ListDirectorySummaryCache,
     ListDirectorySummaryLoadRequest,
 };
+mod file_entry_content_modifier;
+pub(crate) use file_entry_content_modifier::FileEntryContentModifier;
 mod batch_rename;
 pub(crate) use batch_rename::{
     same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode,
@@ -133,14 +135,23 @@ pub(crate) use session::{
     pane_session_from_live, snapshot_from_stored, snapshot_to_stored, BrowserPaneSession,
     BrowserSessionSnapshot, BrowserTabSession,
 };
+mod file_drop;
+pub(crate) use file_drop::{
+    FileDragGestureId, FileDropLayoutRequest, FileDropLayoutState, FileDropOrigin,
+    FileDropSessionIdentity, FileDropSessionPhase, FileDropSessionState, FileDropTarget,
+    FrozenFileDropTarget, InternalFileDragSnapshot, TabDropDestination, TabDropHover,
+    TabFileDropTarget, TabFileDropTargetBounds,
+};
+mod x11_dnd;
+pub(crate) use x11_dnd::X11DndMessage;
 mod drag;
 pub(crate) use drag::{
     BreadcrumbDropTargetBounds, DirectoryFileDragTargetBounds, FileDragBlockedDirectoryBounds,
     FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase, FileDragState,
-    FileDragStationaryAction, FileDragTarget, LastActivationClick, PaneDragPointerPress,
-    PaneDragState, PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
-    SidebarFileDragTargetBounds, TabDragMode, TabDragState, TabSplitTarget,
-    WaylandFileDragEntryTargetBounds, WaylandFileDragHitTestBounds, WaylandFileDragTargetSnapshot,
+    FileDragStationaryAction, FileDropEntryTargetBounds, FileDropHitTestBounds,
+    LastActivationClick, PaneDragPointerPress, PaneDragState, PaneDropTarget,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarFileDragTargetBounds, TabDragMode,
+    TabDragState, TabSplitTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -346,7 +357,7 @@ pub(crate) enum Message {
     ColumnBrowserCursorExited(BrowserPaneId),
     ColumnEntryBoundsMeasured(Vec<ColumnEntryBounds>),
     BreadcrumbDropTargetBoundsMeasured(u64, Vec<BreadcrumbDropTargetBounds>),
-    NativeDragBounds(u64, FileDragHitTestBounds),
+    FileDropLayoutMeasured(FileDropLayoutRequest, FileDragHitTestBounds),
     PaneCursorEntered(BrowserPaneId),
     PaneCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
@@ -369,6 +380,7 @@ pub(crate) enum Message {
     DestructiveActionCanceled,
     AuxiliaryWindowCloseRequested(window::Id),
     AuxiliaryWindowResized(window::Id, f32, f32),
+    X11Dnd(X11DndMessage),
     WindowMinimizeRequested(window::Id),
     WindowMaximizeToggled(window::Id),
     WindowMaximizedObserved(window::Id, WindowFrameState),
@@ -495,6 +507,10 @@ pub(crate) enum Message {
     TabCloseRequested(BrowserPaneId, usize),
     TabDragEntered(BrowserPaneId, usize),
     TabDragFinished,
+    TabFileDropEntered(FileDragGestureId, TabFileDropTarget),
+    TabFileDropExited(FileDragGestureId, TabFileDropTarget),
+    TabFileDropReleased(FileDragGestureId, TabFileDropTarget),
+    TabFileDropHoverElapsed(TabDropHover),
     PaneBack(BrowserPaneId),
     PaneForward(BrowserPaneId),
     PaneUp(BrowserPaneId),
@@ -529,9 +545,10 @@ pub(crate) enum Message {
     DesktopActivationReceived(DesktopActivationEvent),
     DesktopActivationRuntimeFailed(String),
     WaylandDndWindowHandleLoaded(Result<Option<WaylandDndWindowHandle>, String>),
-    WaylandFilesDropped(Result<WaylandDndFileDrop, String>),
+    WaylandFilesDropped(WaylandDndFileDrop),
+    WaylandFileDropFailed(WaylandFileDropTargetSessionId, String),
     WaylandFileDragSourceEvent(WaylandFileDragSourceEvent),
-    WaylandFileDragSelfTargetEvent(WaylandFileDragSelfTargetEvent),
+    WaylandFileDropTargetEvent(WaylandFileDropTargetEvent),
     WaylandDndRuntimeFailed(String),
     FileDropOperationSelected(FileClipboardOperation),
     FileDropCancelled,

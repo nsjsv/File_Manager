@@ -63,6 +63,7 @@ fn loaded_expanded_directory() -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 1.0,
         load_generation: 0,
+        load_context: None,
         load_cancel: None,
     }
 }
@@ -349,6 +350,7 @@ fn cross_directory_move_invalidates_source_and_target_tab_caches() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 1,
+            load_context: None,
             load_cancel: Some(source_load_cancellation.clone()),
         },
     );
@@ -366,6 +368,7 @@ fn cross_directory_move_invalidates_source_and_target_tab_caches() {
                 is_collapsing: false,
                 animation_progress: 1.0,
                 load_generation: 1,
+                load_context: None,
                 load_cancel: Some(target_load_cancellation.clone()),
             },
         );

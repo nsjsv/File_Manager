@@ -200,7 +200,7 @@ impl FileBrowser {
 
         self.clear_preview();
         self.operation_queue.close_panel();
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.selection_marquee = None;
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;

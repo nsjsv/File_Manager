@@ -17,7 +17,8 @@ use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::file_entry_view::{
-    entry_thumbnail_or_icon, themed_icon, FileEntryIconDensity, FileEntryVisualState,
+    entry_text_input_style, entry_thumbnail_or_icon, themed_icon, FileEntryIconDensity,
+    FileEntryVisualState,
 };
 use crate::icons::IconSymbol;
 use crate::input_blocking_space::input_blocking_space;
@@ -363,6 +364,7 @@ fn column_entry_row<'a>(
         &entry.path,
         active_child == Some(entry.path.as_path()),
     );
+    let modifier = browser.file_entry_content_modifier(&entry.path);
     let icon_tone = visual_state.icon_tone();
 
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
@@ -373,13 +375,16 @@ fn column_entry_row<'a>(
         .id(rename_input_id())
         .on_input(Message::RenameInputChanged)
         .on_submit(Message::RenameSelected)
+        .style(entry_text_input_style(modifier))
         .width(Length::Fill)
         .into()
     } else {
-        measured_middle_ellipsized_text(
+        container(measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),
             COLUMN_ENTRY_TEXT_SIZE,
-        )
+        ))
+        .style(visual_state.content_style(modifier))
+        .into()
     };
 
     let trailing: Element<'static, Message> =
@@ -486,12 +491,12 @@ pub(crate) fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<Path
         return vec![pane.current_dir.clone()];
     }
 
-    if let Some(drag) = pane.file_drag {
-        if !drag.column_directories_snapshot.is_empty() {
-            return drag.column_directories_snapshot.clone();
-        }
+    if let Some(directories) = pane
+        .file_drag
+        .and_then(|drag| drag.source_column_directories(pane.id, pane.active_tab_id))
+    {
+        return directories.to_vec();
     }
-
     let mut directories = vec![pane.current_dir.clone()];
     if let Some(open_directory) = pane.deepest_open_column_directory {
         append_column_directory_chain(
@@ -585,6 +590,7 @@ mod tests {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         }
     }

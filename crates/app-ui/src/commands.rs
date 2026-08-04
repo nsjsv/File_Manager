@@ -87,6 +87,8 @@ pub(crate) use startup_paths::{
 };
 mod wayland_dnd;
 pub(crate) use wayland_dnd::wayland_dnd_window_handle_command;
+mod x11_dnd;
+pub(crate) use x11_dnd::x11_dnd_window_handle_command;
 
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const THUMBNAIL_REFRESH_DELAY: Duration = Duration::from_millis(400);

@@ -86,6 +86,7 @@ impl FileBrowser {
         }
         expanded.load_generation = expanded.load_generation.wrapping_add(1);
         let cancellation = CancellationToken::new();
+        expanded.load_context = Some(context.clone());
         expanded.load_cancel = Some(cancellation.clone());
         (
             ExpandedDirectoryLoadRequest {
@@ -102,6 +103,7 @@ impl FileBrowser {
             cancel.cancel();
         }
         expanded.load_generation = expanded.load_generation.wrapping_add(1);
+        expanded.load_context = None;
     }
 
     pub(super) fn accept_directory_scan_batch(
@@ -141,7 +143,10 @@ impl FileBrowser {
         self.directory_loading_placeholder_entries.clear();
         self.sync_active_tab_state();
         self.resort_size_sorted_list_panes();
-        self.schedule_thumbnail_refresh()
+        Task::batch([
+            self.schedule_thumbnail_refresh(),
+            self.remeasure_active_file_drop_layout(),
+        ])
     }
 
     pub(super) fn accept_directory_scan(
@@ -214,10 +219,12 @@ impl FileBrowser {
             self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
             self.request_browser_session_save(),
             self.reveal_address_bar_current_segment(request.pane_id),
+            self.remeasure_active_file_drop_layout(),
         ])
     }
 
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
+        self.cancel_expansion_follow_plans();
         let cancel_address_editing = self.cancel_address_editing();
         let placeholder_entries = self.capture_directory_loading_placeholder_entries();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
@@ -251,6 +258,7 @@ impl FileBrowser {
     }
 
     pub(super) fn open_trash_view(&mut self, mode: NavigationMode) -> Task<Message> {
+        self.cancel_expansion_follow_plans();
         let cancel_address_editing = self.cancel_address_editing();
         let pane_id = self.active_pane_id();
         let cached_entries = self
@@ -301,6 +309,14 @@ impl FileBrowser {
             self.invalidate_trash_snapshot_refresh();
         }
         self.reload_current_preserving_list_directory_summaries()
+    }
+
+    pub(in crate::app) fn reload_current_for_file_drop(&mut self) -> Task<Message> {
+        self.invalidate_list_directory_summaries_for_pane(self.active_pane_id());
+        if self.is_trash_view {
+            self.invalidate_trash_snapshot_refresh();
+        }
+        self.schedule_current_directory_reload_preserving_list_directory_summaries()
     }
 
     pub(super) fn reload_current_preserving_list_directory_summaries(&mut self) -> Task<Message> {
@@ -468,16 +484,14 @@ impl FileBrowser {
         self.invalidate_list_directory_summary_subtree_and_ancestor_chain(&path);
 
         let pane_id = self.active_pane_id();
+        let load_context = self.expanded_directory_load_context(pane_id, &path);
         if let Some(expanded) = self.expanded_directories.get_mut(&path) {
             expanded.status = ExpandedDirectoryStatus::Loading;
             expanded.is_expanded = true;
             expanded.is_collapsing = false;
             expanded.animation_progress = 1.0;
-            let (request, cancellation) = Self::next_expanded_directory_load_request(
-                DirectoryExpansionLoadContext::BrowserTree { pane_id },
-                path,
-                expanded,
-            );
+            let (request, cancellation) =
+                Self::next_expanded_directory_load_request(load_context, path, expanded);
             commands.push(load_expanded_directory_command(
                 request,
                 self.options.clone(),
@@ -567,7 +581,7 @@ impl FileBrowser {
         self.selection_anchor = None;
         self.drag_selection_anchor = None;
         self.column_resize_drag = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.hovered_entry = None;
@@ -585,7 +599,7 @@ impl FileBrowser {
     pub(super) fn clear_transient_interaction_state(&mut self) {
         self.drag_selection_anchor = None;
         self.column_resize_drag = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.hovered_entry = None;
@@ -618,12 +632,10 @@ impl FileBrowser {
         paths
             .into_iter()
             .filter_map(|path| {
+                let load_context = self.expanded_directory_load_context(pane_id, &path);
                 let expanded = self.expanded_directories.get_mut(&path)?;
-                let (request, cancellation) = Self::next_expanded_directory_load_request(
-                    DirectoryExpansionLoadContext::BrowserTree { pane_id },
-                    path,
-                    expanded,
-                );
+                let (request, cancellation) =
+                    Self::next_expanded_directory_load_request(load_context, path, expanded);
                 Some(load_expanded_directory_command(
                     request,
                     self.options.clone(),

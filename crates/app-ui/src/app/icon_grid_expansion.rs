@@ -1,3 +1,5 @@
+#[path = "icon_grid_expansion_follow.rs"]
+mod follow;
 #[cfg(test)]
 #[path = "icon_grid_sibling_switch_tests.rs"]
 mod sibling_switch_tests;
@@ -71,6 +73,7 @@ impl FileBrowser {
         if !self.icon_grid_anchor_is_valid(pane_id, &anchor) {
             return Task::none();
         }
+        self.cancel_expansion_follow_plans();
 
         let rename_command = self.commit_rename_if_active();
         let expansion_command = self.toggle_valid_icon_grid_directory(anchor);
@@ -200,6 +203,9 @@ impl FileBrowser {
             .is_some_and(|state| state.insert_directory(anchor, expanded));
         if !inserted {
             cancellation.cancel();
+            if let Some(state) = self.icon_grid_expansion.as_mut() {
+                state.cancel_follow_plan();
+            }
             return Task::none();
         }
         load_expanded_directory_command(request, self.options.clone(), cancellation)
@@ -255,6 +261,7 @@ impl FileBrowser {
         if self.pane_drag.is_some() || self.ctrl_shift_pane_drag_shortcut_is_pressed() {
             return Task::none();
         }
+        self.cancel_expansion_follow_plans();
         self.start_icon_grid_panel_selection_marquee(directory)
     }
 
@@ -262,6 +269,7 @@ impl FileBrowser {
         if self.view_mode != BrowserViewMode::Icons {
             return Task::none();
         }
+        self.cancel_expansion_follow_plans();
         let parent_directory = path
             .parent()
             .map(Path::to_path_buf)
@@ -303,7 +311,7 @@ impl FileBrowser {
         self.select_path(root_path);
         self.selection_marquee = None;
         self.drag_selection_anchor = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         Some(if root_closed {
             self.finish_closed_icon_grid_root()
         } else {
@@ -321,6 +329,7 @@ impl FileBrowser {
     }
 
     pub(super) fn clear_icon_grid_expansion_for_context_change(&mut self) {
+        self.cancel_expansion_follow_plans();
         let had_expansion = self.icon_grid_expansion.is_some();
         self.clear_icon_grid_expansion();
         if had_expansion {
@@ -354,6 +363,7 @@ impl FileBrowser {
         if advance.entries_became_interactive {
             commands.push(self.schedule_thumbnail_refresh());
         }
+        commands.push(self.advance_icon_grid_expansion_follow());
         if commands.is_empty() {
             Task::none()
         } else {
@@ -393,7 +403,7 @@ impl FileBrowser {
             batch,
             &options,
         );
-        Task::none()
+        self.remeasure_active_file_drop_layout()
     }
 
     pub(super) fn accept_icon_grid_directory(
@@ -416,11 +426,15 @@ impl FileBrowser {
                 };
                 expanded.contents.entries = scan.entries;
                 expanded.contents.status = ExpandedDirectoryStatus::Loaded;
+                expanded.contents.load_context = None;
                 expanded.contents.load_cancel = None;
             }
             Err(DirectoryLoadFailure::DirectoryUnavailable { .. }) => {
                 self.reconcile_icon_grid_removed_paths(std::slice::from_ref(&request.path));
-                return self.schedule_thumbnail_refresh();
+                return Task::batch([
+                    self.schedule_thumbnail_refresh(),
+                    self.remeasure_active_file_drop_layout(),
+                ]);
             }
             Err(DirectoryLoadFailure::ReadFailed { message }) => {
                 let Some(expanded) = self
@@ -432,16 +446,27 @@ impl FileBrowser {
                 };
                 expanded.contents.entries.clear();
                 expanded.contents.status = ExpandedDirectoryStatus::Error;
+                expanded.contents.load_context = None;
                 expanded.contents.load_cancel = None;
+                if let Some(state) = self.icon_grid_expansion.as_mut() {
+                    state.cancel_follow_plan();
+                }
                 self.show_global_error(message);
             }
         }
 
         self.retain_icon_grid_visible_selection();
-        self.schedule_thumbnail_refresh()
+        Task::batch([
+            self.advance_icon_grid_expansion_follow(),
+            self.schedule_thumbnail_refresh(),
+            self.remeasure_active_file_drop_layout(),
+        ])
     }
 
     pub(super) fn reconcile_icon_grid_removed_paths(&mut self, removed_paths: &[PathBuf]) {
+        if let Some(state) = self.icon_grid_expansion.as_mut() {
+            state.cancel_follow_plan();
+        }
         let reconciliation = self
             .icon_grid_expansion
             .as_mut()
@@ -598,6 +623,7 @@ impl FileBrowser {
                     && state.accepts_directory_load(&request.path)
                     && state.directory(&request.path).is_some_and(|expanded| {
                         expanded.contents.load_generation == request.generation
+                            && expanded.contents.load_context.as_ref() == Some(&request.context)
                     })
             })
     }
@@ -710,6 +736,7 @@ fn loading_icon_grid_directory() -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 0.0,
         load_generation: 0,
+        load_context: None,
         load_cancel: None,
     }
 }

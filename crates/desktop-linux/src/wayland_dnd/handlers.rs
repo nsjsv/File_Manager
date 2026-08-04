@@ -26,10 +26,10 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, QueueHandle};
 
-use super::payload::{negotiated_drop_action, pick_mime};
+use super::payload::{drop_origin_for_mime, negotiated_drop_action, pick_mime};
 use super::{
-    WaylandFileDnd, WaylandFileDragSelfTargetEvent, WaylandFileDragSourceEvent,
-    INTERNAL_FILE_DRAG_MIME,
+    ActiveDropTarget, WaylandFileDnd, WaylandFileDragSourceEvent, WaylandFileDropTargetEvent,
+    WaylandFileDropTargetSessionId,
 };
 use crate::wayland_dnd::WaylandDndDropPosition;
 
@@ -133,52 +133,47 @@ impl DataDeviceHandler for WaylandFileDnd {
         let Some(offer) = data_device.data().drag_offer() else {
             return;
         };
-        self.drop_is_over_surface = surface == &self.surface;
-        let position = WaylandDndDropPosition { x, y };
-        self.drop_position = self.drop_is_over_surface.then_some(position);
-        if let Some(previous_session_id) = self.self_target_session_id.take() {
-            self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Left {
-                session_id: previous_session_id,
-            });
-        }
-        let offer_is_from_current_process = offer.with_mime_types(|mime_types| {
-            mime_types
-                .iter()
-                .any(|mime| mime == INTERNAL_FILE_DRAG_MIME)
-        });
-        if self.drop_is_over_surface && offer_is_from_current_process {
-            if let Some(session_id) = self.active_file_drag_session_id() {
-                self.self_target_session_id = Some(session_id);
-                self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Entered {
-                    session_id,
-                    position,
-                });
-            }
-        }
-        if !self.drop_is_over_surface {
+        self.finish_active_drop_target_as_left();
+        if surface != &self.surface {
             offer.accept_mime_type(offer.serial, None);
             offer.set_actions(DndAction::empty(), DndAction::empty());
             return;
         }
-
-        if let Some(mime_type) = offer.with_mime_types(pick_mime) {
-            let action = negotiated_drop_action(&mime_type);
-            offer.accept_mime_type(offer.serial, Some(mime_type));
-            offer.set_actions(action, action);
-        } else {
+        let Some(mime_type) = offer.with_mime_types(pick_mime) else {
             offer.accept_mime_type(offer.serial, None);
             offer.set_actions(DndAction::empty(), DndAction::empty());
-        }
+            return;
+        };
+        let target_session_id = WaylandFileDropTargetSessionId::unique();
+        let origin = match drop_origin_for_mime(&mime_type, self.active_file_drag_session_id()) {
+            Ok(origin) => origin,
+            Err(error) => {
+                self.emit_file_drop_failed(target_session_id, error.to_string());
+                offer.accept_mime_type(offer.serial, None);
+                offer.set_actions(DndAction::empty(), DndAction::empty());
+                return;
+            }
+        };
+        let position = WaylandDndDropPosition { x, y };
+        self.active_drop_target = Some(ActiveDropTarget {
+            target_session_id,
+            origin,
+            mime_type: mime_type.clone(),
+            position,
+        });
+        self.emit_file_drop_target_event(WaylandFileDropTargetEvent::Entered {
+            target_session_id,
+            origin,
+            position,
+        });
+
+        let action = negotiated_drop_action(&mime_type);
+        offer.accept_mime_type(offer.serial, Some(mime_type));
+        offer.set_actions(action, action);
     }
 
     fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
-        self.drop_is_over_surface = false;
-        self.drop_position = None;
-        if let Some(session_id) = self.self_target_session_id.take() {
-            self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Left {
-                session_id,
-            });
-        }
+        self.finish_active_drop_target_as_left();
     }
 
     fn motion(
@@ -189,16 +184,16 @@ impl DataDeviceHandler for WaylandFileDnd {
         x: f64,
         y: f64,
     ) {
-        if self.drop_is_over_surface {
-            let position = WaylandDndDropPosition { x, y };
-            self.drop_position = Some(position);
-            if let Some(session_id) = self.self_target_session_id {
-                self.emit_file_drag_self_target_event(WaylandFileDragSelfTargetEvent::Moved {
-                    session_id,
-                    position,
-                });
-            }
-        }
+        let Some(target) = &mut self.active_drop_target else {
+            return;
+        };
+        let position = WaylandDndDropPosition { x, y };
+        target.position = position;
+        let target_session_id = target.target_session_id;
+        self.emit_file_drop_target_event(WaylandFileDropTargetEvent::Moved {
+            target_session_id,
+            position,
+        });
     }
 
     fn selection(
@@ -221,21 +216,19 @@ impl DataDeviceHandler for WaylandFileDnd {
         let Some(offer) = data_device.data().drag_offer() else {
             return;
         };
-        if !self.drop_is_over_surface {
-            offer.finish();
-            offer.destroy();
-            return;
-        }
-        let Some(mime_type) = offer.with_mime_types(pick_mime) else {
+        let Some(target) = self.active_drop_target.take() else {
             offer.finish();
             offer.destroy();
             return;
         };
-
-        let action = negotiated_drop_action(&mime_type);
-        offer.accept_mime_type(offer.serial, Some(mime_type.clone()));
+        self.emit_file_drop_target_event(WaylandFileDropTargetEvent::Dropped {
+            target_session_id: target.target_session_id,
+            position: Some(target.position),
+        });
+        let action = negotiated_drop_action(&target.mime_type);
+        offer.accept_mime_type(offer.serial, Some(target.mime_type.clone()));
         offer.set_actions(action, action);
-        self.register_drop_read(offer, mime_type);
+        self.register_drop_read(offer, target);
     }
 }
 
@@ -335,16 +328,9 @@ impl DataSourceHandler for WaylandFileDnd {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        source: &WlDataSource,
-        action: DndAction,
+        _source: &WlDataSource,
+        _action: DndAction,
     ) {
-        if let Some(drag_session) = self
-            .drag_sources
-            .iter_mut()
-            .find(|drag_session| drag_session.source.inner() == source)
-        {
-            drag_session.selected_action = action;
-        }
     }
 }
 

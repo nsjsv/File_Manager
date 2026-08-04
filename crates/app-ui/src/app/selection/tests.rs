@@ -9,8 +9,8 @@ use crate::{
     config,
     model::{
         AddressEditingSession, AddressEditingSessionId, BrowserPaneId, ColumnEntryBounds,
-        ContextMenuState, FileDragTarget, SelectionMarquee, SelectionMarqueePhase,
-        SelectionMarqueeSource,
+        ContextMenuState, FileDropTarget as FileDragTarget, SelectionMarquee,
+        SelectionMarqueePhase, SelectionMarqueeSource,
     },
 };
 
@@ -467,4 +467,35 @@ fn right_clicking_directory_selects_menu_target_without_focusing_it() {
     };
     assert_eq!(context_menu.target.as_ref(), Some(&directory));
     assert!(context_menu.target_is_directory);
+}
+
+#[test]
+fn iced_file_drag_keeps_sidebar_trash_non_drop_target() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let source = PathBuf::from("/workspace/report.txt");
+    let destination = PathBuf::from("/workspace/destination");
+    browser.entries = vec![test_entry(source.clone(), FileKind::File)];
+    browser.selected_paths.insert(source.clone());
+    browser.cursor_position = Point::new(0.0, 0.0);
+    browser.start_file_drag(
+        source,
+        crate::model::FileDragStationaryAction::SelectionOnly,
+        Vec::new(),
+    );
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+
+    drop(browser.handle_sidebar_hovered(destination.clone()));
+    assert!(matches!(
+        browser
+            .file_drop_session
+            .as_ref()
+            .and_then(|session| session.hovered_target.as_ref()),
+        Some(FileDragTarget::Directory(directory)) if directory == &destination
+    ));
+
+    drop(browser.handle_sidebar_hovered(crate::model::trash_location_path()));
+    assert!(browser
+        .file_drop_session
+        .as_ref()
+        .is_some_and(|session| session.hovered_target.is_none()));
 }

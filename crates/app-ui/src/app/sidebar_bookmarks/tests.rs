@@ -5,7 +5,7 @@ use iced::Point;
 
 use super::*;
 use crate::config;
-use crate::model::{FileDragNativeDndState, FileDragState, FileDragTarget, SidebarLocation};
+use crate::model::{FileDropTarget as FileDragTarget, SidebarLocation};
 
 fn bookmark(path: &str) -> SidebarLocation {
     SidebarLocation {
@@ -39,16 +39,15 @@ fn browser_with_bookmarks(bookmarks: Vec<SidebarLocation>) -> FileBrowser {
 
 fn start_directory_file_drag(browser: &mut FileBrowser, path: &Path) {
     browser.entries = vec![directory_entry(path)];
-    browser.file_drag = Some(FileDragState {
-        sources: vec![path.to_path_buf()],
-        pressed_path: path.to_path_buf(),
-        stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
-        target: None,
-        phase: FileDragPhase::Dragging,
-        native_dnd: FileDragNativeDndState::NotRequested,
-        wayland_target: None,
-        column_directories_snapshot: Vec::new(),
-    });
+    browser.selected_paths.clear();
+    browser.selected_paths.insert(path.to_path_buf());
+    browser.cursor_position = Point::new(0.0, 0.0);
+    browser.start_file_drag(
+        path.to_path_buf(),
+        crate::model::FileDragStationaryAction::SelectionOnly,
+        Vec::new(),
+    );
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
 }
 
 #[test]
@@ -113,9 +112,9 @@ fn dropped_directory_inserts_bookmark_at_slot_index() {
     let source = PathBuf::from("/home/user/projects");
     browser.entries = vec![directory_entry(&source)];
 
-    drop(browser.add_dragged_sidebar_bookmark(
+    drop(browser.insert_sidebar_bookmark_from_drag(
         SidebarBookmarkDropSlot::Insert { index: 1 },
-        vec![source.clone()],
+        source.clone(),
     ));
 
     let favorites = browser.sidebar_favorite_locations();
@@ -130,10 +129,12 @@ fn duplicate_bookmark_is_not_inserted_again() {
     let mut browser = browser_with_bookmarks(vec![bookmark("/home/user/alpha")]);
     browser.entries = vec![directory_entry(&existing)];
 
-    drop(browser.add_dragged_sidebar_bookmark(
-        SidebarBookmarkDropSlot::Insert { index: 0 },
-        vec![existing],
-    ));
+    drop(
+        browser.insert_sidebar_bookmark_from_drag(
+            SidebarBookmarkDropSlot::Insert { index: 0 },
+            existing,
+        ),
+    );
 
     assert_eq!(browser.sidebar_favorite_locations().len(), 1);
 }
@@ -154,7 +155,10 @@ fn sidebar_pointer_middle_sets_directory_drag_target() {
 
     assert_eq!(browser.sidebar_bookmark_drop_slot, None);
     assert!(matches!(
-        browser.file_drag.as_ref().and_then(|drag| drag.target.as_ref()),
+        browser
+            .file_drop_session
+            .as_ref()
+            .and_then(|session| session.hovered_target.as_ref()),
         Some(FileDragTarget::Directory(path)) if path == Path::new("/home/user/alpha")
     ));
 }
@@ -176,7 +180,10 @@ fn sidebar_pointer_edge_sets_bookmark_insert_target() {
     let slot = SidebarBookmarkDropSlot::Insert { index: 0 };
     assert_eq!(browser.sidebar_bookmark_drop_slot, Some(slot));
     assert!(matches!(
-        browser.file_drag.as_ref().and_then(|drag| drag.target.as_ref()),
+        browser
+            .file_drop_session
+            .as_ref()
+            .and_then(|session| session.hovered_target.as_ref()),
         Some(FileDragTarget::SidebarBookmarkSlot(target)) if *target == slot
     ));
 }
@@ -201,9 +208,9 @@ fn sidebar_pointer_gap_clears_previous_drag_target() {
 
     assert_eq!(browser.sidebar_bookmark_drop_slot, None);
     assert!(browser
-        .file_drag
+        .file_drop_session
         .as_ref()
-        .is_some_and(|drag| drag.target.is_none()));
+        .is_some_and(|session| session.hovered_target.is_none()));
 }
 
 #[test]
@@ -220,9 +227,9 @@ fn bookmark_enter_does_not_replace_insert_target_during_file_drag() {
 
     assert!(matches!(
         browser
-            .file_drag
+            .file_drop_session
             .as_ref()
-            .and_then(|drag| drag.target.as_ref()),
+            .and_then(|session| session.hovered_target.as_ref()),
         Some(FileDragTarget::SidebarBookmarkSlot(
             SidebarBookmarkDropSlot::Insert { index: 0 }
         ))

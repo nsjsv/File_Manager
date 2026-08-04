@@ -74,7 +74,7 @@ impl FileBrowser {
         self.clear_preview();
         self.operation_queue.close_panel();
         self.open_with = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.selection_marquee = None;
         self.drag_selection_anchor = None;
         self.sidebar_bookmark_drag = None;
@@ -163,7 +163,7 @@ impl FileBrowser {
             drop_target: None,
         });
         self.list_column_resize_drag = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.sidebar_bookmark_drag = None;
@@ -312,6 +312,7 @@ mod tests {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         }
     }

@@ -7,11 +7,15 @@ use iced::{Rectangle, Task, Vector};
 
 use crate::model::{
     BreadcrumbDropTargetBounds, BrowserPaneId, ColumnEntryBounds, DirectoryFileDragTargetBounds,
-    FileDragBlockedDirectoryBounds, FileDragHitTestBounds, Message, SidebarFileDragTargetBounds,
+    FileDragBlockedDirectoryBounds, FileDragHitTestBounds, FileDropLayoutRequest, Message,
+    SidebarFileDragTargetBounds, TabFileDropTarget, TabFileDropTargetBounds,
 };
 
 #[derive(Debug, Clone)]
 pub(crate) enum FileDragHitTestMarker {
+    Tab {
+        target: TabFileDropTarget,
+    },
     ColumnEntry {
         pane_id: BrowserPaneId,
         path: PathBuf,
@@ -40,7 +44,7 @@ pub(crate) enum FileDragHitTestMarker {
 pub(crate) enum FileDragHitTestBoundsRequest {
     SelectionMarquee,
     Breadcrumbs(u64),
-    NativeFileDrag(u64),
+    FileDropLayout(FileDropLayoutRequest),
 }
 
 pub(crate) fn file_drag_hit_test_bounds_command(
@@ -96,6 +100,7 @@ struct FileDragHitTestBoundsOperation {
     request: FileDragHitTestBoundsRequest,
     coordinates: HitTestCoordinateContext,
     pending_scrollable_coordinates: Option<HitTestCoordinateContext>,
+    tabs: Vec<TabFileDropTargetBounds>,
     entries: Vec<ColumnEntryBounds>,
     breadcrumb_viewports: Vec<(BrowserPaneId, Rectangle)>,
     breadcrumb_directories: Vec<MeasuredBreadcrumbDirectory>,
@@ -111,6 +116,7 @@ impl FileDragHitTestBoundsOperation {
             request,
             coordinates: HitTestCoordinateContext::default(),
             pending_scrollable_coordinates: None,
+            tabs: Vec::new(),
             entries: Vec::new(),
             breadcrumb_viewports: Vec::new(),
             breadcrumb_directories: Vec::new(),
@@ -175,6 +181,12 @@ impl widget::Operation<Message> for FileDragHitTestBoundsOperation {
         };
 
         match marker {
+            FileDragHitTestMarker::Tab { target } => {
+                self.tabs.push(TabFileDropTargetBounds {
+                    target: target.clone(),
+                    bounds,
+                });
+            }
             FileDragHitTestMarker::ColumnEntry { pane_id, path } => {
                 self.entries.push(ColumnEntryBounds {
                     pane_id: *pane_id,
@@ -231,10 +243,11 @@ impl widget::Operation<Message> for FileDragHitTestBoundsOperation {
             FileDragHitTestBoundsRequest::Breadcrumbs(generation) => {
                 Message::BreadcrumbDropTargetBoundsMeasured(generation, self.breadcrumb_targets())
             }
-            FileDragHitTestBoundsRequest::NativeFileDrag(measurement_id) => {
-                Message::NativeDragBounds(
-                    measurement_id,
+            FileDragHitTestBoundsRequest::FileDropLayout(request) => {
+                Message::FileDropLayoutMeasured(
+                    request,
                     FileDragHitTestBounds {
+                        tabs: self.tabs.clone(),
                         entries: self.entries.clone(),
                         breadcrumbs: self.breadcrumb_targets(),
                         directory_targets: self.directory_targets.clone(),

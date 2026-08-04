@@ -25,7 +25,7 @@ use crate::measured_middle_ellipsized_text::{
 };
 use crate::model::{
     allocate_breadcrumb_widths, breadcrumb_segments, BreadcrumbSegment, BreadcrumbSegmentKind,
-    BrowserPaneId, FileDragTarget, Message, ScrollbarRegion, ScrollbarVisibility,
+    BrowserPaneId, FileDropTarget, Message, ScrollbarRegion, ScrollbarVisibility,
     TRASH_LOCATION_LABEL,
 };
 use crate::typography::readable_text;
@@ -131,14 +131,17 @@ fn breadcrumb_layer<'a>(
 ) -> Element<'a, Message> {
     let pane_id = pane.id;
     let segments = breadcrumb_segments(pane.address_bar_directory(), &browser.home_dir);
-    let active_drop_target = browser
-        .file_drag
-        .as_ref()
-        .filter(|file_drag| file_drag.is_dragging())
-        .and_then(|file_drag| match file_drag.target.as_ref() {
-            Some(FileDragTarget::Directory(directory)) => Some(directory.clone()),
-            Some(FileDragTarget::SidebarBookmarkSlot(_)) | None => None,
-        });
+    let active_drop_target = browser.file_drop_session.as_ref().and_then(|session| {
+        match session.hovered_target.as_ref() {
+            Some(FileDropTarget::Directory(directory)) => Some(directory.clone()),
+            Some(
+                FileDropTarget::Trash
+                | FileDropTarget::SidebarBookmarkSlot(_)
+                | FileDropTarget::Tab(_),
+            )
+            | None => None,
+        }
+    });
     let region = ScrollbarRegion::AddressBar(pane_id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&region);
 

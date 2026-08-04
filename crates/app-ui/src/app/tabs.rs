@@ -15,6 +15,8 @@ pub(crate) use animation::{TabAnimationState, TabBarReveal};
 use animation::{TAB_REORDER_HORIZONTAL_PADDING, TAB_REORDER_MIN_SLOT_WIDTH, TAB_REORDER_SPACING};
 mod folder_middle_click_split;
 #[cfg(test)]
+mod view_mode_follow_tests;
+#[cfg(test)]
 mod view_mode_tests;
 
 pub(crate) struct TabDragPreview<'a> {
@@ -146,19 +148,52 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn select_tab(&mut self, tab_id: usize) -> Task<Message> {
-        if self.tab_is_closing(tab_id) {
-            return Task::none();
+    pub(in crate::app) fn finish_tab_drag_from_captured_release(&mut self) -> Task<Message> {
+        if self.file_drop_session.is_some() {
+            Task::none()
+        } else {
+            self.finish_pointer_drag_interactions()
         }
+    }
 
+    pub(super) fn select_tab(&mut self, tab_id: usize) -> Task<Message> {
         if tab_id == self.active_tab_id {
             self.sync_active_tab_state();
             return Task::none();
         }
-
-        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id).cloned() else {
+        let Some(cancel_address_editing) = self.apply_tab_selection(tab_id) else {
             return Task::none();
         };
+        Task::batch([
+            cancel_address_editing,
+            self.reload_current(),
+            self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(self.active_pane_id()),
+        ])
+    }
+
+    pub(in crate::app) fn select_tab_for_file_drop(
+        &mut self,
+        pane_id: BrowserPaneId,
+        tab_id: usize,
+    ) -> Task<Message> {
+        self.activate_pane(pane_id);
+        let Some(cancel_address_editing) = self.apply_tab_selection(tab_id) else {
+            return Task::none();
+        };
+        Task::batch([
+            cancel_address_editing,
+            self.reload_current_for_file_drop(),
+            self.request_browser_session_save(),
+            self.reveal_address_bar_current_segment(self.active_pane_id()),
+        ])
+    }
+
+    fn apply_tab_selection(&mut self, tab_id: usize) -> Option<Task<Message>> {
+        if self.tab_is_closing(tab_id) {
+            return None;
+        }
+        let tab = self.tabs.iter().find(|tab| tab.id == tab_id).cloned()?;
 
         self.clear_icon_grid_expansion_for_context_change();
         let cancel_address_editing = self.cancel_address_editing();
@@ -177,12 +212,7 @@ impl FileBrowser {
         self.back_stack = tab.back_stack;
         self.forward_stack = tab.forward_stack;
         self.current_dir = tab.directory;
-        Task::batch([
-            cancel_address_editing,
-            self.reload_current(),
-            self.request_browser_session_save(),
-            self.reveal_address_bar_current_segment(self.active_pane_id()),
-        ])
+        Some(cancel_address_editing)
     }
 
     pub(super) fn close_tab(&mut self, tab_id: usize) -> Task<Message> {
@@ -194,6 +224,7 @@ impl FileBrowser {
             return Task::none();
         };
         let was_active = tab_id == self.active_tab_id;
+        self.invalidate_file_drop_for_tab_close();
 
         if self
             .tab_drag
@@ -576,6 +607,10 @@ impl FileBrowser {
                 .map(|tab| tab.id)
                 .collect()
         }
+    }
+
+    pub(in crate::app) fn tab_is_closing_for_file_drop(&self, tab_id: usize) -> bool {
+        self.tab_is_closing(tab_id)
     }
 
     fn tab_is_closing(&self, tab_id: usize) -> bool {

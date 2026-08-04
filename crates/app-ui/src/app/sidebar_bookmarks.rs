@@ -10,7 +10,7 @@ use crate::animation::{
     elapsed_fraction as sidebar_bookmark_animation_progress,
 };
 use crate::model::{
-    ContextMenuState, FileDragPhase, FileDragTarget, Message, NavigationMode,
+    ContextMenuState, FileDragPhase, FileDropTarget, Message, NavigationMode,
     SidebarBookmarkContextMenuState, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
     SidebarLocation, SidebarLocationKind,
 };
@@ -87,9 +87,7 @@ impl FileBrowser {
                 self.hovered_sidebar = None;
                 self.cursor_paste_directory = None;
                 self.sidebar_bookmark_drop_slot = Some(slot);
-                if let Some(file_drag) = &mut self.file_drag {
-                    file_drag.target = Some(FileDragTarget::SidebarBookmarkSlot(slot));
-                }
+                self.set_file_drop_target(Some(FileDropTarget::SidebarBookmarkSlot(slot)));
             }
             SidebarBookmarkPointerTarget::Directory(path) => {
                 self.sidebar_bookmark_drop_slot = None;
@@ -108,21 +106,6 @@ impl FileBrowser {
         self.sidebar_bookmark_drop_slot = None;
         self.clear_sidebar_bookmark_drop_target();
         Task::none()
-    }
-
-    pub(super) fn add_dragged_sidebar_bookmark(
-        &mut self,
-        slot: SidebarBookmarkDropSlot,
-        sources: Vec<PathBuf>,
-    ) -> Task<Message> {
-        self.sidebar_bookmark_drop_slot = None;
-        let Some(source) = sources.first().filter(|_| sources.len() == 1).cloned() else {
-            return Task::none();
-        };
-        if self.entry_kind(&source) != Some(FileKind::Directory) {
-            return Task::none();
-        }
-        self.insert_sidebar_bookmark_from_drag(slot, source)
     }
 
     pub(super) fn insert_sidebar_bookmark_from_drag(
@@ -155,7 +138,7 @@ impl FileBrowser {
             return rename_command;
         }
         self.context_menu = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.selection_marquee = None;
         self.sidebar_bookmark_drop_slot = None;
         self.sidebar_bookmark_motion.clear();
@@ -184,7 +167,7 @@ impl FileBrowser {
 
         self.clear_preview();
         self.operation_queue.close_panel();
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.selection_marquee = None;
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
@@ -423,13 +406,14 @@ impl FileBrowser {
     }
 
     fn clear_sidebar_bookmark_drop_target(&mut self) {
-        if let Some(file_drag) = &mut self.file_drag {
-            if matches!(
-                file_drag.target.as_ref(),
-                Some(FileDragTarget::SidebarBookmarkSlot(_))
-            ) {
-                file_drag.target = None;
-            }
+        let is_bookmark_target = self.file_drop_session.as_ref().is_some_and(|session| {
+            matches!(
+                session.hovered_target.as_ref(),
+                Some(FileDropTarget::SidebarBookmarkSlot(_))
+            )
+        });
+        if is_bookmark_target {
+            self.set_file_drop_target(None);
         }
     }
 

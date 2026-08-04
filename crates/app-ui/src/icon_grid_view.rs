@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use file_core::{DirectoryEntry, FileKind};
 use iced::alignment::{Horizontal, Vertical};
@@ -18,7 +19,9 @@ use crate::appearance::{
 use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
-use crate::file_entry_view::{entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryVisualState};
+use crate::file_entry_view::{
+    entry_text_input_style, entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryVisualState,
+};
 use crate::icon_grid_geometry::{
     row_height, tile_visual_height, tile_width, ICON_GRID_CONTENT_PADDING, ICON_GRID_GAP,
     ICON_GRID_ICON_LABEL_SPACING, ICON_GRID_LABEL_HEIGHT, ICON_GRID_LABEL_LINE_HEIGHT_PX,
@@ -30,7 +33,7 @@ use crate::icon_grid_layout::{
 };
 use crate::icons::rotated_chevron_right_view;
 use crate::input_blocking_space::input_blocking_space;
-use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_wrapped_text;
+use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_wrapped_text_with_tooltip;
 use crate::model::{IconGridExpansionAnchor, IconGridViewport, Message, ScrollbarRegion};
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
@@ -45,6 +48,7 @@ const DISCLOSURE_BUTTON_SIZE: f32 = 24.0;
 const DISCLOSURE_ICON_SIZE: f32 = 14.0;
 const PANEL_INDICATOR_SIZE: f32 = 14.0;
 const ICON_GRID_NAME_TOOLTIP_WIDTH: f32 = 320.0;
+const ICON_GRID_NAME_TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IconGridPanelInput {
@@ -307,6 +311,7 @@ fn icon_grid_entry<'a>(
     input: IconGridPanelInput,
 ) -> Element<'a, Message> {
     let visual_state = FileEntryVisualState::from_entry_context(pane, &entry.path, false);
+    let content_modifier = browser.file_entry_content_modifier(&entry.path);
     let icon_tone = visual_state.icon_tone();
     let icon_edge = browser.user_config().icon_grid_size;
     let tile_width = tile_width(icon_edge);
@@ -381,6 +386,7 @@ fn icon_grid_entry<'a>(
             .id(rename_input_id())
             .on_input(Message::RenameInputChanged)
             .on_submit(Message::RenameSelected)
+            .style(entry_text_input_style(content_modifier))
             .padding(4)
             .size(ICON_GRID_LABEL_SIZE)
             .width(Length::Fill),
@@ -390,25 +396,25 @@ fn icon_grid_entry<'a>(
         .into()
     } else {
         let full_name = entry.name().to_string_lossy().into_owned();
-        tooltip(
-            container(measured_middle_ellipsized_wrapped_text(
-                full_name.clone(),
-                ICON_GRID_LABEL_SIZE,
-                ICON_GRID_LABEL_LINE_HEIGHT_PX,
-            ))
-            .width(Length::Fill)
-            .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT)),
-            container(
-                readable_text(full_name)
-                    .size(12)
-                    .wrapping(text::Wrapping::WordOrGlyph)
-                    .width(Length::Fill),
-            )
-            .padding([5, 7])
-            .width(Length::Fixed(ICON_GRID_NAME_TOOLTIP_WIDTH))
-            .style(context_menu_style),
-            tooltip::Position::Bottom,
+        let full_name_tooltip = container(
+            readable_text(full_name.clone())
+                .size(12)
+                .wrapping(text::Wrapping::WordOrGlyph)
+                .width(Length::Fill),
         )
+        .padding([5, 7])
+        .width(Length::Fixed(ICON_GRID_NAME_TOOLTIP_WIDTH))
+        .style(context_menu_style);
+        container(measured_middle_ellipsized_wrapped_text_with_tooltip(
+            full_name,
+            ICON_GRID_LABEL_SIZE,
+            ICON_GRID_LABEL_LINE_HEIGHT_PX,
+            full_name_tooltip,
+            ICON_GRID_NAME_TOOLTIP_DELAY,
+        ))
+        .style(visual_state.content_style(content_modifier))
+        .width(Length::Fill)
+        .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT))
         .into()
     };
 

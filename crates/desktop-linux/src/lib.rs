@@ -11,6 +11,7 @@ pub mod open;
 pub mod open_with;
 pub mod storage_devices;
 pub mod wayland_dnd;
+pub mod x11_dnd;
 
 pub use desktop_notifications::{publish_desktop_notification, DesktopNotificationError};
 pub use display_renderer::{
@@ -59,5 +60,10 @@ pub use wayland_dnd::{
     spawn_wayland_file_dnd, WaylandDndCommandError, WaylandDndController, WaylandDndDropOrigin,
     WaylandDndDropPosition, WaylandDndError, WaylandDndEvent, WaylandDndFileDrop,
     WaylandDndWindowHandle, WaylandFileDragIcon, WaylandFileDragIconError,
-    WaylandFileDragSelfTargetEvent, WaylandFileDragSessionId, WaylandFileDragSourceEvent,
+    WaylandFileDragSessionId, WaylandFileDragSourceEvent, WaylandFileDropTargetEvent,
+    WaylandFileDropTargetSessionId,
+};
+pub use x11_dnd::{
+    spawn_x11_file_dnd, X11DndController, X11DndDropPosition, X11DndEvent, X11DndFileDrop,
+    X11DndWindowHandle, X11FileDropTargetEvent, X11FileDropTargetSessionId,
 };

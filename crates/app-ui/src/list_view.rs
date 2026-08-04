@@ -13,7 +13,8 @@ use crate::appearance::{
 use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::file_entry_view::{
-    entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryIconTone, FileEntryVisualState,
+    entry_text_input_style, entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryIconTone,
+    FileEntryVisualState,
 };
 use crate::formatting::format_system_time;
 use crate::icons::rotated_chevron_right_view;
@@ -400,8 +401,11 @@ fn list_entry_row<'a>(
     selection_run_position: Option<crate::file_entry_presentation::SelectionRunPosition>,
 ) -> Element<'a, Message> {
     let visual_state = FileEntryVisualState::from_entry_context(pane, &entry.path, false);
+    let modifier = browser.file_entry_content_modifier(&entry.path);
     let icon_tone = visual_state.icon_tone();
-    let row_content = list_entry_cells(browser, pane, entry, depth, icon_tone);
+    let row_content = container(list_entry_cells(browser, pane, entry, depth, icon_tone))
+        .width(Length::Fill)
+        .style(visual_state.content_style(modifier));
 
     let row_container = container(row_content)
         .padding(LIST_ROW_PADDING)
@@ -446,7 +450,14 @@ fn list_placeholder_entry_row<'a>(
     row_index: usize,
 ) -> Element<'a, Message> {
     let entry = &placeholder.entry;
-    let row_content = list_placeholder_entry_cells(browser, entry, placeholder.depth);
+    let modifier = browser.file_entry_content_modifier(&entry.path);
+    let row_content = container(list_placeholder_entry_cells(
+        browser,
+        entry,
+        placeholder.depth,
+    ))
+    .width(Length::Fill)
+    .style(FileEntryVisualState::Normal.content_style(modifier));
 
     container(
         container(row_content)
@@ -599,6 +610,7 @@ fn list_name_cell<'a>(
     icon_tone: FileEntryIconTone,
     width: f32,
 ) -> Element<'a, Message> {
+    let modifier = browser.file_entry_content_modifier(&entry.path);
     let indent = Space::new().width(Length::Fixed(depth as f32 * LIST_INDENT_WIDTH));
     let toggle = list_directory_toggle(pane, entry);
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
@@ -609,6 +621,7 @@ fn list_name_cell<'a>(
         .id(rename_input_id())
         .on_input(Message::RenameInputChanged)
         .on_submit(Message::RenameSelected)
+        .style(entry_text_input_style(modifier))
         .width(Length::Fill)
         .into()
     } else {

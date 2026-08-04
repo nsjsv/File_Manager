@@ -25,7 +25,11 @@ impl FileBrowser {
             Err(error) => {
                 self.finish_trash_views_loading();
                 self.trash_refresh.record_error(error);
-                return Task::none();
+                return if self.is_trash_view {
+                    self.remeasure_active_file_drop_layout()
+                } else {
+                    Task::none()
+                };
             }
         };
         let entries = scan.entries.clone();
@@ -43,10 +47,16 @@ impl FileBrowser {
             })
             .map(|pane_id| delayed_thumbnail_refresh_command(pane_id, trash_location_path()))
             .collect::<Vec<_>>();
+        let remeasure_drop_layout = if self.is_trash_view {
+            self.remeasure_active_file_drop_layout()
+        } else {
+            Task::none()
+        };
         Task::batch(
             thumbnail_commands
                 .into_iter()
-                .chain(std::iter::once(self.request_browser_session_save())),
+                .chain(std::iter::once(self.request_browser_session_save()))
+                .chain(std::iter::once(remeasure_drop_layout)),
         )
     }
 

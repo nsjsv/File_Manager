@@ -3,42 +3,37 @@ use std::path::PathBuf;
 use wayland_client::protocol::wl_data_device_manager::DndAction;
 
 use super::{
-    WaylandDndDropOrigin, WaylandDndError, WaylandFileDragSessionId, GNOME_COPIED_FILES_MIME,
-    INTERNAL_FILE_DRAG_MIME, SUPPORTED_MIME_TYPES, URI_LIST_MIME,
+    WaylandDndDropOrigin, WaylandDndError, WaylandFileDragSessionId, FILE_DROP_TARGET_MIME_TYPES,
+    INTERNAL_FILE_DRAG_MIME, URI_LIST_MIME,
 };
 use crate::file_clipboard::{
-    parse_file_uri_list, parse_gnome_copied_files, serialize_file_uri_list,
-    serialize_gnome_copied_files, FileClipboardOperation, FileClipboardSelection,
+    parse_file_uri_list, parse_gnome_copied_files, serialize_file_uri_list, FileClipboardOperation,
+    FileClipboardSelection, GNOME_COPIED_FILES_MIME,
 };
 
 pub(super) struct DragPayload {
-    internal_file_drag: String,
-    text_uri_list: String,
-    gnome_copied_files: String,
+    uri_list: String,
 }
 
 impl DragPayload {
     pub(super) fn new(paths: &[PathBuf]) -> Self {
         let uri_list = serialize_file_uri_list(paths);
-        let text_uri_list = if uri_list.is_empty() {
-            String::new()
-        } else {
-            format!("{}\r\n", uri_list.replace('\n', "\r\n"))
-        };
-        let selection = FileClipboardSelection::new(FileClipboardOperation::Move, paths.to_vec());
         Self {
-            internal_file_drag: text_uri_list.clone(),
-            text_uri_list,
-            gnome_copied_files: serialize_gnome_copied_files(&selection),
+            uri_list: if uri_list.is_empty() {
+                String::new()
+            } else {
+                format!("{}\r\n", uri_list.replace('\n', "\r\n"))
+            },
         }
     }
 
     pub(super) fn for_mime(&self, mime: &str) -> Option<&str> {
         match mime {
-            INTERNAL_FILE_DRAG_MIME => Some(&self.internal_file_drag),
-            URI_LIST_MIME => Some(&self.text_uri_list),
-            GNOME_COPIED_FILES_MIME => Some(&self.gnome_copied_files),
-            "text/plain;charset=utf-8" | "UTF8_STRING" | "text/plain" => Some(&self.text_uri_list),
+            INTERNAL_FILE_DRAG_MIME
+            | URI_LIST_MIME
+            | "text/plain;charset=utf-8"
+            | "UTF8_STRING"
+            | "text/plain" => Some(&self.uri_list),
             _ => None,
         }
     }
@@ -77,17 +72,22 @@ pub(super) fn parse_drop_selection(
         }
         _ => Vec::new(),
     };
+    let operation = if mime_type == INTERNAL_FILE_DRAG_MIME {
+        FileClipboardOperation::Move
+    } else {
+        FileClipboardOperation::Copy
+    };
     Ok(ParsedDropSelection {
-        selection: FileClipboardSelection::new(FileClipboardOperation::Copy, paths),
+        selection: FileClipboardSelection::new(operation, paths),
     })
 }
 
 pub(super) fn drop_origin_for_mime(
     mime_type: &str,
-    self_target_session_id: Option<WaylandFileDragSessionId>,
+    source_session_id: Option<WaylandFileDragSessionId>,
 ) -> Result<WaylandDndDropOrigin, WaylandDndError> {
     if mime_type == INTERNAL_FILE_DRAG_MIME {
-        self_target_session_id
+        source_session_id
             .map(WaylandDndDropOrigin::Internal)
             .ok_or(WaylandDndError::InternalDropSessionUnavailable)
     } else {
@@ -104,7 +104,7 @@ pub(super) fn negotiated_drop_action(mime_type: &str) -> DndAction {
 }
 
 pub(super) fn pick_mime(mime_types: &[String]) -> Option<String> {
-    SUPPORTED_MIME_TYPES
+    FILE_DROP_TARGET_MIME_TYPES
         .iter()
         .find(|supported| mime_types.iter().any(|mime| mime == **supported))
         .map(|mime| (*mime).to_owned())

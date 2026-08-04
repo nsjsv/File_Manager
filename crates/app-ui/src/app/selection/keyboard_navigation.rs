@@ -249,7 +249,7 @@ impl FileBrowser {
         self.selection_anchor = Some(path);
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.pending_keyboard_column_focus = None;
     }
 
@@ -323,6 +323,7 @@ impl FileBrowser {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         };
         let (request, cancellation) = Self::next_expanded_directory_load_request(

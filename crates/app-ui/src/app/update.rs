@@ -392,7 +392,9 @@ impl FileBrowser {
             Message::BreadcrumbDropTargetBoundsMeasured(generation, bounds) => {
                 self.accept_breadcrumb_drop_target_bounds(generation, bounds)
             }
-            Message::NativeDragBounds(id, bounds) => self.accept_native_bounds(id, bounds),
+            Message::FileDropLayoutMeasured(request, bounds) => {
+                self.accept_drop_layout(request, bounds)
+            }
             Message::PaneCursorEntered(pane_id) => {
                 self.hovered_pane_id = Some(pane_id);
                 Task::none()
@@ -692,7 +694,11 @@ impl FileBrowser {
                 self.reorder_dragged_tab(pane_id, tab_id);
                 Task::none()
             }
-            Message::TabDragFinished => self.finish_pointer_drag_interactions(),
+            Message::TabDragFinished => self.finish_tab_drag_from_captured_release(),
+            Message::TabFileDropEntered(id, tab) => self.accept_tab_file_drop_entered(id, tab),
+            Message::TabFileDropExited(id, tab) => self.accept_tab_file_drop_exited(id, tab),
+            Message::TabFileDropReleased(id, tab) => self.accept_tab_file_drop_released(id, tab),
+            Message::TabFileDropHoverElapsed(hover) => self.accept_tab_hover_elapsed(hover),
             Message::NavigateTo(path) => Task::batch([
                 self.commit_rename_if_active(),
                 self.navigate_to(path, NavigationMode::RecordHistory),
@@ -764,16 +770,16 @@ impl FileBrowser {
                 self.accept_desktop_activation_runtime_failure(error)
             }
             Message::WaylandDndWindowHandleLoaded(handle) => self.accept_wayland_dnd_handle(handle),
-            Message::WaylandFilesDropped(result) => self.accept_wayland_file_drop(result),
-            Message::WaylandFileDragSourceEvent(event) => {
-                self.accept_wayland_file_drag_source_event(event)
+            Message::WaylandFilesDropped(drop) => self.accept_wayland_file_drop(drop),
+            Message::WaylandFileDropFailed(target_session_id, details) => {
+                self.accept_wayland_drop_failure(target_session_id, details)
             }
-            Message::WaylandFileDragSelfTargetEvent(event) => {
-                self.accept_wayland_file_drag_self_target_event(event)
-            }
+            Message::WaylandFileDragSourceEvent(event) => self.accept_wayland_source_event(event),
+            Message::WaylandFileDropTargetEvent(event) => self.accept_wayland_target_event(event),
             Message::WaylandDndRuntimeFailed(error) => {
                 self.accept_wayland_dnd_runtime_failure(error)
             }
+            Message::X11Dnd(message) => self.accept_x11_dnd_message(message),
             Message::FileDropOperationSelected(operation) => {
                 self.apply_file_drop_operation(operation)
             }

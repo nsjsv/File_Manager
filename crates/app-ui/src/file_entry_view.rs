@@ -1,25 +1,30 @@
 use std::path::Path;
 
 use file_core::{DirectoryEntry, FileKind};
-use iced::widget::{container, image, Svg};
-use iced::{Element, Length, Theme};
+use iced::alignment::{Horizontal, Vertical};
+use iced::widget::{container, image, Stack, Svg};
+use iced::{Background, Border, Color, Element, Length, Theme};
 
 use crate::app::panes::BrowserPaneView;
 use crate::app::FileBrowser;
 use crate::appearance::{
-    dragged_row_style, hovered_row_style, icon_svg_style, muted_icon_svg_style,
+    base_text_color, dragged_row_style, hovered_row_style, icon_svg_style, muted_icon_svg_style,
     open_child_row_style, selected_icon_svg_style, selected_row_style, selected_row_style_for_run,
     warning_icon_svg_style,
 };
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
-use crate::model::Message;
+use crate::model::{FileEntryContentModifier, Message};
 use crate::thumbnail_cache::{
     COLUMN_THUMBNAIL_EDGE, COLUMN_THUMBNAIL_SIZE, LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE,
 };
 
 pub(crate) const ENTRY_ICON_SIZE: f32 = 18.0;
 const COLUMN_ENTRY_ICON_SIZE: f32 = 16.0;
+const CUT_BADGE_AREA_RATIO: f32 = 0.42;
+const CUT_BADGE_ICON_RATIO: f32 = 0.66;
+const CUT_BADGE_MIN_SIZE: f32 = 10.0;
+const CUT_BADGE_MAX_SIZE: f32 = 24.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum FileEntryIconDensity {
@@ -101,6 +106,27 @@ impl FileEntryVisualState {
         }
     }
 
+    pub(crate) fn content_style(
+        self,
+        modifier: FileEntryContentModifier,
+    ) -> impl Fn(&Theme) -> iced::widget::container::Style + Clone {
+        move |theme| {
+            let text_color = match self {
+                Self::Dragged => dragged_row_style(theme).text_color,
+                Self::Selected => selected_row_style(theme).text_color,
+                Self::Hovered => hovered_row_style(theme).text_color,
+                Self::OpenChild => open_child_row_style(theme).text_color,
+                Self::Normal => Some(base_text_color(theme)),
+            }
+            .unwrap_or_else(|| base_text_color(theme))
+            .scale_alpha(modifier.opacity());
+            iced::widget::container::Style {
+                text_color: Some(text_color),
+                ..iced::widget::container::Style::default()
+            }
+        }
+    }
+
     pub(crate) fn row_style_for_selection_run(
         self,
         selection_run_position: Option<SelectionRunPosition>,
@@ -122,38 +148,165 @@ impl FileEntryVisualState {
     }
 }
 
+impl FileBrowser {
+    pub(crate) fn file_entry_content_modifier(&self, path: &Path) -> FileEntryContentModifier {
+        self.pending_operation
+            .as_ref()
+            .map_or(FileEntryContentModifier::None, |operation| {
+                operation.content_modifier_for_path(path)
+            })
+    }
+}
+
+pub(crate) fn entry_text_input_style(
+    modifier: FileEntryContentModifier,
+) -> impl Fn(&Theme, iced::widget::text_input::Status) -> iced::widget::text_input::Style + Clone {
+    move |theme, status| {
+        let mut style = iced::widget::text_input::default(theme, status);
+        style.value = style.value.scale_alpha(modifier.opacity());
+        style.placeholder = style.placeholder.scale_alpha(modifier.opacity());
+        style
+    }
+}
+
+fn entry_thumbnail_image(
+    handle: image::Handle,
+    thumbnail_size: f32,
+    modifier: FileEntryContentModifier,
+) -> image::Image {
+    image::Image::new(handle)
+        .width(Length::Fixed(thumbnail_size))
+        .height(Length::Fixed(thumbnail_size))
+        .opacity(modifier.opacity())
+}
+
 pub(crate) fn entry_thumbnail_or_icon<'a>(
     browser: &'a FileBrowser,
     entry: &DirectoryEntry,
     tone: FileEntryIconTone,
     density: FileEntryIconDensity,
 ) -> Element<'a, Message> {
+    let modifier = browser.file_entry_content_modifier(&entry.path);
     let thumbnail_edge = density.thumbnail_edge();
     let thumbnail_size = density.thumbnail_size();
     if let Some(thumbnail) = browser
         .thumbnail_cache
         .ready_for_entry(entry, thumbnail_edge)
     {
-        return container(
-            image::Image::new(thumbnail.handle.clone())
-                .width(Length::Fixed(thumbnail_size))
-                .height(Length::Fixed(thumbnail_size)),
-        )
+        let thumbnail: Element<'a, Message> = container(entry_thumbnail_image(
+            thumbnail.handle.clone(),
+            thumbnail_size,
+            modifier,
+        ))
         .width(Length::Fixed(thumbnail_size))
         .height(Length::Fixed(thumbnail_size))
         .into();
+        return decorate_file_entry_icon(thumbnail, thumbnail_size, modifier);
     }
 
     if !thumbnails::is_supported_thumbnail_path(&entry.path) {
-        return entry_icon(entry, tone, density).into();
+        let icon_size = density.icon_size();
+        let icon = entry_icon(entry, tone, density)
+            .opacity(modifier.opacity())
+            .into();
+        return decorate_file_entry_icon(icon, icon_size, modifier);
     }
 
-    container(entry_icon(entry, tone, density))
-        .width(Length::Fixed(thumbnail_size))
-        .height(Length::Fixed(thumbnail_size))
-        .center_x(Length::Fixed(thumbnail_size))
-        .center_y(Length::Fixed(thumbnail_size))
+    let icon_size = density.icon_size();
+    container(decorate_file_entry_icon(
+        entry_icon(entry, tone, density)
+            .opacity(modifier.opacity())
+            .into(),
+        icon_size,
+        modifier,
+    ))
+    .width(Length::Fixed(thumbnail_size))
+    .height(Length::Fixed(thumbnail_size))
+    .center_x(Length::Fixed(thumbnail_size))
+    .center_y(Length::Fixed(thumbnail_size))
+    .into()
+}
+
+pub(crate) fn file_entry_symbol_icon(
+    symbol: IconSymbol,
+    tone: FileEntryIconTone,
+    size: f32,
+    modifier: FileEntryContentModifier,
+) -> Element<'static, Message> {
+    decorate_file_entry_icon(
+        themed_icon(symbol, tone, size)
+            .opacity(modifier.opacity())
+            .into(),
+        size,
+        modifier,
+    )
+}
+
+fn decorate_file_entry_icon<'a, Renderer>(
+    content: Element<'a, Message, Theme, Renderer>,
+    icon_area_size: f32,
+    modifier: FileEntryContentModifier,
+) -> Element<'a, Message, Theme, Renderer>
+where
+    Renderer: iced::advanced::Renderer + iced::advanced::svg::Renderer + 'a + 'static,
+{
+    match modifier {
+        FileEntryContentModifier::None => content,
+        FileEntryContentModifier::Cut => {
+            Stack::with_children([content, cut_badge_overlay(icon_area_size)])
+                .width(Length::Fixed(icon_area_size))
+                .height(Length::Fixed(icon_area_size))
+                .into()
+        }
+    }
+}
+
+fn cut_badge_overlay<'a, Renderer>(icon_area_size: f32) -> Element<'a, Message, Theme, Renderer>
+where
+    Renderer: iced::advanced::Renderer + iced::advanced::svg::Renderer + 'a + 'static,
+{
+    let badge_size =
+        (icon_area_size * CUT_BADGE_AREA_RATIO).clamp(CUT_BADGE_MIN_SIZE, CUT_BADGE_MAX_SIZE);
+    let badge_icon_size = badge_size * CUT_BADGE_ICON_RATIO;
+    let badge = container(
+        IconSymbol::Scissors
+            .view(badge_icon_size)
+            .style(cut_badge_icon_style),
+    )
+    .width(Length::Fixed(badge_size))
+    .height(Length::Fixed(badge_size))
+    .center_x(Length::Fixed(badge_size))
+    .center_y(Length::Fixed(badge_size))
+    .style(cut_badge_style);
+
+    container(badge)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Horizontal::Left)
+        .align_y(Vertical::Bottom)
         .into()
+}
+
+fn cut_badge_style(_theme: &Theme) -> iced::widget::container::Style {
+    let contrast_color = Color::from_rgb8(24, 31, 43);
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::WHITE)),
+        border: Border {
+            color: contrast_color,
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
+fn cut_badge_icon_style(
+    _theme: &Theme,
+    _status: iced::widget::svg::Status,
+) -> iced::widget::svg::Style {
+    iced::widget::svg::Style {
+        color: Some(Color::from_rgb8(24, 31, 43)),
+    }
 }
 
 pub(crate) fn themed_icon(
@@ -197,4 +350,240 @@ fn is_drag_source(pane: BrowserPaneView<'_>, path: &Path) -> bool {
     pane.file_drag.is_some_and(|drag| {
         drag.is_dragging() && drag.sources.iter().any(|source| source.as_path() == path)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::advanced::{
+        image as renderer_image, layout, mouse, renderer, svg as renderer_svg, widget::Tree, Layout,
+    };
+    use iced::{Rectangle, Size, Transformation};
+
+    #[derive(Debug, Clone, Copy)]
+    struct RecordedSvg {
+        opacity: f32,
+        bounds: Rectangle,
+    }
+
+    #[derive(Default)]
+    struct RecordingRenderer {
+        images: Vec<(f32, Rectangle)>,
+        quads: Vec<(renderer::Quad, Background)>,
+        svgs: Vec<RecordedSvg>,
+    }
+
+    impl iced::advanced::Renderer for RecordingRenderer {
+        fn start_layer(&mut self, _bounds: Rectangle) {}
+
+        fn end_layer(&mut self) {}
+
+        fn start_transformation(&mut self, _transformation: Transformation) {}
+
+        fn end_transformation(&mut self) {}
+
+        fn fill_quad(&mut self, quad: renderer::Quad, background: impl Into<Background>) {
+            self.quads.push((quad, background.into()));
+        }
+
+        fn reset(&mut self, _new_bounds: Rectangle) {}
+
+        fn allocate_image(
+            &mut self,
+            _handle: &renderer_image::Handle,
+            _callback: impl FnOnce(Result<renderer_image::Allocation, renderer_image::Error>)
+                + Send
+                + 'static,
+        ) {
+            panic!("file entry rendering test must not allocate images");
+        }
+    }
+
+    impl renderer_svg::Renderer for RecordingRenderer {
+        fn measure_svg(&self, _handle: &renderer_svg::Handle) -> Size<u32> {
+            Size::new(24, 24)
+        }
+
+        fn draw_svg(&mut self, svg: renderer_svg::Svg, bounds: Rectangle, _clip_bounds: Rectangle) {
+            self.svgs.push(RecordedSvg {
+                opacity: svg.opacity,
+                bounds,
+            });
+        }
+    }
+
+    impl renderer_image::Renderer for RecordingRenderer {
+        type Handle = renderer_image::Handle;
+
+        fn load_image(
+            &self,
+            _handle: &Self::Handle,
+        ) -> Result<renderer_image::Allocation, renderer_image::Error> {
+            Err(renderer_image::Error::Unsupported)
+        }
+
+        fn measure_image(&self, _handle: &Self::Handle) -> Option<Size<u32>> {
+            Some(Size::new(1, 1))
+        }
+
+        fn draw_image(
+            &mut self,
+            image: renderer_image::Image<Self::Handle>,
+            bounds: Rectangle,
+            _clip_bounds: Rectangle,
+        ) {
+            self.images.push((image.opacity, bounds));
+        }
+    }
+
+    fn draw_element(
+        mut element: Element<'_, Message, Theme, RecordingRenderer>,
+        available_size: Size,
+    ) -> (Rectangle, RecordingRenderer) {
+        let mut tree = Tree::new(element.as_widget());
+        let mut renderer = RecordingRenderer::default();
+        let limits = layout::Limits::new(Size::ZERO, available_size);
+        let node = element
+            .as_widget_mut()
+            .layout(&mut tree, &renderer, &limits);
+        let bounds = node.bounds();
+        element.as_widget().draw(
+            &tree,
+            &mut renderer,
+            &Theme::Light,
+            &renderer::Style::default(),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &bounds,
+        );
+        (bounds, renderer)
+    }
+
+    fn assert_approximately_equal(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn cut_svg_draws_dimmed_body_and_opaque_lower_left_badge_without_resizing() {
+        let icon_area_size = ENTRY_ICON_SIZE;
+        let body: Element<'_, Message, Theme, RecordingRenderer> = IconSymbol::File
+            .view(icon_area_size)
+            .style(icon_svg_style())
+            .opacity(FileEntryContentModifier::Cut.opacity())
+            .into();
+        let decorated =
+            decorate_file_entry_icon(body, icon_area_size, FileEntryContentModifier::Cut);
+
+        let (bounds, renderer) = draw_element(decorated, Size::new(icon_area_size, icon_area_size));
+
+        assert_eq!(bounds.size(), Size::new(icon_area_size, icon_area_size));
+        assert_eq!(renderer.svgs.len(), 2);
+        assert_approximately_equal(
+            renderer.svgs[0].opacity,
+            FileEntryContentModifier::Cut.opacity(),
+        );
+        assert_approximately_equal(renderer.svgs[1].opacity, 1.0);
+        assert!(renderer.svgs[1].bounds.center_x() < bounds.center_x());
+        assert!(renderer.svgs[1].bounds.center_y() > bounds.center_y());
+
+        let (badge_quad, badge_background) = renderer
+            .quads
+            .iter()
+            .find(|(_, background)| {
+                matches!(background, Background::Color(color) if *color == Color::WHITE)
+            })
+            .expect("cut badge must draw an opaque contrast backplate");
+        let expected_badge_size =
+            (icon_area_size * CUT_BADGE_AREA_RATIO).clamp(CUT_BADGE_MIN_SIZE, CUT_BADGE_MAX_SIZE);
+        assert_approximately_equal(badge_quad.bounds.x, bounds.x);
+        assert_approximately_equal(
+            badge_quad.bounds.y,
+            bounds.y + bounds.height - expected_badge_size,
+        );
+        assert_approximately_equal(badge_quad.bounds.width, expected_badge_size);
+        assert_approximately_equal(badge_quad.bounds.height, expected_badge_size);
+        assert_approximately_equal(badge_quad.border.color.a, 1.0);
+        let Background::Color(backplate_color) = badge_background else {
+            unreachable!();
+        };
+        assert_approximately_equal(backplate_color.a, 1.0);
+    }
+
+    #[test]
+    fn cut_thumbnail_widget_passes_real_opacity_to_image_renderer() {
+        let thumbnail_size = 32.0;
+        let thumbnail = entry_thumbnail_image(
+            renderer_image::Handle::from_rgba(1, 1, vec![255, 255, 255, 255]),
+            thumbnail_size,
+            FileEntryContentModifier::Cut,
+        );
+        let element: Element<'_, Message, Theme, RecordingRenderer> = thumbnail.into();
+
+        let (bounds, renderer) = draw_element(element, Size::new(thumbnail_size, thumbnail_size));
+
+        assert_eq!(bounds.size(), Size::new(thumbnail_size, thumbnail_size));
+        assert_eq!(renderer.images.len(), 1);
+        assert_approximately_equal(
+            renderer.images[0].0,
+            FileEntryContentModifier::Cut.opacity(),
+        );
+    }
+
+    #[test]
+    fn cut_text_styles_scale_body_alpha_without_changing_interaction_colors() {
+        let theme = Theme::Light;
+        for visual_state in [
+            FileEntryVisualState::Normal,
+            FileEntryVisualState::Hovered,
+            FileEntryVisualState::OpenChild,
+            FileEntryVisualState::Selected,
+            FileEntryVisualState::Dragged,
+        ] {
+            let base_color = match visual_state {
+                FileEntryVisualState::Normal => base_text_color(&theme),
+                FileEntryVisualState::Hovered => hovered_row_style(&theme)
+                    .text_color
+                    .expect("hover style must define text color"),
+                FileEntryVisualState::OpenChild => open_child_row_style(&theme)
+                    .text_color
+                    .expect("open-child style must define text color"),
+                FileEntryVisualState::Selected => selected_row_style(&theme)
+                    .text_color
+                    .expect("selection style must define text color"),
+                FileEntryVisualState::Dragged => dragged_row_style(&theme)
+                    .text_color
+                    .expect("drag style must define text color"),
+            };
+            let style = visual_state.content_style(FileEntryContentModifier::Cut)(&theme);
+            let cut_color = style
+                .text_color
+                .expect("cut content style must define inherited text color");
+            assert_approximately_equal(
+                cut_color.a,
+                base_color.a * FileEntryContentModifier::Cut.opacity(),
+            );
+            assert_eq!(cut_color.r, base_color.r);
+            assert_eq!(cut_color.g, base_color.g);
+            assert_eq!(cut_color.b, base_color.b);
+            assert!(style.background.is_none());
+        }
+
+        let base_input =
+            iced::widget::text_input::default(&theme, iced::widget::text_input::Status::Active);
+        let cut_input = entry_text_input_style(FileEntryContentModifier::Cut)(
+            &theme,
+            iced::widget::text_input::Status::Active,
+        );
+        assert_approximately_equal(
+            cut_input.value.a,
+            base_input.value.a * FileEntryContentModifier::Cut.opacity(),
+        );
+        assert_approximately_equal(
+            cut_input.placeholder.a,
+            base_input.placeholder.a * FileEntryContentModifier::Cut.opacity(),
+        );
+    }
 }

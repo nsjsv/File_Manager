@@ -2,6 +2,10 @@ use iced::advanced::text::Paragraph;
 use iced::advanced::{layout, renderer, text, widget, Layout, Widget};
 use iced::{alignment, Element, Length, Pixels, Point, Rectangle, Size};
 
+mod tooltip;
+
+pub(crate) use tooltip::measured_middle_ellipsized_wrapped_text_with_tooltip;
+
 const ELLIPSIS_MARKER: &str = "...";
 const TEXT_MEASUREMENT_WIDTH: f32 = 100_000.0;
 const TEXT_MEASUREMENT_HEIGHT: f32 = 10_000.0;
@@ -18,25 +22,6 @@ where
         MeasuredMiddleEllipsizedText::new(content)
             .size(size)
             .width(Length::Fill),
-    )
-}
-
-pub(crate) fn measured_middle_ellipsized_wrapped_text<'a, Message>(
-    content: impl Into<String>,
-    size: f32,
-    line_height_pixels: f32,
-) -> Element<'a, Message>
-where
-    Message: 'a,
-{
-    Element::new(
-        MeasuredMiddleEllipsizedText::file_name(content)
-            .size(size)
-            .line_height(text::LineHeight::Absolute(Pixels(line_height_pixels)))
-            .wrapping(text::Wrapping::WordOrGlyph)
-            .align_x(text::Alignment::Center)
-            .width(Length::Fill)
-            .height(Length::Fill),
     )
 }
 
@@ -123,6 +108,10 @@ impl<Paragraph: Default> Default for MeasuredMiddleEllipsizedTextState<Paragraph
             displayed_content: String::new(),
         }
     }
+}
+
+fn displayed_content_is_ellipsized(content: &str, displayed_content: &str) -> bool {
+    displayed_content != content
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for MeasuredMiddleEllipsizedText
@@ -441,10 +430,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        fit_middle_ellipsized_by, fit_middle_ellipsized_text, measured_text_fits,
-        middle_ellipsized_candidate, middle_ellipsized_filename_candidate, shaping_for_content,
-        MeasuredMiddleEllipsizedText, MeasuredMiddleEllipsizedTextState, MiddleEllipsisKind,
-        ELLIPSIS_MARKER,
+        displayed_content_is_ellipsized, fit_middle_ellipsized_by, fit_middle_ellipsized_text,
+        measured_text_fits, middle_ellipsized_candidate, middle_ellipsized_filename_candidate,
+        shaping_for_content, MeasuredMiddleEllipsizedText, MeasuredMiddleEllipsizedTextState,
+        MiddleEllipsisKind, ELLIPSIS_MARKER,
     };
     use crate::icon_grid_geometry::{
         ICON_GRID_LABEL_HEIGHT, ICON_GRID_LABEL_LINE_HEIGHT_PX, ICON_GRID_LABEL_SIZE,
@@ -601,6 +590,15 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_eligibility_matches_actual_displayed_content() {
+        assert!(!displayed_content_is_ellipsized("short.txt", "short.txt"));
+        assert!(displayed_content_is_ellipsized(
+            "very-long-file-name.txt",
+            "very...name.txt"
+        ));
+    }
+
+    #[test]
     fn candidate_preserves_start_and_end() {
         assert_eq!(
             middle_ellipsized_candidate("very-long-name.rs", 8),
@@ -694,6 +692,7 @@ mod tests {
         assert!(displayed.starts_with('v'));
         assert!(displayed.contains(ELLIPSIS_MARKER));
         assert!(displayed.ends_with(".rs"));
+        assert!(displayed_content_is_ellipsized(content, &displayed));
         assert!(measured_text_fits::<iced::Renderer>(
             &displayed,
             width,

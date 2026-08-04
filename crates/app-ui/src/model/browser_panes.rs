@@ -10,6 +10,8 @@ use crate::operation_history::{
 };
 use crate::thumbnail_cache::ColumnViewport;
 
+use super::{displayed_address_directory, TabDropDestination};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct BrowserPaneId(pub(crate) u64);
 
@@ -30,6 +32,15 @@ impl IconGridExpansionSessionId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ListExpansionFollowSessionId(u64);
+
+impl ListExpansionFollowSessionId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DirectoryLoadRequest {
     pub(crate) pane_id: BrowserPaneId,
@@ -41,6 +52,12 @@ pub(crate) struct DirectoryLoadRequest {
 pub(crate) enum DirectoryExpansionLoadContext {
     BrowserTree {
         pane_id: BrowserPaneId,
+    },
+    ListFollow {
+        pane_id: BrowserPaneId,
+        tab_id: usize,
+        current_dir: PathBuf,
+        session_id: ListExpansionFollowSessionId,
     },
     IconGrid {
         pane_id: BrowserPaneId,
@@ -358,6 +375,21 @@ pub(crate) struct BrowserTab {
 }
 
 impl BrowserTab {
+    pub(crate) fn file_drop_destination(&self) -> TabDropDestination {
+        if self.is_trash_view {
+            return TabDropDestination::Trash;
+        }
+
+        TabDropDestination::Directory(
+            displayed_address_directory(
+                &self.directory,
+                self.view_mode,
+                self.deepest_open_column_directory.as_ref(),
+            )
+            .to_path_buf(),
+        )
+    }
+
     pub(crate) fn directory(id: usize, directory: PathBuf) -> Self {
         Self {
             id,
@@ -438,6 +470,7 @@ pub(crate) struct ExpandedDirectory {
     pub(crate) is_collapsing: bool,
     pub(crate) animation_progress: f32,
     pub(crate) load_generation: u64,
+    pub(crate) load_context: Option<DirectoryExpansionLoadContext>,
     pub(crate) load_cancel: Option<CancellationToken>,
 }
 

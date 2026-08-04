@@ -20,6 +20,7 @@ fn loaded_directory() -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 1.0,
         load_generation: 0,
+        load_context: None,
         load_cancel: None,
     }
 }
@@ -68,6 +69,7 @@ fn completed_root_rename_migrates_temporary_icon_grid_tree() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 1,
+            load_context: None,
             load_cancel: None,
         },
     ));
@@ -177,6 +179,7 @@ fn successful_trash_prunes_deleted_icon_grid_branch_before_reload() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 1,
+            load_context: None,
             load_cancel: None,
         },
     );

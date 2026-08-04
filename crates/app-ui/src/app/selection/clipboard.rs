@@ -54,7 +54,11 @@ impl FileBrowser {
         if self.search_workspace.is_none() && self.is_trash_view {
             return self.delete_selected_trash_entries();
         }
-        let paths = self.active_file_selection();
+        self.trash_explicit_paths(self.active_file_selection())
+    }
+
+    pub(in crate::app) fn trash_explicit_paths(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
+        self.context_menu = None;
         if paths.is_empty() {
             return Task::none();
         }
@@ -168,7 +172,7 @@ impl FileBrowser {
         self.clear_preview();
         self.renaming = None;
         self.drag_selection_anchor = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.enqueue_file_operation(QueuedFileOperation::CreateDirectory { parent: directory })
     }
 
@@ -180,7 +184,7 @@ impl FileBrowser {
         self.clear_preview();
         self.renaming = None;
         self.drag_selection_anchor = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.enqueue_file_operation(QueuedFileOperation::CreateEmptyFile { parent: directory })
     }
 
@@ -398,6 +402,7 @@ mod tests {
 
     use super::*;
     use crate::config;
+    use crate::model::FileEntryContentModifier;
     use desktop_linux::{
         NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
     };
@@ -441,6 +446,81 @@ mod tests {
         browser
             .network_connections
             .accept_loaded(vec![(id, NetworkMountState::Mounted(mount_path))]);
+    }
+
+    #[test]
+    fn cut_visual_modifier_requires_exact_move_source_membership() {
+        let source = PathBuf::from("/workspace/report.txt");
+        let move_operation = PendingOperation::Move(vec![source.clone()]);
+
+        assert_eq!(
+            move_operation.content_modifier_for_path(&source),
+            FileEntryContentModifier::Cut
+        );
+        assert_eq!(
+            move_operation.content_modifier_for_path(Path::new("/workspace/report.txt.bak")),
+            FileEntryContentModifier::None
+        );
+        assert_eq!(
+            move_operation.content_modifier_for_path(Path::new("/archive/report.txt")),
+            FileEntryContentModifier::None
+        );
+        assert_eq!(
+            PendingOperation::Copy(vec![source.clone()]).content_modifier_for_path(&source),
+            FileEntryContentModifier::None
+        );
+    }
+
+    #[test]
+    fn new_clipboard_operation_replaces_cut_visual_membership() {
+        let first = PathBuf::from("/workspace/first.txt");
+        let second = PathBuf::from("/workspace/second.txt");
+        let mut browser = browser_with_entries(&[first.clone(), second.clone()]);
+        browser.selected_paths = HashSet::from([first.clone()]);
+        drop(browser.move_selected());
+        assert_eq!(
+            browser.file_entry_content_modifier(&first),
+            FileEntryContentModifier::Cut
+        );
+
+        browser.selected = Some(second.clone());
+        browser.selected_paths = HashSet::from([second.clone()]);
+        drop(browser.move_selected());
+        assert_eq!(
+            browser.file_entry_content_modifier(&first),
+            FileEntryContentModifier::None
+        );
+        assert_eq!(
+            browser.file_entry_content_modifier(&second),
+            FileEntryContentModifier::Cut
+        );
+
+        drop(browser.copy_selected());
+        assert_eq!(
+            browser.file_entry_content_modifier(&second),
+            FileEntryContentModifier::None
+        );
+    }
+
+    #[test]
+    fn move_paste_consumes_cut_visual_membership() {
+        let source = PathBuf::from("/workspace/report.txt");
+        let mut browser = browser_with_entries(std::slice::from_ref(&source));
+        drop(browser.move_selected());
+        assert_eq!(
+            browser.file_entry_content_modifier(&source),
+            FileEntryContentModifier::Cut
+        );
+
+        drop(browser.paste_operation(
+            PathBuf::from("/destination"),
+            PendingOperation::Move(vec![source.clone()]),
+        ));
+        assert!(browser.pending_operation.is_none());
+        assert_eq!(
+            browser.file_entry_content_modifier(&source),
+            FileEntryContentModifier::None
+        );
     }
 
     #[test]

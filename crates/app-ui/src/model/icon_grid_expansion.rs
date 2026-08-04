@@ -13,6 +13,11 @@ use super::{
     BrowserPaneId, ExpandedDirectory, ExpandedDirectoryStatus, IconGridExpansionSessionId,
 };
 
+#[path = "icon_grid_expansion_follow.rs"]
+mod follow;
+pub(crate) use follow::IconGridExpansionFollowAdvance;
+use follow::IconGridExpansionFollowPlan;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IconGridExpansionContext {
     pub(crate) pane_id: BrowserPaneId,
@@ -59,6 +64,7 @@ impl IconGridExpandedDirectory {
             cancellation.cancel();
         }
         self.contents.load_generation = self.contents.load_generation.wrapping_add(1);
+        self.contents.load_context = None;
     }
 
     fn begin_closing(&mut self) {
@@ -115,6 +121,7 @@ pub(crate) struct IconGridExpansionState {
     pending_root: Option<IconGridExpansionAnchor>,
     pending_children: HashMap<PathBuf, IconGridExpansionAnchor>,
     selection_directory: PathBuf,
+    follow_plan: Option<IconGridExpansionFollowPlan>,
 }
 
 impl IconGridExpansionState {
@@ -138,6 +145,7 @@ impl IconGridExpansionState {
             pending_root: None,
             pending_children: HashMap::new(),
             selection_directory,
+            follow_plan: None,
         }
     }
 
@@ -323,6 +331,7 @@ impl IconGridExpansionState {
     }
 
     pub(crate) fn begin_directory_dismissal(&mut self, path: &Path) -> Vec<PathBuf> {
+        self.cancel_follow_plan();
         if let Some(parent_directory) = self
             .directories
             .get(path)
@@ -337,6 +346,7 @@ impl IconGridExpansionState {
         &mut self,
         next_child: IconGridExpansionAnchor,
     ) -> IconGridChildSwitch {
+        self.cancel_follow_plan();
         let parent_directory = next_child.parent_directory.clone();
         if parent_directory == self.context.current_dir
             || next_child.path.parent() != Some(parent_directory.as_path())
@@ -379,6 +389,7 @@ impl IconGridExpansionState {
     }
 
     pub(crate) fn begin_root_dismissal(&mut self) -> Vec<PathBuf> {
+        self.cancel_follow_plan();
         self.pending_root = None;
         self.pending_children.clear();
         let root_path = self.root_path.clone();
@@ -389,6 +400,7 @@ impl IconGridExpansionState {
         &mut self,
         next_root: IconGridExpansionAnchor,
     ) -> Vec<PathBuf> {
+        self.cancel_follow_plan();
         self.pending_root = Some(next_root);
         self.pending_children.clear();
         let root_path = self.root_path.clone();
@@ -396,6 +408,7 @@ impl IconGridExpansionState {
     }
 
     pub(crate) fn reopen_directory(&mut self, path: &Path) -> bool {
+        self.cancel_follow_plan();
         let Some(parent_directory) = self.directories.get_mut(path).map(|directory| {
             directory.reopen();
             directory.parent_directory.clone()

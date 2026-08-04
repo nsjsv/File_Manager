@@ -10,7 +10,7 @@ use crate::config;
 use crate::model::{
     trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext,
     ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
-    FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase, Message,
+    FileDragNativeDndState, FileDragPhase, Message,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -49,6 +49,7 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 1.0,
         load_generation: 0,
+        load_context: None,
         load_cancel: None,
     }
 }
@@ -125,7 +126,7 @@ fn shift_range_click_does_not_seed_activation_double_click() {
 }
 
 #[test]
-fn file_drag_starts_wayland_dnd_after_current_target_bounds_are_measured() {
+fn file_drag_requests_wayland_dnd_immediately_after_activation() {
     let source = PathBuf::from("/workspace/report.txt");
     let mut browser = browser_with_entries(std::slice::from_ref(&source));
     drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
@@ -138,13 +139,6 @@ fn file_drag_starts_wayland_dnd_after_current_target_bounds_are_measured() {
     );
 
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
-    let measurement_id = match browser.file_drag.as_ref().map(|drag| drag.native_dnd) {
-        Some(FileDragNativeDndState::MeasuringTargets(measurement_id)) => measurement_id,
-        state => panic!("expected target measurement, got {state:?}"),
-    };
-
-    drop(browser.accept_native_bounds(measurement_id, FileDragHitTestBounds::default()));
-
     assert!(matches!(
         browser.file_drag.as_ref().map(|drag| drag.native_dnd),
         Some(FileDragNativeDndState::Requested(_))
@@ -152,7 +146,7 @@ fn file_drag_starts_wayland_dnd_after_current_target_bounds_are_measured() {
 }
 
 #[test]
-fn main_window_outside_cursor_move_prepares_wayland_dnd_target_measurement() {
+fn main_window_outside_cursor_move_requests_wayland_dnd() {
     let source = PathBuf::from("/workspace/report.txt");
     let mut browser = browser_with_entries(std::slice::from_ref(&source));
     drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
@@ -170,45 +164,30 @@ fn main_window_outside_cursor_move_prepares_wayland_dnd_target_measurement() {
     assert!(file_drag.is_dragging());
     assert!(matches!(
         file_drag.native_dnd,
-        FileDragNativeDndState::MeasuringTargets(_)
+        FileDragNativeDndState::Requested(_)
     ));
 }
 
 #[test]
-fn stale_native_target_measurement_does_not_start_wayland_source() {
+fn iced_release_does_not_consume_requested_wayland_source() {
     let source = PathBuf::from("/workspace/report.txt");
     let mut browser = browser_with_entries(std::slice::from_ref(&source));
     drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
 
     drop(browser.handle_column_entry_clicked(source));
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
-    let measurement_id = match browser.file_drag.as_ref().map(|drag| drag.native_dnd) {
-        Some(FileDragNativeDndState::MeasuringTargets(measurement_id)) => measurement_id,
-        state => panic!("expected target measurement, got {state:?}"),
-    };
+    let requested = browser
+        .file_drag
+        .as_ref()
+        .map(|drag| drag.native_dnd)
+        .expect("requested Wayland source");
 
-    drop(browser.accept_native_bounds(
-        measurement_id.wrapping_sub(1),
-        FileDragHitTestBounds::default(),
-    ));
+    drop(browser.finish_drag_selection(None));
 
     assert_eq!(
         browser.file_drag.as_ref().map(|drag| drag.native_dnd),
-        Some(FileDragNativeDndState::MeasuringTargets(measurement_id))
+        Some(requested)
     );
-}
-
-#[test]
-fn release_while_native_target_measurement_is_pending_cancels_file_drag() {
-    let source = PathBuf::from("/workspace/report.txt");
-    let mut browser = browser_with_entries(std::slice::from_ref(&source));
-    drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
-
-    drop(browser.handle_column_entry_clicked(source));
-    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
-    drop(browser.finish_drag_selection(None));
-
-    assert!(browser.file_drag.is_none());
 }
 
 #[test]
@@ -284,6 +263,7 @@ fn list_single_click_selects_directory_without_expanding_or_opening_column() {
             is_collapsing: false,
             animation_progress: 0.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         },
     );
@@ -528,6 +508,7 @@ fn list_right_arrow_expands_then_focuses_first_child() {
             is_collapsing: false,
             animation_progress: 0.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         },
     );

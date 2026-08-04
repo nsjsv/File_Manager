@@ -1,21 +1,19 @@
-use super::payload::negotiated_drop_action;
+use super::payload::{drop_origin_for_mime, negotiated_drop_action};
 use super::*;
 use crate::file_clipboard::FileClipboardOperation;
 
 #[test]
-fn drag_payload_uses_move_operation_and_uri_list_line_endings() {
+fn drag_payload_is_operation_neutral_and_uses_uri_list_line_endings() {
     let paths = vec![PathBuf::from("/tmp/a b"), PathBuf::from("/tmp/c")];
 
     let payload = DragPayload::new(&paths);
 
-    assert_eq!(
-        payload.for_mime(URI_LIST_MIME),
-        Some("file:///tmp/a%20b\r\nfile:///tmp/c\r\n")
-    );
-    assert_eq!(
-        payload.for_mime(GNOME_COPIED_FILES_MIME),
-        Some("cut\nfile:///tmp/a%20b\nfile:///tmp/c")
-    );
+    let expected = "file:///tmp/a%20b\r\nfile:///tmp/c\r\n";
+    assert_eq!(payload.for_mime(INTERNAL_FILE_DRAG_MIME), Some(expected));
+    assert_eq!(payload.for_mime(URI_LIST_MIME), Some(expected));
+    assert_eq!(payload.for_mime(GNOME_COPIED_FILES_MIME), None);
+    assert!(!FILE_DRAG_SOURCE_MIME_TYPES.contains(&GNOME_COPIED_FILES_MIME));
+    assert!(FILE_DROP_TARGET_MIME_TYPES.contains(&GNOME_COPIED_FILES_MIME));
 }
 
 #[test]
@@ -32,6 +30,13 @@ fn drop_payload_forces_copy_even_if_gnome_payload_says_cut() {
         drop_origin_for_mime(GNOME_COPIED_FILES_MIME, None).unwrap(),
         WaylandDndDropOrigin::External
     );
+}
+
+#[test]
+fn source_actions_intersect_copy_only_and_internal_move_only_targets() {
+    assert_eq!(FILE_DRAG_SOURCE_ACTIONS & DndAction::Copy, DndAction::Copy);
+    assert_eq!(FILE_DRAG_SOURCE_ACTIONS & DndAction::Move, DndAction::Move);
+    assert_eq!(FILE_DRAG_SOURCE_ACTIONS, DndAction::Copy | DndAction::Move);
 }
 
 #[test]
@@ -56,7 +61,7 @@ fn internal_drag_payload_requires_and_preserves_source_session() {
     let selection =
         parse_drop_selection(INTERNAL_FILE_DRAG_MIME, b"file:///tmp/source\r\n").unwrap();
 
-    assert_eq!(selection.selection.operation, FileClipboardOperation::Copy);
+    assert_eq!(selection.selection.operation, FileClipboardOperation::Move);
     assert_eq!(
         selection.selection.paths,
         vec![PathBuf::from("/tmp/source")]
@@ -102,25 +107,44 @@ fn controller_sends_identified_file_drag_command_to_worker_receiver() {
 }
 
 #[test]
-fn self_target_events_preserve_source_session_identity() {
+fn target_events_preserve_offer_session_identity_for_internal_and_external_origins() {
     let controller = WaylandDndController::new();
-    let session_id = controller
+    let source_session_id = controller
         .start_file_drag(vec![PathBuf::from("/tmp/source")], test_drag_icon())
         .unwrap();
 
-    for event in [
-        WaylandFileDragSelfTargetEvent::Entered {
-            session_id,
-            position: WaylandDndDropPosition { x: 1.0, y: 2.0 },
-        },
-        WaylandFileDragSelfTargetEvent::Moved {
-            session_id,
-            position: WaylandDndDropPosition { x: 3.0, y: 4.0 },
-        },
-        WaylandFileDragSelfTargetEvent::Left { session_id },
+    for origin in [
+        WaylandDndDropOrigin::Internal(source_session_id),
+        WaylandDndDropOrigin::External,
     ] {
-        assert_eq!(event.session_id(), session_id);
+        let target_session_id = WaylandFileDropTargetSessionId::unique();
+        for event in [
+            WaylandFileDropTargetEvent::Entered {
+                target_session_id,
+                origin,
+                position: WaylandDndDropPosition { x: 1.0, y: 2.0 },
+            },
+            WaylandFileDropTargetEvent::Moved {
+                target_session_id,
+                position: WaylandDndDropPosition { x: 3.0, y: 4.0 },
+            },
+            WaylandFileDropTargetEvent::Left { target_session_id },
+            WaylandFileDropTargetEvent::Dropped {
+                target_session_id,
+                position: Some(WaylandDndDropPosition { x: 5.0, y: 6.0 }),
+            },
+        ] {
+            assert_eq!(event.target_session_id(), target_session_id);
+        }
     }
+}
+
+#[test]
+fn target_session_ids_are_distinct_from_each_other() {
+    assert_ne!(
+        WaylandFileDropTargetSessionId::unique(),
+        WaylandFileDropTargetSessionId::unique()
+    );
 }
 
 #[test]

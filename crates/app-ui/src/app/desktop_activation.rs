@@ -94,7 +94,6 @@ impl FileBrowser {
         self.open_with = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
-        self.pending_wayland_file_drop = None;
         self.clear_icon_grid_expansion_for_context_change();
         self.clear_transient_interaction_state();
         self.clear_pointer_driven_interaction_state();

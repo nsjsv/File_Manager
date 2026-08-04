@@ -25,6 +25,7 @@ fn loaded(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 1.0,
         load_generation: 1,
+        load_context: None,
         load_cancel: None,
     }
 }
@@ -54,6 +55,96 @@ fn state_with_root() -> IconGridExpansionState {
             entry("/workspace/root/beta", FileKind::Directory),
         ]),
     )
+}
+
+#[test]
+fn follow_plan_advances_only_through_loaded_direct_directories() {
+    let target = PathBuf::from("/workspace/root/alpha/report.txt");
+    let mut state = IconGridExpansionState::following_directory_chain(
+        context(),
+        anchor("/workspace", "/workspace/root", 0),
+        loaded(vec![entry("/workspace/root/alpha", FileKind::Directory)]),
+        vec![PathBuf::from("/workspace/root/alpha")],
+        PathBuf::from("/workspace/root/alpha"),
+        target.clone(),
+    );
+
+    let IconGridExpansionFollowAdvance::StartChild(next) = state.advance_follow_plan() else {
+        panic!("loaded root must yield the next direct directory");
+    };
+    assert_eq!(next.path, Path::new("/workspace/root/alpha"));
+    assert!(state.insert_directory(
+        next,
+        loaded(vec![entry(
+            "/workspace/root/alpha/report.txt",
+            FileKind::File,
+        )]),
+    ));
+    assert_eq!(
+        state.advance_follow_plan(),
+        IconGridExpansionFollowAdvance::RestoreSelection(target)
+    );
+    assert!(!state.has_follow_plan());
+}
+
+#[test]
+fn follow_plan_rejects_missing_or_non_directory_next_component() {
+    let mut state = IconGridExpansionState::following_directory_chain(
+        context(),
+        anchor("/workspace", "/workspace/root", 0),
+        loaded(vec![entry("/workspace/root/alpha", FileKind::File)]),
+        vec![PathBuf::from("/workspace/root/alpha")],
+        PathBuf::from("/workspace/root/alpha"),
+        PathBuf::from("/workspace/root/alpha/report.txt"),
+    );
+
+    assert_eq!(
+        state.advance_follow_plan(),
+        IconGridExpansionFollowAdvance::Invalid
+    );
+    assert!(!state.has_follow_plan());
+}
+
+#[test]
+fn interactive_selection_chain_uses_only_the_selected_branch() {
+    let mut state = state_with_root();
+    assert!(state.insert_directory(
+        anchor("/workspace/root", "/workspace/root/alpha", 0),
+        loaded(vec![entry(
+            "/workspace/root/alpha/report.txt",
+            FileKind::File,
+        )]),
+    ));
+
+    assert_eq!(
+        state.interactive_expansion_chain_for_selection(Path::new(
+            "/workspace/root/alpha/report.txt"
+        )),
+        Some(vec![
+            PathBuf::from("/workspace/root"),
+            PathBuf::from("/workspace/root/alpha"),
+        ])
+    );
+    assert_eq!(
+        state.interactive_expansion_chain_for_selection(Path::new("/workspace/root/beta")),
+        Some(vec![PathBuf::from("/workspace/root")])
+    );
+}
+
+#[test]
+fn manual_dismissal_cancels_follow_plan() {
+    let mut state = IconGridExpansionState::following_directory_chain(
+        context(),
+        anchor("/workspace", "/workspace/root", 0),
+        loaded(Vec::new()),
+        Vec::new(),
+        PathBuf::from("/workspace/root"),
+        PathBuf::from("/workspace/root"),
+    );
+
+    state.begin_root_dismissal();
+
+    assert!(!state.has_follow_plan());
 }
 
 #[test]

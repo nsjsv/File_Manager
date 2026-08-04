@@ -19,6 +19,7 @@ mod settings_group;
 mod settings_window;
 mod shortcut_settings;
 mod sidebar_panel;
+mod tab_bar;
 mod tab_motion;
 mod text_preview_panel;
 mod toggle_switch;
@@ -44,16 +45,15 @@ pub(crate) use tab_motion::translated_with_width_overflow;
 use std::path::Path;
 
 use file_core::{DirectoryEntry, FileKind};
-use iced::widget::{button, container, mouse_area, opaque, row, stack, Column, Row, Space, Svg};
+use iced::widget::{container, mouse_area, opaque, row, stack, Column, Row, Space, Svg};
 use iced::{Alignment, Element, Length, Point, Theme};
 
 use crate::app::panes::BrowserPaneView;
 use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::app::FileBrowser;
 use crate::appearance::{
-    app_content_style, drag_preview_style, icon_svg_style, navigation_icon_button_style,
-    selected_icon_svg_style, selected_tab_item_style, tab_item_style, tab_split_overlay_style,
-    tab_strip_style, warning_icon_svg_style,
+    app_content_style, drag_preview_style, icon_svg_style, selected_icon_svg_style,
+    selected_tab_item_style, tab_split_overlay_style, warning_icon_svg_style,
 };
 use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
@@ -89,6 +89,7 @@ use floating_panels::{
 use rendering_settings::renderer_restart_notice_panel;
 use search_panel::{search_input_panel, search_results_view};
 use sidebar_panel::sidebar_view;
+use tab_bar::tab_bar;
 use toolbar_controls::{navigation_button_group, view_mode_button_group};
 use transfer_conflict::transfer_conflict_panel;
 use window_chrome::{pane_navigation_layout, window_control_group, PaneNavigationLayout};
@@ -416,7 +417,7 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
     };
     let mut main_content = Column::new().spacing(0).push(header_content);
     if pane.tab_bar_should_occupy_layout() {
-        main_content = main_content.push(tab_bar(pane));
+        main_content = main_content.push(tab_bar(browser, pane));
     }
 
     if pane.is_trash_view {
@@ -648,88 +649,6 @@ fn pane_drag_preview_panel(browser: &FileBrowser) -> Option<Element<'_, Message>
     )
 }
 
-fn tab_bar<'a>(pane: BrowserPaneView<'a>) -> Element<'a, Message> {
-    let reveal_fraction = pane.tab_bar_reveal_fraction;
-    if reveal_fraction <= f32::EPSILON && pane.tabs.len() <= 1 {
-        return Space::new().height(Length::Fixed(0.0)).into();
-    }
-
-    let mut tabs = Row::new()
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .width(Length::Fill);
-    for tab in pane.tabs {
-        tabs = tabs.push(tab_button(
-            pane.id,
-            tab.id,
-            tab.directory.as_path(),
-            tab.is_trash_view,
-            tab.id == pane.active_tab_id,
-            pane.tab_width_fraction(tab.id),
-            pane.tab_shift_offset(tab.id),
-        ));
-    }
-
-    container(tabs)
-        .height(Length::Fixed(TAB_BAR_EXPANDED_HEIGHT * reveal_fraction))
-        .width(Length::Fill)
-        .padding([3, 18])
-        .style(tab_strip_style)
-        .into()
-}
-
-fn tab_button<'a>(
-    pane_id: BrowserPaneId,
-    tab_id: usize,
-    directory: &'a Path,
-    is_trash_view: bool,
-    is_active: bool,
-    width_fraction: f32,
-    shift_offset: f32,
-) -> Element<'a, Message> {
-    let tone = if is_active {
-        IconTone::Selected
-    } else {
-        IconTone::Normal
-    };
-    let title = tab_title_content(directory, is_trash_view, tone);
-    let label = row![
-        Space::new().width(Length::Fixed(TAB_CLOSE_SLOT_WIDTH)),
-        container(title).center_x(Length::Fill),
-        button(themed_icon(IconSymbol::Close, tone, TAB_CLOSE_ICON_SIZE))
-            .on_press(Message::TabCloseRequested(pane_id, tab_id))
-            .padding([2, 2])
-            .width(Length::Fixed(TAB_CLOSE_SLOT_WIDTH))
-            .style(navigation_icon_button_style()),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .width(Length::Fill);
-
-    let tab = container(label)
-        .padding([4, 8])
-        .width(Length::Fill)
-        .clip(true);
-    let tab = tab.style(if is_active {
-        selected_tab_item_style
-    } else {
-        tab_item_style
-    });
-
-    let tab = tab_motion::translated(tab, shift_offset, 0.0);
-
-    container(
-        mouse_area(tab)
-            .on_press(Message::TabPressed(pane_id, tab_id))
-            .on_middle_press(Message::TabCloseRequested(pane_id, tab_id))
-            .on_enter(Message::TabDragEntered(pane_id, tab_id))
-            .on_release(Message::TabDragFinished)
-            .interaction(iced::mouse::Interaction::Pointer),
-    )
-    .width(Length::FillPortion(tab_width_portion(width_fraction)))
-    .into()
-}
-
 fn tab_title_content<'a>(
     directory: &'a Path,
     is_trash_view: bool,
@@ -746,12 +665,6 @@ fn tab_title_content<'a>(
     ]
     .spacing(6)
     .align_y(Alignment::Center)
-}
-
-fn tab_width_portion(intro_fraction: f32) -> u16 {
-    ((TAB_FILL_PORTION as f32) * intro_fraction.clamp(0.0, 1.0))
-        .round()
-        .max(1.0) as u16
 }
 
 fn tab_title_text(directory: &Path, is_trash_view: bool) -> String {

@@ -1,7 +1,7 @@
 use iced::keyboard;
 use iced::{event, mouse, window, Event, Theme};
 
-use crate::model::Message;
+use crate::model::{Message, X11DndMessage};
 
 pub(super) fn global_event_message(
     event: Event,
@@ -18,6 +18,12 @@ pub(super) fn global_event_message(
                 size.width,
                 size.height,
             )),
+            iced::window::Event::Rescaled(scale_factor) => {
+                Some(Message::X11Dnd(X11DndMessage::ScaleFactorChanged {
+                    window,
+                    scale_factor: *scale_factor,
+                }))
+            }
             iced::window::Event::Focused => Some(Message::WindowFocused(window)),
             iced::window::Event::Unfocused => Some(Message::WindowUnfocused(window)),
             _ => None,
@@ -169,6 +175,36 @@ mod tests {
         assert_eq!(received_window, window);
         assert_eq!(received.x, position.x);
         assert_eq!(received.y, position.y);
+    }
+
+    #[test]
+    fn window_scale_change_routes_generation_boundary() {
+        let window = window::Id::unique();
+        let message = route_event_with_window(
+            Event::Window(iced::window::Event::Rescaled(1.25)),
+            event::Status::Ignored,
+            window,
+        );
+
+        assert!(matches!(
+            message,
+            Some(Message::X11Dnd(X11DndMessage::ScaleFactorChanged {
+                window: received_window,
+                scale_factor,
+            })) if received_window == window && scale_factor == 1.25
+        ));
+    }
+
+    #[test]
+    fn iced_external_file_events_have_no_operation_entry() {
+        let path = std::path::PathBuf::from("/tmp/external.txt");
+        for event in [
+            iced::window::Event::FileHovered(path.clone()),
+            iced::window::Event::FileDropped(path),
+            iced::window::Event::FilesHoveredLeft,
+        ] {
+            assert!(route_event(Event::Window(event), event::Status::Ignored).is_none());
+        }
     }
 
     #[test]

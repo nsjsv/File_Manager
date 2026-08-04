@@ -348,6 +348,7 @@ fn restored_expanded_directory() -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 1.0,
         load_generation: 0,
+        load_context: None,
         load_cancel: None,
     }
 }

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use desktop_linux::{
     DesktopActivationRuntime, WaylandDndController, WaylandDndEvent, WaylandDndWindowHandle,
+    X11DndController, X11DndEvent, X11DndWindowHandle,
 };
 use file_core::watch_directory;
 use iced::futures::SinkExt;
@@ -13,7 +14,7 @@ use iced::{Subscription, Task, Theme};
 use super::events::system_theme;
 use super::FileBrowser;
 use crate::command_line::ApplicationLaunchRequest;
-use crate::model::Message;
+use crate::model::{Message, X11DndMessage};
 use crate::startup_trace;
 
 const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -123,6 +124,19 @@ pub(super) fn wayland_file_dnd_subscription(
     )
 }
 
+pub(super) fn x11_file_dnd_subscription(
+    window_handle: X11DndWindowHandle,
+    controller: Arc<X11DndController>,
+) -> Subscription<Message> {
+    Subscription::run_with(
+        X11DndSubscriptionState {
+            window_handle,
+            controller,
+        },
+        x11_file_dnd_stream,
+    )
+}
+
 fn directory_watch_stream(path: &PathBuf) -> impl iced::futures::Stream<Item = Message> + 'static {
     let path = path.clone();
     iced::stream::channel(DIRECTORY_WATCH_CHANNEL_SIZE, async move |mut output| {
@@ -170,7 +184,7 @@ fn wayland_file_dnd_stream(
     iced::stream::channel(16, async move |mut output| {
         let (event_sender, mut event_receiver) = tokio::sync::mpsc::unbounded_channel();
         let (shutdown_sender, shutdown_receiver) = mpsc::channel();
-        let _shutdown_guard = WaylandDndShutdown::new(shutdown_sender);
+        let _shutdown_guard = FileDndShutdown::new(shutdown_sender);
 
         if let Err(error) = desktop_linux::spawn_wayland_file_dnd(
             state.window_handle,
@@ -179,20 +193,23 @@ fn wayland_file_dnd_stream(
             shutdown_receiver,
         ) {
             let _ = output
-                .send(Message::WaylandFilesDropped(Err(error.to_string())))
+                .send(Message::WaylandDndRuntimeFailed(error.to_string()))
                 .await;
             return;
         }
 
         while let Some(event) = event_receiver.recv().await {
             let message = match event {
-                WaylandDndEvent::FilesDropped(drop) => Message::WaylandFilesDropped(Ok(drop)),
-                WaylandDndEvent::FileDropFailed(error) => Message::WaylandFilesDropped(Err(error)),
+                WaylandDndEvent::FilesDropped(drop) => Message::WaylandFilesDropped(drop),
+                WaylandDndEvent::FileDropFailed {
+                    target_session_id,
+                    details,
+                } => Message::WaylandFileDropFailed(target_session_id, details),
                 WaylandDndEvent::FileDragSource(event) => {
                     Message::WaylandFileDragSourceEvent(event)
                 }
-                WaylandDndEvent::FileDragSelfTarget(event) => {
-                    Message::WaylandFileDragSelfTargetEvent(event)
+                WaylandDndEvent::FileDropTarget(event) => {
+                    Message::WaylandFileDropTargetEvent(event)
                 }
                 WaylandDndEvent::RuntimeFailed(error) => Message::WaylandDndRuntimeFailed(error),
             };
@@ -203,11 +220,72 @@ fn wayland_file_dnd_stream(
     })
 }
 
-struct WaylandDndShutdown {
+#[derive(Debug, Clone)]
+struct X11DndSubscriptionState {
+    window_handle: X11DndWindowHandle,
+    controller: Arc<X11DndController>,
+}
+
+impl PartialEq for X11DndSubscriptionState {
+    fn eq(&self, other: &Self) -> bool {
+        self.window_handle == other.window_handle && self.controller.id() == other.controller.id()
+    }
+}
+
+impl Eq for X11DndSubscriptionState {}
+
+impl std::hash::Hash for X11DndSubscriptionState {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.window_handle.hash(state);
+        self.controller.id().hash(state);
+    }
+}
+
+fn x11_file_dnd_stream(
+    state: &X11DndSubscriptionState,
+) -> impl iced::futures::Stream<Item = Message> + 'static {
+    let state = state.clone();
+    iced::stream::channel(16, async move |mut output| {
+        let runtime_id = state.controller.id();
+        let (event_sender, mut event_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (shutdown_sender, shutdown_receiver) = mpsc::channel();
+        let _shutdown_guard = FileDndShutdown::new(shutdown_sender);
+
+        if let Err(error) = desktop_linux::spawn_x11_file_dnd(
+            state.window_handle,
+            state.controller,
+            event_sender,
+            shutdown_receiver,
+        ) {
+            let _ = output
+                .send(Message::X11Dnd(X11DndMessage::RuntimeEvent {
+                    runtime_id,
+                    event: X11DndEvent::RuntimeFailed(error.to_string()),
+                }))
+                .await;
+            return;
+        }
+
+        while let Some(event) = event_receiver.recv().await {
+            if output
+                .send(Message::X11Dnd(X11DndMessage::RuntimeEvent {
+                    runtime_id,
+                    event,
+                }))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    })
+}
+
+struct FileDndShutdown {
     sender: Option<mpsc::Sender<()>>,
 }
 
-impl WaylandDndShutdown {
+impl FileDndShutdown {
     fn new(sender: mpsc::Sender<()>) -> Self {
         Self {
             sender: Some(sender),
@@ -215,7 +293,7 @@ impl WaylandDndShutdown {
     }
 }
 
-impl Drop for WaylandDndShutdown {
+impl Drop for FileDndShutdown {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(());

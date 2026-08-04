@@ -328,12 +328,14 @@ mod tests {
             test_entry(unavailable_directory.clone(), FileKind::Directory),
             test_entry(remaining_entry.clone(), FileKind::File),
         ];
-        browser
-            .expanded_directories
-            .insert(unavailable_directory.clone(), loading_expanded_directory(4));
-        browser
-            .expanded_directories
-            .insert(unavailable_child.clone(), loading_expanded_directory(2));
+        browser.expanded_directories.insert(
+            unavailable_directory.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 4),
+        );
+        browser.expanded_directories.insert(
+            unavailable_child.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 2),
+        );
         reset_recorded_global_errors();
 
         drop(browser.accept_expanded_directory(
@@ -383,15 +385,18 @@ mod tests {
             .selected_paths
             .extend([unavailable_child.clone(), remaining_selection.clone()]);
         browser.selection_anchor = Some(unavailable_directory.clone());
-        browser
-            .expanded_directories
-            .insert(ancestor_directory.clone(), loading_expanded_directory(1));
-        browser
-            .expanded_directories
-            .insert(unavailable_directory.clone(), loading_expanded_directory(4));
-        browser
-            .expanded_directories
-            .insert(unavailable_child.clone(), loading_expanded_directory(2));
+        browser.expanded_directories.insert(
+            ancestor_directory.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 1),
+        );
+        browser.expanded_directories.insert(
+            unavailable_directory.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 4),
+        );
+        browser.expanded_directories.insert(
+            unavailable_child.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 2),
+        );
         browser
             .column_viewports
             .insert(ancestor_directory.clone(), ColumnViewport::default());
@@ -451,15 +456,18 @@ mod tests {
         let unavailable_directory = second_directory.join("C");
         browser.current_dir = root_directory.clone();
         browser.deepest_open_column_directory = Some(unavailable_directory.clone());
-        browser
-            .expanded_directories
-            .insert(first_directory.clone(), loading_expanded_directory(1));
-        browser
-            .expanded_directories
-            .insert(second_directory.clone(), loading_expanded_directory(2));
-        browser
-            .expanded_directories
-            .insert(unavailable_directory.clone(), loading_expanded_directory(5));
+        browser.expanded_directories.insert(
+            first_directory.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 1),
+        );
+        browser.expanded_directories.insert(
+            second_directory.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 2),
+        );
+        browser.expanded_directories.insert(
+            unavailable_directory.clone(),
+            loading_expanded_directory(BrowserPaneId::PRIMARY, 5),
+        );
 
         drop(browser.accept_expanded_directory(
             crate::model::ExpandedDirectoryLoadRequest {
@@ -499,15 +507,18 @@ mod tests {
         inactive_pane.tabs = vec![BrowserTab::directory(0, root_directory.clone())];
         inactive_pane.active_tab_id = 0;
         inactive_pane.deepest_open_column_directory = Some(unavailable_child.clone());
-        inactive_pane
-            .expanded_directories
-            .insert(ancestor_directory.clone(), loading_expanded_directory(1));
-        inactive_pane
-            .expanded_directories
-            .insert(unavailable_directory.clone(), loading_expanded_directory(4));
-        inactive_pane
-            .expanded_directories
-            .insert(unavailable_child, loading_expanded_directory(2));
+        inactive_pane.expanded_directories.insert(
+            ancestor_directory.clone(),
+            loading_expanded_directory(inactive_pane_id, 1),
+        );
+        inactive_pane.expanded_directories.insert(
+            unavailable_directory.clone(),
+            loading_expanded_directory(inactive_pane_id, 4),
+        );
+        inactive_pane.expanded_directories.insert(
+            unavailable_child,
+            loading_expanded_directory(inactive_pane_id, 2),
+        );
         inactive_pane.sync_active_tab_state();
         browser.panes.push(inactive_pane);
         reset_recorded_global_errors();
@@ -579,7 +590,7 @@ mod tests {
         DirectoryEntry::new(path, kind, EntryMetadata::default(), false, false, false)
     }
 
-    fn loading_expanded_directory(generation: u64) -> ExpandedDirectory {
+    fn loading_expanded_directory(pane_id: BrowserPaneId, generation: u64) -> ExpandedDirectory {
         ExpandedDirectory {
             entries: Vec::new(),
             status: ExpandedDirectoryStatus::Loading,
@@ -587,6 +598,7 @@ mod tests {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: generation,
+            load_context: Some(DirectoryExpansionLoadContext::BrowserTree { pane_id }),
             load_cancel: Some(tokio_util::sync::CancellationToken::new()),
         }
     }

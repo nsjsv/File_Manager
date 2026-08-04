@@ -80,6 +80,7 @@ fn icons_pane_rejects_thumbnail_results_from_hidden_persistent_expansions() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         },
     );
@@ -166,6 +167,7 @@ fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         },
     );
@@ -243,6 +245,7 @@ fn icon_grid_schedules_visible_expansion_thumbnail_requests() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 1,
+            load_context: None,
             load_cancel: None,
         },
     ));

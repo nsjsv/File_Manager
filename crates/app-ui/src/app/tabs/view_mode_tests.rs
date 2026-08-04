@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+use file_core::{DirectoryEntry, DirectoryScan, EntryMetadata, FileKind};
 
 use crate::app::FileBrowser;
 use crate::config;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
-    ColumnBrowserViewport, ExpandedDirectory, ExpandedDirectoryStatus, ListColumnKind, SplitAxis,
-    StartupEnvironment,
+    ColumnBrowserViewport, DirectoryExpansionLoadContext, ExpandedDirectory,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridExpansionAnchor,
+    IconGridExpansionContext, IconGridExpansionSessionId, IconGridExpansionState, ListColumnKind,
+    SplitAxis, StartupEnvironment,
 };
 use crate::startup_rendering::{StartupRenderingEnvironment, StartupRenderingEnvironmentStatus};
 use crate::thumbnail_cache::ColumnViewport;
@@ -36,7 +38,39 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         is_collapsing: false,
         animation_progress: 1.0,
         load_generation: 0,
+        load_context: None,
         load_cancel: None,
+    }
+}
+
+fn icon_grid_request(browser: &FileBrowser, path: &PathBuf) -> ExpandedDirectoryLoadRequest {
+    let state = browser
+        .icon_grid_expansion
+        .as_ref()
+        .expect("icon grid expansion");
+    let directory = state.directory(path).expect("expanded icon directory");
+    ExpandedDirectoryLoadRequest {
+        context: DirectoryExpansionLoadContext::IconGrid {
+            pane_id: state.context().pane_id,
+            current_dir: state.context().current_dir.clone(),
+            session_id: state.context().session_id,
+        },
+        path: path.clone(),
+        generation: directory.contents.load_generation,
+    }
+}
+
+fn list_request(browser: &FileBrowser, path: &PathBuf) -> ExpandedDirectoryLoadRequest {
+    let request = browser
+        .pending_list_expansion_follow_request()
+        .expect("pending list expansion follow request");
+    assert_eq!(&request.path, path);
+    request
+}
+
+fn finish_icon_animation(browser: &mut FileBrowser) {
+    for _ in 0..6 {
+        drop(browser.advance_icon_grid_expansion_animation());
     }
 }
 
@@ -268,6 +302,333 @@ fn switching_from_list_to_columns_replaces_stale_column_history() {
 }
 
 #[test]
+fn list_to_icons_follows_only_the_selected_loaded_branch() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let src = project.join("src");
+    let target = src.join("main.rs");
+    let stale = root.join("stale");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(stale.clone(), FileKind::Directory),
+    ];
+    browser.view_mode = BrowserViewMode::List;
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(src.clone(), FileKind::Directory)]),
+    );
+    browser.expanded_directories.insert(
+        src.clone(),
+        loaded_directory(vec![test_entry(target.clone(), FileKind::File)]),
+    );
+    browser
+        .expanded_directories
+        .insert(stale.clone(), loaded_directory(Vec::new()));
+    browser.selected = Some(target.clone());
+    browser.selected_paths = HashSet::from([target.clone()]);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Icons));
+
+    assert_eq!(browser.selected, None);
+    assert_eq!(browser.expanded_directories.len(), 3);
+    assert!(browser
+        .icon_grid_expansion
+        .as_ref()
+        .is_some_and(IconGridExpansionState::has_follow_plan));
+    let project_request = icon_grid_request(&browser, &project);
+    drop(browser.accept_expanded_directory(
+        project_request,
+        Ok(DirectoryScan {
+            path: project.clone(),
+            entries: vec![test_entry(src.clone(), FileKind::Directory)],
+            skipped: Vec::new(),
+        }),
+    ));
+    finish_icon_animation(&mut browser);
+    assert!(browser
+        .icon_grid_expansion
+        .as_ref()
+        .is_some_and(|state| state.directory(&src).is_some()));
+    assert!(browser
+        .icon_grid_expansion
+        .as_ref()
+        .is_some_and(|state| state.directory(&stale).is_none()));
+
+    let src_request = icon_grid_request(&browser, &src);
+    drop(browser.accept_expanded_directory(
+        src_request,
+        Ok(DirectoryScan {
+            path: src.clone(),
+            entries: vec![test_entry(target.clone(), FileKind::File)],
+            skipped: Vec::new(),
+        }),
+    ));
+    finish_icon_animation(&mut browser);
+
+    assert_eq!(browser.selected, Some(target.clone()));
+    assert_eq!(browser.selected_paths, HashSet::from([target]));
+    assert_eq!(
+        browser
+            .icon_grid_expansion
+            .as_ref()
+            .map(IconGridExpansionState::selection_directory),
+        Some(src.as_path())
+    );
+    assert!(browser
+        .icon_grid_expansion
+        .as_ref()
+        .is_some_and(|state| !state.has_follow_plan()));
+}
+
+#[test]
+fn list_to_icons_includes_the_selected_directory_when_it_is_expanded() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.view_mode = BrowserViewMode::List;
+    browser
+        .expanded_directories
+        .insert(project.clone(), loaded_directory(Vec::new()));
+    browser.selected = Some(project.clone());
+    browser.selected_paths = HashSet::from([project.clone()]);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Icons));
+
+    assert!(browser
+        .icon_grid_expansion
+        .as_ref()
+        .is_some_and(|state| state.root_path() == project));
+    let request = icon_grid_request(&browser, &project);
+    drop(browser.accept_expanded_directory(
+        request,
+        Ok(DirectoryScan {
+            path: project.clone(),
+            entries: Vec::new(),
+            skipped: Vec::new(),
+        }),
+    ));
+    finish_icon_animation(&mut browser);
+    assert_eq!(browser.selected, Some(project));
+}
+
+#[test]
+fn user_selection_cancels_list_to_icons_follow_before_old_load_completes() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let src = project.join("src");
+    let target = src.join("main.rs");
+    let other = root.join("other");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(other.clone(), FileKind::File),
+    ];
+    browser.view_mode = BrowserViewMode::List;
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(src.clone(), FileKind::Directory)]),
+    );
+    browser.expanded_directories.insert(
+        src.clone(),
+        loaded_directory(vec![test_entry(target.clone(), FileKind::File)]),
+    );
+    browser.selected = Some(target.clone());
+    browser.selected_paths = HashSet::from([target]);
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Icons));
+    let request = icon_grid_request(&browser, &project);
+
+    browser.select_path(other.clone());
+    drop(browser.accept_expanded_directory(
+        request,
+        Ok(DirectoryScan {
+            path: project.clone(),
+            entries: vec![test_entry(src.clone(), FileKind::Directory)],
+            skipped: Vec::new(),
+        }),
+    ));
+    finish_icon_animation(&mut browser);
+
+    assert_eq!(browser.selected, Some(other));
+    assert!(browser
+        .icon_grid_expansion
+        .as_ref()
+        .is_some_and(|state| !state.has_follow_plan() && state.directory(&src).is_none()));
+}
+
+#[test]
+fn icons_to_list_reloads_its_own_single_chain_before_restoring_selection() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let src = project.join("src");
+    let target = src.join("main.rs");
+    let stale = root.join("stale");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(stale.clone(), FileKind::Directory),
+    ];
+    browser.view_mode = BrowserViewMode::Icons;
+    browser
+        .expanded_directories
+        .insert(stale, loaded_directory(Vec::new()));
+    let mut expansion = IconGridExpansionState::new(
+        IconGridExpansionContext {
+            pane_id: BrowserPaneId::PRIMARY,
+            current_dir: root.clone(),
+            session_id: IconGridExpansionSessionId::new(41),
+        },
+        IconGridExpansionAnchor {
+            parent_directory: root.clone(),
+            path: project.clone(),
+            index: 0,
+        },
+        loaded_directory(vec![test_entry(src.clone(), FileKind::Directory)]),
+    );
+    assert!(expansion.insert_directory(
+        IconGridExpansionAnchor {
+            parent_directory: project.clone(),
+            path: src.clone(),
+            index: 0,
+        },
+        loaded_directory(vec![test_entry(target.clone(), FileKind::File)]),
+    ));
+    browser.icon_grid_expansion = Some(expansion);
+    browser.selected = Some(target.clone());
+    browser.selected_paths = HashSet::from([target.clone()]);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+
+    assert_eq!(
+        browser.expanded_directories.keys().collect::<Vec<_>>(),
+        vec![&project]
+    );
+    assert_eq!(browser.selected, None);
+    assert!(browser.list_expansion_follow.is_some());
+    let project_request = list_request(&browser, &project);
+    let mut stale_request = project_request.clone();
+    stale_request.generation += 1;
+    drop(browser.accept_expanded_directory(
+        stale_request,
+        Ok(DirectoryScan {
+            path: project.clone(),
+            entries: Vec::new(),
+            skipped: Vec::new(),
+        }),
+    ));
+    assert!(browser.list_expansion_follow.is_some());
+    assert!(browser
+        .expanded_directories
+        .get(&project)
+        .is_some_and(|expanded| matches!(expanded.status, ExpandedDirectoryStatus::Loading)));
+    drop(browser.accept_expanded_directory(
+        project_request,
+        Ok(DirectoryScan {
+            path: project.clone(),
+            entries: vec![test_entry(src.clone(), FileKind::Directory)],
+            skipped: Vec::new(),
+        }),
+    ));
+    assert!(browser.expanded_directories.contains_key(&src));
+    assert_eq!(browser.selected, None);
+
+    let src_request = list_request(&browser, &src);
+    drop(browser.accept_expanded_directory(
+        src_request,
+        Ok(DirectoryScan {
+            path: src,
+            entries: vec![test_entry(target.clone(), FileKind::File)],
+            skipped: Vec::new(),
+        }),
+    ));
+
+    assert_eq!(browser.selected, Some(target.clone()));
+    assert_eq!(browser.selected_paths, HashSet::from([target]));
+    assert!(browser.list_expansion_follow.is_none());
+}
+
+#[test]
+fn user_right_click_selection_cancels_icons_to_list_follow_before_old_load_completes() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let src = project.join("src");
+    let target = src.join("main.rs");
+    let other = root.join("other.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![
+        test_entry(project.clone(), FileKind::Directory),
+        test_entry(other.clone(), FileKind::File),
+    ];
+    browser.view_mode = BrowserViewMode::Icons;
+    let mut expansion = IconGridExpansionState::new(
+        IconGridExpansionContext {
+            pane_id: BrowserPaneId::PRIMARY,
+            current_dir: root.clone(),
+            session_id: IconGridExpansionSessionId::new(42),
+        },
+        IconGridExpansionAnchor {
+            parent_directory: root,
+            path: project.clone(),
+            index: 0,
+        },
+        loaded_directory(vec![test_entry(src.clone(), FileKind::Directory)]),
+    );
+    assert!(expansion.insert_directory(
+        IconGridExpansionAnchor {
+            parent_directory: project.clone(),
+            path: src.clone(),
+            index: 0,
+        },
+        loaded_directory(vec![test_entry(target.clone(), FileKind::File)]),
+    ));
+    browser.icon_grid_expansion = Some(expansion);
+    browser.selected = Some(target.clone());
+    browser.selected_paths = HashSet::from([target]);
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+    let request = list_request(&browser, &project);
+
+    drop(browser.handle_entry_right_clicked(other.clone()));
+    drop(browser.accept_expanded_directory(
+        request,
+        Ok(DirectoryScan {
+            path: project.clone(),
+            entries: vec![test_entry(src.clone(), FileKind::Directory)],
+            skipped: Vec::new(),
+        }),
+    ));
+
+    assert_eq!(browser.selected, None);
+    assert_eq!(browser.selected_paths, HashSet::from([other]));
+    assert!(browser.list_expansion_follow.is_none());
+    assert!(!browser.expanded_directories.contains_key(&project));
+    assert!(!browser.expanded_directories.contains_key(&src));
+}
+
+#[test]
+fn icons_to_list_without_interactive_chain_clears_hidden_list_expansion() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.view_mode = BrowserViewMode::Icons;
+    browser
+        .expanded_directories
+        .insert(project, loaded_directory(Vec::new()));
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+
+    assert!(browser.expanded_directories.is_empty());
+    assert!(browser.list_expansion_follow.is_none());
+}
+
+#[test]
 fn entering_icons_keeps_hierarchy_and_removes_hidden_selection() {
     let root = PathBuf::from("/workspace");
     let project = root.join("project");
@@ -296,7 +657,7 @@ fn entering_icons_keeps_hierarchy_and_removes_hidden_selection() {
 
     drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
 
-    assert!(browser.expanded_directories.contains_key(&project));
+    assert!(browser.expanded_directories.is_empty());
     assert_eq!(browser.deepest_open_column_directory, Some(project));
 }
 

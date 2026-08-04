@@ -241,6 +241,7 @@ mod tests {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         }
     }
@@ -323,6 +324,7 @@ mod tests {
                 is_collapsing: false,
                 animation_progress: 1.0,
                 load_generation: 0,
+                load_context: None,
                 load_cancel: None,
             },
         )]);
@@ -349,6 +351,7 @@ mod tests {
                 is_collapsing: false,
                 animation_progress: 1.0,
                 load_generation: 0,
+                load_context: None,
                 load_cancel: None,
             },
         )]);
@@ -373,6 +376,7 @@ mod tests {
                 is_collapsing: false,
                 animation_progress: 1.0,
                 load_generation: 0,
+                load_context: None,
                 load_cancel: None,
             },
         )]);
@@ -397,6 +401,7 @@ mod tests {
                 is_collapsing: true,
                 animation_progress: 0.5,
                 load_generation: 0,
+                load_context: None,
                 load_cancel: None,
             },
         )]);

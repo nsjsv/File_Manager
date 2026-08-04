@@ -66,6 +66,7 @@ fn child_column_preserves_pending_loaded_and_failed_mappings() {
             is_collapsing: false,
             animation_progress: 1.0,
             load_generation: 0,
+            load_context: None,
             load_cancel: None,
         },
     );

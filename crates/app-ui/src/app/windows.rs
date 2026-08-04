@@ -301,7 +301,7 @@ impl FileBrowser {
         self.archive_extraction = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
@@ -615,6 +615,7 @@ impl FileBrowser {
             || self.shortcut_capture.is_some()
             || self.operation_queue.is_panel_open()
             || self.file_drag.is_some()
+            || self.file_drop_session.is_some()
             || self.sidebar_bookmark_drag.is_some()
             || self.sidebar_bookmark_drop_slot.is_some()
             || self.selection_marquee.is_some()
@@ -622,7 +623,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;
@@ -668,6 +669,7 @@ impl FileBrowser {
         self.clear_file_properties_state();
         self.archive_creation = None;
         self.archive_extraction = None;
+        self.cancel_file_drag_interaction();
         self.clear_preview();
         self.pending_preview_resize = None;
 

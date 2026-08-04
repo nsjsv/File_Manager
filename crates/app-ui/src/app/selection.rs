@@ -8,9 +8,9 @@ use iced::Task;
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
 
 use crate::model::{
-    trash_location_path, BrowserPaneId, BrowserViewMode, ColumnEntryBounds, ContextMenuState,
-    FileContextMenuExpansion, FileContextMenuState, FileDeleteAction, FileDragStationaryAction,
-    LastActivationClick, Message, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
+    BrowserPaneId, BrowserViewMode, ColumnEntryBounds, ContextMenuState, FileContextMenuExpansion,
+    FileContextMenuState, FileDeleteAction, FileDragStationaryAction, LastActivationClick, Message,
+    SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
 };
 
 #[cfg(test)]
@@ -20,12 +20,16 @@ mod clipboard;
 mod column_gesture_tests;
 mod conflict;
 mod drag;
+mod file_drop;
+mod file_drop_target;
 mod keyboard_navigation;
 #[cfg(test)]
 mod tests;
 mod visible_paths;
+#[cfg(test)]
 mod wayland_drop;
-mod wayland_target;
+#[cfg(test)]
+mod x11_drop;
 
 #[cfg(test)]
 use drag::resolve_file_drag_target;
@@ -36,6 +40,7 @@ impl FileBrowser {
     }
 
     pub(super) fn select_path(&mut self, path: PathBuf) {
+        self.cancel_expansion_follow_plans();
         self.selected_paths.clear();
         self.selected_paths.insert(path.clone());
         self.selection_anchor = Some(path.clone());
@@ -71,6 +76,7 @@ impl FileBrowser {
         stationary_action: FileDragStationaryAction,
         column_directories_snapshot: Vec<PathBuf>,
     ) -> Task<Message> {
+        self.cancel_expansion_follow_plans();
         let was_selected = self.is_path_selected(&path);
         let rename_command = self.commit_rename_if_active();
 
@@ -100,7 +106,7 @@ impl FileBrowser {
             self.toggle_path_selection(path.clone());
             self.selection_anchor = Some(path.clone());
             self.drag_selection_anchor = Some(path.clone());
-            self.file_drag = None;
+            self.cancel_file_drag_interaction();
         } else {
             if was_selected && self.is_trash_view {
                 self.select_path(path.clone());
@@ -126,7 +132,7 @@ impl FileBrowser {
 
         let action_command = if is_double_click {
             self.drag_selection_anchor = None;
-            self.file_drag = None;
+            self.cancel_file_drag_interaction();
             self.activate_path(path)
         } else {
             Task::none()
@@ -244,11 +250,9 @@ impl FileBrowser {
         self.hovered_sidebar = Some(path.clone());
         self.cursor_paste_directory = None;
         if self.file_drag.is_some() {
-            if path == trash_location_path() {
-                self.clear_file_drag_target();
-            } else {
-                self.set_file_drag_target(path);
-            }
+            self.set_file_drop_target(file_drop_target::sidebar_file_drop_target_for_directory(
+                &path,
+            ));
         }
         Task::none()
     }
@@ -272,7 +276,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.focus_column_blank_context_or_clear_selection(directory);
 
         Task::batch([rename_command, self.request_browser_session_save()])
@@ -284,7 +288,7 @@ impl FileBrowser {
         self.context_menu = None;
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.record_pane_drag_pointer_press();
 
         rename_command
@@ -297,7 +301,7 @@ impl FileBrowser {
         let delete_action = self.file_delete_action_for_selection();
         self.clear_preview();
         self.drag_selection_anchor = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
             target: Some(path.clone()),
             target_is_directory: self.entry_kind(&path) == Some(FileKind::Directory),
@@ -376,6 +380,7 @@ impl FileBrowser {
     }
 
     fn start_selection_marquee_from(&mut self, source: SelectionMarqueeSource) -> Task<Message> {
+        self.cancel_expansion_follow_plans();
         if self.renaming.is_some() {
             return self.commit_rename_if_active();
         }
@@ -391,7 +396,7 @@ impl FileBrowser {
         self.clear_preview();
         self.context_menu = None;
         self.drag_selection_anchor = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         let preserve_existing = self.keyboard_modifiers.control();
         let base_selection = self.selected_paths.clone();
         if matches!(&source, SelectionMarqueeSource::PaneBlank) && !preserve_existing {
@@ -534,6 +539,7 @@ impl FileBrowser {
         if !self.file_browser_content_shortcuts_enabled() {
             return Task::none();
         }
+        self.cancel_expansion_follow_plans();
         let paths = self.select_all_selection_scope_paths();
         self.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
         self.selection_anchor = paths.first().cloned();
@@ -660,6 +666,7 @@ impl FileBrowser {
             return;
         }
 
+        self.cancel_expansion_follow_plans();
         self.selected_paths.clear();
         self.selected_paths.insert(path.clone());
         self.selection_anchor = Some(path);

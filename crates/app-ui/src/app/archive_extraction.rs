@@ -213,7 +213,7 @@ impl FileBrowser {
         self.transfer_conflict = None;
         self.shortcut_capture = None;
         self.operation_queue.close_panel();
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.selection_marquee = None;

@@ -166,6 +166,9 @@ impl FileBrowser {
             return Task::none();
         }
 
+        self.cancel_file_drag_interaction();
+        self.cancel_expansion_follow_plans();
+
         let invalidate_icon_grid_expansion =
             self.icon_grid_expansion.as_mut().is_some_and(|state| {
                 state.migrate_completed_paths(&migrations)

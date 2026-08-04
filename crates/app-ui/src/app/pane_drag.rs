@@ -81,7 +81,7 @@ impl FileBrowser {
 
         self.sync_active_tab_state();
         self.pane_drag_pointer_press = None;
-        self.file_drag = None;
+        self.cancel_file_drag_interaction();
         self.selection_marquee = None;
         self.drag_selection_anchor = None;
         self.sidebar_bookmark_drop_slot = None;
@@ -585,13 +585,15 @@ mod tests {
         let source = PathBuf::from("/workspace/left/report.txt");
         browser.cursor_position = Point::new(190.0, 50.0);
         browser.file_drag = Some(FileDragState {
+            gesture_id: crate::model::FileDragGestureId(1),
+            source_pane_id: browser.active_pane_id(),
+            source_tab_id: browser.active_tab_id,
             sources: vec![source.clone()],
             pressed_path: source,
+            bookmark_source: None,
             stationary_action: crate::model::FileDragStationaryAction::SelectionOnly,
-            target: None,
             phase: FileDragPhase::Dragging,
             native_dnd: FileDragNativeDndState::NotRequested,
-            wayland_target: None,
             column_directories_snapshot: Vec::new(),
         });
 
