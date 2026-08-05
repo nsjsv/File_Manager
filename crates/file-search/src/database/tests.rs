@@ -69,18 +69,36 @@ fn name_only_search_excludes_content_matches_and_marks_name_hits() {
 }
 
 #[test]
-fn explicit_bm25_preserves_default_rank_results_across_pages() {
-    fn default_ranked_hits(database: &SearchDatabase) -> Vec<(PathBuf, u64)> {
+fn native_rank_matches_bm25_across_pages_without_temporary_sorting() {
+    fn assert_native_rank_plan(plan: &[String]) {
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("file_search_fts VIRTUAL TABLE INDEX 32:")),
+            "FTS5 did not consume native rank ordering: {plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("USE TEMP B-TREE FOR ORDER BY")),
+            "native rank query created a temporary ORDER BY: {plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.contains("MATERIALIZE ranked")),
+            "native rank query still materialized an intermediate window: {plan:#?}"
+        );
+    }
+
+    fn explicit_bm25_hits(database: &SearchDatabase) -> Vec<(PathBuf, u64)> {
         let mut statement = database
             .connection
             .prepare(
-                "SELECT f.path, file_search_fts.rank
+                "SELECT f.path, bm25(file_search_fts) AS score
                  FROM file_search_fts
                  JOIN files f ON f.rowid = file_search_fts.rowid
                  WHERE file_search_fts MATCH ?1
                    AND f.tombstoned = 0
                    AND f.observation_state = 'observable'
-                 ORDER BY file_search_fts.rank",
+                 ORDER BY score",
             )
             .unwrap();
         statement
@@ -131,12 +149,9 @@ fn explicit_bm25_preserves_default_rank_results_across_pages() {
             .unwrap();
     }
     let query = SearchQuery::global(1, "needle");
-    assert!(database
-        .search_plan(&query)
-        .unwrap()
-        .iter()
-        .any(|step| step.contains("MATERIALIZE ranked")));
-    assert_eq!(searched_hits(&database), default_ranked_hits(&database));
+    let unfiltered_rank_plan = database.search_plan(&query).unwrap();
+    assert_native_rank_plan(&unfiltered_rank_plan);
+    assert_eq!(searched_hits(&database), explicit_bm25_hits(&database));
 
     let mut inaccessible = indexed_file(
         "/tmp/inaccessible.txt",
@@ -149,12 +164,9 @@ fn explicit_bm25_preserves_default_rank_results_across_pages() {
         message: "permission denied".to_owned(),
     };
     database.upsert_inaccessible_file(&inaccessible).unwrap();
-    assert!(!database
-        .search_plan(&query)
-        .unwrap()
-        .iter()
-        .any(|step| step.contains("MATERIALIZE ranked")));
-    assert_eq!(searched_hits(&database), default_ranked_hits(&database));
+    let metadata_filter_plan = database.search_plan(&query).unwrap();
+    assert_native_rank_plan(&metadata_filter_plan);
+    assert_eq!(searched_hits(&database), explicit_bm25_hits(&database));
 }
 
 #[test]
@@ -386,6 +398,60 @@ fn search_hits_expose_only_content_snippets() {
         .unwrap();
     assert_eq!(metadata_hit.match_source, MatchSource::Metadata);
     assert!(metadata_hit.snippet.is_none());
+}
+
+#[test]
+fn sql_snippet_gating_matches_public_match_sources() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for (path, name, content) in [
+        ("/tmp/name.txt", "ALPHA-beta-name.txt", "unrelated content"),
+        ("/tmp/content.txt", "content.txt", "alpha BETA body"),
+        ("/tmp/mixed.txt", "alpha-mixed.txt", "BETA body"),
+    ] {
+        database
+            .upsert_file(&indexed_file(path, name, content))
+            .unwrap();
+    }
+
+    let query = SearchQuery::global(1, "alpha beta");
+    let projected_snippets = database.projected_content_snippets(&query).unwrap();
+    let batch = database.search(&query).unwrap();
+    for (path, expected_source) in [
+        (Path::new("/tmp/name.txt"), MatchSource::Name),
+        (Path::new("/tmp/content.txt"), MatchSource::Content),
+        (Path::new("/tmp/mixed.txt"), MatchSource::Content),
+    ] {
+        let raw_snippet = projected_snippets
+            .iter()
+            .find(|(candidate, _)| candidate == path)
+            .unwrap()
+            .1
+            .as_ref();
+        let hit = batch.hits.iter().find(|hit| hit.path == path).unwrap();
+        assert_eq!(hit.match_source, expected_source);
+        assert_eq!(
+            raw_snippet.is_some(),
+            expected_source == MatchSource::Content
+        );
+        assert_eq!(
+            hit.snippet.is_some(),
+            expected_source == MatchSource::Content
+        );
+    }
+
+    let mut name_only_query = SearchQuery::global(2, "alpha BETA");
+    name_only_query.text_scope = SearchTextScope::NameOnly;
+    let projected_snippets = database
+        .projected_content_snippets(&name_only_query)
+        .unwrap();
+    let batch = database.search(&name_only_query).unwrap();
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].match_source, MatchSource::Name);
+    assert!(batch.hits[0].snippet.is_none());
+    assert_eq!(
+        projected_snippets,
+        vec![(Path::new("/tmp/name.txt").to_path_buf(), None)]
+    );
 }
 
 #[test]

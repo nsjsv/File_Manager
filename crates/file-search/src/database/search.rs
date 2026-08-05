@@ -18,7 +18,7 @@ const SEARCH_SNIPPET_CHARACTER_LIMIT: usize = 240;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FullTextQueryPlan {
     FilterWithMetadata,
-    RankBeforeMetadata,
+    UnfilteredRank,
 }
 
 impl SearchDatabase {
@@ -26,9 +26,10 @@ impl SearchDatabase {
         let limit = query.limit.clamp(1, 200);
         let fetch_limit = limit.saturating_add(1);
         let offset = query.cursor.map_or(0, |cursor| cursor.offset);
+        let tokens = search_tokens(&query.terms);
         let transaction = self.connection.unchecked_transaction()?;
         let full_text_plan = full_text_query_plan(&transaction, query)?;
-        let (sql, values) = search_sql(query, fetch_limit, offset, full_text_plan);
+        let (sql, values) = search_sql(query, &tokens, fetch_limit, offset, full_text_plan);
 
         let mut hits = {
             let mut statement = transaction.prepare(&sql)?;
@@ -40,7 +41,7 @@ impl SearchDatabase {
                     let score: f64 = row.get(7)?;
                     let raw_snippet: Option<String> = row.get(8)?;
                     let match_source =
-                        match_source_for_hit(query.text_scope, &query.terms, &display_name);
+                        match_source_for_hit(query.text_scope, &tokens, &display_name);
                     let snippet = if match_source == MatchSource::Content {
                         raw_snippet.and_then(|snippet| normalize_content_snippet(&snippet))
                     } else {
@@ -81,8 +82,9 @@ impl SearchDatabase {
     pub(super) fn search_plan(&self, query: &SearchQuery) -> SearchResult<Vec<String>> {
         let limit = query.limit.clamp(1, 200).saturating_add(1);
         let offset = query.cursor.map_or(0, |cursor| cursor.offset);
+        let tokens = search_tokens(&query.terms);
         let full_text_plan = full_text_query_plan(&self.connection, query)?;
-        let (sql, values) = search_sql(query, limit, offset, full_text_plan);
+        let (sql, values) = search_sql(query, &tokens, limit, offset, full_text_plan);
         let mut statement = self
             .connection
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
@@ -91,6 +93,26 @@ impl SearchDatabase {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into);
         plan
+    }
+
+    #[cfg(test)]
+    pub(super) fn projected_content_snippets(
+        &self,
+        query: &SearchQuery,
+    ) -> SearchResult<Vec<(std::path::PathBuf, Option<String>)>> {
+        let limit = query.limit.clamp(1, 200).saturating_add(1);
+        let offset = query.cursor.map_or(0, |cursor| cursor.offset);
+        let tokens = search_tokens(&query.terms);
+        let full_text_plan = full_text_query_plan(&self.connection, query)?;
+        let (sql, values) = search_sql(query, &tokens, limit, offset, full_text_plan);
+        let mut statement = self.connection.prepare(&sql)?;
+        let rows = statement
+            .query_map(params_from_iter(values), |row| {
+                let path: Vec<u8> = row.get(0)?;
+                Ok((path_from_storage_bytes(path), row.get(8)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn indexed_file_count(&self) -> SearchResult<u64> {
@@ -124,54 +146,37 @@ fn full_text_query_plan(
     Ok(if hidden_rows_exist {
         FullTextQueryPlan::FilterWithMetadata
     } else {
-        FullTextQueryPlan::RankBeforeMetadata
+        FullTextQueryPlan::UnfilteredRank
     })
 }
 
 fn search_sql(
     query: &SearchQuery,
+    tokens: &[&str],
     limit: usize,
     offset: usize,
     full_text_plan: FullTextQueryPlan,
 ) -> (String, Vec<Value>) {
-    let match_expression = search_match_expression(&query.terms, query.text_scope);
-    if let (Some(match_expression), FullTextQueryPlan::RankBeforeMetadata) =
-        (match_expression.as_ref(), full_text_plan)
-    {
-        return (
-            "WITH ranked AS MATERIALIZED (
-                SELECT file_search_fts.rowid AS rowid, bm25(file_search_fts) AS score,
-                       snippet(file_search_fts, 2, '', '', '...', 16) AS content_snippet
-                FROM file_search_fts
-                WHERE file_search_fts MATCH ?
-                ORDER BY score LIMIT ? OFFSET ?
-             )
-             SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
-                    f.created_ms, ranked.score, ranked.content_snippet
-             FROM ranked
-             JOIN files f ON f.rowid = ranked.rowid
-             ORDER BY ranked.score"
-                .to_owned(),
-            vec![
-                Value::Text(match_expression.clone()),
-                Value::Integer(limit as i64),
-                Value::Integer(offset as i64),
-            ],
-        );
-    }
+    let match_expression = search_match_expression(tokens, query.text_scope);
     let recursive_range = recursive_path_range(query);
     let range_drives_query = match_expression.is_none() && recursive_range.is_some();
     let mut values = Vec::new();
     let mut sql = if let Some(match_expression) = match_expression.as_ref() {
+        let snippet_projection = content_snippet_projection(tokens, query.text_scope, &mut values);
         values.push(Value::Text(match_expression.clone()));
-        "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
-                f.created_ms, bm25(file_search_fts) AS score,
-                snippet(file_search_fts, 2, '', '', '...', 16) AS content_snippet
+        let mut full_text_sql = format!(
+            "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
+                f.created_ms, file_search_fts.rank AS score,
+                {snippet_projection}
          FROM file_search_fts
          JOIN files f ON f.rowid = file_search_fts.rowid
-         WHERE file_search_fts MATCH ? AND "
-            .to_owned()
-            + QUERY_VISIBLE_PREDICATE
+         WHERE file_search_fts MATCH ?"
+        );
+        if full_text_plan == FullTextQueryPlan::FilterWithMetadata {
+            full_text_sql.push_str(" AND ");
+            full_text_sql.push_str(QUERY_VISIBLE_PREDICATE);
+        }
+        full_text_sql
     } else if let Some(range) = recursive_range.as_ref() {
         let mut scoped_sql = "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms,
                     f.accessed_ms, f.created_ms, 0.0 AS score, NULL AS content_snippet
@@ -195,8 +200,8 @@ fn search_sql(
     }
     append_filters(&mut sql, &mut values, query);
     if match_expression.is_some() {
-        // bundled SQLite 3.46 可复用投影分数，且与默认 rank 的分页顺序等价。
-        sql.push_str(" ORDER BY score LIMIT ? OFFSET ?");
+        // FTS5 可在原生 rank 顺序下提前满足 LIMIT，避免评分并排序全部命中。
+        sql.push_str(" ORDER BY file_search_fts.rank LIMIT ? OFFSET ?");
     } else {
         sql.push_str(" ORDER BY f.modified_ms DESC, f.display_name ASC LIMIT ? OFFSET ?");
     }
@@ -314,10 +319,13 @@ fn append_time_filter(
     }
 }
 
-fn search_match_expression(terms: &str, text_scope: SearchTextScope) -> Option<String> {
-    let tokens = terms
-        .split_whitespace()
-        .filter(|token| !token.is_empty())
+fn search_tokens(terms: &str) -> Vec<&str> {
+    terms.split_whitespace().collect()
+}
+
+fn search_match_expression(tokens: &[&str], text_scope: SearchTextScope) -> Option<String> {
+    let tokens = tokens
+        .iter()
         .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
         .collect::<Vec<_>>();
     if tokens.is_empty() {
@@ -330,12 +338,34 @@ fn search_match_expression(terms: &str, text_scope: SearchTextScope) -> Option<S
     })
 }
 
+fn content_snippet_projection(
+    tokens: &[&str],
+    text_scope: SearchTextScope,
+    values: &mut Vec<Value>,
+) -> String {
+    if text_scope == SearchTextScope::NameOnly {
+        return "NULL AS content_snippet".to_owned();
+    }
+    debug_assert!(!tokens.is_empty());
+    let mut projection = "CASE WHEN ".to_owned();
+    for (index, token) in tokens.iter().enumerate() {
+        if index > 0 {
+            projection.push_str(" AND ");
+        }
+        projection.push_str("instr(lower(f.display_name), lower(?)) > 0");
+        values.push(Value::Text((*token).to_owned()));
+    }
+    projection.push_str(
+        " THEN NULL ELSE snippet(file_search_fts, 2, '', '', '...', 16) END AS content_snippet",
+    );
+    projection
+}
+
 fn match_source_for_hit(
     text_scope: SearchTextScope,
-    terms: &str,
+    terms: &[&str],
     display_name: &str,
 ) -> MatchSource {
-    let terms = terms.split_whitespace().collect::<Vec<_>>();
     if terms.is_empty() {
         return MatchSource::Metadata;
     }
