@@ -194,6 +194,184 @@ fn clear_tasks_keeps_column_widths() {
     let _ = fs::remove_dir_all(root);
 }
 
+fn stored_browser_session(path: &Path) -> StoredBrowserSession {
+    StoredBrowserSession {
+        panes: vec![StoredBrowserPane {
+            id: 0,
+            tabs: vec![StoredBrowserTab {
+                id: 0,
+                directory: StoredPath::from_path(path),
+                is_trash_view: false,
+                selected: None,
+                selected_paths: Vec::new(),
+                deepest_open_column_directory: None,
+                expanded_directories: Vec::new(),
+                view_mode: StoredBrowserViewMode::List,
+                back_stack: Vec::new(),
+                forward_stack: Vec::new(),
+            }],
+            active_tab_id: 0,
+            column_browser_viewport: StoredColumnBrowserViewport {
+                offset_x: 0.0,
+                width: 800.0,
+            },
+            column_viewports: Vec::new(),
+        }],
+        layout: StoredBrowserPaneLayout::Single { active: 0 },
+    }
+}
+
+fn stored_recoverable_copy() -> StoredOperation {
+    StoredOperation::Copy {
+        transfers: vec![StoredTransfer {
+            source: StoredPath::from_path(Path::new("/tmp/source")),
+            target: StoredPath::from_path(Path::new("/tmp/target")),
+            conflict_strategy: StoredTransferConflictStrategy::Fail,
+        }],
+        verification: StoredFileOperationVerification::BasicMetadata,
+        recovery_version: Some(TRANSFER_JOURNAL_VERSION),
+    }
+}
+
+#[test]
+fn application_shutdown_commits_session_recovery_and_transient_cleanup_atomically() {
+    let (store, root) = test_store();
+    let claimed = store
+        .insert_claimed_recoverable_transfer_task(&stored_recoverable_copy())
+        .unwrap();
+    let recoverable_task_id = claimed.task_id;
+    drop(claimed.runner_lease);
+    let transient_task_id = store
+        .insert_task(&StoredOperation::CreateDirectory {
+            parent: StoredPath::from_path(Path::new("/tmp")),
+        })
+        .unwrap();
+    let session = stored_browser_session(Path::new("/tmp/final-session"));
+
+    store
+        .commit_application_shutdown(StoredApplicationShutdown {
+            browser_session: StoredBrowserSessionShutdown::Persist(session.clone()),
+            interrupted_recoverable_tasks: vec![StoredInterruptedRecoverableTask {
+                task_id: recoverable_task_id,
+                status: StoredTaskStatus::RecoveryPending,
+                progress: StoredProgress::with_fraction(0.25),
+                error: Some("application stopped".to_owned()),
+            }],
+            transient_task_ids: vec![transient_task_id],
+        })
+        .unwrap();
+
+    assert_eq!(store.read_browser_session().unwrap(), Some(session));
+    assert_eq!(
+        store
+            .read_task(recoverable_task_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        StoredTaskStatus::RecoveryPending
+    );
+    assert!(store.read_task(transient_task_id).unwrap().is_none());
+    assert!(!store
+        .read_transfer_recovery(recoverable_task_id)
+        .unwrap()
+        .journal_entries
+        .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn application_shutdown_rejects_transient_id_with_recovery_and_rolls_back() {
+    let (store, root) = test_store();
+    let previous_session = stored_browser_session(Path::new("/tmp/previous-session"));
+    store.replace_browser_session(&previous_session).unwrap();
+    let claimed = store
+        .insert_claimed_recoverable_transfer_task(&stored_recoverable_copy())
+        .unwrap();
+    let recoverable_task_id = claimed.task_id;
+    drop(claimed.runner_lease);
+
+    let error = store
+        .commit_application_shutdown(StoredApplicationShutdown {
+            browser_session: StoredBrowserSessionShutdown::Persist(stored_browser_session(
+                Path::new("/tmp/new-session"),
+            )),
+            interrupted_recoverable_tasks: Vec::new(),
+            transient_task_ids: vec![recoverable_task_id],
+        })
+        .unwrap_err();
+
+    assert!(matches!(error, StoreError::InvalidRecoverableOperation(_)));
+    assert_eq!(
+        store.read_browser_session().unwrap(),
+        Some(previous_session)
+    );
+    assert!(store.read_task(recoverable_task_id).unwrap().is_some());
+    assert!(!store
+        .read_transfer_recovery(recoverable_task_id)
+        .unwrap()
+        .journal_entries
+        .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn application_shutdown_rolls_back_prior_task_writes_when_session_write_fails() {
+    let (store, root) = test_store();
+    let claimed = store
+        .insert_claimed_recoverable_transfer_task(&stored_recoverable_copy())
+        .unwrap();
+    let recoverable_task_id = claimed.task_id;
+    drop(claimed.runner_lease);
+    let transient_task_id = store
+        .insert_task(&StoredOperation::CreateDirectory {
+            parent: StoredPath::from_path(Path::new("/tmp")),
+        })
+        .unwrap();
+    let connection = rusqlite::Connection::open(root.join("state.sqlite")).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_shutdown_session
+             BEFORE INSERT ON browser_session
+             BEGIN
+                 SELECT RAISE(FAIL, 'injected shutdown session failure');
+             END;",
+        )
+        .unwrap();
+
+    let error = store
+        .commit_application_shutdown(StoredApplicationShutdown {
+            browser_session: StoredBrowserSessionShutdown::Persist(stored_browser_session(
+                Path::new("/tmp/new-session"),
+            )),
+            interrupted_recoverable_tasks: vec![StoredInterruptedRecoverableTask {
+                task_id: recoverable_task_id,
+                status: StoredTaskStatus::RecoveryPending,
+                progress: StoredProgress::with_fraction(0.5),
+                error: Some("application stopped".to_owned()),
+            }],
+            transient_task_ids: vec![transient_task_id],
+        })
+        .unwrap_err();
+
+    assert!(matches!(error, StoreError::Sqlite(_)));
+    assert_eq!(
+        store
+            .read_task(recoverable_task_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        StoredTaskStatus::Pending
+    );
+    assert!(store.read_task(transient_task_id).unwrap().is_some());
+    assert!(store.read_browser_session().unwrap().is_none());
+    assert!(!store
+        .read_transfer_recovery(recoverable_task_id)
+        .unwrap()
+        .journal_entries
+        .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn browser_session_roundtrip_replace_and_clear() {
     let (store, root) = test_store();
@@ -259,6 +437,10 @@ fn icon_browser_view_mode_uses_stable_json_value() {
 fn user_preferences_roundtrip_replace() {
     let (store, root) = test_store();
     assert_eq!(store.read_user_preferences().unwrap(), None);
+    assert_eq!(
+        StoredUserPreferences::default().max_preview_file_bytes,
+        25 * 1024 * 1024
+    );
     let first = StoredUserPreferences {
         network_list_thumbnail_downloads_enabled: true,
         max_preview_file_bytes: 8 * 1024 * 1024,

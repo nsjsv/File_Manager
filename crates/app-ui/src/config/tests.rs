@@ -655,10 +655,8 @@ fn default_user_config_keeps_expected_preview_defaults() {
     let config = default_user_config();
 
     assert!(!config.network_list_thumbnail_downloads_enabled);
-    assert_eq!(
-        config.max_preview_file_bytes,
-        DEFAULT_MAX_PREVIEW_FILE_BYTES
-    );
+    assert_eq!(DEFAULT_MAX_PREVIEW_FILE_BYTES, 25 * 1024 * 1024);
+    assert_eq!(config.max_preview_file_bytes, 25 * 1024 * 1024);
     assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
     assert_eq!(config.icon_grid_size, DEFAULT_ICON_GRID_SIZE);
     assert!(!config.save_view_state);

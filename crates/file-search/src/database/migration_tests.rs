@@ -1,9 +1,12 @@
+use std::path::Path;
+
 use rusqlite::{params, Connection};
 use tempfile::tempdir;
 
 use crate::extractor::ExtractionStatus;
+use crate::model::SearchQuery;
 
-use super::SearchDatabase;
+use super::{path_to_storage, SearchDatabase, SCHEMA_VERSION};
 
 #[test]
 fn path_migration_failure_rolls_back_every_rebuilt_table() {
@@ -120,4 +123,252 @@ fn path_migration_failure_rolls_back_every_rebuilt_table() {
         )
         .unwrap();
     assert_eq!(partial_tables, 0);
+}
+
+fn create_schema_eight_database(database_path: &Path) -> i64 {
+    let database = SearchDatabase::open(database_path).unwrap();
+    let content_status = serde_json::to_string(&ExtractionStatus::Indexed).unwrap();
+    database
+        .connection
+        .execute(
+            "INSERT INTO files (
+                path, parent_path, display_name, kind, size, content_status
+             ) VALUES (?1, ?2, 'legacy.txt', 'file', 11, ?3)",
+            params![
+                path_to_storage(Path::new("/tmp/legacy.txt")),
+                path_to_storage(Path::new("/tmp")),
+                content_status,
+            ],
+        )
+        .unwrap();
+    let file_rowid = database.connection.last_insert_rowid();
+    database
+        .connection
+        .execute_batch(
+            "DROP TABLE file_search_fts;
+             DROP TABLE file_search_snippets;
+             CREATE VIRTUAL TABLE file_search_fts
+                USING fts5(path UNINDEXED, name, content);",
+        )
+        .unwrap();
+    database
+        .connection
+        .execute(
+            "INSERT INTO file_search_fts(rowid, path, name, content)
+             VALUES(?1, '/tmp/legacy.txt', 'legacy.txt', 'preserved needle body')",
+            [file_rowid],
+        )
+        .unwrap();
+    database
+        .connection
+        .pragma_update(None, "user_version", 8)
+        .unwrap();
+    file_rowid
+}
+
+fn assert_schema_eight_fts_preserved(database_path: &Path, expected_rows: i64) {
+    let connection = Connection::open(database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        8
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM file_search_fts
+                 WHERE file_search_fts MATCH 'needle'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        expected_rows
+    );
+}
+
+fn assert_no_migration_fts_table(database_path: &Path) {
+    let connection = Connection::open(database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema
+                 WHERE name = 'file_search_fts_v9'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn schema_eight_fulltext_migration_preserves_hits_and_builds_bounded_preview() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let expected_rowid = create_schema_eight_database(&database_path);
+
+    let database = SearchDatabase::open(&database_path).unwrap();
+    assert_eq!(
+        database
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        SCHEMA_VERSION
+    );
+    assert_eq!(
+        database
+            .connection
+            .query_row("SELECT rowid FROM file_search_fts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        expected_rowid
+    );
+    assert_eq!(
+        database
+            .connection
+            .query_row(
+                "SELECT preview FROM file_search_snippets WHERE file_rowid = ?1",
+                [expected_rowid],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "preserved needle body"
+    );
+    let hits = database
+        .search(&SearchQuery::global(1, "needle"))
+        .unwrap()
+        .hits;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].path, Path::new("/tmp/legacy.txt"));
+}
+
+#[test]
+fn schema_nine_create_failure_rolls_back_to_schema_eight() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    create_schema_eight_database(&database_path);
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch("CREATE TABLE file_search_fts_v9(sentinel INTEGER);")
+        .unwrap();
+    drop(connection);
+
+    assert!(SearchDatabase::open(&database_path).is_err());
+    assert_schema_eight_fts_preserved(&database_path, 1);
+    let connection = Connection::open(&database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name = 'file_search_fts_v9'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "CREATE TABLE file_search_fts_v9(sentinel INTEGER)"
+    );
+}
+
+#[test]
+fn schema_nine_validation_failure_rolls_back_to_schema_eight() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    create_schema_eight_database(&database_path);
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO file_search_fts(rowid, path, name, content)
+             VALUES(999, '/tmp/orphan.txt', 'orphan.txt', 'needle orphan')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(SearchDatabase::open(&database_path).is_err());
+    assert_schema_eight_fts_preserved(&database_path, 2);
+    assert_no_migration_fts_table(&database_path);
+}
+
+#[test]
+fn schema_nine_copy_failure_rolls_back_to_schema_eight() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let file_rowid = create_schema_eight_database(&database_path);
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE file_search_fts;
+             CREATE VIRTUAL TABLE file_search_fts
+                USING fts5(path UNINDEXED, name, body);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO file_search_fts(rowid, path, name, body)
+             VALUES(?1, '/tmp/legacy.txt', 'legacy.txt', 'preserved needle body')",
+            [file_rowid],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(SearchDatabase::open(&database_path).is_err());
+    let connection = Connection::open(&database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        8
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT body FROM file_search_fts", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "preserved needle body"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'file_search_fts_v9'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn schema_nine_replace_failure_rolls_back_to_schema_eight() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    create_schema_eight_database(&database_path);
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE file_search_snippets(
+                file_rowid INTEGER PRIMARY KEY,
+                preview TEXT NOT NULL
+             );
+             INSERT INTO file_search_snippets VALUES(77, 'sentinel');",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(SearchDatabase::open(&database_path).is_err());
+    assert_schema_eight_fts_preserved(&database_path, 1);
+    assert_no_migration_fts_table(&database_path);
+    let connection = Connection::open(&database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT preview FROM file_search_snippets WHERE file_rowid = 77",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "sentinel"
+    );
 }

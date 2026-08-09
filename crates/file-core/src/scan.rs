@@ -1,20 +1,22 @@
 #[cfg(unix)]
 use std::ffi::CStr;
 use std::ffi::OsString;
-use std::io;
 #[cfg(unix)]
 use std::mem::MaybeUninit;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-use crate::{sort_entries, DirectoryEntry, EntryMetadata, FileKind, SortDirection, SortField};
+use crate::{
+    resolve_directory_metadata, sort_discovered_entry_indices, sort_entries, DirectoryEntry,
+    DirectoryMetadataRequest, DirectoryMetadataRequirement, DirectoryMetadataResolver,
+    DiscoveredDirectoryEntry, FileKind, SortDirection, SortField,
+};
 
 const DIRECTORY_SCAN_BATCH_SIZE: usize = 128;
 
@@ -37,6 +39,22 @@ impl Default for ScanOptions {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DirectoryDiscovery {
+    pub path: PathBuf,
+    pub entries: Arc<Vec<DiscoveredDirectoryEntry>>,
+    pub order: Arc<Vec<usize>>,
+    pub metadata_resolver: DirectoryMetadataResolver,
+    pub warnings: Vec<ScanWarning>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectoryDiscoveryBatch {
+    pub path: PathBuf,
+    pub entries: Vec<DiscoveredDirectoryEntry>,
+    pub warnings: Vec<ScanWarning>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryScan {
     pub path: PathBuf,
@@ -57,19 +75,12 @@ pub struct DirectoryScanBatch {
     pub skipped: Vec<ScanWarning>,
 }
 
-pub async fn scan_directory(
-    path: impl AsRef<Path>,
-    options: ScanOptions,
-) -> Result<DirectoryScan, FileError> {
-    scan_directory_with_progress(path, options, CancellationToken::new(), |_| {}).await
-}
-
-pub async fn scan_directory_with_progress(
+pub async fn discover_directory_with_progress(
     path: impl AsRef<Path>,
     options: ScanOptions,
     cancellation: CancellationToken,
-    mut on_batch: impl FnMut(DirectoryScanBatch),
-) -> Result<DirectoryScan, FileError> {
+    mut on_batch: impl FnMut(DirectoryDiscoveryBatch),
+) -> Result<DirectoryDiscovery, FileError> {
     let path = path.as_ref().to_path_buf();
     if cancellation.is_cancelled() {
         return Err(FileError::Cancelled);
@@ -80,11 +91,10 @@ pub async fn scan_directory_with_progress(
             path: path.clone(),
             source,
         })?;
-
     let mut entries = Vec::new();
-    let mut skipped = Vec::new();
+    let mut warnings = Vec::new();
     let mut batch_entries = Vec::new();
-    let mut batch_skipped = Vec::new();
+    let mut batch_warnings = Vec::new();
 
     loop {
         let next_entry = tokio::select! {
@@ -101,181 +111,186 @@ pub async fn scan_directory_with_progress(
                 })
             }
         };
-
         let name = dir_entry.file_name();
         let is_hidden = is_hidden_name(&name);
         if is_hidden && !options.include_hidden {
             continue;
         }
-
-        let entry_result = tokio::select! {
+        let entry_path = dir_entry.path();
+        let file_type = tokio::select! {
             _ = cancellation.cancelled() => return Err(FileError::Cancelled),
-            entry_result = entry_from_dir_entry(dir_entry, name, is_hidden) => entry_result,
+            file_type = dir_entry.file_type() => file_type,
         };
-        match entry_result {
-            Ok(entry) => {
-                entries.push(entry.clone());
-                batch_entries.push(entry);
+        let entry = match file_type {
+            Ok(file_type) => {
+                let kind = if file_type.is_dir() {
+                    FileKind::Directory
+                } else if file_type.is_file() {
+                    FileKind::File
+                } else if file_type.is_symlink() {
+                    FileKind::Symlink
+                } else {
+                    FileKind::Other
+                };
+                DiscoveredDirectoryEntry::new(
+                    entry_path,
+                    name,
+                    kind,
+                    is_hidden,
+                    file_type.is_symlink(),
+                )
             }
-            Err(FileError::Metadata { path, source }) => {
+            Err(source) => {
                 let warning = ScanWarning {
-                    path,
+                    path: entry_path.clone(),
                     message: source.to_string(),
                 };
-                skipped.push(warning.clone());
-                batch_skipped.push(warning);
+                warnings.push(warning.clone());
+                batch_warnings.push(warning);
+                DiscoveredDirectoryEntry::with_unavailable_filesystem_metadata(
+                    entry_path,
+                    name,
+                    is_hidden,
+                    source.to_string(),
+                )
             }
-            Err(error) => return Err(error),
-        }
+        };
+        entries.push(entry.clone());
+        batch_entries.push(entry);
 
-        if batch_entries.len() + batch_skipped.len() >= DIRECTORY_SCAN_BATCH_SIZE {
-            emit_directory_scan_batch(&path, &mut batch_entries, &mut batch_skipped, &mut on_batch);
+        if batch_entries.len() + batch_warnings.len() >= DIRECTORY_SCAN_BATCH_SIZE {
+            emit_directory_discovery_batch(
+                &path,
+                &mut batch_entries,
+                &mut batch_warnings,
+                &mut on_batch,
+            );
         }
     }
+    emit_directory_discovery_batch(
+        &path,
+        &mut batch_entries,
+        &mut batch_warnings,
+        &mut on_batch,
+    );
+    let order = Arc::new(sort_discovered_entry_indices(&entries, &options));
+    let entries = Arc::new(entries);
+    let metadata_resolver = DirectoryMetadataResolver::new(path.clone(), Arc::clone(&entries));
 
-    emit_directory_scan_batch(&path, &mut batch_entries, &mut batch_skipped, &mut on_batch);
+    Ok(DirectoryDiscovery {
+        path,
+        entries,
+        order,
+        metadata_resolver,
+        warnings,
+    })
+}
 
+fn emit_directory_discovery_batch(
+    path: &Path,
+    entries: &mut Vec<DiscoveredDirectoryEntry>,
+    warnings: &mut Vec<ScanWarning>,
+    on_batch: &mut impl FnMut(DirectoryDiscoveryBatch),
+) {
+    if entries.is_empty() && warnings.is_empty() {
+        return;
+    }
+    on_batch(DirectoryDiscoveryBatch {
+        path: path.to_path_buf(),
+        entries: std::mem::take(entries),
+        warnings: std::mem::take(warnings),
+    });
+}
+
+pub async fn scan_directory(
+    path: impl AsRef<Path>,
+    options: ScanOptions,
+) -> Result<DirectoryScan, FileError> {
+    scan_directory_with_progress(path, options, CancellationToken::new(), |_| {}).await
+}
+
+pub async fn scan_directory_with_progress(
+    path: impl AsRef<Path>,
+    options: ScanOptions,
+    cancellation: CancellationToken,
+    mut on_batch: impl FnMut(DirectoryScanBatch),
+) -> Result<DirectoryScan, FileError> {
+    let discovery =
+        discover_directory_with_progress(path, options.clone(), cancellation.clone(), |_| {})
+            .await?;
+    let target_count = discovery.entries.len();
+    let metadata_resolution = resolve_directory_metadata(
+        discovery.metadata_resolver.clone(),
+        DirectoryMetadataRequest {
+            request_generation: 0,
+            requirement: DirectoryMetadataRequirement::IdentityNames,
+            targets: (0..target_count).collect(),
+        },
+        cancellation,
+    )
+    .await?;
+    let mut entries = discovery
+        .entries
+        .iter()
+        .filter_map(DiscoveredDirectoryEntry::complete_entry)
+        .collect::<Vec<_>>();
     sort_entries(&mut entries, &options);
+    let mut skipped = discovery.warnings;
+    for warning in metadata_resolution.warnings {
+        if !skipped.contains(&warning) {
+            skipped.push(warning);
+        }
+    }
+    emit_complete_scan_batches(&discovery.path, &entries, &skipped, &mut on_batch);
 
     Ok(DirectoryScan {
-        path,
+        path: discovery.path,
         entries,
         skipped,
     })
 }
 
-fn emit_directory_scan_batch(
+fn emit_complete_scan_batches(
     path: &Path,
-    entries: &mut Vec<DirectoryEntry>,
-    skipped: &mut Vec<ScanWarning>,
+    entries: &[DirectoryEntry],
+    skipped: &[ScanWarning],
     on_batch: &mut impl FnMut(DirectoryScanBatch),
 ) {
-    if entries.is_empty() && skipped.is_empty() {
-        return;
+    let mut pending_skipped = skipped.to_vec();
+    for chunk in entries.chunks(DIRECTORY_SCAN_BATCH_SIZE) {
+        on_batch(DirectoryScanBatch {
+            path: path.to_path_buf(),
+            entries: chunk.to_vec(),
+            skipped: std::mem::take(&mut pending_skipped),
+        });
     }
-
-    on_batch(DirectoryScanBatch {
-        path: path.to_path_buf(),
-        entries: std::mem::take(entries),
-        skipped: std::mem::take(skipped),
-    });
-}
-
-pub(crate) async fn entry_from_dir_entry(
-    dir_entry: fs::DirEntry,
-    name: std::ffi::OsString,
-    is_hidden: bool,
-) -> Result<DirectoryEntry, FileError> {
-    let path = dir_entry.path();
-    entry_from_path(path, name, is_hidden).await
-}
-
-pub(crate) async fn entry_from_path(
-    path: PathBuf,
-    name: OsString,
-    is_hidden: bool,
-) -> Result<DirectoryEntry, FileError> {
-    let symlink_metadata =
-        fs::symlink_metadata(&path)
-            .await
-            .map_err(|source| FileError::Metadata {
-                path: path.clone(),
-                source,
-            })?;
-    let file_type = symlink_metadata.file_type();
-    let is_symlink = file_type.is_symlink();
-    let is_broken_symlink = if is_symlink {
-        matches!(fs::metadata(&path).await, Err(error) if error.kind() == io::ErrorKind::NotFound)
-    } else {
-        false
-    };
-
-    Ok(entry_from_metadata(
-        path,
-        name,
-        is_hidden,
-        &symlink_metadata,
-        is_broken_symlink,
-    ))
+    if entries.is_empty() && !pending_skipped.is_empty() {
+        on_batch(DirectoryScanBatch {
+            path: path.to_path_buf(),
+            entries: Vec::new(),
+            skipped: pending_skipped,
+        });
+    }
 }
 
 pub(crate) fn entry_from_metadata(
     path: PathBuf,
     name: OsString,
     is_hidden: bool,
-    symlink_metadata: &std::fs::Metadata,
+    metadata: &std::fs::Metadata,
     is_broken_symlink: bool,
 ) -> DirectoryEntry {
-    let file_type = symlink_metadata.file_type();
-    let is_symlink = file_type.is_symlink();
-    let kind = if file_type.is_dir() {
-        FileKind::Directory
-    } else if file_type.is_file() {
-        FileKind::File
-    } else if is_symlink {
-        FileKind::Symlink
-    } else {
-        FileKind::Other
-    };
-
-    let metadata = entry_metadata_from_fs_metadata(symlink_metadata);
-
-    DirectoryEntry::with_file_name(
+    crate::directory_metadata::complete_entry_from_metadata(
         path,
         name,
-        kind,
-        metadata,
         is_hidden,
-        is_symlink,
+        metadata,
         is_broken_symlink,
     )
 }
 
-fn entry_metadata_from_fs_metadata(metadata: &std::fs::Metadata) -> EntryMetadata {
-    EntryMetadata {
-        len: metadata.len(),
-        modified: metadata.modified().ok(),
-        accessed: metadata.accessed().ok(),
-        created: metadata.created().ok(),
-        readonly: metadata.permissions().readonly(),
-        owner_name: owner_name_from_fs_metadata(metadata),
-        group_name: group_name_from_fs_metadata(metadata),
-        permissions_mode: permissions_mode_from_fs_metadata(metadata),
-    }
-}
-
 #[cfg(unix)]
-fn owner_name_from_fs_metadata(metadata: &std::fs::Metadata) -> Option<String> {
-    Some(lookup_unix_user_name(metadata.uid()))
-}
-
-#[cfg(not(unix))]
-fn owner_name_from_fs_metadata(_metadata: &std::fs::Metadata) -> Option<String> {
-    None
-}
-
-#[cfg(unix)]
-fn group_name_from_fs_metadata(metadata: &std::fs::Metadata) -> Option<String> {
-    Some(lookup_unix_group_name(metadata.gid()))
-}
-
-#[cfg(not(unix))]
-fn group_name_from_fs_metadata(_metadata: &std::fs::Metadata) -> Option<String> {
-    None
-}
-
-#[cfg(unix)]
-fn permissions_mode_from_fs_metadata(metadata: &std::fs::Metadata) -> Option<u32> {
-    Some(metadata.mode() & 0o7777)
-}
-
-#[cfg(not(unix))]
-fn permissions_mode_from_fs_metadata(_metadata: &std::fs::Metadata) -> Option<u32> {
-    None
-}
-
-#[cfg(unix)]
-fn lookup_unix_user_name(uid: u32) -> String {
+pub(crate) fn lookup_unix_user_name(uid: u32) -> String {
     let mut buffer = vec![0_u8; unix_account_lookup_buffer_len()];
     loop {
         let mut passwd = MaybeUninit::<libc::passwd>::zeroed();
@@ -310,7 +325,7 @@ fn lookup_unix_user_name(uid: u32) -> String {
 }
 
 #[cfg(unix)]
-fn lookup_unix_group_name(gid: u32) -> String {
+pub(crate) fn lookup_unix_group_name(gid: u32) -> String {
     let mut buffer = vec![0_u8; unix_group_lookup_buffer_len()];
     loop {
         let mut group = MaybeUninit::<libc::group>::zeroed();
@@ -447,6 +462,8 @@ pub enum FileError {
     InvalidInput { path: PathBuf, message: String },
     #[error("operation cancelled")]
     Cancelled,
+    #[error("application is stopping")]
+    ApplicationStopping,
     #[error("unsupported operation: {0}")]
     Unsupported(&'static str),
 }

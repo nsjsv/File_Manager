@@ -117,6 +117,7 @@ pub enum X11DndEvent {
         target_session_id: X11FileDropTargetSessionId,
         details: String,
     },
+    MainWindowDestroyed,
     RuntimeFailed(String),
 }
 

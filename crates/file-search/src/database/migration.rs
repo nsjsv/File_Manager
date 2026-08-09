@@ -1,7 +1,9 @@
-use crate::error::SearchResult;
+use crate::error::{SearchError, SearchResult};
 use crate::extractor::ExtractionStatus;
 
-use super::{IndexedEntryStageState, SearchDatabase, SCHEMA_VERSION};
+use super::{
+    IndexedEntryStageState, SearchDatabase, SCHEMA_VERSION, SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT,
+};
 
 const LEGACY_TOMBSTONE_RECOVERY_MIGRATION: &str = "legacy_tombstone_recovery_v1";
 
@@ -89,11 +91,91 @@ impl SearchDatabase {
         if current < 8 {
             self.migrate_paths_to_blob()?;
         }
-        self.recover_legacy_tombstones_once()?;
-        if current < SCHEMA_VERSION {
-            self.connection
-                .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        if current < 9 {
+            self.migrate_fulltext_storage()?;
         }
+        Ok(())
+    }
+
+    fn migrate_fulltext_storage(&self) -> SearchResult<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let old_row_count =
+            transaction.query_row("SELECT COUNT(*) FROM file_search_fts", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        let missing_file_count = transaction.query_row(
+            "SELECT COUNT(*)
+             FROM file_search_fts AS old
+             LEFT JOIN files AS f ON f.rowid = old.rowid
+             WHERE f.rowid IS NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        if missing_file_count != 0 {
+            return Err(SearchError::InvalidDatabaseSchema {
+                message: format!(
+                    "schema 8 FTS rowid coverage is incomplete: {missing_file_count} orphan FTS rows"
+                ),
+            });
+        }
+
+        transaction.execute_batch(
+            "CREATE VIRTUAL TABLE file_search_fts_v9
+                USING fts5(
+                    name,
+                    content,
+                    content = '',
+                    contentless_delete = 1,
+                    detail = full
+                );
+             CREATE TABLE file_search_snippets_v9 (
+                file_rowid INTEGER PRIMARY KEY,
+                preview TEXT NOT NULL CHECK (length(preview) <= 1024)
+             );
+             INSERT INTO file_search_fts_v9(rowid, name, content)
+                SELECT rowid, name, content FROM file_search_fts;",
+        )?;
+        transaction.execute(
+            "INSERT INTO file_search_snippets_v9(file_rowid, preview)
+             SELECT rowid, substr(content, 1, ?1)
+             FROM file_search_fts
+             WHERE content IS NOT NULL AND content <> ''",
+            [SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT as i64],
+        )?;
+
+        let new_row_count =
+            transaction.query_row("SELECT COUNT(*) FROM file_search_fts_v9", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        let invalid_preview_count = transaction.query_row(
+            "SELECT COUNT(*) FROM file_search_snippets_v9
+             WHERE length(preview) > ?1 OR preview = ''",
+            [SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT as i64],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let new_orphan_count = transaction.query_row(
+            "SELECT COUNT(*)
+             FROM file_search_fts_v9 AS migrated
+             LEFT JOIN files AS f ON f.rowid = migrated.rowid
+             WHERE f.rowid IS NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        if new_row_count != old_row_count || invalid_preview_count != 0 || new_orphan_count != 0 {
+            return Err(SearchError::InvalidDatabaseSchema {
+                message: format!(
+                    "schema 9 FTS validation failed: expected {old_row_count} rows, copied {new_row_count}, invalid previews {invalid_preview_count}, orphan rows {new_orphan_count}"
+                ),
+            });
+        }
+
+        transaction.execute_batch(
+            "DROP TABLE file_search_fts;
+             ALTER TABLE file_search_fts_v9 RENAME TO file_search_fts;
+             ALTER TABLE file_search_snippets_v9 RENAME TO file_search_snippets;",
+        )?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -188,7 +270,7 @@ impl SearchDatabase {
         Ok(())
     }
 
-    fn recover_legacy_tombstones_once(&self) -> SearchResult<()> {
+    pub(super) fn recover_legacy_tombstones_once(&self) -> SearchResult<()> {
         let migration_completed = self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM search_data_migrations WHERE name = ?1)",
             [LEGACY_TOMBSTONE_RECOVERY_MIGRATION],
@@ -205,6 +287,11 @@ impl SearchDatabase {
             |row| row.get::<_, bool>(0),
         )?;
         if tombstones_exist {
+            transaction.execute(
+                "DELETE FROM file_search_snippets
+                 WHERE file_rowid IN (SELECT rowid FROM files WHERE tombstoned <> 0)",
+                [],
+            )?;
             transaction.execute(
                 "DELETE FROM file_search_fts
                  WHERE rowid IN (SELECT rowid FROM files WHERE tombstoned <> 0)",

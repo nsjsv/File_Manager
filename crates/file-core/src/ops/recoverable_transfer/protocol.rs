@@ -271,6 +271,8 @@ pub enum TransferJournalMutation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransferJournalError {
     StaleRevision,
+    UserCancelled,
+    ApplicationStopping,
     Storage(String),
 }
 

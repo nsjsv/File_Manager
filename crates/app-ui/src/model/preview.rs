@@ -6,6 +6,7 @@ use iced::widget::image;
 
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::audio_preview::AudioPreviewRuntime;
+use crate::document_preview::PagedDocumentPreview;
 use crate::operation_progress::active_byte_fraction;
 use crate::text_preview::{TextPreviewFormat, TextPreviewLineLimitNotice};
 
@@ -90,6 +91,7 @@ pub(crate) enum PreviewContent {
     Archive {
         entries: Vec<PreviewTreeEntry>,
     },
+    PagedDocument(Box<PagedDocumentPreview>),
     Image {
         path: PathBuf,
         handle: image::Handle,

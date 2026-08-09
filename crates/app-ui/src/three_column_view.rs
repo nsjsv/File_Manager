@@ -585,6 +585,7 @@ mod tests {
     fn loaded_expanded_directory(entries: Vec<DirectoryEntry>) -> crate::model::ExpandedDirectory {
         crate::model::ExpandedDirectory {
             entries,
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -592,6 +593,10 @@ mod tests {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         }
     }
 
@@ -609,6 +614,7 @@ mod tests {
             current_dir,
             is_trash_view: false,
             entries,
+            directory_discovery: None,
             directory_loading_placeholder_entries: &[],
             selected,
             selected_paths,
@@ -624,7 +630,7 @@ mod tests {
             address_editing: None,
             address_transition_fraction: 0.0,
             address_exit_snapshot: None,
-            is_loading: false,
+            directory_collection_phase: crate::model::DirectoryCollectionPhase::Ready,
             renaming: None,
             rename_input: "",
             file_drag: None,

@@ -236,6 +236,7 @@ mod tests {
     fn expanded(entries: Vec<DirectoryEntry>, is_expanded: bool) -> ExpandedDirectory {
         ExpandedDirectory {
             entries,
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded,
             is_collapsing: false,
@@ -243,6 +244,10 @@ mod tests {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         }
     }
 
@@ -319,6 +324,7 @@ mod tests {
             directory.path.clone(),
             ExpandedDirectory {
                 entries: vec![child],
+                directory_discovery: None,
                 status: ExpandedDirectoryStatus::Loaded,
                 is_expanded: false,
                 is_collapsing: false,
@@ -326,6 +332,10 @@ mod tests {
                 load_generation: 0,
                 load_context: None,
                 load_cancel: None,
+                directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                    field: file_core::SortField::Name,
+                    direction: file_core::SortDirection::Ascending,
+                },
             },
         )]);
 
@@ -346,6 +356,7 @@ mod tests {
             directory.path.clone(),
             ExpandedDirectory {
                 entries: vec![child],
+                directory_discovery: None,
                 status: ExpandedDirectoryStatus::Loading,
                 is_expanded: true,
                 is_collapsing: false,
@@ -353,6 +364,10 @@ mod tests {
                 load_generation: 0,
                 load_context: None,
                 load_cancel: None,
+                directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                    field: file_core::SortField::Name,
+                    direction: file_core::SortDirection::Ascending,
+                },
             },
         )]);
 
@@ -371,6 +386,7 @@ mod tests {
             directory.path.clone(),
             ExpandedDirectory {
                 entries: vec![child],
+                directory_discovery: None,
                 status: ExpandedDirectoryStatus::Loading,
                 is_expanded: true,
                 is_collapsing: false,
@@ -378,6 +394,10 @@ mod tests {
                 load_generation: 0,
                 load_context: None,
                 load_cancel: None,
+                directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                    field: file_core::SortField::Name,
+                    direction: file_core::SortDirection::Ascending,
+                },
             },
         )]);
 
@@ -396,6 +416,7 @@ mod tests {
             directory.path.clone(),
             ExpandedDirectory {
                 entries: vec![child.clone()],
+                directory_discovery: None,
                 status: ExpandedDirectoryStatus::Loaded,
                 is_expanded: true,
                 is_collapsing: true,
@@ -403,6 +424,10 @@ mod tests {
                 load_generation: 0,
                 load_context: None,
                 load_cancel: None,
+                directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                    field: file_core::SortField::Name,
+                    direction: file_core::SortDirection::Ascending,
+                },
             },
         )]);
 

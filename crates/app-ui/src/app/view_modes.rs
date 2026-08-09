@@ -555,6 +555,7 @@ impl FileBrowser {
 
         let mut expanded = ExpandedDirectory {
             entries: Vec::new(),
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loading,
             is_expanded: true,
             is_collapsing: false,
@@ -562,6 +563,10 @@ impl FileBrowser {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         };
         let (request, cancellation) = Self::next_expanded_directory_load_request(
             DirectoryExpansionLoadContext::BrowserTree {
@@ -639,6 +644,7 @@ fn list_directory_is_followable(expanded: &ExpandedDirectory) -> bool {
 fn loading_list_directory() -> ExpandedDirectory {
     ExpandedDirectory {
         entries: Vec::new(),
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loading,
         is_expanded: true,
         is_collapsing: false,
@@ -646,6 +652,10 @@ fn loading_list_directory() -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 

@@ -27,6 +27,7 @@ pub(crate) fn run(
     file_manager_activation: Arc<DesktopActivationRuntime>,
     initial_desktop_activation: Option<desktop_linux::DesktopActivationEvent>,
 ) -> iced::Result {
+    startup_trace::mark("iced_run_entered");
     iced::daemon(
         move || {
             FileBrowser::boot(

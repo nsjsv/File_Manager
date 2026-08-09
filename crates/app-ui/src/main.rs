@@ -34,6 +34,7 @@ mod command_line;
 mod commands;
 mod config;
 mod directory_summary;
+mod document_preview;
 mod file_drag_hit_test_bounds;
 mod file_drag_hit_test_marker;
 mod file_entry_presentation;
@@ -98,22 +99,35 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         }
     };
+    startup_trace::begin_launch_from_env();
 
     let activation_paths = application_launch_request
         .as_ref()
         .map(command_line::ApplicationLaunchRequest::activation_paths)
         .unwrap_or_default();
-    let activation_controller =
-        match desktop_linux::DesktopActivationRuntime::claim_or_forward(&activation_paths) {
-            Ok(desktop_linux::FileManagerActivationClaim::Primary(controller)) => controller,
-            Ok(desktop_linux::FileManagerActivationClaim::Forwarded) => {
-                return std::process::ExitCode::SUCCESS;
-            }
-            Err(error) => {
-                eprintln!("file-manager: desktop activation failed: {error}");
-                return std::process::ExitCode::FAILURE;
-            }
-        };
+    startup_trace::mark("desktop_activation_claim_started");
+    let activation_claim =
+        desktop_linux::DesktopActivationRuntime::claim_or_forward(&activation_paths);
+    let activation_claim_outcome = match &activation_claim {
+        Ok(desktop_linux::FileManagerActivationClaim::Primary(_)) => {
+            startup_trace::DesktopActivationClaimOutcome::Primary
+        }
+        Ok(desktop_linux::FileManagerActivationClaim::Forwarded) => {
+            startup_trace::DesktopActivationClaimOutcome::Forwarded
+        }
+        Err(_) => startup_trace::DesktopActivationClaimOutcome::Failed,
+    };
+    startup_trace::mark_desktop_activation_claim_finished(activation_claim_outcome);
+    let activation_controller = match activation_claim {
+        Ok(desktop_linux::FileManagerActivationClaim::Primary(controller)) => controller,
+        Ok(desktop_linux::FileManagerActivationClaim::Forwarded) => {
+            return std::process::ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!("file-manager: desktop activation failed: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
 
     let (application_launch_request, initial_desktop_activation) = if activation_service {
         let first_event = match activation_controller.wait_for_initial_event() {
@@ -147,6 +161,7 @@ fn main() -> std::process::ExitCode {
     };
 
     runtime_logging::init();
+    startup_trace::mark_runtime_logging_ready();
     match activation_controller.standard_service_status() {
         desktop_linux::StandardFileManagerServiceStatus::Owned => tracing::info!(
             target: "app_ui::desktop_activation",
@@ -165,8 +180,6 @@ fn main() -> std::process::ExitCode {
         event = "application_started",
         "File Manager application started"
     );
-    startup_trace::init_from_env();
-    startup_trace::mark("main_entered");
     startup_rendering::apply_fast_startup_environment();
     match app::run(
         application_launch_request,

@@ -1,4 +1,5 @@
 use super::*;
+use file_operation_store::TransferManifestCheckpointUpdate;
 
 mod progress;
 mod store_codec;
@@ -11,6 +12,7 @@ pub(super) use progress::{
 #[derive(Clone)]
 struct TaskQueueTransferJournal {
     store: TaskQueueStore,
+    controls: FileOperationControls,
 }
 
 impl TransferJournal for TaskQueueTransferJournal {
@@ -19,6 +21,7 @@ impl TransferJournal for TaskQueueTransferJournal {
         mutation: TransferJournalMutation,
     ) -> Pin<Box<dyn Future<Output = Result<u64, TransferJournalError>> + Send + '_>> {
         let store = self.store.clone();
+        let controls = self.controls.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || match mutation {
                 TransferJournalMutation::InstallManifestAndCheckpoint {
@@ -30,58 +33,94 @@ impl TransferJournal for TaskQueueTransferJournal {
                     checkpoint,
                 } => {
                     let stored_key = store_codec::encode_work_key(&key);
-                    let manifest_entries =
-                        store_codec::encode_manifest_entries(key.transfer_index, &manifest);
-                    let replacement_manifest_entries = replacement_manifest
-                        .as_ref()
-                        .map(|manifest| {
-                            store_codec::encode_manifest_entries(key.transfer_index, manifest)
-                        })
-                        .unwrap_or_default();
-                    let stored_checkpoint = store_codec::encode_checkpoint(&checkpoint)?;
-                    store.install_transfer_manifests_and_checkpoint(
-                        task_id,
-                        &stored_key,
-                        expected_revision,
-                        &manifest_entries,
-                        &replacement_manifest_entries,
-                        &stored_checkpoint,
+                    let encoding_controls = controls.clone();
+                    let manifest_entries = store_codec::encode_manifest_entries_while(
+                        key.transfer_index,
+                        &manifest,
+                        || encoding_controls.checkpoint_now().is_ok(),
                     )
+                    .ok_or_else(|| interrupted_journal_error(&controls))?;
+                    let replacement_manifest_entries = match replacement_manifest.as_ref() {
+                        Some(manifest) => store_codec::encode_manifest_entries_while(
+                            key.transfer_index,
+                            manifest,
+                            || encoding_controls.checkpoint_now().is_ok(),
+                        )
+                        .ok_or_else(|| interrupted_journal_error(&controls))?,
+                        None => Vec::new(),
+                    };
+                    let stored_checkpoint =
+                        store_codec::encode_checkpoint(&checkpoint).map_err(store_journal_error)?;
+                    let transaction_controls = controls.clone();
+                    let revision = store
+                        .install_transfer_manifests_and_checkpoint_while(
+                            task_id,
+                            TransferManifestCheckpointUpdate {
+                                key: &stored_key,
+                                expected_revision,
+                                manifest_entries: &manifest_entries,
+                                replacement_manifest_entries: &replacement_manifest_entries,
+                                checkpoint: &stored_checkpoint,
+                            },
+                            || transaction_controls.checkpoint_now().is_ok(),
+                        )
+                        .map_err(store_journal_error)?;
+                    revision.ok_or_else(|| interrupted_journal_error(&controls))
                 }
                 TransferJournalMutation::CompareAndSwapCheckpoint {
                     task_id,
                     key,
                     expected_revision,
                     checkpoint,
-                } => store.compare_and_swap_transfer_checkpoint(
-                    task_id,
-                    &store_codec::encode_work_key(&key),
-                    expected_revision,
-                    &store_codec::encode_checkpoint(&checkpoint)?,
-                ),
+                } => store
+                    .compare_and_swap_transfer_checkpoint(
+                        task_id,
+                        &store_codec::encode_work_key(&key),
+                        expected_revision,
+                        &store_codec::encode_checkpoint(&checkpoint)
+                            .map_err(store_journal_error)?,
+                    )
+                    .map_err(store_journal_error),
                 TransferJournalMutation::PersistMergeCompletionAndCheckpoint {
                     task_id,
                     key,
                     expected_revision,
                     completion,
                     checkpoint,
-                } => store.compare_and_swap_transfer_merge_completion(
-                    task_id,
-                    &store_codec::encode_work_key(&key),
-                    expected_revision,
-                    &store_codec::encode_merge_completion(&completion)?,
-                    &store_codec::encode_checkpoint(&checkpoint)?,
-                ),
+                } => store
+                    .compare_and_swap_transfer_merge_completion(
+                        task_id,
+                        &store_codec::encode_work_key(&key),
+                        expected_revision,
+                        &store_codec::encode_merge_completion(&completion)
+                            .map_err(store_journal_error)?,
+                        &store_codec::encode_checkpoint(&checkpoint)
+                            .map_err(store_journal_error)?,
+                    )
+                    .map_err(store_journal_error),
             })
             .await
             .map_err(|error| TransferJournalError::Storage(error.to_string()))?
-            .map_err(|error| match error {
-                file_operation_store::StoreError::StaleTransferRevision { .. } => {
-                    TransferJournalError::StaleRevision
-                }
-                error => TransferJournalError::Storage(error.to_string()),
-            })
         })
+    }
+}
+
+fn store_journal_error(error: file_operation_store::StoreError) -> TransferJournalError {
+    match error {
+        file_operation_store::StoreError::StaleTransferRevision { .. } => {
+            TransferJournalError::StaleRevision
+        }
+        error => TransferJournalError::Storage(error.to_string()),
+    }
+}
+
+fn interrupted_journal_error(controls: &FileOperationControls) -> TransferJournalError {
+    match controls.checkpoint_now() {
+        Err(FileError::ApplicationStopping) => TransferJournalError::ApplicationStopping,
+        Err(FileError::Cancelled) => TransferJournalError::UserCancelled,
+        _ => TransferJournalError::Storage(
+            "manifest transaction stopped without an operation control signal".to_owned(),
+        ),
     }
 }
 
@@ -136,7 +175,10 @@ pub(super) async fn run_queued_transfers(
     } else {
         FileOperationHistoryEligibility::NotReplayable
     };
-    let journal = TaskQueueTransferJournal { store };
+    let journal = TaskQueueTransferJournal {
+        store,
+        controls: controls.clone(),
+    };
     let mut manifest_controls = controls.clone();
     for record in &mut records {
         if record.manifest.is_some()
@@ -150,7 +192,13 @@ pub(super) async fn run_queued_transfers(
         if manifest_controls.wait_until_running().await.is_err() {
             break;
         }
-        if let Err(error) = persist_recoverable_source_manifest(record, &journal).await {
+        if let Err(error) = persist_recoverable_source_manifest_with_controls(
+            record,
+            &journal,
+            &mut manifest_controls,
+        )
+        .await
+        {
             if matches!(
                 error,
                 RecoverableTransferError::Journal { .. }
@@ -217,6 +265,9 @@ fn recoverable_transfer_failure(
 ) -> FileOperationCompletion {
     let diagnostic = error.to_string();
     match error {
+        RecoverableTransferError::FileOperation(file_core::FileError::ApplicationStopping) => {
+            FileOperationCompletion::RecoveryInterrupted(diagnostic, completed_move_transfers)
+        }
         RecoverableTransferError::FileOperation(file_core::FileError::Cancelled) => {
             FileOperationCompletion::Canceled(match mode {
                 QueuedTransferMode::Copy => Vec::new(),
@@ -358,6 +409,21 @@ mod recoverable_transfer_tests {
     use iced::futures::StreamExt;
 
     mod cross_filesystem_recovery;
+
+    #[test]
+    fn application_stopping_has_recoverable_interruption_completion() {
+        assert!(matches!(
+            recoverable_transfer_failure(
+                QueuedTransferMode::Copy,
+                RecoverableTransferError::FileOperation(
+                    file_core::FileError::ApplicationStopping,
+                ),
+                Vec::new(),
+            ),
+            FileOperationCompletion::RecoveryInterrupted(_, completed)
+                if completed.is_empty()
+        ));
+    }
 
     #[test]
     fn recoverable_cancellation_has_typed_completion() {
@@ -593,6 +659,7 @@ mod recoverable_transfer_tests {
             .unwrap();
         let journal = TaskQueueTransferJournal {
             store: store.clone(),
+            controls: running.controls.clone(),
         };
         let (mut output, _messages) = iced::futures::channel::mpsc::channel(64);
         let mut batch_progress = TransferBatchProgress::new(&records);
@@ -689,6 +756,7 @@ mod recoverable_transfer_tests {
             .unwrap();
         let journal = TaskQueueTransferJournal {
             store: store.clone(),
+            controls: running.controls.clone(),
         };
         let (mut output, _messages) = iced::futures::channel::mpsc::channel(64);
         let mut batch_progress = TransferBatchProgress::new(&records);

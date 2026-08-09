@@ -11,7 +11,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 mod browser_session;
@@ -25,7 +25,8 @@ pub use recoverable_transfer::{
     StoredFileIdentity, StoredFileObjectKind, StoredFileOperationVerification, StoredManifestEntry,
     StoredMergeChildCompletion, StoredTransferCheckpoint, StoredTransferCheckpointKind,
     StoredTransferConflictStrategy, StoredTransferJournalEntry, StoredTransferOperation,
-    StoredTransferRecoverySnapshot, StoredTransferWorkKey, TRANSFER_JOURNAL_VERSION,
+    StoredTransferRecoverySnapshot, StoredTransferWorkKey, TransferManifestCheckpointUpdate,
+    TRANSFER_JOURNAL_VERSION,
 };
 mod user_preferences;
 pub use user_preferences::{
@@ -405,6 +406,27 @@ pub struct StoredTask {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredInterruptedRecoverableTask {
+    pub task_id: u64,
+    pub status: StoredTaskStatus,
+    pub progress: StoredProgress,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StoredBrowserSessionShutdown {
+    Skip,
+    Persist(StoredBrowserSession),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredApplicationShutdown {
+    pub browser_session: StoredBrowserSessionShutdown,
+    pub interrupted_recoverable_tasks: Vec<StoredInterruptedRecoverableTask>,
+    pub transient_task_ids: Vec<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskQueueStore {
     db_path: PathBuf,
@@ -621,6 +643,74 @@ impl TaskQueueStore {
         Ok(())
     }
 
+    pub fn commit_application_shutdown(
+        &self,
+        shutdown: StoredApplicationShutdown,
+    ) -> StoreResult<()> {
+        let StoredApplicationShutdown {
+            browser_session,
+            interrupted_recoverable_tasks,
+            transient_task_ids,
+        } = shutdown;
+        let browser_session_json = match &browser_session {
+            StoredBrowserSessionShutdown::Skip => None,
+            StoredBrowserSessionShutdown::Persist(session) => Some(serde_json::to_string(session)?),
+        };
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        for task in interrupted_recoverable_tasks {
+            if !matches!(
+                task.status,
+                StoredTaskStatus::RecoveryPending | StoredTaskStatus::Canceling
+            ) || !task_has_recovery_rows(&transaction, task.task_id)?
+            {
+                return Err(StoreError::InvalidRecoverableOperation(
+                    "shutdown recoverable task has no preserved recovery state",
+                ));
+            }
+            let updated = transaction.execute(
+                "UPDATE task_queue
+                 SET status = ?1, progress_fraction = ?2, error = ?3, updated_at_ms = ?4
+                 WHERE id = ?5",
+                params![
+                    task.status.as_str(),
+                    task.progress.fraction,
+                    task.error,
+                    current_time_ms(),
+                    task.task_id
+                ],
+            )?;
+            if updated != 1 {
+                return Err(StoreError::InvalidRecoverableOperation(
+                    "shutdown recoverable task row is missing",
+                ));
+            }
+        }
+
+        for task_id in transient_task_ids {
+            if task_has_recovery_rows(&transaction, task_id)? {
+                return Err(StoreError::InvalidRecoverableOperation(
+                    "transient shutdown task owns recovery state",
+                ));
+            }
+            transaction.execute("DELETE FROM task_queue WHERE id = ?1", params![task_id])?;
+        }
+
+        if let Some(payload_json) = browser_session_json {
+            transaction.execute(
+                "INSERT INTO browser_session (session_key, payload_json, updated_at_ms)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(session_key) DO UPDATE SET
+                     payload_json = excluded.payload_json,
+                     updated_at_ms = excluded.updated_at_ms",
+                params![BROWSER_SESSION_KEY, payload_json, current_time_ms()],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn read_browser_session(&self) -> StoreResult<Option<StoredBrowserSession>> {
         let connection = self.connection()?;
         let payload_json = connection
@@ -751,6 +841,22 @@ fn read_indexed_column_widths(connection: &Connection) -> StoreResult<HashMap<us
 
 fn column_width_preference_key(column_index: usize) -> String {
     format!("{COLUMN_WIDTH_PREFERENCE_PREFIX}{column_index}")
+}
+
+fn task_has_recovery_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: u64,
+) -> StoreResult<bool> {
+    let has_rows = transaction.query_row(
+        "SELECT
+            EXISTS(SELECT 1 FROM transfer_journal WHERE task_id = ?1)
+            OR EXISTS(SELECT 1 FROM transfer_manifest WHERE task_id = ?1)
+            OR EXISTS(SELECT 1 FROM transfer_replacement_manifest WHERE task_id = ?1)
+            OR EXISTS(SELECT 1 FROM transfer_merge_completion WHERE task_id = ?1)",
+        params![task_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    Ok(has_rows)
 }
 
 fn current_time_ms() -> i64 {

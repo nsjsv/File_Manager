@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use tokio::fs;
+use tokio_util::sync::CancellationToken;
 
+use super::super::FileOperationControls;
 use super::{inspect_file_identity, FileIdentity, FileObjectKind, RecoverableTransferError};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -24,9 +26,19 @@ struct PendingDirectory {
     expected_identity: FileIdentity,
 }
 
+#[cfg(test)]
 pub async fn build_source_manifest(
     root: &Path,
 ) -> Result<SourceManifest, RecoverableTransferError> {
+    let mut controls = FileOperationControls::running(CancellationToken::new());
+    build_source_manifest_with_controls(root, &mut controls).await
+}
+
+pub async fn build_source_manifest_with_controls(
+    root: &Path,
+    controls: &mut FileOperationControls,
+) -> Result<SourceManifest, RecoverableTransferError> {
+    controls.wait_until_running().await?;
     let root_identity = inspect_file_identity(root).await?;
     let mut entries = vec![SourceManifestEntry {
         relative_path: PathBuf::new(),
@@ -42,6 +54,7 @@ pub async fn build_source_manifest(
     }
 
     while let Some(directory) = pending_directories.pop() {
+        controls.wait_until_running().await?;
         let before = inspect_file_identity(&directory.path).await?;
         if before != directory.expected_identity {
             return Err(RecoverableTransferError::SourceChanged {
@@ -60,11 +73,11 @@ pub async fn build_source_manifest(
                 source,
             )
         })? {
+            controls.wait_until_running().await?;
             children.push((child.file_name(), child.path()));
         }
-        children.sort_by(|(left, _), (right, _)| left.cmp(right));
-
         for (name, child_path) in children {
+            controls.wait_until_running().await?;
             let relative_path = directory.relative_path.join(name);
             let identity = inspect_file_identity(&child_path).await?;
             entries.push(SourceManifestEntry {
@@ -88,7 +101,9 @@ pub async fn build_source_manifest(
         }
     }
 
+    controls.wait_until_running().await?;
     entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    controls.wait_until_running().await?;
     Ok(SourceManifest {
         root: root.to_path_buf(),
         entries,
@@ -98,7 +113,15 @@ pub async fn build_source_manifest(
 pub async fn verify_source_manifest(
     expected: &SourceManifest,
 ) -> Result<(), RecoverableTransferError> {
-    let actual = build_source_manifest(&expected.root).await?;
+    let mut controls = FileOperationControls::running(CancellationToken::new());
+    verify_source_manifest_with_controls(expected, &mut controls).await
+}
+
+pub async fn verify_source_manifest_with_controls(
+    expected: &SourceManifest,
+    controls: &mut FileOperationControls,
+) -> Result<(), RecoverableTransferError> {
+    let actual = build_source_manifest_with_controls(&expected.root, controls).await?;
     if actual == *expected {
         return Ok(());
     }

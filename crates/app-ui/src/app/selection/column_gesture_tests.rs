@@ -26,6 +26,7 @@ fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
 fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
     ExpandedDirectory {
         entries,
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -33,14 +34,18 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
 fn browser_with_entries(entries: Vec<DirectoryEntry>) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
-    browser.is_loading = false;
-    browser.entries = entries;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
+    browser.entries = entries.into();
     browser
 }
 

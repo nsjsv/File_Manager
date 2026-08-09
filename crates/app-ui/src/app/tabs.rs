@@ -201,6 +201,7 @@ impl FileBrowser {
         self.active_tab_id = tab.id;
         self.is_trash_view = tab.is_trash_view;
         self.entries = tab.entries;
+        self.directory_discovery = tab.directory_discovery;
         self.directory_loading_placeholder_entries.clear();
         self.trash_entries = tab.trash_entries;
         self.selected = tab.selected;
@@ -657,6 +658,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         current_dir: tab.directory.clone(),
         is_trash_view: tab.is_trash_view,
         entries: tab.entries.clone(),
+        directory_discovery: tab.directory_discovery.clone(),
         directory_loading_placeholder_entries: Vec::new(),
         trash_entries: tab.trash_entries.clone(),
         selected: tab.selected.clone(),
@@ -673,7 +675,8 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         directory_load_cancel: None,
         back_stack: tab.back_stack.clone(),
         forward_stack: tab.forward_stack.clone(),
-        is_loading: false,
+        directory_collection_phase: tab.directory_collection_phase,
+        directory_order_phase: tab.directory_order_phase,
     };
     pane.sync_active_tab_state();
     pane
@@ -695,6 +698,7 @@ pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.current_dir = tab.directory.clone();
     pane.is_trash_view = tab.is_trash_view;
     pane.entries = tab.entries.clone();
+    pane.directory_discovery = tab.directory_discovery.clone();
     pane.directory_loading_placeholder_entries.clear();
     pane.trash_entries = tab.trash_entries.clone();
     pane.selected = tab.selected.clone();
@@ -705,6 +709,7 @@ pub(super) fn apply_tab_to_pane(pane: &mut BrowserPane, tab: &BrowserTab) {
     pane.view_mode = tab.view_mode;
     pane.back_stack = tab.back_stack.clone();
     pane.forward_stack = tab.forward_stack.clone();
-    pane.is_loading = false;
+    pane.directory_collection_phase = tab.directory_collection_phase;
+    pane.directory_order_phase = tab.directory_order_phase;
     pane.sync_active_tab_state();
 }

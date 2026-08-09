@@ -32,18 +32,20 @@ fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
 fn browser_with_entries(paths: &[PathBuf]) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     browser.entries = paths
         .iter()
         .cloned()
         .map(|path| test_entry(path, FileKind::File))
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     browser
 }
 
 fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
     ExpandedDirectory {
         entries,
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -51,6 +53,10 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -63,7 +69,8 @@ fn pending_column_drag_preserves_the_press_time_target_columns() {
     browser.entries = vec![
         test_entry(source.clone(), FileKind::File),
         test_entry(target_directory.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser
         .expanded_directories
         .insert(target_directory.clone(), loaded_directory(Vec::new()));
@@ -235,7 +242,7 @@ fn plain_double_click_still_activates_directory() {
     let directory = PathBuf::from("/workspace/project");
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
 
     drop(browser.handle_column_entry_clicked(directory.clone()));
     drop(browser.handle_column_entry_clicked(directory.clone()));
@@ -253,11 +260,12 @@ fn list_single_click_selects_directory_without_expanding_or_opening_column() {
     let child = PathBuf::from("/workspace/project/main.rs");
     let mut browser = browser_with_entries(&[directory.clone()]);
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         directory.clone(),
         ExpandedDirectory {
             entries: vec![test_entry(child, FileKind::File)],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: false,
             is_collapsing: false,
@@ -265,6 +273,10 @@ fn list_single_click_selects_directory_without_expanding_or_opening_column() {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
 
@@ -284,7 +296,7 @@ fn list_double_click_activates_directory() {
     let directory = PathBuf::from("/workspace/project");
     let mut browser = browser_with_entries(&[directory.clone()]);
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
 
     drop(browser.handle_flat_entry_clicked(directory.clone()));
     drop(browser.handle_flat_entry_clicked(directory.clone()));
@@ -299,7 +311,7 @@ fn list_double_click_keeps_visible_placeholders_while_canonical_entries_load() {
     let child = PathBuf::from("/workspace/project/main.rs");
     let mut browser = browser_with_entries(&[directory.clone()]);
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         directory.clone(),
         loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
@@ -310,7 +322,7 @@ fn list_double_click_keeps_visible_placeholders_while_canonical_entries_load() {
     drop(browser.handle_flat_entry_clicked(directory.clone()));
 
     assert_eq!(browser.current_dir, directory.clone());
-    assert!(browser.is_loading);
+    assert!(browser.directory_collection_phase.is_discovering());
     assert!(browser.entries.is_empty());
     assert!(browser.expanded_directories.is_empty());
     assert_eq!(browser.selected, None);
@@ -332,7 +344,7 @@ fn list_double_click_keeps_visible_placeholders_while_canonical_entries_load() {
 fn column_single_click_still_opens_child_column() {
     let directory = PathBuf::from("/workspace/project");
     let mut browser = browser_with_entries(&[directory.clone()]);
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
 
     drop(browser.handle_column_entry_clicked(directory.clone()));
 
@@ -363,8 +375,8 @@ fn column_single_click_requests_session_save_when_enabled() {
     user_config.save_view_state = user_config.startup_location_policy.saves_view_state();
     let (mut browser, _) = FileBrowser::new(user_config);
     browser.current_dir = PathBuf::from("/workspace");
-    browser.is_loading = false;
-    browser.entries = vec![test_entry(directory, FileKind::Directory)];
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
+    browser.entries = vec![test_entry(directory, FileKind::Directory)].into();
 
     drop(browser.handle_column_entry_clicked(PathBuf::from("/workspace/project")));
 
@@ -377,7 +389,7 @@ fn right_arrow_enters_loaded_child_column_and_remembers_return_target() {
     let first_child = PathBuf::from("/workspace/project/a.txt");
     let return_child = PathBuf::from("/workspace/project/notes.txt");
     let mut browser = browser_with_entries(&[parent.clone()]);
-    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         parent.clone(),
         loaded_directory(vec![
@@ -409,7 +421,8 @@ fn vertical_arrows_open_directory_contents_without_entering_child_column() {
     browser.entries = vec![
         test_entry(first_parent.clone(), FileKind::Directory),
         test_entry(second_parent.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser.expanded_directories.insert(
         second_parent.clone(),
         loaded_directory(vec![test_entry(second_child.clone(), FileKind::File)]),
@@ -432,7 +445,7 @@ fn right_arrow_focuses_first_child_after_directory_loads() {
     let parent = PathBuf::from("/workspace/project");
     let child = PathBuf::from("/workspace/project/first.txt");
     let mut browser = browser_with_entries(&[parent.clone()]);
-    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)].into();
     browser.select_path(parent.clone());
 
     drop(browser.move_file_selection(FileSelectionDirection::Right));
@@ -445,7 +458,7 @@ fn right_arrow_focuses_first_child_after_directory_loads() {
         .map(|expanded| expanded.load_generation)
         .unwrap_or_default();
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         ExpandedDirectoryLoadRequest {
             context: DirectoryExpansionLoadContext::BrowserTree {
                 pane_id: BrowserPaneId::PRIMARY,
@@ -475,7 +488,8 @@ fn list_vertical_arrows_move_across_expanded_directory_levels() {
     browser.entries = vec![
         test_entry(parent.clone(), FileKind::Directory),
         test_entry(sibling.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.expanded_directories.insert(
         parent.clone(),
         loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
@@ -498,11 +512,12 @@ fn list_right_arrow_expands_then_focuses_first_child() {
     let child = PathBuf::from("/workspace/project/main.rs");
     let mut browser = browser_with_entries(&[parent.clone()]);
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         parent.clone(),
         ExpandedDirectory {
             entries: vec![test_entry(child.clone(), FileKind::File)],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: false,
             is_collapsing: false,
@@ -510,6 +525,10 @@ fn list_right_arrow_expands_then_focuses_first_child() {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
     browser.select_path(parent.clone());
@@ -534,7 +553,7 @@ fn list_left_arrow_collapses_then_focuses_visible_parent() {
     let grandchild = PathBuf::from("/workspace/project/src/main.rs");
     let mut browser = browser_with_entries(&[parent.clone()]);
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         parent.clone(),
         loaded_directory(vec![test_entry(child.clone(), FileKind::Directory)]),
@@ -577,7 +596,8 @@ fn list_select_all_and_range_use_the_same_visible_rows() {
     browser.entries = vec![
         test_entry(parent.clone(), FileKind::Directory),
         test_entry(sibling.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.expanded_directories.insert(
         parent.clone(),
         loaded_directory(vec![test_entry(child.clone(), FileKind::File)]),
@@ -609,7 +629,8 @@ fn icon_grid_select_all_and_range_only_use_direct_entries() {
     browser.entries = vec![
         test_entry(parent.clone(), FileKind::Directory),
         test_entry(sibling.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.expanded_directories.insert(
         parent.clone(),
         loaded_directory(vec![test_entry(hidden_child, FileKind::File)]),
@@ -639,7 +660,8 @@ fn column_select_all_uses_hovered_column_directory() {
     browser.entries = vec![
         test_entry(project.clone(), FileKind::Directory),
         test_entry(sibling, FileKind::File),
-    ];
+    ]
+    .into();
     browser.expanded_directories.insert(
         project.clone(),
         loaded_directory(vec![
@@ -669,7 +691,8 @@ fn column_select_all_hovered_directory_entry_stays_in_entry_column() {
     browser.entries = vec![
         test_entry(project.clone(), FileKind::Directory),
         test_entry(sibling.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.expanded_directories.insert(
         project.clone(),
         loaded_directory(vec![test_entry(child, FileKind::File)]),

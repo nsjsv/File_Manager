@@ -401,6 +401,131 @@ fn search_hits_expose_only_content_snippets() {
 }
 
 #[test]
+fn content_hit_outside_bounded_preview_has_no_snippet() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let content = format!("{}deepneedle", "prefix ".repeat(200));
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/deep-content.txt",
+            "deep-content.txt",
+            &content,
+        ))
+        .unwrap();
+
+    let hit = database
+        .search(&SearchQuery::global(1, "deepneedle"))
+        .unwrap()
+        .hits
+        .into_iter()
+        .find(|hit| hit.path == Path::new("/tmp/deep-content.txt"))
+        .unwrap();
+    assert_eq!(hit.match_source, MatchSource::Content);
+    assert!(hit.snippet.is_none());
+    assert_eq!(
+        database
+            .connection
+            .query_row(
+                "SELECT length(preview) FROM file_search_snippets",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1_024
+    );
+}
+
+#[test]
+fn preview_substrings_do_not_masquerade_as_fulltext_tokens() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let content = format!("cart {} art", "filler ".repeat(200));
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/token-boundary.txt",
+            "token-boundary.txt",
+            &content,
+        ))
+        .unwrap();
+
+    let hit = database
+        .search(&SearchQuery::global(1, "art"))
+        .unwrap()
+        .hits
+        .into_iter()
+        .find(|hit| hit.path == Path::new("/tmp/token-boundary.txt"))
+        .unwrap();
+    assert_eq!(hit.match_source, MatchSource::Content);
+    assert!(hit.snippet.is_none());
+}
+
+#[test]
+fn fulltext_replacement_and_scope_delete_keep_snippets_aligned() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/replaced.txt",
+            "replaced.txt",
+            "legacytoken body",
+        ))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/replaced.txt",
+            "replaced.txt",
+            "replacementtoken body",
+        ))
+        .unwrap();
+
+    assert_eq!(
+        database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM file_search_fts WHERE file_search_fts MATCH 'legacytoken'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM file_search_fts WHERE file_search_fts MATCH 'replacementtoken'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        database
+            .connection
+            .query_row("SELECT preview FROM file_search_snippets", [], |row| row
+                .get::<_, String>(
+                0
+            ),)
+            .unwrap(),
+        "replacementtoken body"
+    );
+
+    database
+        .delete_scope(Path::new("/tmp/replaced.txt"))
+        .unwrap();
+    for table in ["files", "file_search_fts", "file_search_snippets"] {
+        assert_eq!(
+            database
+                .connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0,
+            "table {table}"
+        );
+    }
+}
+
+#[test]
 fn sql_snippet_gating_matches_public_match_sources() {
     let database = SearchDatabase::in_memory().unwrap();
     for (path, name, content) in [
@@ -807,8 +932,11 @@ fn inaccessible_content_stays_retained_hidden_and_retryable_until_recovery() {
     let retained_fts_rows: i64 = database
         .connection
         .query_row(
-            "SELECT COUNT(*) FROM file_search_fts WHERE path = ?1",
-            ["/tmp/private.txt"],
+            "SELECT COUNT(*)
+             FROM file_search_fts
+             JOIN files AS f ON f.rowid = file_search_fts.rowid
+             WHERE f.path = ?1 AND file_search_fts MATCH 'needle'",
+            [path_to_storage(Path::new("/tmp/private.txt"))],
             |row| row.get(0),
         )
         .unwrap();
@@ -1129,19 +1257,13 @@ fn fts_rowid_migration_preserves_content_and_uses_files_row_identity() {
     drop(database);
 
     let connection = Connection::open(&database_path).unwrap();
-    let (path, name, content): (String, String, String) = connection
-        .query_row(
-            "SELECT path, name, content FROM file_search_fts LIMIT 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    connection
-        .execute("DELETE FROM file_search_fts", [])
-        .unwrap();
     connection
         .execute_batch(
-            "UPDATE files SET path = CAST(path AS TEXT), parent_path = CAST(parent_path AS TEXT);
+            "DROP TABLE file_search_fts;
+             DROP TABLE file_search_snippets;
+             CREATE VIRTUAL TABLE file_search_fts
+                USING fts5(path UNINDEXED, name, content);
+             UPDATE files SET path = CAST(path AS TEXT), parent_path = CAST(parent_path AS TEXT);
              UPDATE file_stage_state SET path = CAST(path AS TEXT);
              UPDATE directory_snapshots SET
                 path = CAST(path AS TEXT),
@@ -1151,8 +1273,9 @@ fn fts_rowid_migration_preserves_content_and_uses_files_row_identity() {
         .unwrap();
     connection
         .execute(
-            "INSERT INTO file_search_fts(rowid, path, name, content) VALUES (1001, ?1, ?2, ?3)",
-            params![path, name, content],
+            "INSERT INTO file_search_fts(rowid, path, name, content)
+             VALUES (1001, ?1, ?2, ?3)",
+            params!["/tmp/rowid.txt", "rowid.txt", "preserved needle"],
         )
         .unwrap();
     connection.pragma_update(None, "user_version", 4).unwrap();

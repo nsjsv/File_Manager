@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::UiLanguage;
 
+mod document_preview;
 mod file_operation_notifications;
 mod index_status;
 mod properties;
@@ -51,6 +52,10 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
     }
 
     if let Some(translated) = file_operation_notifications::translate(text) {
+        return Cow::Owned(translated);
+    }
+
+    if let Some(translated) = document_preview::translate(text) {
         return Cow::Owned(translated);
     }
 

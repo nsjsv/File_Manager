@@ -15,8 +15,15 @@ mod known_entry;
 mod migration;
 #[path = "database/scan.rs"]
 mod scan;
+#[path = "database/schema.rs"]
+mod schema;
 #[path = "database/search.rs"]
 mod search;
+#[path = "database/storage_rebuild.rs"]
+mod storage_rebuild;
+#[cfg(unix)]
+#[path = "database/storage_workspace.rs"]
+mod storage_workspace;
 
 pub(crate) use known_entry::{
     DirectorySignature, DirectorySnapshot, EntryObservationState, KnownDirectChild, KnownFileEntry,
@@ -28,7 +35,8 @@ pub(crate) use scan::{
 };
 
 /// Bumped whenever the on-disk schema changes in a way that requires a migration.
-pub(crate) const SCHEMA_VERSION: i64 = 8;
+pub(crate) const SCHEMA_VERSION: i64 = 9;
+pub(super) const SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT: usize = 1_024;
 
 const WRITER_PAGE_CACHE_KIB: i64 = 2_048;
 const READER_PAGE_CACHE_KIB: i64 = 512;
@@ -187,6 +195,7 @@ impl SearchDatabase {
     pub fn open(path: &Path) -> SearchResult<Self> {
         let connection = Connection::open(path)?;
         verify_supported_schema(&connection)?;
+        let connection = storage_rebuild::rebuild_schema_eight_database(path, connection)?;
         configure_writer_connection(&connection)?;
         let database = Self {
             connection,
@@ -202,6 +211,9 @@ impl SearchDatabase {
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        verify_supported_schema(&connection)?;
+        verify_current_schema(&connection)?;
+        schema::verify_search_storage_schema(&connection)?;
         configure_read_only_connection(&connection)?;
         Ok(Self {
             connection,
@@ -363,67 +375,6 @@ impl SearchDatabase {
             })
             .transpose()
     }
-
-    fn initialize(&self) -> SearchResult<()> {
-        self.connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS files (
-                path BLOB PRIMARY KEY,
-                parent_path BLOB NOT NULL,
-                display_name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                modified_ms INTEGER,
-                accessed_ms INTEGER,
-                created_ms INTEGER,
-                mime_type TEXT,
-                content_status TEXT NOT NULL,
-                tombstoned INTEGER NOT NULL DEFAULT 0,
-                device INTEGER,
-                inode INTEGER,
-                mtime_ns INTEGER,
-                ctime_ns INTEGER,
-                observation_state TEXT NOT NULL DEFAULT 'observable'
-                    CHECK (observation_state IN ('observable', 'inaccessible')),
-                scan_generation INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS file_stage_state (
-                path BLOB PRIMARY KEY,
-                metadata_stage_state TEXT NOT NULL,
-                content_stage_state TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS directory_snapshots (
-                path BLOB PRIMARY KEY,
-                parent_path BLOB NOT NULL,
-                root_path BLOB NOT NULL,
-                device INTEGER NOT NULL,
-                inode INTEGER NOT NULL,
-                mtime_ns INTEGER NOT NULL,
-                ctime_ns INTEGER NOT NULL,
-                observation_state TEXT NOT NULL DEFAULT 'observable'
-                    CHECK (observation_state IN ('observable', 'inaccessible'))
-            );
-            CREATE TABLE IF NOT EXISTS search_data_migrations (
-                name TEXT PRIMARY KEY
-            ) WITHOUT ROWID;
-            CREATE VIRTUAL TABLE IF NOT EXISTS file_search_fts
-                USING fts5(path UNINDEXED, name, content);",
-        )?;
-        self.migrate()?;
-        self.connection.execute_batch(
-            "CREATE INDEX IF NOT EXISTS files_visible_modified_name
-                ON files(tombstoned, observation_state, modified_ms DESC, display_name);
-             CREATE INDEX IF NOT EXISTS files_parent_visible_modified_name
-                ON files(parent_path, tombstoned, observation_state, modified_ms DESC, display_name);
-             CREATE INDEX IF NOT EXISTS files_hidden_query_rows
-                ON files(tombstoned, observation_state)
-                WHERE tombstoned <> 0 OR observation_state <> 'observable';
-             CREATE INDEX IF NOT EXISTS directory_snapshots_root_path
-                ON directory_snapshots(root_path, path);
-             CREATE INDEX IF NOT EXISTS directory_snapshots_parent_path
-                ON directory_snapshots(parent_path, path);",
-        )?;
-        Ok(())
-    }
 }
 
 pub(crate) fn inspect_existing_schema(path: &Path) -> SearchResult<()> {
@@ -440,6 +391,18 @@ fn verify_supported_schema(connection: &Connection) -> SearchResult<()> {
         return Err(SearchError::UnsupportedDatabaseSchema {
             found,
             supported: SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
+
+fn verify_current_schema(connection: &Connection) -> SearchResult<()> {
+    let found = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+    if found != SCHEMA_VERSION {
+        return Err(SearchError::InvalidDatabaseSchema {
+            message: format!(
+                "read-only search requires schema {SCHEMA_VERSION}, found schema {found}"
+            ),
         });
     }
     Ok(())
@@ -614,18 +577,36 @@ fn replace_fulltext_content(
     connection
         .prepare_cached("DELETE FROM file_search_fts WHERE rowid = ?1")?
         .execute(params![file_rowid])?;
-    // FTS 中的 path 只服务展示；文件身份和删除关联始终使用 files.rowid。
     connection
-        .prepare_cached(
-            "INSERT INTO file_search_fts (rowid, path, name, content) VALUES (?1, ?2, ?3, ?4)",
-        )?
+        .prepare_cached("DELETE FROM file_search_snippets WHERE file_rowid = ?1")?
+        .execute(params![file_rowid])?;
+    connection
+        .prepare_cached("INSERT INTO file_search_fts (rowid, name, content) VALUES (?1, ?2, ?3)")?
         .execute(params![
             file_rowid,
-            fulltext_row.path.to_string_lossy(),
             fulltext_row.display_name,
             fulltext_row.content.unwrap_or("")
         ])?;
+    if let Some(preview) = fulltext_row
+        .content
+        .and_then(bounded_search_content_preview)
+    {
+        // 命中身份只属于 FTS；预览受硬上限约束，不能成为正文副本。
+        connection
+            .prepare_cached(
+                "INSERT INTO file_search_snippets (file_rowid, preview) VALUES (?1, ?2)",
+            )?
+            .execute(params![file_rowid, preview])?;
+    }
     Ok(())
+}
+
+fn bounded_search_content_preview(content: &str) -> Option<String> {
+    let preview = content
+        .chars()
+        .take(SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT)
+        .collect::<String>();
+    (!preview.is_empty()).then_some(preview)
 }
 
 fn path_to_storage(path: &Path) -> Vec<u8> {

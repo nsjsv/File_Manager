@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use tokio::fs;
+use tokio_util::sync::CancellationToken;
 
 use super::super::copy::{
     copy_path_with_inspected_source, FileOperationControls, FileTransferOptions,
@@ -10,14 +11,14 @@ use super::super::copy::{
 use super::super::ensure_replace_target_does_not_contain_source_path;
 use super::super::transfer_object::inspect_transfer_source;
 use super::{
-    build_source_manifest, fingerprint_object, inspect_file_identity, plan_owned_artifact,
-    recover_owned_artifact, remove_owned_artifact, rename_noreplace, sync_parent_blocking,
-    sync_tree_blocking, verify_source_manifest, CommitPayload, CommitTransfer, FileIdentity,
-    FileObjectKind, NoReplaceRenameError, OwnedArtifact, OwnedArtifactKind, PreparedTransfer,
-    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
-    SourceManifest, StagedSourceLocation, StagingTransfer, TransferCheckpoint,
-    TransferExecutionKind, TransferJournal, TransferJournalError, TransferJournalMutation,
-    TransferJournalRecord,
+    build_source_manifest_with_controls, fingerprint_object_with_controls, inspect_file_identity,
+    plan_owned_artifact, recover_owned_artifact, remove_owned_artifact, rename_noreplace,
+    sync_parent_blocking, sync_tree_blocking, verify_source_manifest_with_controls, CommitPayload,
+    CommitTransfer, FileIdentity, FileObjectKind, NoReplaceRenameError, OwnedArtifact,
+    OwnedArtifactKind, PreparedTransfer, RecoverableTransferError, RecoverableTransferOperation,
+    RecoverableTransferOutcome, SourceManifest, StagedSourceLocation, StagingTransfer,
+    TransferCheckpoint, TransferExecutionKind, TransferJournal, TransferJournalError,
+    TransferJournalMutation, TransferJournalRecord,
 };
 use crate::transfer_conflict::{
     available_transfer_target_path_candidate, transfer_target_metadata_if_exists,
@@ -30,7 +31,7 @@ mod validation;
 
 use commit::{
     advance_committed_transfer, advance_retired_source, commit_transfer, retire_source,
-    verify_completed_target, verify_prepared_source,
+    verify_completed_target, verify_prepared_source_with_controls,
 };
 use merge::{advance_merge_transfer, prepare_merge_transfer};
 use recovery::{
@@ -48,6 +49,15 @@ pub async fn persist_recoverable_source_manifest<J: TransferJournal>(
     record: &mut TransferJournalRecord,
     journal: &J,
 ) -> Result<(), RecoverableTransferError> {
+    let mut controls = FileOperationControls::running(CancellationToken::new());
+    persist_recoverable_source_manifest_with_controls(record, journal, &mut controls).await
+}
+
+pub async fn persist_recoverable_source_manifest_with_controls<J: TransferJournal>(
+    record: &mut TransferJournalRecord,
+    journal: &J,
+    controls: &mut FileOperationControls,
+) -> Result<(), RecoverableTransferError> {
     if record.manifest.is_some() {
         return Ok(());
     }
@@ -57,7 +67,7 @@ pub async fn persist_recoverable_source_manifest<J: TransferJournal>(
         });
     }
 
-    let manifest = build_source_manifest(&record.request.source).await?;
+    let manifest = build_source_manifest_with_controls(&record.request.source, controls).await?;
     install_manifest_and_checkpoint(
         record,
         journal,
@@ -77,6 +87,11 @@ pub async fn run_recoverable_transfer<J: TransferJournal>(
         match advance_recoverable_transfer(&mut record, journal, &transfer_options).await {
             Ok(TransferAdvance::Continue) => {}
             Ok(TransferAdvance::Complete(outcome)) => return Ok(outcome),
+            Err(
+                error @ RecoverableTransferError::FileOperation(
+                    crate::FileError::ApplicationStopping,
+                ),
+            ) => return Err(error),
             Err(error)
                 if matches!(
                     error,
@@ -152,7 +167,7 @@ pub async fn advance_recoverable_transfer<J: TransferJournal>(
     }
     match checkpoint {
         TransferCheckpoint::AwaitingManifest => {
-            prepare_transfer(record, journal).await?;
+            prepare_transfer(record, journal, transfer_options).await?;
             Ok(TransferAdvance::Continue)
         }
         TransferCheckpoint::Merging(merge) => {
@@ -165,7 +180,8 @@ pub async fn advance_recoverable_transfer<J: TransferJournal>(
                     message: "staging intent has no owned artifact plan".to_owned(),
                 }
             })?;
-            verify_prepared_source(record, &prepared).await?;
+            verify_prepared_source_with_controls(record, &prepared, &transfer_options.controls)
+                .await?;
             let artifact = recover_owned_artifact(staging_plan).await?;
             persist_checkpoint(
                 record,
@@ -227,13 +243,16 @@ pub async fn advance_recoverable_transfer<J: TransferJournal>(
 async fn prepare_transfer<J: TransferJournal>(
     record: &mut TransferJournalRecord,
     journal: &J,
+    transfer_options: &FileTransferOptions,
 ) -> Result<(), RecoverableTransferError> {
+    let mut controls = transfer_options.controls.clone();
     let manifest = match &record.manifest {
         Some(manifest) => manifest.clone(),
-        None => build_source_manifest(&record.request.source).await?,
+        None => build_source_manifest_with_controls(&record.request.source, &mut controls).await?,
     };
-    let source_fingerprint = fingerprint_object(&record.request.source).await?;
-    verify_source_manifest(&manifest).await?;
+    let source_fingerprint =
+        fingerprint_object_with_controls(&record.request.source, &controls).await?;
+    verify_source_manifest_with_controls(&manifest, &mut controls).await?;
     let source_identity = manifest_root_identity(&manifest)?.clone();
     let requested_target_identity =
         inspect_optional_identity(&record.request.requested_target).await?;
@@ -304,10 +323,15 @@ async fn prepare_transfer<J: TransferJournal>(
                     &record.request.requested_target,
                     &metadata,
                 )?;
-                let replacement_manifest =
-                    build_source_manifest(&record.request.requested_target).await?;
-                let fingerprint = fingerprint_object(&record.request.requested_target).await?;
-                verify_source_manifest(&replacement_manifest).await?;
+                let replacement_manifest = build_source_manifest_with_controls(
+                    &record.request.requested_target,
+                    &mut controls,
+                )
+                .await?;
+                let fingerprint =
+                    fingerprint_object_with_controls(&record.request.requested_target, &controls)
+                        .await?;
+                verify_source_manifest_with_controls(&replacement_manifest, &mut controls).await?;
                 if manifest_root_identity(&replacement_manifest)? != &target_identity {
                     return Err(RecoverableTransferError::TargetConflict {
                         path: record.request.requested_target.clone(),
@@ -417,7 +441,8 @@ async fn stage_transfer<J: TransferJournal>(
                 path: record.request.source.clone(),
             });
         }
-        verify_prepared_source(record, &staging.prepared).await?;
+        verify_prepared_source_with_controls(record, &staging.prepared, &transfer_options.controls)
+            .await?;
         match staging.prepared.execution {
             TransferExecutionKind::CopyToStage => {
                 copy_to_payload(record, transfer_options, &payload_path).await?;
@@ -449,10 +474,12 @@ async fn stage_transfer<J: TransferJournal>(
     };
 
     if source_location == StagedSourceLocation::OriginalPath {
-        verify_prepared_source(record, &staging.prepared).await?;
+        verify_prepared_source_with_controls(record, &staging.prepared, &transfer_options.controls)
+            .await?;
     }
     sync_tree(&payload_path).await?;
-    let payload_fingerprint = fingerprint_object(&payload_path).await?;
+    let payload_fingerprint =
+        fingerprint_object_with_controls(&payload_path, &transfer_options.controls).await?;
     if payload_fingerprint != staging.prepared.source_fingerprint {
         return Err(RecoverableTransferError::FingerprintMismatch { path: payload_path });
     }
@@ -754,9 +781,16 @@ fn validate_next_revision(current: u64, next: u64) -> Result<(), RecoverableTran
 }
 
 fn journal_error(error: TransferJournalError) -> RecoverableTransferError {
-    let message = match error {
-        TransferJournalError::StaleRevision => "stale transfer revision".to_owned(),
-        TransferJournalError::Storage(message) => message,
-    };
-    RecoverableTransferError::Journal { message }
+    match error {
+        TransferJournalError::UserCancelled => {
+            RecoverableTransferError::FileOperation(crate::FileError::Cancelled)
+        }
+        TransferJournalError::ApplicationStopping => {
+            RecoverableTransferError::FileOperation(crate::FileError::ApplicationStopping)
+        }
+        TransferJournalError::StaleRevision => RecoverableTransferError::Journal {
+            message: "stale transfer revision".to_owned(),
+        },
+        TransferJournalError::Storage(message) => RecoverableTransferError::Journal { message },
+    }
 }

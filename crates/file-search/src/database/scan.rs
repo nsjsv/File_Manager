@@ -333,6 +333,18 @@ impl SearchDatabase {
         let transaction = self.connection.unchecked_transaction()?;
         let scope_range = recursive_storage_range(scope);
         transaction.execute(
+            "DELETE FROM file_search_snippets
+             WHERE file_rowid IN (
+                SELECT rowid FROM files
+                WHERE path = ?1 OR (path >= ?2 AND path < ?3)
+             )",
+            params![
+                &scope_range.exact_path,
+                &scope_range.descendant_lower,
+                &scope_range.descendant_upper,
+            ],
+        )?;
+        transaction.execute(
             "DELETE FROM file_search_fts
              WHERE rowid IN (
                 SELECT rowid FROM files

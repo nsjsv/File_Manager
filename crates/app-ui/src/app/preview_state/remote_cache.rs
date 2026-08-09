@@ -158,4 +158,68 @@ mod tests {
         };
         assert_eq!(download.generation, 2);
     }
+
+    #[test]
+    fn completed_remote_office_cache_reuses_local_document_dispatch() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let source = PathBuf::from("/run/user/1000/gvfs/dav/report.docx");
+        let cache_path = PathBuf::from("/tmp/file-manager-preview/report.docx");
+        browser.preview = Some(PreviewState::DownloadingRemoteFile(
+            RemotePreviewDownload::new(source.clone(), 5),
+        ));
+
+        drop(
+            browser.accept_remote_preview_cache_finished(RemotePreviewCacheFinished {
+                source_path: source,
+                generation: 5,
+                outcome: Ok(cache_path.clone()),
+            }),
+        );
+
+        assert!(matches!(
+            browser.preview,
+            Some(PreviewState::Loading(ref path)) if path == &cache_path
+        ));
+        assert_eq!(
+            browser
+                .pending_document_preview
+                .as_ref()
+                .unwrap()
+                .key
+                .source_path,
+            cache_path
+        );
+    }
+
+    #[test]
+    fn completed_remote_pdf_cache_reuses_local_document_dispatch() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let source = PathBuf::from("/run/user/1000/gvfs/dav/report.pdf");
+        let cache_path = PathBuf::from("/tmp/file-manager-preview/report.pdf");
+        browser.preview = Some(PreviewState::DownloadingRemoteFile(
+            RemotePreviewDownload::new(source.clone(), 4),
+        ));
+
+        drop(
+            browser.accept_remote_preview_cache_finished(RemotePreviewCacheFinished {
+                source_path: source,
+                generation: 4,
+                outcome: Ok(cache_path.clone()),
+            }),
+        );
+
+        assert!(matches!(
+            browser.preview,
+            Some(PreviewState::Loading(ref path)) if path == &cache_path
+        ));
+        assert_eq!(
+            browser
+                .pending_document_preview
+                .as_ref()
+                .unwrap()
+                .key
+                .source_path,
+            cache_path
+        );
+    }
 }

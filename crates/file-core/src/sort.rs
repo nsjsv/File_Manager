@@ -3,7 +3,9 @@ use std::ffi::OsStr;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
-use crate::{DirectoryEntry, FileKind, ScanOptions};
+use crate::{
+    DirectoryEntry, DirectoryMetadataState, DiscoveredDirectoryEntry, FileKind, ScanOptions,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortField {
@@ -34,20 +36,93 @@ pub fn sort_entries(entries: &mut [DirectoryEntry], options: &ScanOptions) {
     entries.sort_unstable_by(|left, right| compare_entries(left, right, options));
 }
 
+pub fn discovered_sort_is_ready(
+    entries: &[DiscoveredDirectoryEntry],
+    options: &ScanOptions,
+) -> bool {
+    match options.sort_field {
+        SortField::Name | SortField::Kind => true,
+        SortField::Size | SortField::Modified => entries
+            .iter()
+            .all(|entry| !matches!(entry.filesystem_metadata(), DirectoryMetadataState::Pending)),
+    }
+}
+
+pub fn sort_discovered_entry_indices(
+    entries: &[DiscoveredDirectoryEntry],
+    options: &ScanOptions,
+) -> Vec<usize> {
+    let mut indices = (0..entries.len()).collect::<Vec<_>>();
+    indices.sort_unstable_by(|left, right| {
+        compare_discovered_entries(&entries[*left], &entries[*right], options)
+    });
+    indices
+}
+
+fn compare_discovered_entries(
+    left: &DiscoveredDirectoryEntry,
+    right: &DiscoveredDirectoryEntry,
+    options: &ScanOptions,
+) -> Ordering {
+    if let Some(ordering) = directory_position(left.kind(), right.kind(), options) {
+        return ordering;
+    }
+
+    let ordering = match options.sort_field {
+        SortField::Kind => kind_rank(left.kind())
+            .cmp(&kind_rank(right.kind()))
+            .then_with(|| compare_names(left.name(), right.name())),
+        SortField::Name => compare_names(left.name(), right.name()),
+        SortField::Size => {
+            return compare_discovered_filesystem_metadata(left, right, options, |metadata| {
+                metadata.len
+            });
+        }
+        SortField::Modified => {
+            return compare_discovered_filesystem_metadata(left, right, options, |metadata| {
+                metadata.modified
+            });
+        }
+    };
+    apply_sort_direction(ordering, options.sort_direction)
+}
+
+fn compare_discovered_filesystem_metadata<T: Ord>(
+    left: &DiscoveredDirectoryEntry,
+    right: &DiscoveredDirectoryEntry,
+    options: &ScanOptions,
+    value: impl Fn(&crate::DirectoryFilesystemMetadata) -> T,
+) -> Ordering {
+    match (left.filesystem_metadata(), right.filesystem_metadata()) {
+        (
+            DirectoryMetadataState::Complete(left_metadata),
+            DirectoryMetadataState::Complete(right_metadata),
+        ) => apply_sort_direction(
+            value(left_metadata)
+                .cmp(&value(right_metadata))
+                .then_with(|| compare_names(left.name(), right.name())),
+            options.sort_direction,
+        ),
+        (DirectoryMetadataState::Complete(_), _) => Ordering::Less,
+        (_, DirectoryMetadataState::Complete(_)) => Ordering::Greater,
+        (DirectoryMetadataState::Unavailable(_), DirectoryMetadataState::Pending) => Ordering::Less,
+        (DirectoryMetadataState::Pending, DirectoryMetadataState::Unavailable(_)) => {
+            Ordering::Greater
+        }
+        _ => apply_sort_direction(
+            compare_names(left.name(), right.name()),
+            options.sort_direction,
+        ),
+    }
+}
+
 pub fn compare_entries(
     left: &DirectoryEntry,
     right: &DirectoryEntry,
     options: &ScanOptions,
 ) -> Ordering {
-    if options.directories_first {
-        match (
-            left.kind == FileKind::Directory,
-            right.kind == FileKind::Directory,
-        ) {
-            (true, false) => return Ordering::Less,
-            (false, true) => return Ordering::Greater,
-            _ => {}
-        }
+    if let Some(ordering) = directory_position(left.kind, right.kind, options) {
+        return ordering;
     }
 
     let ordering = match options.sort_field {
@@ -67,7 +142,22 @@ pub fn compare_entries(
             .then_with(|| compare_names(left.name(), right.name())),
     };
 
-    match options.sort_direction {
+    apply_sort_direction(ordering, options.sort_direction)
+}
+
+fn directory_position(left: FileKind, right: FileKind, options: &ScanOptions) -> Option<Ordering> {
+    if !options.directories_first {
+        return None;
+    }
+    match (left == FileKind::Directory, right == FileKind::Directory) {
+        (true, false) => Some(Ordering::Less),
+        (false, true) => Some(Ordering::Greater),
+        _ => None,
+    }
+}
+
+fn apply_sort_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
+    match direction {
         SortDirection::Ascending => ordering,
         SortDirection::Descending => ordering.reverse(),
     }

@@ -19,9 +19,9 @@ fn entry(path: &str, kind: FileKind) -> DirectoryEntry {
 fn browser_with_entries(entries: Vec<DirectoryEntry>) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
-    browser.entries = entries;
+    browser.entries = entries.into();
     browser.view_mode = BrowserViewMode::Icons;
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     browser
 }
 
@@ -48,7 +48,7 @@ fn current_request(browser: &FileBrowser, path: &Path) -> ExpandedDirectoryLoadR
 
 fn finish_scan(browser: &mut FileBrowser, path: &Path, entries: Vec<DirectoryEntry>) {
     let request = current_request(browser, path);
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         request,
         Ok(DirectoryScan {
             path: path.to_path_buf(),

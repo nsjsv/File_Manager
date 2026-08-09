@@ -24,8 +24,8 @@ use crate::operation_progress::remote_preview_download_panel;
 use crate::typography::{localized_text, readable_text};
 
 use super::{
-    auxiliary_window_message, icon_tone_style, text_preview_panel::text_preview_panel, themed_icon,
-    IconTone,
+    auxiliary_window_message, document_preview_panel::document_preview_panel, icon_tone_style,
+    text_preview_panel::text_preview_panel, themed_icon, IconTone,
 };
 
 const PREVIEW_PANEL_PADDING_RESERVED_HEIGHT: f32 = 28.0;
@@ -61,6 +61,7 @@ pub(crate) fn view_preview_window<'a>(
     operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
     archive_scrollbar_visibility: ScrollbarVisibility,
+    document_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     preview
@@ -74,6 +75,7 @@ pub(crate) fn view_preview_window<'a>(
                 operation_progress_animation_frame,
                 directory_scrollbar_visibility,
                 archive_scrollbar_visibility,
+                document_scrollbar_visibility,
                 markdown_scrollbar_visibility,
             )
         })
@@ -91,6 +93,7 @@ fn preview_panel<'a>(
     operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
     archive_scrollbar_visibility: ScrollbarVisibility,
+    document_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
@@ -118,6 +121,9 @@ fn preview_panel<'a>(
         ),
         PreviewState::Ready(PreviewContent::Archive { entries, .. }) => {
             archive_preview_panel(entries, scroll_height, archive_scrollbar_visibility)
+        }
+        PreviewState::Ready(PreviewContent::PagedDocument(document)) => {
+            return document_preview_panel(document, size, document_scrollbar_visibility);
         }
         PreviewState::Ready(PreviewContent::Image {
             handle,

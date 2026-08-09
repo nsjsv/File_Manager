@@ -343,6 +343,7 @@ fn restored_column_chain_directories(current_dir: &Path, open_directory: &Path) 
 fn restored_expanded_directory() -> ExpandedDirectory {
     ExpandedDirectory {
         entries: Vec::new(),
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loading,
         is_expanded: true,
         is_collapsing: false,
@@ -350,6 +351,10 @@ fn restored_expanded_directory() -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 

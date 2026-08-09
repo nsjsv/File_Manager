@@ -17,7 +17,7 @@ impl FileBrowser {
     }
 
     fn application_window_is_open(&self, window: window::Id) -> bool {
-        !self.is_shutting_down
+        self.application_shutdown_phase.is_running()
             && (window == self.main_window
                 || self.settings_window == Some(window)
                 || self.properties_window == Some(window)

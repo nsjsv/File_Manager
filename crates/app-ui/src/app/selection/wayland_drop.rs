@@ -487,7 +487,7 @@ fn tab_hover_threshold_is_500ms_and_switch_invalidates_old_layout() {
 
     let reloaded_directory = PathBuf::from("/workspace/hover");
     let directory_load_generation = browser.directory_load_generation;
-    drop(browser.accept_directory_scan(
+    drop(browser.accept_complete_directory_fixture(
         DirectoryLoadRequest {
             pane_id: target.pane_id,
             path: reloaded_directory.clone(),
@@ -717,7 +717,7 @@ async fn iced_fallback_tab_release_uses_same_internal_dispatch() {
 
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let target = add_inactive_directory_tab(&mut browser, destination.clone());
-    browser.entries = vec![test_entry(&source)];
+    browser.entries = vec![test_entry(&source)].into();
     browser.selected_paths.insert(source.clone());
     browser.cursor_position = Point::new(0.0, 0.0);
     browser.start_file_drag(
@@ -757,7 +757,7 @@ fn iced_fallback_trash_tab_uses_drag_snapshot_paths() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let target = add_inactive_trash_tab(&mut browser);
     let source = PathBuf::from("/tmp/iced-trash.txt");
-    browser.entries = vec![test_entry(&source)];
+    browser.entries = vec![test_entry(&source)].into();
     browser.selected_paths.insert(source.clone());
     browser.cursor_position = Point::new(0.0, 0.0);
     browser.start_file_drag(

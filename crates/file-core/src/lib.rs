@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod archive_extraction;
 pub mod archive_listing;
+pub mod directory_metadata;
 pub mod entry;
 pub mod media;
 pub mod ops;
@@ -22,7 +23,13 @@ pub use archive_extraction::{
     ArchiveExtractionProgress, ArchiveExtractionRequest,
 };
 pub use archive_listing::{list_archive_members, ArchiveListingEntry};
-pub use entry::{DirectoryEntry, EntryMetadata, FileKind};
+pub use directory_metadata::{
+    resolve_directory_metadata, DirectoryFilesystemMetadata, DirectoryIdentityNames,
+    DirectoryMetadataRequest, DirectoryMetadataRequirement, DirectoryMetadataResolution,
+    DirectoryMetadataResolver, DirectoryMetadataState, DirectoryMetadataUnavailable,
+    DiscoveredDirectoryEntry,
+};
+pub use entry::{DirectoryEntry, DirectoryMetadataAvailability, EntryMetadata, FileKind};
 pub use media::{
     is_supported_audio_extension, is_supported_audio_path, is_supported_image_extension,
     is_supported_image_path, is_supported_video_extension, is_supported_video_path,
@@ -31,25 +38,27 @@ pub use media::{
 pub use ops::{
     batch_rename_paths, copy_path, copy_path_with_options, create_directory, create_empty_file,
     create_file_with_contents, delete_path_permanently, move_path, move_path_with_options,
-    persist_recoverable_source_manifest, rename_path, run_recoverable_transfer, ArtifactOwner,
-    ArtifactToken, BatchRenameItem, CommitPayload, CommitTransfer, CommittedTransfer,
-    CompletedBatchRename, CompletedTarget, CopyProgress, FileIdentity, FileObjectKind,
-    FileOperationControls, FileOperationRunState, FileOperationVerification, FileTransferOptions,
-    MergeChildCompletion, MergeChildOutcome, MergeTransfer, ObjectFingerprint, OwnedArtifact,
-    OwnedArtifactKind, OwnedArtifactPlan, PreparedTransfer, ProgressSender,
-    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
-    RecoverableTransferRequest, RetiredSource, SourceDisposition, SourceManifest,
-    SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation, StagingTransfer,
-    TransferCheckpoint, TransferConflictStrategy, TransferExecutionKind, TransferJournal,
-    TransferJournalError, TransferJournalFuture, TransferJournalMutation, TransferJournalRecord,
-    TransferWorkKey,
+    persist_recoverable_source_manifest, persist_recoverable_source_manifest_with_controls,
+    rename_path, run_recoverable_transfer, ArtifactOwner, ArtifactToken, BatchRenameItem,
+    CommitPayload, CommitTransfer, CommittedTransfer, CompletedBatchRename, CompletedTarget,
+    CopyProgress, FileIdentity, FileObjectKind, FileOperationControls, FileOperationRunState,
+    FileOperationVerification, FileTransferOptions, MergeChildCompletion, MergeChildOutcome,
+    MergeTransfer, ObjectFingerprint, OwnedArtifact, OwnedArtifactKind, OwnedArtifactPlan,
+    PreparedTransfer, ProgressSender, RecoverableTransferError, RecoverableTransferOperation,
+    RecoverableTransferOutcome, RecoverableTransferRequest, RetiredSource, SourceDisposition,
+    SourceManifest, SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation,
+    StagingTransfer, TransferCheckpoint, TransferConflictStrategy, TransferExecutionKind,
+    TransferJournal, TransferJournalError, TransferJournalFuture, TransferJournalMutation,
+    TransferJournalRecord, TransferWorkKey,
 };
 pub use scan::{
-    scan_directory, scan_directory_with_progress, DirectoryScan, DirectoryScanBatch, FileError,
+    discover_directory_with_progress, scan_directory, scan_directory_with_progress,
+    DirectoryDiscovery, DirectoryDiscoveryBatch, DirectoryScan, DirectoryScanBatch, FileError,
     ScanOptions, ScanWarning,
 };
 pub use sort::{
-    apply_entry_options, compare_entries, filter_hidden, sort_entries, SortDirection, SortField,
+    apply_entry_options, compare_entries, discovered_sort_is_ready, filter_hidden,
+    sort_discovered_entry_indices, sort_entries, SortDirection, SortField,
 };
 pub use transfer_conflict::{
     available_transfer_target_path, check_transfer_conflicts, is_transfer_target_available,

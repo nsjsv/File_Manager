@@ -360,9 +360,9 @@ fn daemon_defers_fragmented_full_text_compaction_to_startup_maintenance() {
     for index in 0..4 {
         connection
             .execute(
-                "INSERT INTO file_search_fts(rowid, path, name, content)
-                 VALUES(?1, ?2, ?3, 'needle')",
-                rusqlite::params![index + 1, format!("/tmp/{index}"), format!("file-{index}")],
+                "INSERT INTO file_search_fts(rowid, name, content)
+                 VALUES(?1, ?2, 'needle')",
+                rusqlite::params![index + 1, format!("file-{index}")],
             )
             .unwrap();
     }

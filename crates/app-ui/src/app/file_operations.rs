@@ -53,6 +53,25 @@ impl RenameInputHistory {
     }
 }
 
+pub(super) fn queue_finish_from_completion(
+    completion: &FileOperationCompletion,
+) -> FileOperationFinish {
+    match completion {
+        FileOperationCompletion::Succeeded(outcome) => match outcome.completion_warning() {
+            Some(warning) => FileOperationFinish::SucceededWithWarning(warning),
+            None => FileOperationFinish::Succeeded,
+        },
+        FileOperationCompletion::Canceled(_) => FileOperationFinish::Canceled,
+        FileOperationCompletion::Failed { error, .. } => FileOperationFinish::Failed(error.clone()),
+        FileOperationCompletion::RecoveryInterrupted(error, _) => {
+            FileOperationFinish::RecoveryInterrupted(error.clone())
+        }
+        FileOperationCompletion::RecoveryBlocked { error, .. } => {
+            FileOperationFinish::RecoveryBlocked(error.clone())
+        }
+    }
+}
+
 impl FileBrowser {
     pub(super) fn accept_file_operation_finished(
         &mut self,
@@ -60,22 +79,7 @@ impl FileBrowser {
         completion: FileOperationCompletion,
     ) -> Task<Message> {
         let completed_operation = self.operation_queue.operation(task_id).cloned();
-        let queue_outcome = match &completion {
-            FileOperationCompletion::Succeeded(outcome) => match outcome.completion_warning() {
-                Some(warning) => FileOperationFinish::SucceededWithWarning(warning),
-                None => FileOperationFinish::Succeeded,
-            },
-            FileOperationCompletion::Canceled(_) => FileOperationFinish::Canceled,
-            FileOperationCompletion::Failed { error, .. } => {
-                FileOperationFinish::Failed(error.clone())
-            }
-            FileOperationCompletion::RecoveryInterrupted(error, _) => {
-                FileOperationFinish::RecoveryInterrupted(error.clone())
-            }
-            FileOperationCompletion::RecoveryBlocked { error, .. } => {
-                FileOperationFinish::RecoveryBlocked(error.clone())
-            }
-        };
+        let queue_outcome = queue_finish_from_completion(&completion);
         let (terminal_status, storage_error) = self.operation_queue.finish(task_id, queue_outcome);
         if let Some(error) = storage_error {
             self.show_global_error(error);

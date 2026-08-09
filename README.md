@@ -21,7 +21,7 @@ File Manager 专注于 Linux 日常文件操作中最常见、最需要信任感
 - **浏览与布局：** 多栏视图适合沿目录层级快速移动，列表视图适合扫描和排序；标签页和分屏面板用于在多个位置之间复制、移动和对照。
 - **可靠文件操作：** 复制和移动进入后台队列，支持进度显示、暂停、恢复和取消。同名目标可选择替换、跳过、保留两者或合并目录，并可关闭校验、使用基础元数据校验或更强的内容校验。常见文件操作会进入撤销/重做历史，也支持批量重命名以及常见压缩包的创建和解压。
 - **索引搜索：** 后台搜索服务为 Home 建立并持续维护索引，应用从当前目录发起递归搜索；搜索服务不可用时，本地当前目录搜索仍可回退到目录扫描。
-- **内容预览：** 预览窗口覆盖文本、Markdown、目录树、压缩包、图片、音频和视频等常见内容，减少仅为确认内容而打开外部应用的次数。
+- **内容预览：** 预览窗口覆盖文本、Markdown、目录树、压缩包、PDF、Office 文档、图片（包括 AVIF）、音频和视频等常见内容，减少仅为确认内容而打开外部应用的次数。
 - **Linux 桌面集成：** 侧边栏读取常见用户目录和 GTK 书签，并允许管理收藏；存储设备通过 UDisks2 显示，可执行挂载、卸载和安全移除。应用还可连接 SMB、WebDAV 和 SFTP 网络位置，打开终端、默认应用和桌面主题等行为尽量贴近 Linux 桌面习惯。
 - **可配置工作台：** 设置窗口集中管理隐藏文件显示、启动位置与会话恢复、界面语言、终端选择、渲染 GPU 偏好、文件操作校验和快捷键。属性窗口用于查看文件信息、目录内容统计和权限，并可直接修改常见权限位。
 
@@ -106,7 +106,7 @@ cargo run --locked -p app-ui -- ~/Downloads/report.pdf
 
 ```bash
 sudo pacman -S --needed base-devel git rust cargo pkgconf \
-  acl alsa-lib fontconfig glib2 libnotify libxkbcommon wayland wl-clipboard xdg-utils
+  acl alsa-lib dav1d fontconfig glib2 libnotify libxkbcommon wayland wl-clipboard xdg-utils
 ```
 
 核心文件操作和桌面集成功能使用以下系统库或命令：
@@ -116,16 +116,19 @@ sudo pacman -S --needed base-devel git rust cargo pkgconf \
 - “打开方式”需要 `gio`；Arch Linux 由 `glib2` 包提供。
 - 文件任务桌面通知需要 `notify-send`；Arch Linux 由 `libnotify` 包提供。
 - 复制和跨文件系统移动保留 POSIX ACL 需要 `libacl`；Arch Linux 由 `acl` 包提供。
+- AVIF 由内置图片解码器支持；构建和运行时使用 `dav1d`。
 
 
 
 ### 可选预览与压缩包支持
 
 ```bash
-sudo pacman -S --needed 7zip ffmpeg ffmpegthumbnailer
+sudo pacman -S --needed 7zip ffmpeg ffmpegthumbnailer libreoffice-fresh poppler
 ```
 
 - 视频预览和元数据读取需要 `ffmpeg`、`ffprobe`，视频缩略图也可以使用 `ffmpegthumbnailer`。
+- PDF 预览需要 Poppler 提供的 `pdfinfo` 和 `pdftoppm`。
+- Office 文档（DOC/DOCX、XLS/XLSX、PPT/PPTX、ODT/ODS/ODP）预览需要 Poppler 和 LibreOffice；Arch Linux 可安装 `libreoffice-fresh`，`libreoffice-still` 也提供相同的 `libreoffice` 命令。
 - 创建 `.7z` 压缩包以及预览、解压 `.7z` 和 `.rar` 文件，需要 `7z`、`7zz` 或 `7za`；Arch Linux 由 `7zip` 包提供。
 
 

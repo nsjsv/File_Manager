@@ -33,12 +33,12 @@ fn directory_entry(path: &Path) -> DirectoryEntry {
 fn browser_with_bookmarks(bookmarks: Vec<SidebarLocation>) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.sidebar_locations = bookmarks;
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     browser
 }
 
 fn start_directory_file_drag(browser: &mut FileBrowser, path: &Path) {
-    browser.entries = vec![directory_entry(path)];
+    browser.entries = vec![directory_entry(path)].into();
     browser.selected_paths.clear();
     browser.selected_paths.insert(path.to_path_buf());
     browser.cursor_position = Point::new(0.0, 0.0);
@@ -110,7 +110,7 @@ fn dropped_directory_inserts_bookmark_at_slot_index() {
         bookmark("/home/user/beta"),
     ]);
     let source = PathBuf::from("/home/user/projects");
-    browser.entries = vec![directory_entry(&source)];
+    browser.entries = vec![directory_entry(&source)].into();
 
     drop(browser.insert_sidebar_bookmark_from_drag(
         SidebarBookmarkDropSlot::Insert { index: 1 },
@@ -127,7 +127,7 @@ fn dropped_directory_inserts_bookmark_at_slot_index() {
 fn duplicate_bookmark_is_not_inserted_again() {
     let existing = PathBuf::from("/home/user/alpha");
     let mut browser = browser_with_bookmarks(vec![bookmark("/home/user/alpha")]);
-    browser.entries = vec![directory_entry(&existing)];
+    browser.entries = vec![directory_entry(&existing)].into();
 
     drop(
         browser.insert_sidebar_bookmark_from_drag(

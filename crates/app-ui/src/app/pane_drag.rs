@@ -492,6 +492,7 @@ mod tests {
             current_dir: tab.directory.clone(),
             is_trash_view: tab.is_trash_view,
             entries: tab.entries.clone(),
+            directory_discovery: tab.directory_discovery.clone(),
             directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::<TrashEntry>::new(),
             selected: tab.selected.clone(),
@@ -508,7 +509,11 @@ mod tests {
             directory_load_cancel: None,
             back_stack: tab.back_stack.clone(),
             forward_stack: tab.forward_stack.clone(),
-            is_loading: false,
+            directory_collection_phase: crate::model::DirectoryCollectionPhase::Ready,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         }
     }
 

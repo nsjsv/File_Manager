@@ -12,8 +12,9 @@ ExecStartPre=/usr/lib/file-manager/file-searchd --shutdown-existing
 ExecStart=/usr/lib/file-manager/file-searchd
 
 MemoryAccounting=yes
-MemoryHigh=80000000
-MemoryMax=96000000
+IOAccounting=yes
+MemoryHigh=160000000
+MemoryMax=192000000
 MemorySwapMax=0
 CPUQuota=5%
 

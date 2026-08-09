@@ -1,4 +1,5 @@
 mod application_logs;
+mod application_shutdown;
 pub(crate) mod archive_creation;
 pub(crate) mod archive_extraction;
 pub(crate) mod archive_password;
@@ -8,6 +9,7 @@ mod column_scroll;
 mod config_persistence;
 mod desktop_activation;
 mod directory_expansion_loading;
+mod directory_metadata_demand;
 mod directory_recovery;
 mod events;
 mod file_operation_notifications;
@@ -33,6 +35,7 @@ mod paths;
 mod persistence_feedback;
 mod pointer_interactions;
 mod preview_state;
+mod preview_window_view;
 mod properties;
 mod remote_mounts;
 mod rendering_settings;
@@ -74,13 +77,14 @@ use desktop_linux::{
     DesktopActivationEvent, DesktopActivationRuntime, NetworkConnectionId, StorageDeviceId,
     TerminalEmulator,
 };
-use file_core::{DirectoryEntry, ScanOptions, TrashEntry};
+use file_core::{DirectoryDiscovery, DirectoryMetadataRequirement, ScanOptions, TrashEntry};
 use iced::event;
 use iced::keyboard;
 use iced::window;
 use iced::{time, Element, Point, Subscription, Task, Theme};
 
 use crate::animated_image_preview::animated_image_preview_subscription;
+use crate::app::application_shutdown::ApplicationShutdownPhase;
 use crate::app::archive_creation::ArchiveCreationState;
 use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
@@ -106,17 +110,19 @@ use crate::commands::{
 };
 use crate::config;
 use crate::config::UiLanguage;
+use crate::document_preview::PendingDocumentPreview;
 use crate::localization;
 use crate::model::search::SearchWorkspaceState;
 use crate::model::{
-    AddressBarTransition, AddressEditingSession, ApplicationLogViewState, AudioPreviewPlayback,
-    BatchRenameState, BreadcrumbDropTargetBounds, BrowserPane, BrowserPaneId, BrowserPaneLayout,
-    BrowserTab, BrowserViewMode, ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState,
-    DestructiveActionConfirmation, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    FileDragState, FileDropPrompt, FileDropSessionState, FilePropertiesState,
-    IconGridExpansionState, IconGridViewport, ListColumnKind, Message, PaneDragPointerPress,
-    PaneDragState, PendingOperation, PreviewSize, PreviewState, PreviewWindowProfile,
-    ScrollbarRegion, SearchServiceState, SelectionMarquee, SettingsCategory,
+    empty_directory_entry_snapshot, AddressBarTransition, AddressEditingSession,
+    ApplicationLogViewState, AudioPreviewPlayback, BatchRenameState, BreadcrumbDropTargetBounds,
+    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
+    ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState, DestructiveActionConfirmation,
+    DirectoryCollectionPhase, DirectoryEntrySnapshot, DirectoryLoadingPlaceholderEntry,
+    DirectoryOrderPhase, ExpandedDirectory, FileDragState, FileDropPrompt, FileDropSessionState,
+    FilePropertiesState, IconGridExpansionState, IconGridViewport, ListColumnKind, Message,
+    PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
+    PreviewWindowProfile, ScrollbarRegion, SearchServiceState, SelectionMarquee, SettingsCategory,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
     TrashRefreshState, VideoPreviewPlayback,
@@ -131,8 +137,8 @@ use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
 use crate::view::{
-    separate_window_content, view_browser, view_preview_window, view_properties_window,
-    view_settings_window, window_resize_frame,
+    separate_window_content, view_browser, view_properties_window, view_settings_window,
+    window_resize_frame,
 };
 
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
@@ -145,11 +151,19 @@ const SEARCH_SERVICE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const APPLICATION_LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const TRASH_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DirectoryMetadataDemandKey {
+    context: crate::model::DirectoryMetadataLoadContext,
+    requirement: DirectoryMetadataRequirement,
+    index: usize,
+}
+
 pub(crate) struct FileBrowser {
     pub(crate) home_dir: PathBuf,
     pub(crate) current_dir: PathBuf,
     pub(crate) is_trash_view: bool,
-    pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) entries: DirectoryEntrySnapshot,
+    pub(crate) directory_discovery: Option<DirectoryDiscovery>,
     pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
     pub(crate) trash_entries: Vec<TrashEntry>,
     pub(crate) trash_refresh: TrashRefreshState,
@@ -161,6 +175,8 @@ pub(crate) struct FileBrowser {
     pub(crate) hovered_network_connection: Option<NetworkConnectionId>,
     cursor_paste_directory: Option<PathBuf>,
     pub(crate) preview: Option<PreviewState>,
+    pending_document_preview: Option<PendingDocumentPreview>,
+    document_preview_generation: u64,
     remote_preview_download_cancel: Option<tokio_util::sync::CancellationToken>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
     animated_image_preview_generation: u64,
@@ -168,6 +184,8 @@ pub(crate) struct FileBrowser {
     text_preview_generation: u64,
     directory_load_generation: u64,
     directory_load_cancel: Option<tokio_util::sync::CancellationToken>,
+    next_directory_metadata_request_generation: u64,
+    directory_metadata_in_flight: HashSet<DirectoryMetadataDemandKey>,
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
     pub(crate) video_preview: Option<VideoPreviewPlayback>,
     pub(crate) preview_size: PreviewSize,
@@ -256,7 +274,8 @@ pub(crate) struct FileBrowser {
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) rename_input: String,
     rename_input_history: file_operations::RenameInputHistory,
-    pub(crate) is_loading: bool,
+    pub(crate) directory_collection_phase: DirectoryCollectionPhase,
+    pub(crate) directory_order_phase: DirectoryOrderPhase,
     error: Option<String>,
     pub(crate) application_logs: ApplicationLogViewState,
     system_language: UiLanguage,
@@ -283,6 +302,7 @@ pub(crate) struct FileBrowser {
     operation_history: FileOperationHistory,
     list_directory_summary_cache: crate::model::ListDirectorySummaryCache,
     pending_browser_session_save: bool,
+    browser_session_saves_in_flight: usize,
     last_browser_session_save: Option<std::time::Instant>,
     scrollbar: ScrollbarState,
     smooth_scroll: MosScrollState,
@@ -293,7 +313,7 @@ pub(crate) struct FileBrowser {
     next_icon_grid_expansion_session_id: u64,
     next_list_expansion_follow_session_id: u64,
     theme: Theme,
-    is_shutting_down: bool,
+    application_shutdown_phase: ApplicationShutdownPhase,
 }
 
 #[derive(Debug, Clone)]
@@ -417,7 +437,8 @@ impl FileBrowser {
             id: BrowserPaneId::PRIMARY,
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
-            entries: Vec::new(),
+            entries: empty_directory_entry_snapshot(),
+            directory_discovery: None,
             directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::new(),
             selected: None,
@@ -434,13 +455,18 @@ impl FileBrowser {
             directory_load_cancel: None,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
-            is_loading: true,
+            directory_collection_phase: DirectoryCollectionPhase::Discovering,
+            directory_order_phase: DirectoryOrderPhase::Ready {
+                field: options.sort_field,
+                direction: options.sort_direction,
+            },
         };
         let mut browser = Self {
             home_dir: placeholder_dir.clone(),
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
-            entries: Vec::new(),
+            entries: empty_directory_entry_snapshot(),
+            directory_discovery: None,
             directory_loading_placeholder_entries: Vec::new(),
             trash_entries: Vec::new(),
             trash_refresh: TrashRefreshState::default(),
@@ -452,6 +478,8 @@ impl FileBrowser {
             hovered_network_connection: None,
             cursor_paste_directory: None,
             preview: None,
+            pending_document_preview: None,
+            document_preview_generation: 0,
             remote_preview_download_cancel: None,
             text_preview_document: None,
             animated_image_preview_generation: 0,
@@ -459,6 +487,8 @@ impl FileBrowser {
             text_preview_generation: 0,
             directory_load_generation: 0,
             directory_load_cancel: None,
+            next_directory_metadata_request_generation: 1,
+            directory_metadata_in_flight: HashSet::new(),
             audio_preview: None,
             video_preview: None,
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
@@ -554,7 +584,11 @@ impl FileBrowser {
             view_mode: initial_view_mode,
             rename_input: String::new(),
             rename_input_history: file_operations::RenameInputHistory::default(),
-            is_loading: true,
+            directory_collection_phase: DirectoryCollectionPhase::Discovering,
+            directory_order_phase: DirectoryOrderPhase::Ready {
+                field: options.sort_field,
+                direction: options.sort_direction,
+            },
             error: None,
             application_logs: ApplicationLogViewState::new(
                 crate::runtime_logging::journald_initialization_warning(),
@@ -582,6 +616,7 @@ impl FileBrowser {
             operation_history: FileOperationHistory::new(),
             list_directory_summary_cache: crate::model::ListDirectorySummaryCache::default(),
             pending_browser_session_save: false,
+            browser_session_saves_in_flight: 0,
             last_browser_session_save: None,
             scrollbar: ScrollbarState::default(),
             smooth_scroll: MosScrollState::default(),
@@ -592,7 +627,7 @@ impl FileBrowser {
             next_icon_grid_expansion_session_id: 1,
             next_list_expansion_follow_session_id: 1,
             theme: Theme::Light,
-            is_shutting_down: false,
+            application_shutdown_phase: ApplicationShutdownPhase::Running,
         };
         browser.refresh_current_language();
         browser.refresh_column_width_reference_content_widths();
@@ -612,7 +647,18 @@ impl FileBrowser {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.is_shutting_down {
+        if !self.application_shutdown_phase.is_running() {
+            if self.application_shutdown_phase.is_draining() {
+                let mut subscriptions = vec![event::listen_with(global_event_message)];
+                if let Some(operation_subscription) = self
+                    .operation_queue
+                    .active_subscription()
+                    .map(file_operation_subscription)
+                {
+                    subscriptions.push(operation_subscription);
+                }
+                return Subscription::batch(subscriptions);
+            }
             return Subscription::none();
         }
 
@@ -634,7 +680,7 @@ impl FileBrowser {
             ));
         }
 
-        if !self.is_loading && !self.is_trash_view {
+        if !self.directory_collection_phase.is_discovering() && !self.is_trash_view {
             let watched_directories = std::iter::once(self.current_dir.clone())
                 .chain(self.expanded_directories.keys().cloned())
                 .chain(self.icon_grid_expansion_watch_directories())
@@ -769,21 +815,12 @@ impl FileBrowser {
             );
             self.view_with_separate_window_chrome(window, content)
         } else if self.preview_window == Some(window) {
-            let content = view_preview_window(
-                self.preview.as_ref(),
-                self.text_preview_document.as_ref(),
-                self.preview_size,
-                self.audio_preview.as_ref(),
-                self.video_preview.as_ref(),
-                self.operation_progress_animation_frame,
-                self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDirectory),
-                self.scrollbar_visibility_for(&ScrollbarRegion::PreviewArchive),
-                self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
-            );
-            self.view_with_separate_window_chrome(window, content)
+            self.view_with_separate_window_chrome(window, self.preview_window_content())
         } else if window == self.main_window {
             startup_trace::mark_once("first_main_window_view");
-            if !self.is_loading {
+            if !self.directory_collection_phase.is_discovering()
+                && self.directory_order_phase.is_ready()
+            {
                 startup_trace::mark_once("first_browser_view_after_initial_load");
             }
             view_browser(self)

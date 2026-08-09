@@ -307,6 +307,7 @@ mod tests {
     fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         ExpandedDirectory {
             entries,
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -314,6 +315,10 @@ mod tests {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         }
     }
 
@@ -323,6 +328,7 @@ mod tests {
             current_dir: tab.directory.clone(),
             is_trash_view: tab.is_trash_view,
             entries: tab.entries.clone(),
+            directory_discovery: tab.directory_discovery.clone(),
             directory_loading_placeholder_entries: Vec::new(),
             trash_entries: tab.trash_entries.clone(),
             selected: tab.selected.clone(),
@@ -339,7 +345,11 @@ mod tests {
             directory_load_cancel: None,
             back_stack: tab.back_stack.clone(),
             forward_stack: tab.forward_stack.clone(),
-            is_loading: false,
+            directory_collection_phase: crate::model::DirectoryCollectionPhase::Ready,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         }
     }
 
@@ -398,8 +408,8 @@ mod tests {
 
         browser.current_dir = active_root.clone();
         browser.view_mode = BrowserViewMode::List;
-        browser.is_loading = false;
-        browser.entries = vec![test_entry(active_dir.clone(), FileKind::Directory)];
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
+        browser.entries = vec![test_entry(active_dir.clone(), FileKind::Directory)].into();
         browser.expanded_directories.insert(
             active_dir.clone(),
             loaded_directory(vec![test_entry(active_child.clone(), FileKind::Directory)]),
@@ -415,7 +425,7 @@ mod tests {
 
         let mut inactive_tab = BrowserTab::directory(1, inactive_root);
         inactive_tab.view_mode = BrowserViewMode::List;
-        inactive_tab.entries = vec![test_entry(inactive_dir.clone(), FileKind::Directory)];
+        inactive_tab.entries = vec![test_entry(inactive_dir.clone(), FileKind::Directory)].into();
         inactive_tab.expanded_directories.insert(
             inactive_dir.clone(),
             loaded_directory(vec![test_entry(
@@ -449,7 +459,7 @@ mod tests {
         assert_eq!(browser.options.sort_field, SortField::Size);
         assert_eq!(browser.options.sort_direction, SortDirection::Ascending);
         assert_eq!(browser.directory_load_generation, 1);
-        assert!(browser.is_loading);
+        assert!(browser.directory_collection_phase.is_discovering());
         assert_eq!(
             browser
                 .expanded_directories
@@ -469,7 +479,7 @@ mod tests {
 
         let inactive_pane = browser.pane_by_id(BrowserPaneId(1)).expect("inactive pane");
         assert_eq!(inactive_pane.directory_load_generation, 1);
-        assert!(inactive_pane.is_loading);
+        assert!(inactive_pane.directory_collection_phase.is_discovering());
         assert_eq!(
             inactive_pane
                 .expanded_directories
@@ -507,8 +517,8 @@ mod tests {
 
         browser.current_dir = root;
         browser.view_mode = BrowserViewMode::List;
-        browser.is_loading = false;
-        browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
+        browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
         remember_summary(&mut browser, &directory, 2, 2048);
 
         drop(browser.select_list_sort_column(ListColumnKind::Size));

@@ -5,7 +5,8 @@ use iced::Task;
 use super::FileBrowser;
 use crate::commands::load_directory_command;
 use crate::model::{
-    BrowserPaneId, DirectoryLoadFailure, DirectoryLoadRequest, Message, NavigationMode,
+    BrowserPaneId, DirectoryCollectionPhase, DirectoryLoadFailure, DirectoryLoadRequest, Message,
+    NavigationMode,
 };
 
 impl FileBrowser {
@@ -123,7 +124,7 @@ impl FileBrowser {
     }
 
     fn finish_active_failed_directory_load(&mut self) {
-        self.is_loading = false;
+        self.directory_collection_phase = DirectoryCollectionPhase::Ready;
         self.directory_loading_placeholder_entries.clear();
         self.directory_load_cancel = None;
         self.sync_active_tab_state();
@@ -163,7 +164,7 @@ impl FileBrowser {
 }
 
 fn finish_failed_directory_load_for_pane(pane: &mut crate::model::BrowserPane) {
-    pane.is_loading = false;
+    pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
     pane.directory_loading_placeholder_entries.clear();
     pane.directory_load_cancel = None;
     pane.sync_active_tab_state();
@@ -191,7 +192,7 @@ mod tests {
         browser.current_dir = unavailable_directory.clone();
         browser.directory_load_generation = 7;
         browser.directory_load_cancel = Some(tokio_util::sync::CancellationToken::new());
-        browser.is_loading = true;
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
         browser.back_stack = vec![
             parent_directory.clone(),
             unavailable_directory.join("older-child"),
@@ -209,7 +210,7 @@ mod tests {
         ));
 
         assert_eq!(browser.current_dir, parent_directory.clone());
-        assert!(browser.is_loading);
+        assert!(browser.directory_collection_phase.is_discovering());
         assert_eq!(browser.directory_load_generation, 8);
         assert_eq!(browser.current_error(), None);
         assert_eq!(recorded_global_error_count(), 0);
@@ -225,7 +226,7 @@ mod tests {
         let unavailable_directory = unavailable_parent.join("removed");
         browser.current_dir = unavailable_directory.clone();
         browser.directory_load_generation = 7;
-        browser.is_loading = true;
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
         reset_recorded_global_errors();
 
         drop(browser.accept_directory_load_failure(
@@ -250,7 +251,7 @@ mod tests {
 
         assert_eq!(browser.current_dir, available_ancestor);
         assert_eq!(browser.directory_load_generation, 9);
-        assert!(browser.is_loading);
+        assert!(browser.directory_collection_phase.is_discovering());
         assert_eq!(browser.current_error(), None);
         assert_eq!(recorded_global_error_count(), 0);
     }
@@ -262,7 +263,7 @@ mod tests {
         let stale_directory = PathBuf::from("/workspace/stale");
         browser.current_dir = current_directory.clone();
         browser.directory_load_generation = 9;
-        browser.is_loading = true;
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
         reset_recorded_global_errors();
 
         drop(browser.accept_directory_load_failure(
@@ -276,7 +277,7 @@ mod tests {
 
         assert_eq!(browser.current_dir, current_directory);
         assert_eq!(browser.directory_load_generation, 9);
-        assert!(browser.is_loading);
+        assert!(browser.directory_collection_phase.is_discovering());
         assert_eq!(browser.current_error(), None);
         assert_eq!(recorded_global_error_count(), 0);
     }
@@ -293,7 +294,8 @@ mod tests {
         inactive_pane.tabs = vec![BrowserTab::directory(0, unavailable_directory.clone())];
         inactive_pane.active_tab_id = 0;
         inactive_pane.directory_load_generation = 12;
-        inactive_pane.is_loading = true;
+        inactive_pane.directory_collection_phase =
+            crate::model::DirectoryCollectionPhase::Discovering;
         inactive_pane.sync_active_tab_state();
         browser.panes.push(inactive_pane);
         reset_recorded_global_errors();
@@ -309,7 +311,7 @@ mod tests {
 
         let recovered_pane = browser.pane_by_id(inactive_pane_id).expect("inactive pane");
         assert_eq!(recovered_pane.current_dir, parent_directory);
-        assert!(recovered_pane.is_loading);
+        assert!(recovered_pane.directory_collection_phase.is_discovering());
         assert_eq!(recovered_pane.directory_load_generation, 13);
         assert_eq!(browser.current_error(), None);
         assert_eq!(recorded_global_error_count(), 0);
@@ -327,7 +329,8 @@ mod tests {
         browser.entries = vec![
             test_entry(unavailable_directory.clone(), FileKind::Directory),
             test_entry(remaining_entry.clone(), FileKind::File),
-        ];
+        ]
+        .into();
         browser.expanded_directories.insert(
             unavailable_directory.clone(),
             loading_expanded_directory(BrowserPaneId::PRIMARY, 4),
@@ -338,7 +341,7 @@ mod tests {
         );
         reset_recorded_global_errors();
 
-        drop(browser.accept_expanded_directory(
+        drop(browser.accept_complete_expanded_directory_fixture(
             crate::model::ExpandedDirectoryLoadRequest {
                 context: DirectoryExpansionLoadContext::BrowserTree {
                     pane_id: BrowserPaneId::PRIMARY,
@@ -413,7 +416,7 @@ mod tests {
             .expect("descendant load cancellation");
         reset_recorded_global_errors();
 
-        drop(browser.accept_expanded_directory(
+        drop(browser.accept_complete_expanded_directory_fixture(
             crate::model::ExpandedDirectoryLoadRequest {
                 context: DirectoryExpansionLoadContext::BrowserTree {
                     pane_id: BrowserPaneId::PRIMARY,
@@ -469,7 +472,7 @@ mod tests {
             loading_expanded_directory(BrowserPaneId::PRIMARY, 5),
         );
 
-        drop(browser.accept_expanded_directory(
+        drop(browser.accept_complete_expanded_directory_fixture(
             crate::model::ExpandedDirectoryLoadRequest {
                 context: DirectoryExpansionLoadContext::BrowserTree {
                     pane_id: BrowserPaneId::PRIMARY,
@@ -523,7 +526,7 @@ mod tests {
         browser.panes.push(inactive_pane);
         reset_recorded_global_errors();
 
-        drop(browser.accept_expanded_directory(
+        drop(browser.accept_complete_expanded_directory_fixture(
             crate::model::ExpandedDirectoryLoadRequest {
                 context: DirectoryExpansionLoadContext::BrowserTree {
                     pane_id: inactive_pane_id,
@@ -561,7 +564,7 @@ mod tests {
         let locked_directory = PathBuf::from("/workspace/locked");
         browser.current_dir = locked_directory.clone();
         browser.directory_load_generation = 3;
-        browser.is_loading = true;
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
         reset_recorded_global_errors();
 
         drop(browser.accept_directory_load_failure(
@@ -575,7 +578,7 @@ mod tests {
             },
         ));
 
-        assert!(!browser.is_loading);
+        assert!(!browser.directory_collection_phase.is_discovering());
         assert_eq!(browser.current_error(), Some("permission denied"));
         assert_eq!(recorded_global_error_count(), 1);
     }
@@ -593,6 +596,7 @@ mod tests {
     fn loading_expanded_directory(pane_id: BrowserPaneId, generation: u64) -> ExpandedDirectory {
         ExpandedDirectory {
             entries: Vec::new(),
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loading,
             is_expanded: true,
             is_collapsing: false,
@@ -600,6 +604,10 @@ mod tests {
             load_generation: generation,
             load_context: Some(DirectoryExpansionLoadContext::BrowserTree { pane_id }),
             load_cancel: Some(tokio_util::sync::CancellationToken::new()),
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         }
     }
 }

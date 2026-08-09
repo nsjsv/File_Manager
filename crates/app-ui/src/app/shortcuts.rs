@@ -265,8 +265,8 @@ mod tests {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         browser.current_dir = trash_location_path();
         browser.is_trash_view = true;
-        browser.is_loading = false;
-        browser.entries = vec![trash_entry.entry.clone()];
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
+        browser.entries = vec![trash_entry.entry.clone()].into();
         browser.trash_entries = vec![trash_entry];
         browser.selected = Some(trash_path.clone());
         browser.selected_paths = HashSet::from([trash_path]);

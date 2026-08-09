@@ -40,7 +40,7 @@ fn browser_with_search_selection() -> (FileBrowser, Vec<PathBuf>) {
 
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = root;
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     browser.sync_active_tab_state();
     browser
         .selected_paths

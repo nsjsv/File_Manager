@@ -10,7 +10,7 @@ mod tests;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use file_core::{DirectoryEntry, DirectoryScan, FileKind};
+use file_core::{DirectoryDiscoveryBatch, DirectoryEntry, FileKind};
 use iced::Task;
 
 use super::panes::BrowserPaneView;
@@ -382,15 +382,20 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn accept_icon_grid_directory_batch(
+    pub(super) fn accept_icon_grid_directory_discovery_batch(
         &mut self,
         request: ExpandedDirectoryLoadRequest,
-        batch: file_core::DirectoryScanBatch,
+        batch: DirectoryDiscoveryBatch,
     ) -> Task<Message> {
         if !self.icon_grid_request_is_current(&request) {
             return Task::none();
         }
-        let options = self.options.clone();
+        let mut entries = batch
+            .entries
+            .iter()
+            .map(file_core::DiscoveredDirectoryEntry::display_entry)
+            .collect::<Vec<_>>();
+        file_core::sort_entries(&mut entries, &self.options);
         let Some(expanded) = self
             .icon_grid_expansion
             .as_mut()
@@ -398,33 +403,38 @@ impl FileBrowser {
         else {
             return Task::none();
         };
-        super::navigation::merge_directory_scan_batch(
-            &mut expanded.contents.entries,
-            batch,
-            &options,
-        );
-        self.remeasure_active_file_drop_layout()
+        expanded.contents.entries.extend(entries);
+        Task::none()
     }
 
-    pub(super) fn accept_icon_grid_directory(
+    #[cfg(test)]
+    pub(super) fn accept_complete_icon_grid_directory_fixture(
         &mut self,
         request: ExpandedDirectoryLoadRequest,
-        scan: Result<DirectoryScan, DirectoryLoadFailure>,
+        scan: Result<file_core::DirectoryScan, DirectoryLoadFailure>,
+    ) -> Task<Message> {
+        self.accept_icon_grid_directory_entries(request, scan.map(|scan| scan.entries))
+    }
+
+    pub(super) fn accept_icon_grid_directory_entries(
+        &mut self,
+        request: ExpandedDirectoryLoadRequest,
+        entries: Result<Vec<DirectoryEntry>, DirectoryLoadFailure>,
     ) -> Task<Message> {
         if !self.icon_grid_request_is_current(&request) {
             return Task::none();
         }
 
-        match scan {
-            Ok(scan) => {
+        match entries {
+            Ok(entries) => {
                 let Some(state) = self.icon_grid_expansion.as_mut() else {
                     return Task::none();
                 };
-                state.reconcile_child_anchors(&request.path, &scan.entries);
+                state.reconcile_child_anchors(&request.path, &entries);
                 let Some(expanded) = state.directory_mut(&request.path) else {
                     return Task::none();
                 };
-                expanded.contents.entries = scan.entries;
+                expanded.contents.entries = entries;
                 expanded.contents.status = ExpandedDirectoryStatus::Loaded;
                 expanded.contents.load_context = None;
                 expanded.contents.load_cancel = None;
@@ -731,6 +741,7 @@ impl FileBrowser {
 fn loading_icon_grid_directory() -> ExpandedDirectory {
     ExpandedDirectory {
         entries: Vec::new(),
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loading,
         is_expanded: true,
         is_collapsing: false,
@@ -738,6 +749,10 @@ fn loading_icon_grid_directory() -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 

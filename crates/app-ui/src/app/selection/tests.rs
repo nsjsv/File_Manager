@@ -155,7 +155,8 @@ fn marquee_selection_uses_intersecting_bounds() {
     browser.entries = vec![
         test_entry(inside.clone(), FileKind::File),
         test_entry(outside.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.selection_marquee = Some(active_selection_marquee(
         Point::new(50.0, 50.0),
         HashSet::new(),
@@ -183,7 +184,8 @@ fn marquee_selection_preserves_existing_selection_when_requested() {
     browser.entries = vec![
         test_entry(preserved.clone(), FileKind::File),
         test_entry(added.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.selection_marquee = Some(active_selection_marquee(
         Point::new(50.0, 50.0),
         HashSet::from([preserved.clone()]),
@@ -215,7 +217,8 @@ fn clicking_current_column_blank_clears_existing_selection() {
         test_entry(first.clone(), FileKind::File),
         test_entry(second.clone(), FileKind::File),
         test_entry(child_directory.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser.selected = Some(second.clone());
     browser.selected_paths = HashSet::from([first, second]);
     browser.selection_anchor = Some(child_directory.clone());
@@ -241,7 +244,8 @@ fn clicking_child_column_blank_preserves_open_column_context() {
         test_entry(first.clone(), FileKind::File),
         test_entry(second.clone(), FileKind::File),
         test_entry(child_directory.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser.selected = Some(second);
     browser.selected_paths = HashSet::from([first]);
     browser.address_editing = Some(AddressEditingSession::new(
@@ -284,7 +288,7 @@ fn clicking_column_placeholder_preserves_open_columns_and_selection() {
     let current_dir = PathBuf::from("/workspace");
     let child_directory = current_dir.join("project");
     browser.current_dir = current_dir.clone();
-    browser.entries = vec![test_entry(child_directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(child_directory.clone(), FileKind::Directory)].into();
     browser.deepest_open_column_directory = Some(child_directory.clone());
     browser.selected = Some(child_directory.clone());
     browser.selected_paths = HashSet::from([child_directory.clone()]);
@@ -322,7 +326,8 @@ fn pressing_current_column_blank_clears_selection_before_release() {
         test_entry(first.clone(), FileKind::File),
         test_entry(second.clone(), FileKind::File),
         test_entry(child_directory.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser.selected = Some(second.clone());
     browser.selected_paths = HashSet::from([first, second]);
     browser.selection_anchor = Some(child_directory.clone());
@@ -349,7 +354,8 @@ fn pressing_child_column_blank_preserves_open_column_before_release() {
         test_entry(first.clone(), FileKind::File),
         test_entry(second.clone(), FileKind::File),
         test_entry(child_directory.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser.selected = Some(second);
     browser.selected_paths = HashSet::from([first]);
     browser.deepest_open_column_directory = Some(child_directory.clone());
@@ -383,7 +389,8 @@ fn dragging_child_column_blank_preserves_open_column_context() {
         test_entry(first.clone(), FileKind::File),
         test_entry(second.clone(), FileKind::File),
         test_entry(child_directory.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     browser.selected = Some(second);
     browser.selected_paths = HashSet::from([first]);
     browser.deepest_open_column_directory = Some(child_directory.clone());
@@ -422,7 +429,8 @@ fn releasing_selected_item_without_drag_collapses_multi_selection() {
     browser.entries = vec![
         test_entry(first.clone(), FileKind::File),
         test_entry(second.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.selected = Some(first.clone());
     browser.selected_paths = HashSet::from([first.clone(), second.clone()]);
 
@@ -447,7 +455,7 @@ fn right_clicking_directory_selects_menu_target_without_focusing_it() {
     let current_dir = PathBuf::from("/workspace");
     let directory = current_dir.join("project");
     browser.current_dir = current_dir.clone();
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
     browser.selected = None;
     browser.selected_paths.clear();
     browser.expanded_directories.clear();
@@ -474,7 +482,7 @@ fn iced_file_drag_keeps_sidebar_trash_non_drop_target() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let source = PathBuf::from("/workspace/report.txt");
     let destination = PathBuf::from("/workspace/destination");
-    browser.entries = vec![test_entry(source.clone(), FileKind::File)];
+    browser.entries = vec![test_entry(source.clone(), FileKind::File)].into();
     browser.selected_paths.insert(source.clone());
     browser.cursor_position = Point::new(0.0, 0.0);
     browser.start_file_drag(

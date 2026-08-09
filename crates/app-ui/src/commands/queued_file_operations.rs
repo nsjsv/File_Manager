@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 use file_core::{
     create_archive_with_controls_and_progress, create_directory, create_empty_file,
     delete_path_permanently, delete_trash_entry, extract_archive_with_controls_and_progress,
-    persist_recoverable_source_manifest, rename_path, restore_trash_entry,
+    persist_recoverable_source_manifest_with_controls, rename_path, restore_trash_entry,
     run_recoverable_transfer, trash_path_with_restore_entry_and_cancellation,
-    ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileOperationControls,
-    FileOperationVerification, FileTransferOptions, RecoverableTransferError,
-    RecoverableTransferOperation, RecoverableTransferOutcome, TransferConflictStrategy,
-    TransferJournal, TransferJournalError, TransferJournalMutation, TransferJournalRecord,
-    TrashRestoreEntry,
+    ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileError,
+    FileOperationControls, FileOperationVerification, FileTransferOptions,
+    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
+    TransferConflictStrategy, TransferJournal, TransferJournalError, TransferJournalMutation,
+    TransferJournalRecord, TrashRestoreEntry,
 };
 use file_operation_store::TaskQueueStore;
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};

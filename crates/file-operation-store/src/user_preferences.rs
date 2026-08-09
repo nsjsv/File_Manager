@@ -43,7 +43,7 @@ impl Default for StoredUserPreferences {
     fn default() -> Self {
         Self {
             network_list_thumbnail_downloads_enabled: false,
-            max_preview_file_bytes: 3 * 1024 * 1024,
+            max_preview_file_bytes: 25 * 1024 * 1024,
             show_hidden_files: false,
             language_setting: default_language_setting(),
             sidebar_width: 180.0,

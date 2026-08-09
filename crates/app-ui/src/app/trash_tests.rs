@@ -17,6 +17,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         current_dir: tab.directory.clone(),
         is_trash_view: tab.is_trash_view,
         entries: tab.entries.clone(),
+        directory_discovery: tab.directory_discovery.clone(),
         directory_loading_placeholder_entries: Vec::new(),
         trash_entries: tab.trash_entries.clone(),
         selected: tab.selected.clone(),
@@ -33,7 +34,11 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         directory_load_cancel: None,
         back_stack: Vec::new(),
         forward_stack: Vec::new(),
-        is_loading: true,
+        directory_collection_phase: crate::model::DirectoryCollectionPhase::Discovering,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -76,7 +81,7 @@ fn opening_trash_projects_the_cached_snapshot_without_a_loading_placeholder() {
     drop(browser.open_trash_view(NavigationMode::RecordHistory));
 
     assert!(browser.is_trash_view);
-    assert!(!browser.is_loading);
+    assert!(!browser.directory_collection_phase.is_discovering());
     assert!(browser.directory_loading_placeholder_entries.is_empty());
     assert_eq!(browser.entries.len(), 1);
     assert_eq!(browser.entries[0].path, trash_path);
@@ -137,7 +142,7 @@ fn completed_refresh_removes_unmounted_entries_and_selection_from_all_trash_pane
     );
     let trash_tab = |id| {
         let mut tab = BrowserTab::trash(id);
-        tab.entries = vec![directory_entry.clone()];
+        tab.entries = vec![directory_entry.clone()].into();
         tab.trash_entries = vec![trash_entry.clone()];
         tab.selected = Some(trashed_path.clone());
         tab.selected_paths.insert(trashed_path.clone());
@@ -170,7 +175,7 @@ fn completed_refresh_removes_unmounted_entries_and_selection_from_all_trash_pane
         assert!(pane.selected.is_none());
         assert!(pane.selected_paths.is_empty());
         assert!(pane.selection_anchor.is_none());
-        assert!(!pane.is_loading);
+        assert!(!pane.directory_collection_phase.is_discovering());
     }
     assert!(browser.entries.is_empty());
     assert!(browser.selected.is_none());

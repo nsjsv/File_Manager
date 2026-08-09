@@ -8,6 +8,7 @@ license=('GPL-3.0-or-later')
 depends=(
     'acl'
     'alsa-lib'
+    'dav1d'
     'fontconfig'
     'glib2'
     'libnotify'
@@ -25,7 +26,9 @@ optdepends=(
     'gvfs-gphoto2: digital camera/GPhoto support'
     'gvfs-mtp: Android and media-player MTP support'
     'gvfs-smb: SMB network locations'
+    'libreoffice: Office document preview (provided by libreoffice-fresh or libreoffice-still)'
     'libsecret: saved network passwords'
+    'poppler: PDF and Office document preview'
     'udisks2: storage device discovery and management'
 )
 provides=('file-manager')

@@ -108,6 +108,11 @@ impl FileBrowser {
                 target_session_id,
                 details,
             } => self.accept_x11_drop_failure(target_session_id, details),
+            X11DndEvent::MainWindowDestroyed => {
+                self.x11_dnd = None;
+                self.cancel_x11_file_drop_session();
+                self.accept_application_window_closed(self.main_window)
+            }
             X11DndEvent::RuntimeFailed(error) => {
                 self.x11_dnd = None;
                 self.cancel_x11_file_drop_session();
@@ -146,5 +151,23 @@ fn valid_scale_factor(scale_factor: f32) -> f32 {
         scale_factor
     } else {
         1.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config;
+
+    #[test]
+    fn main_window_destroy_event_enters_owned_shutdown() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        drop(browser.accept_x11_dnd_handle(Ok(Some(X11DndWindowHandle::new(7, 0))), 1.0));
+        let runtime_id = browser.x11_dnd.as_ref().unwrap().controller.id();
+
+        drop(browser.accept_x11_dnd_event(runtime_id, X11DndEvent::MainWindowDestroyed));
+
+        assert!(browser.x11_dnd.is_none());
+        assert!(!browser.application_shutdown_phase.is_running());
     }
 }

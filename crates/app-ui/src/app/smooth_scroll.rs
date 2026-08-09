@@ -401,6 +401,7 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
         ScrollbarRegion::SearchResults => iced::widget::Id::new("search-results"),
         ScrollbarRegion::PreviewDirectory => iced::widget::Id::new("preview-directory"),
         ScrollbarRegion::PreviewArchive => iced::widget::Id::new("preview-archive"),
+        ScrollbarRegion::PreviewDocument => iced::widget::Id::new("preview-document"),
         ScrollbarRegion::MarkdownPreview => iced::widget::Id::new("markdown-preview"),
     }
 }

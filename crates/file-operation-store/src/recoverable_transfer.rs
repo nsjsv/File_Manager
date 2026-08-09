@@ -61,6 +61,16 @@ pub use lease::{
     ClaimedRecoverableTask, RecoverableRestoreCoordinatorLease, RecoverableTaskRunnerLease,
 };
 pub use model::*;
+
+#[derive(Clone, Copy)]
+pub struct TransferManifestCheckpointUpdate<'a> {
+    pub key: &'a StoredTransferWorkKey,
+    pub expected_revision: u64,
+    pub manifest_entries: &'a [StoredManifestEntry],
+    pub replacement_manifest_entries: &'a [StoredManifestEntry],
+    pub checkpoint: &'a StoredTransferCheckpoint,
+}
+
 impl TaskQueueStore {
     #[cfg(test)]
     pub(crate) fn insert_recoverable_transfer_task(
@@ -289,6 +299,31 @@ impl TaskQueueStore {
         replacement_manifest_entries: &[StoredManifestEntry],
         checkpoint: &StoredTransferCheckpoint,
     ) -> StoreResult<u64> {
+        let update = TransferManifestCheckpointUpdate {
+            key,
+            expected_revision,
+            manifest_entries,
+            replacement_manifest_entries,
+            checkpoint,
+        };
+        Ok(self
+            .install_transfer_manifests_and_checkpoint_while(task_id, update, || true)?
+            .expect("unconditional manifest transaction cannot be interrupted"))
+    }
+
+    pub fn install_transfer_manifests_and_checkpoint_while(
+        &self,
+        task_id: u64,
+        update: TransferManifestCheckpointUpdate<'_>,
+        mut continue_transaction: impl FnMut() -> bool,
+    ) -> StoreResult<Option<u64>> {
+        let TransferManifestCheckpointUpdate {
+            key,
+            expected_revision,
+            manifest_entries,
+            replacement_manifest_entries,
+            checkpoint,
+        } = update;
         ensure_top_level_work_key(key)?;
         checkpoint.validate()?;
         if manifest_entries
@@ -299,6 +334,9 @@ impl TaskQueueStore {
             return Err(StoreError::InvalidRecoverableOperation(
                 "manifest entry belongs to another transfer",
             ));
+        }
+        if !continue_transaction() {
+            return Ok(None);
         }
 
         let mut connection = self.connection()?;
@@ -324,6 +362,9 @@ impl TaskQueueStore {
             params![sqlite_index(task_id)?, sqlite_index(key.transfer_index)?],
         )?;
         for entry in manifest_entries {
+            if !continue_transaction() {
+                return Ok(None);
+            }
             transaction.execute(
                 "INSERT INTO transfer_manifest (
                     task_id, transfer_index, relative_path_json, identity_json
@@ -342,6 +383,9 @@ impl TaskQueueStore {
             params![sqlite_index(task_id)?, sqlite_index(key.transfer_index)?],
         )?;
         for entry in replacement_manifest_entries {
+            if !continue_transaction() {
+                return Ok(None);
+            }
             transaction.execute(
                 "INSERT INTO transfer_replacement_manifest (
                     task_id, transfer_index, relative_path_json, identity_json
@@ -354,8 +398,11 @@ impl TaskQueueStore {
                 ],
             )?;
         }
+        if !continue_transaction() {
+            return Ok(None);
+        }
         transaction.commit()?;
-        Ok(next_revision)
+        Ok(Some(next_revision))
     }
 
     pub fn compare_and_swap_transfer_checkpoint(

@@ -3,6 +3,26 @@ use crate::model::{Message, NavigationMode, ScrollbarRegion as Region};
 use iced::Task;
 impl FileBrowser {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
+        if !self.application_shutdown_phase.is_running() {
+            return match message {
+                Message::FileOperationFinished(task_id, completion) => {
+                    self.accept_application_shutdown_operation_finished(task_id, completion)
+                }
+                Message::BrowserSessionSaved(outcome) => {
+                    self.accept_application_shutdown_browser_session_saved(outcome)
+                }
+                Message::ApplicationWindowClosed(window) => {
+                    self.accept_application_window_closed(window)
+                }
+                Message::ApplicationWindowCloseCommandsFinished => {
+                    self.accept_application_window_close_commands_finished()
+                }
+                Message::ApplicationShutdownPersisted(outcome) => {
+                    self.accept_application_shutdown_persisted(outcome)
+                }
+                _ => Task::none(),
+            };
+        }
         match message {
             Message::StartupEnvironmentLoaded(startup_environment) => {
                 self.accept_startup_environment(startup_environment)
@@ -29,12 +49,17 @@ impl FileBrowser {
             Message::OperationStoreLoaded(operation_store) => {
                 self.accept_operation_store(operation_store)
             }
-            Message::DirectoryLoadBatch(request, batch) => {
-                self.accept_directory_scan_batch(request, batch)
+            Message::DirectoryDiscoveryBatch(request, batch) => {
+                self.accept_directory_discovery_batch(request, batch)
             }
-            Message::Loaded(request, Ok(scan)) => self.accept_directory_scan(request, scan),
-            Message::Loaded(request, Err(failure)) => {
+            Message::DirectoryEntriesReady(request, Ok(discovery)) => {
+                self.accept_directory_discovery(request, discovery)
+            }
+            Message::DirectoryEntriesReady(request, Err(failure)) => {
                 self.accept_directory_load_failure(request, failure)
+            }
+            Message::DirectoryMetadataResolved(request, outcome) => {
+                self.accept_directory_metadata_resolution(request, outcome)
             }
             Message::TrashLoaded(generation, outcome) => {
                 self.accept_trash_refresh_completion(generation, outcome)
@@ -72,9 +97,8 @@ impl FileBrowser {
                 self.show_global_error(error);
                 Task::none()
             }
-            Message::PreviewLoaded(path, preview_outcome) => {
-                self.accept_preview(path, preview_outcome)
-            }
+            Message::PreviewLoaded(path, outcome) => self.accept_preview(path, outcome),
+            Message::DocumentPreview(message) => self.handle_document_preview_message(message),
             Message::RemotePreviewCache(message) => {
                 self.accept_remote_preview_cache_message(message)
             }
@@ -542,11 +566,16 @@ impl FileBrowser {
             Message::BrowserSessionSaveDelayElapsed => {
                 self.maybe_flush_pending_browser_session_save()
             }
-            Message::ExpandedDirectoryLoadBatch(request, batch) => {
-                self.accept_expanded_directory_batch(request, batch)
+            Message::ApplicationWindowClosed(window) => {
+                self.accept_application_window_closed(window)
             }
-            Message::ExpandedDirectoryLoaded(request, scan) => {
-                self.accept_expanded_directory(request, scan)
+            Message::ApplicationWindowCloseCommandsFinished
+            | Message::ApplicationShutdownPersisted(_) => Task::none(),
+            Message::ExpandedDirectoryDiscoveryBatch(request, batch) => {
+                self.accept_expanded_directory_discovery_batch(request, batch)
+            }
+            Message::ExpandedDirectoryEntriesReady(request, discovery) => {
+                self.accept_expanded_directory_discovery(request, discovery)
             }
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::SettingsOpened => self.open_settings(),
@@ -659,6 +688,10 @@ impl FileBrowser {
             Message::ListScrolled(pane_id, offset_y, height) => Task::batch([
                 self.show_scrollbars_temporarily(Region::PaneList(pane_id)),
                 self.handle_list_scrolled(pane_id, offset_y, height),
+                self.schedule_visible_directory_metadata(
+                    pane_id,
+                    Some(crate::thumbnail_cache::ColumnViewport { offset_y, height }),
+                ),
                 self.request_browser_session_save(),
             ]),
             Message::IconGridScrolled(pane_id, offset_y, width, height) => Task::batch([

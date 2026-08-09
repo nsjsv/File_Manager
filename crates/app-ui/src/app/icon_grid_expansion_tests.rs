@@ -26,9 +26,9 @@ fn entry(path: &str, kind: FileKind) -> DirectoryEntry {
 fn browser_with_entries(entries: Vec<DirectoryEntry>) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
-    browser.entries = entries;
+    browser.entries = entries.into();
     browser.view_mode = BrowserViewMode::Icons;
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     browser
 }
 
@@ -59,7 +59,7 @@ fn finish_scan(
     entries: Vec<DirectoryEntry>,
 ) -> ExpandedDirectoryLoadRequest {
     let request = current_request(browser, path);
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         request.clone(),
         Ok(DirectoryScan {
             path: path.to_path_buf(),
@@ -148,7 +148,7 @@ fn icon_grid_load_rejects_every_stale_identity_dimension() {
         },
     ];
     for stale in stale_requests {
-        drop(browser.accept_expanded_directory(
+        drop(browser.accept_complete_expanded_directory_fixture(
             stale,
             Ok(DirectoryScan {
                 path: root.clone(),
@@ -170,7 +170,7 @@ fn icon_grid_load_rejects_every_stale_identity_dimension() {
     ));
     assert!(expanded.contents.entries.is_empty());
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         request,
         Ok(DirectoryScan {
             path: root.clone(),
@@ -717,7 +717,7 @@ fn current_directory_scan_reconciles_anchor_and_drops_removed_root() {
     ));
     let generation = browser.directory_load_generation;
 
-    drop(browser.accept_directory_scan(
+    drop(browser.accept_complete_directory_fixture(
         DirectoryLoadRequest {
             pane_id: BrowserPaneId::PRIMARY,
             path: PathBuf::from("/workspace"),
@@ -740,7 +740,7 @@ fn current_directory_scan_reconciles_anchor_and_drops_removed_root() {
         0
     );
 
-    drop(browser.accept_directory_scan(
+    drop(browser.accept_complete_directory_fixture(
         DirectoryLoadRequest {
             pane_id: BrowserPaneId::PRIMARY,
             path: PathBuf::from("/workspace"),

@@ -161,7 +161,8 @@ mod tests {
         browser.entries = vec![
             file_entry(first_path.clone()),
             file_entry(second_path.clone()),
-        ];
+        ]
+        .into();
         browser.selected_paths = HashSet::from([first_path.clone(), second_path.clone()]);
 
         drop(browser.handle_batch_rename_message(BatchRenameMessage::OpenSelected));
@@ -186,7 +187,8 @@ mod tests {
         browser.entries = vec![
             file_entry(first_path.clone()),
             file_entry(second_path.clone()),
-        ];
+        ]
+        .into();
         browser.selected_paths = HashSet::from([first_path.clone(), second_path.clone()]);
 
         drop(browser.handle_batch_rename_message(BatchRenameMessage::OpenSelected));

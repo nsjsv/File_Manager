@@ -36,6 +36,8 @@ mod archive_creation;
 pub(crate) use archive_creation::check_archive_target_command;
 mod application_logs;
 pub(crate) use application_logs::application_logs_command;
+mod application_shutdown;
+pub(crate) use application_shutdown::commit_application_shutdown_command;
 mod archive_extraction;
 pub(crate) use archive_extraction::inspect_archive_extraction_command;
 mod batch_rename_operation;
@@ -45,8 +47,12 @@ mod config_persistence;
 pub(crate) use config_persistence::{save_app_config_command, save_user_preferences_command};
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
+mod directory_metadata;
+pub(crate) use directory_metadata::load_directory_metadata_command;
 mod desktop_notifications;
 pub(crate) use desktop_notifications::publish_desktop_notification_command;
+mod document_preview;
+pub(crate) use document_preview::{prepare_document_command, render_document_page_command};
 mod list_directory_summary;
 pub(crate) use list_directory_summary::load_list_directory_summary_command;
 mod network_connections;
@@ -320,7 +326,9 @@ async fn load_startup_environment() -> StartupEnvironment {
     startup_trace::mark_once("startup_environment_started");
     tokio::task::spawn_blocking(|| {
         let app_config = config::load_app_config();
+        startup_trace::mark_once("startup_app_config_loaded");
         let user_config = config::load_user_config_for_app_config(app_config);
+        startup_trace::mark_once("startup_user_config_loaded");
         let rendering_environment_status = StartupRenderingEnvironmentStatus::for_loaded_config(
             user_config.rendering_gpu_preference,
         );

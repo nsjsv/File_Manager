@@ -70,11 +70,12 @@ fn icons_pane_rejects_thumbnail_results_from_hidden_persistent_expansions() {
     let request = request_for_entry(&image_entry, LIST_THUMBNAIL_EDGE).expect("image request");
     let pane = browser.panes.last_mut().unwrap();
     pane.view_mode = BrowserViewMode::Icons;
-    pane.entries.clear();
+    pane.entries = Vec::new().into();
     pane.expanded_directories.insert(
         PathBuf::from("/inactive/hidden"),
         ExpandedDirectory {
             entries: vec![image_entry],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -82,6 +83,10 @@ fn icons_pane_rejects_thumbnail_results_from_hidden_persistent_expansions() {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
 
@@ -119,7 +124,8 @@ fn list_scrolled_schedules_visible_list_thumbnail_requests() {
         image_entry("/workspace/photo-0.png"),
         image_entry("/workspace/vector.svg"),
         image_entry("/workspace/photo-2.png"),
-    ];
+    ]
+    .into();
 
     browser.schedule_visible_list_thumbnail_range_for_pane(
         BrowserPaneId::PRIMARY,
@@ -157,11 +163,13 @@ fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
     browser.sidebar_width = 0.0;
     browser.entries = (0..100)
         .map(|index| image_entry(&format!("/workspace/{index}.png")))
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     browser.expanded_directories.insert(
         PathBuf::from("/workspace/subdir"),
         ExpandedDirectory {
             entries: vec![image_entry("/workspace/subdir/hidden.png")],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -169,6 +177,10 @@ fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
     let viewport = IconGridViewport {
@@ -226,7 +238,7 @@ fn icon_grid_schedules_visible_expansion_thumbnail_requests() {
     let child_image = image_entry("/workspace/root/child.png");
     browser.current_dir = PathBuf::from("/workspace");
     browser.view_mode = BrowserViewMode::Icons;
-    browser.entries = vec![directory_entry(root.clone()), main_image.clone()];
+    browser.entries = vec![directory_entry(root.clone()), main_image.clone()].into();
     browser.icon_grid_expansion = Some(IconGridExpansionState::new(
         IconGridExpansionContext {
             pane_id: BrowserPaneId::PRIMARY,
@@ -240,6 +252,7 @@ fn icon_grid_schedules_visible_expansion_thumbnail_requests() {
         },
         ExpandedDirectory {
             entries: vec![child_image.clone()],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -247,6 +260,10 @@ fn icon_grid_schedules_visible_expansion_thumbnail_requests() {
             load_generation: 1,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     ));
     browser.icon_grid_viewports.insert(
@@ -283,7 +300,7 @@ fn icon_grid_schedules_visible_expansion_thumbnail_requests() {
 fn network_list_thumbnails_default_to_cache_only_policy() {
     let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![image_entry("/mnt/nas/photo.png")];
+    browser.entries = vec![image_entry("/mnt/nas/photo.png")].into();
     mount_network_root(&mut browser, "/mnt/nas");
 
     browser.schedule_visible_list_thumbnail_range_for_pane(
@@ -306,7 +323,7 @@ fn enabled_network_list_thumbnails_use_generate_policy() {
     config.network_list_thumbnail_downloads_enabled = true;
     let (mut browser, _) = FileBrowser::new(config);
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![image_entry("/mnt/nas/photo.png")];
+    browser.entries = vec![image_entry("/mnt/nas/photo.png")].into();
     mount_network_root(&mut browser, "/mnt/nas");
 
     browser.schedule_visible_list_thumbnail_range_for_pane(
@@ -425,7 +442,7 @@ fn transfer_conflict_thumbnail_requests_are_queued() {
 fn preview_thumbnail_refresh_skips_same_edge_window_resize() {
     let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
     let image_entry = image_entry("/workspace/vector.svg");
-    browser.entries = vec![image_entry.clone()];
+    browser.entries = vec![image_entry.clone()].into();
     browser.preview_size = crate::model::PreviewSize {
         width: 640.0,
         height: 480.0,
@@ -492,7 +509,8 @@ fn browser_with_inactive_pane_image(
         id: inactive_id,
         current_dir: inactive_dir.clone(),
         is_trash_view: false,
-        entries: vec![image_entry.clone()],
+        entries: vec![image_entry.clone()].into(),
+        directory_discovery: None,
         directory_loading_placeholder_entries: Vec::new(),
         trash_entries: Vec::new(),
         selected: None,
@@ -515,7 +533,11 @@ fn browser_with_inactive_pane_image(
         directory_load_cancel: None,
         back_stack: Vec::new(),
         forward_stack: Vec::new(),
-        is_loading: false,
+        directory_collection_phase: crate::model::DirectoryCollectionPhase::Ready,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     });
     browser.pane_layout = BrowserPaneLayout::Split {
         axis: SplitAxis::Horizontal,

@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use file_core::{SortDirection, SortField};
 use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::load_directory_command;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-    BrowserTabSession, ClassifiedStartupSession, ColumnBrowserViewport, Message,
-    StartupSessionPlan, StartupSessionPlanRequest, StartupSessionSource,
+    BrowserTabSession, ClassifiedStartupSession, ColumnBrowserViewport, DirectoryCollectionPhase,
+    DirectoryOrderPhase, Message, StartupSessionPlan, StartupSessionPlanRequest,
+    StartupSessionSource,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -100,7 +103,7 @@ impl FileBrowser {
     ) -> Task<Message> {
         self.current_dir = directory.clone();
         self.is_trash_view = false;
-        self.entries.clear();
+        Arc::make_mut(&mut self.entries).clear();
         self.directory_loading_placeholder_entries.clear();
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
@@ -110,7 +113,7 @@ impl FileBrowser {
         self.icon_grid_viewports.clear();
         self.back_stack.clear();
         self.forward_stack.clear();
-        self.is_loading = true;
+        self.directory_collection_phase = DirectoryCollectionPhase::Discovering;
         self.replace_global_error(error);
         self.tabs = vec![{
             let mut tab = crate::model::BrowserTab::directory(0, directory.clone());
@@ -160,7 +163,7 @@ impl FileBrowser {
             .expect("restored panes is non-empty");
         self.pane_layout = self.pane_layout.with_active(active_pane.id);
         self.restore_pane_snapshot(active_pane);
-        self.is_loading = true;
+        self.directory_collection_phase = DirectoryCollectionPhase::Discovering;
         self.clear_global_error();
         self.sync_active_pane_state();
 
@@ -241,7 +244,8 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
         id: pane.id,
         current_dir: active_tab.directory.clone(),
         is_trash_view: active_tab.is_trash_view,
-        entries: Vec::new(),
+        entries: Vec::new().into(),
+        directory_discovery: None,
         directory_loading_placeholder_entries: Vec::new(),
         trash_entries: Vec::new(),
         selected: active_tab.selected,
@@ -258,7 +262,11 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
         directory_load_cancel: None,
         back_stack: active_tab.back_stack,
         forward_stack: active_tab.forward_stack,
-        is_loading: true,
+        directory_collection_phase: DirectoryCollectionPhase::Discovering,
+        directory_order_phase: DirectoryOrderPhase::Ready {
+            field: SortField::Name,
+            direction: SortDirection::Ascending,
+        },
     };
     browser_pane.sync_active_tab_state();
     Some(browser_pane)

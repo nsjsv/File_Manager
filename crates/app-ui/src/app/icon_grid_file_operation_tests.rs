@@ -15,6 +15,7 @@ use crate::operation_queue::QueuedFileOperation;
 fn loaded_directory() -> ExpandedDirectory {
     ExpandedDirectory {
         entries: Vec::new(),
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -22,6 +23,10 @@ fn loaded_directory() -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -43,7 +48,7 @@ fn completed_root_rename_migrates_temporary_icon_grid_tree() {
     let renamed = PathBuf::from("/workspace/renamed");
     browser.current_dir = PathBuf::from("/workspace");
     browser.view_mode = BrowserViewMode::Icons;
-    browser.entries = vec![directory_entry("/workspace/root")];
+    browser.entries = vec![directory_entry("/workspace/root")].into();
     browser.icon_grid_expansion = Some(IconGridExpansionState::new(
         IconGridExpansionContext {
             pane_id: BrowserPaneId::PRIMARY,
@@ -64,6 +69,7 @@ fn completed_root_rename_migrates_temporary_icon_grid_tree() {
                 false,
                 false,
             )],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -71,6 +77,10 @@ fn completed_root_rename_migrates_temporary_icon_grid_tree() {
             load_generation: 1,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     ));
 
@@ -110,7 +120,7 @@ fn completed_root_rename_migrates_temporary_icon_grid_tree() {
         .entries
         .is_empty());
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         ExpandedDirectoryLoadRequest {
             context: DirectoryExpansionLoadContext::IconGrid {
                 pane_id: context.pane_id,
@@ -160,7 +170,7 @@ fn successful_trash_prunes_deleted_icon_grid_branch_before_reload() {
     let branch = PathBuf::from("/workspace/root/branch");
     browser.current_dir = PathBuf::from("/workspace");
     browser.view_mode = BrowserViewMode::Icons;
-    browser.entries = vec![directory_entry("/workspace/root")];
+    browser.entries = vec![directory_entry("/workspace/root")].into();
     let mut state = IconGridExpansionState::new(
         IconGridExpansionContext {
             pane_id: BrowserPaneId::PRIMARY,
@@ -174,6 +184,7 @@ fn successful_trash_prunes_deleted_icon_grid_branch_before_reload() {
         },
         ExpandedDirectory {
             entries: vec![directory_entry("/workspace/root/branch")],
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loaded,
             is_expanded: true,
             is_collapsing: false,
@@ -181,6 +192,10 @@ fn successful_trash_prunes_deleted_icon_grid_branch_before_reload() {
             load_generation: 1,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
     assert!(state.insert_directory(

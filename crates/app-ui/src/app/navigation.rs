@@ -1,6 +1,9 @@
-use file_core::{DirectoryEntry, DirectoryScan, FileKind};
+use file_core::{
+    sort_entries, DirectoryDiscovery, DirectoryDiscoveryBatch, DirectoryEntry, FileKind, SortField,
+};
 use iced::Task;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use super::FileBrowser;
@@ -8,9 +11,10 @@ use crate::commands::{
     delayed_thumbnail_refresh_command, load_directory_command, load_expanded_directory_command,
 };
 use crate::model::{
-    trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext,
-    DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, Message, NavigationMode,
+    trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryCollectionPhase,
+    DirectoryExpansionLoadContext, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
+    DirectoryOrderPhase, ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
+    Message, NavigationMode,
 };
 use crate::startup_trace;
 impl FileBrowser {
@@ -19,6 +23,8 @@ impl FileBrowser {
             cancel.cancel();
         }
         self.directory_load_generation = self.directory_load_generation.wrapping_add(1);
+        self.clear_directory_metadata_demands_for_pane(self.active_pane_id());
+        self.directory_discovery = None;
         self.directory_load_cancel = Some(CancellationToken::new());
         DirectoryLoadRequest {
             pane_id: self.active_pane_id(),
@@ -38,6 +44,7 @@ impl FileBrowser {
             cancel.cancel();
         }
         self.directory_load_generation = self.directory_load_generation.wrapping_add(1);
+        self.directory_discovery = None;
     }
 
     pub(super) fn directory_load_cancellation(
@@ -64,6 +71,7 @@ impl FileBrowser {
             cancel.cancel();
         }
         pane.directory_load_generation = pane.directory_load_generation.wrapping_add(1);
+        pane.directory_discovery = None;
         let cancellation = CancellationToken::new();
         pane.directory_load_cancel = Some(cancellation.clone());
         (
@@ -106,29 +114,31 @@ impl FileBrowser {
         expanded.load_context = None;
     }
 
-    pub(super) fn accept_directory_scan_batch(
+    pub(super) fn accept_directory_discovery_batch(
         &mut self,
         request: DirectoryLoadRequest,
-        batch: file_core::DirectoryScanBatch,
+        batch: DirectoryDiscoveryBatch,
     ) -> Task<Message> {
+        let mut entries = batch
+            .entries
+            .iter()
+            .map(file_core::DiscoveredDirectoryEntry::display_entry)
+            .collect::<Vec<_>>();
+        sort_entries(&mut entries, &self.options);
+
         if request.pane_id != self.active_pane_id() {
-            let options = self.options.clone();
-            {
-                let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
-                    return Task::none();
-                };
-                if !directory_load_request_matches_pane(
-                    &request,
-                    pane.current_dir.as_path(),
-                    pane.directory_load_generation,
-                ) {
-                    return Task::none();
-                }
-                merge_directory_scan_batch(&mut pane.entries, batch, &options);
-                pane.directory_loading_placeholder_entries.clear();
-                pane.sync_active_tab_state();
+            let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
+                return Task::none();
+            };
+            if !directory_load_request_matches_pane(
+                &request,
+                pane.current_dir.as_path(),
+                pane.directory_load_generation,
+            ) {
+                return Task::none();
             }
-            self.resort_size_sorted_list_panes();
+            Arc::make_mut(&mut pane.entries).extend(entries);
+            pane.directory_loading_placeholder_entries.clear();
             return Task::none();
         }
 
@@ -139,21 +149,43 @@ impl FileBrowser {
         ) {
             return Task::none();
         }
-        merge_directory_scan_batch(&mut self.entries, batch, &self.options);
+        Arc::make_mut(&mut self.entries).extend(entries);
         self.directory_loading_placeholder_entries.clear();
-        self.sync_active_tab_state();
-        self.resort_size_sorted_list_panes();
-        Task::batch([
-            self.schedule_thumbnail_refresh(),
-            self.remeasure_active_file_drop_layout(),
-        ])
+        Task::none()
     }
 
-    pub(super) fn accept_directory_scan(
+    pub(super) fn accept_directory_discovery(
         &mut self,
         request: DirectoryLoadRequest,
-        scan: DirectoryScan,
+        discovery: DirectoryDiscovery,
     ) -> Task<Message> {
+        let path = discovery.path.clone();
+        let entries = Arc::new(display_entries_in_discovery_order(&discovery));
+        self.accept_authoritative_directory_entries(request, path, entries, Some(discovery))
+    }
+
+    #[cfg(test)]
+    pub(super) fn accept_complete_directory_fixture(
+        &mut self,
+        request: DirectoryLoadRequest,
+        scan: file_core::DirectoryScan,
+    ) -> Task<Message> {
+        self.accept_authoritative_directory_entries(
+            request,
+            scan.path,
+            Arc::new(scan.entries),
+            None,
+        )
+    }
+
+    fn accept_authoritative_directory_entries(
+        &mut self,
+        request: DirectoryLoadRequest,
+        path: PathBuf,
+        entries: Arc<Vec<DirectoryEntry>>,
+        discovery: Option<DirectoryDiscovery>,
+    ) -> Task<Message> {
+        let order_phase = directory_order_phase_after_collection(&self.options, &entries);
         if request.pane_id != self.active_pane_id() {
             let current_dir = {
                 let Some(pane) = self.pane_by_id_mut(request.pane_id) else {
@@ -167,8 +199,9 @@ impl FileBrowser {
                     return Task::none();
                 }
 
-                pane.current_dir = scan.path;
-                pane.entries = scan.entries;
+                pane.current_dir = path;
+                pane.entries = entries;
+                pane.directory_discovery = discovery;
                 if pane.view_mode == crate::model::BrowserViewMode::Icons {
                     crate::model::retain_direct_entry_selection(
                         &pane.entries,
@@ -178,8 +211,8 @@ impl FileBrowser {
                     );
                 }
                 pane.directory_loading_placeholder_entries.clear();
-                pane.is_loading = false;
-                pane.directory_load_cancel = None;
+                pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
+                pane.directory_order_phase = order_phase;
                 pane.sync_active_tab_state();
                 pane.current_dir.clone()
             };
@@ -187,6 +220,7 @@ impl FileBrowser {
             return Task::batch([
                 delayed_thumbnail_refresh_command(request.pane_id, current_dir),
                 self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
+                self.schedule_visible_directory_metadata(request.pane_id, None),
                 self.reveal_address_bar_current_segment(request.pane_id),
             ]);
         }
@@ -199,17 +233,21 @@ impl FileBrowser {
             return Task::none();
         }
 
-        self.reconcile_icon_grid_root_after_scan(&scan.entries);
-        self.current_dir = scan.path;
-        self.entries = scan.entries;
+        self.reconcile_icon_grid_root_after_scan(&entries);
+        self.current_dir = path;
+        self.entries = entries;
+        self.directory_discovery = discovery;
         if self.view_mode == crate::model::BrowserViewMode::Icons {
             self.retain_icon_grid_visible_selection();
         }
         self.directory_loading_placeholder_entries.clear();
-        self.is_loading = false;
-        self.directory_load_cancel = None;
+        self.directory_collection_phase = DirectoryCollectionPhase::Ready;
+        self.directory_order_phase = order_phase;
         self.clear_global_error();
-        startup_trace::mark_once("initial_directory_ready");
+        startup_trace::record_directory_collection_ready(self.entries.len());
+        if self.directory_order_phase.is_ready() {
+            startup_trace::mark_once("initial_directory_ready");
+        }
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
         self.resort_size_sorted_list_panes();
@@ -217,6 +255,7 @@ impl FileBrowser {
             command,
             delayed_thumbnail_refresh_command(request.pane_id, self.current_dir.clone()),
             self.schedule_visible_list_directory_summaries_for_pane(request.pane_id),
+            self.schedule_visible_directory_metadata(request.pane_id, None),
             self.request_browser_session_save(),
             self.reveal_address_bar_current_segment(request.pane_id),
             self.remeasure_active_file_drop_layout(),
@@ -235,7 +274,7 @@ impl FileBrowser {
         self.clear_icon_grid_expansion();
         self.current_dir = path.clone();
         self.is_trash_view = false;
-        self.entries.clear();
+        Arc::make_mut(&mut self.entries).clear();
         self.directory_loading_placeholder_entries = placeholder_entries;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
@@ -244,7 +283,7 @@ impl FileBrowser {
         self.column_browser_viewport = Default::default();
         self.column_viewports.clear();
         self.clear_selection_context();
-        self.is_loading = true;
+        self.directory_collection_phase = DirectoryCollectionPhase::Discovering;
         self.clear_global_error();
         self.sync_active_tab_state();
         let request = self.next_directory_load_request(path);
@@ -283,7 +322,9 @@ impl FileBrowser {
             .trash_entries
             .iter()
             .map(|trash_entry| trash_entry.entry.clone())
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
+        self.directory_discovery = None;
         self.directory_loading_placeholder_entries = placeholder_entries;
         self.deepest_open_column_directory = None;
         self.cancel_active_expanded_directory_loads();
@@ -291,7 +332,11 @@ impl FileBrowser {
         self.column_browser_viewport = Default::default();
         self.column_viewports.clear();
         self.clear_selection_context();
-        self.is_loading = !has_cached_entries;
+        self.directory_collection_phase = if has_cached_entries {
+            DirectoryCollectionPhase::Ready
+        } else {
+            DirectoryCollectionPhase::Discovering
+        };
         self.clear_global_error();
         self.cancel_active_directory_load();
         self.sync_active_tab_state();
@@ -330,7 +375,11 @@ impl FileBrowser {
         if self.is_trash_view {
             self.clear_icon_grid_expansion();
             self.directory_loading_placeholder_entries.clear();
-            self.is_loading = self.trash_refresh.snapshot().is_none();
+            self.directory_collection_phase = if self.trash_refresh.snapshot().is_some() {
+                DirectoryCollectionPhase::Ready
+            } else {
+                DirectoryCollectionPhase::Discovering
+            };
             self.clear_global_error();
             self.cancel_active_directory_load();
             self.deepest_open_column_directory = None;
@@ -340,7 +389,7 @@ impl FileBrowser {
         }
 
         self.directory_loading_placeholder_entries.clear();
-        self.is_loading = true;
+        self.directory_collection_phase = DirectoryCollectionPhase::Discovering;
         self.clear_global_error();
 
         let mut commands = self.refresh_expanded_directory_commands();
@@ -413,10 +462,10 @@ impl FileBrowser {
         };
 
         pane.directory_loading_placeholder_entries.clear();
-        pane.is_loading = if pane.is_trash_view {
-            !has_trash_snapshot
+        pane.directory_collection_phase = if pane.is_trash_view && has_trash_snapshot {
+            DirectoryCollectionPhase::Ready
         } else {
-            true
+            DirectoryCollectionPhase::Discovering
         };
 
         if pane.is_trash_view {
@@ -646,6 +695,29 @@ impl FileBrowser {
     }
 }
 
+pub(super) fn directory_order_phase_after_collection(
+    options: &file_core::ScanOptions,
+    entries: &[DirectoryEntry],
+) -> DirectoryOrderPhase {
+    if matches!(options.sort_field, SortField::Size | SortField::Modified)
+        && entries.iter().any(|entry| {
+            entry.metadata.filesystem_availability
+                == file_core::DirectoryMetadataAvailability::Pending
+        })
+    {
+        DirectoryOrderPhase::WaitingForMetadata {
+            request_generation: 0,
+            field: options.sort_field,
+            direction: options.sort_direction,
+        }
+    } else {
+        DirectoryOrderPhase::Ready {
+            field: options.sort_field,
+            direction: options.sort_direction,
+        }
+    }
+}
+
 fn directory_load_request_matches_pane(
     request: &DirectoryLoadRequest,
     current_dir: &Path,
@@ -654,20 +726,85 @@ fn directory_load_request_matches_pane(
     request.generation == generation && request.path.as_path() == current_dir
 }
 
-pub(super) fn merge_directory_scan_batch(
-    entries: &mut Vec<DirectoryEntry>,
-    batch: file_core::DirectoryScanBatch,
-    options: &file_core::ScanOptions,
-) {
-    for entry in batch.entries {
-        if let Some(existing) = entries
-            .iter_mut()
-            .find(|existing| existing.path == entry.path)
-        {
-            *existing = entry;
-        } else {
-            entries.push(entry);
+pub(super) fn display_entries_in_discovery_order(
+    discovery: &DirectoryDiscovery,
+) -> Vec<DirectoryEntry> {
+    discovery
+        .order
+        .iter()
+        .map(|index| {
+            discovery.entries[*index]
+                .display_entry()
+                .with_discovery_index(*index)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use file_core::{discover_directory_with_progress, DirectoryMetadataAvailability, ScanOptions};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn hints_stay_ephemeral_until_authoritative_discovery_is_committed() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..300 {
+            std::fs::write(directory.path().join(format!("file-{index:03}.dat")), []).unwrap();
         }
+        let mut batches = Vec::new();
+        let discovery = discover_directory_with_progress(
+            directory.path(),
+            ScanOptions::default(),
+            CancellationToken::new(),
+            |batch| batches.push(batch),
+        )
+        .await
+        .unwrap();
+        let discovery_entries = Arc::clone(&discovery.entries);
+
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser.current_dir = directory.path().to_path_buf();
+        let request = browser.next_directory_load_request(directory.path().to_path_buf());
+        for batch in batches {
+            drop(browser.accept_directory_discovery_batch(request.clone(), batch));
+        }
+
+        assert_eq!(browser.entries.len(), 300);
+        let active_tab = browser
+            .tabs
+            .iter()
+            .find(|tab| tab.id == browser.active_tab_id)
+            .expect("active tab");
+        assert!(active_tab.entries.is_empty());
+
+        drop(browser.accept_directory_discovery(request, discovery));
+
+        assert_eq!(browser.entries.len(), 300);
+        assert!(browser.entries.iter().all(|entry| {
+            entry.metadata.filesystem_availability == DirectoryMetadataAvailability::Pending
+                && entry.metadata.identity_names_availability
+                    == DirectoryMetadataAvailability::Pending
+        }));
+        let active_tab = browser
+            .tabs
+            .iter()
+            .find(|tab| tab.id == browser.active_tab_id)
+            .expect("active tab");
+        assert!(Arc::ptr_eq(&browser.entries, &active_tab.entries));
+        let active_pane = browser
+            .panes
+            .iter()
+            .find(|pane| pane.id == browser.active_pane_id())
+            .expect("active pane");
+        assert!(Arc::ptr_eq(&browser.entries, &active_pane.entries));
+        let committed_discovery = browser
+            .directory_discovery
+            .as_ref()
+            .expect("authoritative discovery");
+        assert!(Arc::ptr_eq(
+            &committed_discovery.entries,
+            &discovery_entries
+        ));
     }
-    file_core::sort_entries(entries, options);
 }

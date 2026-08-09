@@ -157,7 +157,9 @@ fn restore_coordinator_keeps_restart_task_claims_in_one_process() {
         .enqueue(sample_transfer_operation())
         .error()
         .is_none());
-    assert!(original.prepare_for_shutdown().is_none());
+    let disposition = original.begin_application_shutdown();
+    assert_eq!(disposition.journal_read_count, 0);
+    original.release_application_shutdown_ownership();
     let coordinator = store
         .try_acquire_recoverable_restore_coordinator()
         .unwrap()
@@ -316,31 +318,50 @@ fn pending_recoverable_cancel_uses_recovery_runner() {
         .is_empty());
 }
 
-#[test]
-fn shutdown_preserves_nonterminal_recoverable_task() {
+#[tokio::test]
+async fn shutdown_preserves_nonterminal_recoverable_task_until_transaction() {
     let directory = tempfile::tempdir().unwrap();
     let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
     let mut queue = FileOperationQueue::new();
     queue.set_store(store.clone());
     queue.enqueue(sample_transfer_operation());
     let task_id = queue.tasks()[0].id;
+    let mut controls = queue.active_subscription().unwrap().controls;
 
-    assert!(queue.prepare_for_shutdown().is_none());
+    let disposition = queue.begin_application_shutdown();
 
-    assert!(queue.tasks().is_empty());
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
-        StoredTaskStatus::Running
+        disposition.waiting_for_operation_ids,
+        BTreeSet::from([task_id])
     );
+    assert_eq!(disposition.stopping_signal_count, 1);
+    assert_eq!(disposition.journal_read_count, 0);
+    assert_eq!(disposition.interrupted_recoverable_tasks.len(), 1);
+    assert_eq!(
+        disposition.interrupted_recoverable_tasks[0].status,
+        StoredTaskStatus::RecoveryPending
+    );
+    assert!(disposition.transient_task_ids.is_empty());
+    assert!(matches!(
+        controls.wait_until_running().await,
+        Err(file_core::FileError::ApplicationStopping)
+    ));
+    assert_eq!(queue.tasks().len(), 1);
+    assert!(store
+        .try_acquire_recoverable_task_runner(task_id)
+        .unwrap()
+        .is_none());
+
+    queue.release_application_shutdown_ownership();
+    assert!(store
+        .try_acquire_recoverable_task_runner(task_id)
+        .unwrap()
+        .is_some());
     assert!(!store
         .read_transfer_recovery(task_id)
         .unwrap()
         .journal_entries
         .is_empty());
-
-    let mut restored = FileOperationQueue::new();
-    assert!(restored.set_store_and_restore(store.clone()).is_none());
-    assert_eq!(restored.tasks()[0].status, FileOperationStatus::Running);
 }
 
 #[test]
@@ -635,8 +656,16 @@ fn finished_tasks_stay_until_queue_is_cleared() {
     queue.open_panel();
     assert_eq!(queue.unread_count(), 0);
 
-    assert!(queue.prepare_for_shutdown().is_none());
-    assert!(queue.tasks().is_empty());
+    let disposition = queue.begin_application_shutdown();
+    assert!(disposition.waiting_for_operation_ids.is_empty());
+    store
+        .commit_application_shutdown(file_operation_store::StoredApplicationShutdown {
+            browser_session: file_operation_store::StoredBrowserSessionShutdown::Skip,
+            interrupted_recoverable_tasks: disposition.interrupted_recoverable_tasks,
+            transient_task_ids: disposition.transient_task_ids,
+        })
+        .unwrap();
+    queue.release_application_shutdown_ownership();
     assert!(store.read_tasks().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(root);
 }

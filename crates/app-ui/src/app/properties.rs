@@ -437,7 +437,8 @@ mod tests {
                 false,
                 false,
             ),
-        ];
+        ]
+        .into();
         browser.selected = Some(first.clone());
         browser.selected_paths = std::collections::HashSet::from([first.clone(), second.clone()]);
 

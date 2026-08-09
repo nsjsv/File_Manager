@@ -7,6 +7,11 @@ use thumbnails::{
     ThumbnailSourceMetadata,
 };
 
+const AVIF_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/primary-colors.avif"
+);
+
 #[tokio::test]
 async fn generate_image_thumbnail_writes_small_image() {
     let dir = tempfile::tempdir().unwrap();
@@ -133,6 +138,30 @@ async fn load_or_generate_image_thumbnail_reads_bmp_source() {
 }
 
 #[tokio::test]
+async fn avif_dimensions_thumbnail_and_cache_use_bitmap_decoder() {
+    let source = Path::new(AVIF_FIXTURE);
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    let request = thumbnail_request(source, 8);
+
+    assert_eq!(load_image_dimensions(source).await.unwrap(), (16, 8));
+
+    let first = load_or_generate_image_thumbnail(&cache_dir, request.clone())
+        .await
+        .unwrap();
+    let second = load_or_generate_image_thumbnail(&cache_dir, request)
+        .await
+        .unwrap();
+
+    assert_eq!((first.width, first.height), (8, 4));
+    assert_eq!(image::image_dimensions(&first.output).unwrap(), (8, 4));
+    assert!(!first.cache_hit);
+    assert!(second.cache_hit);
+    assert_eq!(first.key, second.key);
+    assert_eq!(first.output, second.output);
+}
+
+#[tokio::test]
 async fn load_or_generate_image_thumbnail_renders_svg_source() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.svg");
@@ -199,6 +228,7 @@ async fn load_image_dimensions_reads_svg_size() {
 #[test]
 fn supported_thumbnail_path_includes_images_and_videos() {
     for path in [
+        "source.avif",
         "source.bmp",
         "source.gif",
         "source.ico",
@@ -215,6 +245,8 @@ fn supported_thumbnail_path_includes_images_and_videos() {
     assert!(is_supported_thumbnail_path("clip.MP4"));
     assert!(is_supported_thumbnail_path("movie.webm"));
     assert!(!is_supported_thumbnail_path("notes.txt"));
+    assert!(!is_supported_thumbnail_path("photo.heic"));
+    assert!(!is_supported_thumbnail_path("photo.heif"));
 }
 
 #[test]

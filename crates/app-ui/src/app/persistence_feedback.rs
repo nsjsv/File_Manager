@@ -26,6 +26,7 @@ impl FileBrowser {
         &mut self,
         result: Result<(), String>,
     ) -> Task<Message> {
+        let result = self.record_browser_session_save_outcome(result);
         self.accept_persistence_result(result, "Failed to save browser session")
     }
 

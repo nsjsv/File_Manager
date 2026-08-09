@@ -77,9 +77,12 @@ impl BoundedPathSet {
         std::mem::take(&mut self.paths).into_iter().collect()
     }
 
-    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.paths.len()
+    }
+
+    pub(super) fn estimated_bytes(&self) -> usize {
+        self.estimated_bytes
     }
 }
 
@@ -118,6 +121,21 @@ mod tests {
         byte_limited.insert(first).unwrap();
         assert!(byte_limited.insert(second).is_err());
         assert_eq!(byte_limited.len(), 1);
+    }
+
+    #[test]
+    fn observed_home_scale_fits_the_realtime_path_budget() {
+        let mut paths = BoundedPathSet::new(96_000, 32_000_000);
+        for position in 0..78_710 {
+            paths
+                .insert(PathBuf::from(format!(
+                    "/home/yuanming/work/project-{position:05}/target/debug/build/dependency-{position:05}/out/generated"
+                )))
+                .unwrap();
+        }
+
+        assert_eq!(paths.len(), 78_710);
+        assert!(paths.estimated_bytes() <= 32_000_000);
     }
 
     #[test]

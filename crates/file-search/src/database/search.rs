@@ -39,11 +39,13 @@ impl SearchDatabase {
                     let display_name: String = row.get(1)?;
                     let kind = SearchFileKind::from_storage_value(row.get_ref(2)?.as_str()?);
                     let score: f64 = row.get(7)?;
-                    let raw_snippet: Option<String> = row.get(8)?;
+                    let content_preview: Option<String> = row.get(8)?;
                     let match_source =
                         match_source_for_hit(query.text_scope, &tokens, &display_name);
                     let snippet = if match_source == MatchSource::Content {
-                        raw_snippet.and_then(|snippet| normalize_content_snippet(&snippet))
+                        content_preview.as_deref().and_then(|preview| {
+                            content_snippet_from_preview(&display_name, preview, &tokens)
+                        })
                     } else {
                         None
                     };
@@ -162,7 +164,12 @@ fn search_sql(
     let range_drives_query = match_expression.is_none() && recursive_range.is_some();
     let mut values = Vec::new();
     let mut sql = if let Some(match_expression) = match_expression.as_ref() {
-        let snippet_projection = content_snippet_projection(tokens, query.text_scope, &mut values);
+        let snippet_projection = content_preview_projection(tokens, query.text_scope, &mut values);
+        let preview_join = if query.text_scope == SearchTextScope::NameAndContent {
+            "LEFT JOIN file_search_snippets ON file_search_snippets.file_rowid = f.rowid"
+        } else {
+            ""
+        };
         values.push(Value::Text(match_expression.clone()));
         let mut full_text_sql = format!(
             "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms, f.accessed_ms,
@@ -170,6 +177,7 @@ fn search_sql(
                 {snippet_projection}
          FROM file_search_fts
          JOIN files f ON f.rowid = file_search_fts.rowid
+         {preview_join}
          WHERE file_search_fts MATCH ?"
         );
         if full_text_plan == FullTextQueryPlan::FilterWithMetadata {
@@ -338,7 +346,7 @@ fn search_match_expression(tokens: &[&str], text_scope: SearchTextScope) -> Opti
     })
 }
 
-fn content_snippet_projection(
+fn content_preview_projection(
     tokens: &[&str],
     text_scope: SearchTextScope,
     values: &mut Vec<Value>,
@@ -355,9 +363,7 @@ fn content_snippet_projection(
         projection.push_str("instr(lower(f.display_name), lower(?)) > 0");
         values.push(Value::Text((*token).to_owned()));
     }
-    projection.push_str(
-        " THEN NULL ELSE snippet(file_search_fts, 2, '', '', '...', 16) END AS content_snippet",
-    );
+    projection.push_str(" THEN NULL ELSE file_search_snippets.preview END AS content_snippet");
     projection
 }
 
@@ -372,23 +378,76 @@ fn match_source_for_hit(
     if text_scope == SearchTextScope::NameOnly {
         return MatchSource::Name;
     }
-    let display_name = display_name.as_bytes();
-    if terms.iter().all(|term| {
-        let term = term.as_bytes();
-        display_name
-            .windows(term.len())
-            .any(|candidate| candidate.eq_ignore_ascii_case(term))
-    }) {
+    if terms
+        .iter()
+        .all(|term| display_name_contains_search_token(display_name, term))
+    {
         MatchSource::Name
     } else {
         MatchSource::Content
     }
 }
 
-fn normalize_content_snippet(snippet: &str) -> Option<String> {
-    let mut normalized = String::with_capacity(snippet.len());
+fn display_name_contains_search_token(display_name: &str, term: &str) -> bool {
+    let display_name = display_name.as_bytes();
+    let term = term.as_bytes();
+    display_name
+        .windows(term.len())
+        .any(|candidate| candidate.eq_ignore_ascii_case(term))
+}
+
+fn content_snippet_from_preview(
+    display_name: &str,
+    preview: &str,
+    terms: &[&str],
+) -> Option<String> {
+    let normalized = normalize_content_preview(preview)?;
+    let match_character_index = terms
+        .iter()
+        .filter(|term| !display_name_contains_search_token(display_name, term))
+        .find_map(|term| preview_token_start(&normalized, term))?;
+    Some(snippet_around_character(&normalized, match_character_index))
+}
+
+fn preview_token_start(preview: &str, term: &str) -> Option<usize> {
+    if term.is_empty() {
+        return None;
+    }
+    let term_character_count = term.chars().count();
+    let folded_term = term.to_lowercase();
+    for (start_byte, _) in preview.char_indices() {
+        if preview[..start_byte]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+        {
+            continue;
+        }
+        let mut candidate_characters = preview[start_byte..].chars();
+        let candidate = candidate_characters
+            .by_ref()
+            .take(term_character_count)
+            .collect::<String>();
+        if candidate.chars().count() != term_character_count
+            || candidate.to_lowercase() != folded_term
+        {
+            continue;
+        }
+        if candidate_characters
+            .next()
+            .is_some_and(char::is_alphanumeric)
+        {
+            continue;
+        }
+        return Some(preview[..start_byte].chars().count());
+    }
+    None
+}
+
+fn normalize_content_preview(preview: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(preview.len());
     let mut pending_space = false;
-    for character in snippet.chars() {
+    for character in preview.chars() {
         if character.is_whitespace() || character.is_control() {
             pending_space = !normalized.is_empty();
             continue;
@@ -402,12 +461,38 @@ fn normalize_content_snippet(snippet: &str) -> Option<String> {
     if normalized.is_empty() {
         return None;
     }
-    if normalized.chars().count() > SEARCH_SNIPPET_CHARACTER_LIMIT {
-        normalized = normalized
-            .chars()
-            .take(SEARCH_SNIPPET_CHARACTER_LIMIT.saturating_sub(3))
-            .collect::<String>();
-        normalized.push_str("...");
-    }
     Some(normalized)
+}
+
+fn snippet_around_character(content: &str, match_character_index: usize) -> String {
+    let characters = content.chars().collect::<Vec<_>>();
+    if characters.len() <= SEARCH_SNIPPET_CHARACTER_LIMIT {
+        return content.to_owned();
+    }
+
+    let mut start = match_character_index
+        .min(characters.len().saturating_sub(1))
+        .saturating_sub(60);
+    let prefix_characters = usize::from(start > 0) * 3;
+    let mut end = (start
+        + SEARCH_SNIPPET_CHARACTER_LIMIT
+            .saturating_sub(prefix_characters)
+            .saturating_sub(3))
+    .min(characters.len());
+    if end == characters.len() {
+        start = characters
+            .len()
+            .saturating_sub(SEARCH_SNIPPET_CHARACTER_LIMIT.saturating_sub(3));
+        end = characters.len();
+    }
+
+    let mut snippet = String::new();
+    if start > 0 {
+        snippet.push_str("...");
+    }
+    snippet.extend(characters[start..end].iter());
+    if end < characters.len() {
+        snippet.push_str("...");
+    }
+    snippet
 }

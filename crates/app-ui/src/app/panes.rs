@@ -1,15 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use file_core::DirectoryEntry;
+use file_core::{DirectoryDiscovery, DirectoryEntry, EntryMetadata};
 use iced::Point;
 
 use super::tabs::{TabAnimationState, TabBarReveal};
 use super::FileBrowser;
 use crate::model::{
     displayed_address_directory, AddressEditingSession, BrowserPane, BrowserPaneId,
-    BrowserPaneLayout, BrowserTab, BrowserViewMode, DirectoryLoadingPlaceholderEntry,
-    ExpandedDirectory, FileDragState, IconGridViewport, SplitAxis, SplitRegion,
+    BrowserPaneLayout, BrowserTab, BrowserViewMode, DirectoryCollectionPhase,
+    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, IconGridViewport,
+    SplitAxis, SplitRegion,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -27,6 +28,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) current_dir: &'a PathBuf,
     pub(crate) is_trash_view: bool,
     pub(crate) entries: &'a [DirectoryEntry],
+    pub(crate) directory_discovery: Option<&'a DirectoryDiscovery>,
     pub(crate) directory_loading_placeholder_entries: &'a [DirectoryLoadingPlaceholderEntry],
     pub(crate) selected: Option<&'a PathBuf>,
     pub(crate) selected_paths: &'a HashSet<PathBuf>,
@@ -42,7 +44,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) address_editing: Option<&'a AddressEditingSession>,
     pub(crate) address_transition_fraction: f32,
     pub(crate) address_exit_snapshot: Option<&'a str>,
-    pub(crate) is_loading: bool,
+    pub(crate) directory_collection_phase: DirectoryCollectionPhase,
     pub(crate) renaming: Option<&'a PathBuf>,
     pub(crate) rename_input: &'a str,
     pub(crate) file_drag: Option<&'a FileDragState>,
@@ -50,8 +52,27 @@ pub(crate) struct BrowserPaneView<'a> {
 }
 
 impl<'a> BrowserPaneView<'a> {
+    pub(crate) fn metadata_for_entry(&self, entry: &DirectoryEntry) -> EntryMetadata {
+        let Some(index) = entry.discovery_index else {
+            return entry.metadata.clone();
+        };
+        let discovery = entry.path.parent().and_then(|parent| {
+            if parent == self.current_dir.as_path() {
+                self.directory_discovery
+            } else {
+                self.expanded_directories
+                    .get(parent)
+                    .and_then(|expanded| expanded.directory_discovery.as_ref())
+            }
+        });
+        discovery
+            .and_then(|discovery| discovery.entries.get(index))
+            .map(|discovered| discovered.display_entry().metadata)
+            .unwrap_or_else(|| entry.metadata.clone())
+    }
+
     pub(crate) fn current_directory_content(&self) -> DirectoryContentAvailability<'a> {
-        if self.is_loading && self.entries.is_empty() {
+        if self.directory_collection_phase.is_discovering() && self.entries.is_empty() {
             DirectoryContentAvailability::Pending
         } else {
             DirectoryContentAvailability::Available(self.entries)
@@ -152,6 +173,7 @@ impl FileBrowser {
                 current_dir: &self.current_dir,
                 is_trash_view: self.is_trash_view,
                 entries: &self.entries,
+                directory_discovery: self.directory_discovery.as_ref(),
                 directory_loading_placeholder_entries: &self.directory_loading_placeholder_entries,
                 selected: self.selected.as_ref(),
                 selected_paths: &self.selected_paths,
@@ -167,7 +189,7 @@ impl FileBrowser {
                 address_editing,
                 address_transition_fraction,
                 address_exit_snapshot,
-                is_loading: self.is_loading,
+                directory_collection_phase: self.directory_collection_phase,
                 renaming: self.renaming.as_ref(),
                 rename_input: &self.rename_input,
                 file_drag: self.file_drag.as_ref(),
@@ -181,6 +203,7 @@ impl FileBrowser {
             current_dir: &pane.current_dir,
             is_trash_view: pane.is_trash_view,
             entries: &pane.entries,
+            directory_discovery: pane.directory_discovery.as_ref(),
             directory_loading_placeholder_entries: &pane.directory_loading_placeholder_entries,
             selected: pane.selected.as_ref(),
             selected_paths: &pane.selected_paths,
@@ -196,7 +219,7 @@ impl FileBrowser {
             address_editing,
             address_transition_fraction,
             address_exit_snapshot,
-            is_loading: pane.is_loading,
+            directory_collection_phase: pane.directory_collection_phase,
             renaming: None,
             rename_input: "",
             file_drag: None,
@@ -364,6 +387,7 @@ impl FileBrowser {
             current_dir: self.current_dir.clone(),
             is_trash_view: self.is_trash_view,
             entries: self.entries.clone(),
+            directory_discovery: self.directory_discovery.clone(),
             directory_loading_placeholder_entries: self
                 .directory_loading_placeholder_entries
                 .clone(),
@@ -382,7 +406,8 @@ impl FileBrowser {
             directory_load_cancel: self.directory_load_cancel.clone(),
             back_stack: self.back_stack.clone(),
             forward_stack: self.forward_stack.clone(),
-            is_loading: self.is_loading,
+            directory_collection_phase: self.directory_collection_phase,
+            directory_order_phase: self.directory_order_phase,
         }
     }
 
@@ -403,6 +428,7 @@ impl FileBrowser {
         self.current_dir = pane.current_dir;
         self.is_trash_view = pane.is_trash_view;
         self.entries = pane.entries;
+        self.directory_discovery = pane.directory_discovery;
         self.directory_loading_placeholder_entries = pane.directory_loading_placeholder_entries;
         self.trash_entries = pane.trash_entries;
         self.selected = pane.selected;
@@ -419,7 +445,8 @@ impl FileBrowser {
         self.directory_load_cancel = pane.directory_load_cancel;
         self.back_stack = pane.back_stack;
         self.forward_stack = pane.forward_stack;
-        self.is_loading = pane.is_loading;
+        self.directory_collection_phase = pane.directory_collection_phase;
+        self.directory_order_phase = pane.directory_order_phase;
         self.tab_bar_reveal = if self.tabs.len() > 1 {
             TabBarReveal::Visible
         } else {
@@ -434,6 +461,8 @@ impl FileBrowser {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
 
     use super::*;
@@ -443,8 +472,8 @@ mod tests {
         let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
         let pane_id = browser.active_pane_id();
 
-        browser.entries.clear();
-        browser.is_loading = true;
+        Arc::make_mut(&mut browser.entries).clear();
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
         assert!(matches!(
             browser
                 .pane_view(pane_id)
@@ -453,7 +482,7 @@ mod tests {
             DirectoryContentAvailability::Pending
         ));
 
-        browser.is_loading = false;
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
         let DirectoryContentAvailability::Available(entries) = browser
             .pane_view(pane_id)
             .expect("active pane")
@@ -463,8 +492,8 @@ mod tests {
         };
         assert!(entries.is_empty());
 
-        browser.is_loading = true;
-        browser.entries.push(DirectoryEntry::new(
+        browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
+        Arc::make_mut(&mut browser.entries).push(DirectoryEntry::new(
             PathBuf::from("/streamed.txt"),
             FileKind::File,
             EntryMetadata::default(),
@@ -480,6 +509,30 @@ mod tests {
             panic!("a streamed batch must become visible before completion");
         };
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn tab_and_pane_snapshots_share_directory_entries() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser.entries = Arc::new(vec![DirectoryEntry::new(
+            PathBuf::from("/report.txt"),
+            FileKind::File,
+            EntryMetadata::default(),
+            false,
+            false,
+            false,
+        )]);
+
+        browser.sync_active_tab_state();
+        let active_tab = browser
+            .tabs
+            .iter()
+            .find(|tab| tab.id == browser.active_tab_id)
+            .expect("active tab");
+        assert!(Arc::ptr_eq(&browser.entries, &active_tab.entries));
+
+        let pane = browser.capture_active_pane_snapshot();
+        assert!(Arc::ptr_eq(&browser.entries, &pane.entries));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use file_core::{
@@ -6,7 +7,8 @@ use file_core::{
     TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
-    RecoverableTaskRunnerLease, StoredOperation, StoredTask, StoredTaskStatus, TaskQueueStore,
+    RecoverableTaskRunnerLease, StoredInterruptedRecoverableTask, StoredOperation, StoredTask,
+    StoredTaskStatus, TaskQueueStore,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -243,6 +245,14 @@ pub(crate) struct RunningFileOperation {
     pub(crate) store: Option<TaskQueueStore>,
 }
 
+pub(crate) struct FileOperationShutdownDisposition {
+    pub(crate) waiting_for_operation_ids: BTreeSet<u64>,
+    pub(crate) interrupted_recoverable_tasks: Vec<StoredInterruptedRecoverableTask>,
+    pub(crate) transient_task_ids: Vec<u64>,
+    pub(crate) stopping_signal_count: usize,
+    pub(crate) journal_read_count: usize,
+}
+
 pub(crate) struct FileOperationQueue {
     tasks: Vec<FileOperationTask>,
     next_local_id: u64,
@@ -442,6 +452,26 @@ impl FileOperationQueue {
         id: u64,
         outcome: FileOperationFinish,
     ) -> (Option<FileOperationTerminalStatus>, Option<String>) {
+        let (terminal_status, storage_error) = self.finish_without_advancing_queue(id, outcome);
+        (
+            terminal_status,
+            combine_storage_errors(storage_error, self.start_next()),
+        )
+    }
+
+    pub(crate) fn finish_for_application_shutdown(
+        &mut self,
+        id: u64,
+        outcome: FileOperationFinish,
+    ) -> (Option<FileOperationTerminalStatus>, Option<String>) {
+        self.finish_without_advancing_queue(id, outcome)
+    }
+
+    fn finish_without_advancing_queue(
+        &mut self,
+        id: u64,
+        outcome: FileOperationFinish,
+    ) -> (Option<FileOperationTerminalStatus>, Option<String>) {
         let Some(position) = self.tasks.iter().position(|task| task.id == id) else {
             return (None, None);
         };
@@ -455,7 +485,7 @@ impl FileOperationQueue {
         }
 
         let was_canceling = self.tasks[position].status == FileOperationStatus::Canceling;
-        let mut storage_error = match outcome {
+        let storage_error = match outcome {
             FileOperationFinish::Succeeded => {
                 let task = &mut self.tasks[position];
                 task.status = FileOperationStatus::Completed;
@@ -532,7 +562,6 @@ impl FileOperationQueue {
         };
 
         self.tasks[position]._runner_lease = None;
-        storage_error = combine_storage_errors(storage_error, self.start_next());
         (Some(terminal_status), storage_error)
     }
 
@@ -594,40 +623,72 @@ impl FileOperationQueue {
         storage_error
     }
 
-    pub(crate) fn prepare_for_shutdown(&mut self) -> Option<String> {
-        let mut combined_error = None;
-        for task in &self.tasks {
-            let preserve_recovery = match self.store.as_ref() {
-                Some(store) if task.operation.uses_recovery_journal() && task.is_persisted => {
-                    match store.read_transfer_recovery(task.id) {
-                        Ok(snapshot) => !snapshot.journal_entries.is_empty(),
-                        Err(error) => {
-                            combined_error =
-                                combine_storage_errors(combined_error, Some(storage_error(error)));
-                            true
-                        }
-                    }
+    pub(crate) fn begin_application_shutdown(&mut self) -> FileOperationShutdownDisposition {
+        let mut waiting_for_operation_ids = BTreeSet::new();
+        let mut interrupted_recoverable_tasks = Vec::new();
+        let mut transient_task_ids = Vec::new();
+        let mut stopping_signal_count = 0;
+
+        for task in &mut self.tasks {
+            let is_active = matches!(
+                task.status,
+                FileOperationStatus::Running
+                    | FileOperationStatus::Paused
+                    | FileOperationStatus::Canceling
+            );
+            let is_recoverable = task.operation.uses_recovery_journal() && task.is_persisted;
+            if is_active {
+                waiting_for_operation_ids.insert(task.id);
+                let _ = task
+                    .run_state_sender
+                    .send(FileOperationRunState::ApplicationStopping);
+                stopping_signal_count += 1;
+                if !is_recoverable {
+                    task.cancel.cancel();
                 }
-                _ => false,
-            };
-            if preserve_recovery {
+            }
+
+            if is_recoverable {
+                if is_active {
+                    interrupted_recoverable_tasks.push(StoredInterruptedRecoverableTask {
+                        task_id: task.id,
+                        status: if task.status == FileOperationStatus::Canceling {
+                            StoredTaskStatus::Canceling
+                        } else {
+                            StoredTaskStatus::RecoveryPending
+                        },
+                        progress: task.progress.to_stored(),
+                        error: Some("Application stopped with recoverable work pending".to_owned()),
+                    });
+                }
                 continue;
             }
 
-            task.cancel.cancel();
-            let _ = task.run_state_sender.send(FileOperationRunState::Running);
             if task.is_persisted {
-                if let Some(store) = self.store.as_ref() {
-                    combined_error = combine_storage_errors(
-                        combined_error,
-                        store.delete_task(task.id).err().map(storage_error),
-                    );
-                }
+                transient_task_ids.push(task.id);
             }
         }
+        self.is_panel_open = false;
+
+        FileOperationShutdownDisposition {
+            waiting_for_operation_ids,
+            interrupted_recoverable_tasks,
+            transient_task_ids,
+            stopping_signal_count,
+            journal_read_count: 0,
+        }
+    }
+
+    pub(crate) fn release_application_shutdown_ownership(&mut self) {
         self.tasks.clear();
         self.is_panel_open = false;
-        combined_error
+    }
+
+    pub(crate) fn operation_uses_recovery_journal(&self, id: u64) -> bool {
+        self.tasks
+            .iter()
+            .find(|task| task.id == id)
+            .is_some_and(|task| task.operation.uses_recovery_journal())
     }
 
     pub(crate) fn task_count(&self) -> usize {

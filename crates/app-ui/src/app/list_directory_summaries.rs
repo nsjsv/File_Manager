@@ -1,8 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use file_core::{DirectoryEntry, FileKind, ScanOptions, SortDirection, SortField};
+use file_core::{
+    DirectoryEntry, DirectoryMetadataAvailability, EntryMetadata, FileKind, ScanOptions,
+    SortDirection, SortField,
+};
 use iced::Task;
 
 use super::FileBrowser;
@@ -46,7 +50,7 @@ impl FileBrowser {
 
         if self.view_mode == BrowserViewMode::List && !self.is_trash_view {
             resort_list_state_by_displayed_size(
-                &mut self.entries,
+                Arc::make_mut(&mut self.entries),
                 &mut self.expanded_directories,
                 &self.list_directory_summary_cache,
                 display_mode,
@@ -65,7 +69,7 @@ impl FileBrowser {
                 continue;
             }
             resort_list_state_by_displayed_size(
-                &mut pane.entries,
+                Arc::make_mut(&mut pane.entries),
                 &mut pane.expanded_directories,
                 &self.list_directory_summary_cache,
                 display_mode,
@@ -252,9 +256,16 @@ impl FileBrowser {
         }
     }
 
-    pub(crate) fn list_directory_size_text(&self, entry: &DirectoryEntry) -> String {
+    pub(crate) fn list_directory_size_text(
+        &self,
+        entry: &DirectoryEntry,
+        metadata: &EntryMetadata,
+    ) -> String {
         if entry.kind != FileKind::Directory {
-            return format_file_size(entry.metadata.len);
+            if metadata.filesystem_availability != DirectoryMetadataAvailability::Complete {
+                return "-".to_owned();
+            }
+            return format_file_size(metadata.len);
         }
 
         let Some(summary) = self
@@ -287,7 +298,10 @@ impl FileBrowser {
         let Some(pane) = self.pane_view(pane_id) else {
             return Vec::new();
         };
-        if pane.view_mode != BrowserViewMode::List || pane.is_trash_view || pane.is_loading {
+        if pane.view_mode != BrowserViewMode::List
+            || pane.is_trash_view
+            || pane.directory_collection_phase.is_discovering()
+        {
             return Vec::new();
         }
 
@@ -646,7 +660,8 @@ mod tests {
             test_entry(larger.clone(), FileKind::Directory, 0),
             test_entry(smaller.clone(), FileKind::Directory, 0),
             test_entry(PathBuf::from("/workspace/file.bin"), FileKind::File, 9),
-        ];
+        ]
+        .into();
         remember_summary(&mut browser, &smaller, 1, 10);
         remember_summary(&mut browser, &larger, 3, 30);
 

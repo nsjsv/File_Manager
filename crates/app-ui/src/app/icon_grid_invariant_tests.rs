@@ -31,6 +31,7 @@ fn expanded(
 ) -> ExpandedDirectory {
     ExpandedDirectory {
         entries,
+        directory_discovery: None,
         status,
         is_expanded: true,
         is_collapsing: false,
@@ -38,6 +39,10 @@ fn expanded(
         load_generation: generation,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -86,7 +91,7 @@ fn browser_with_root(root_contents: ExpandedDirectory) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
     browser.view_mode = BrowserViewMode::Icons;
-    browser.entries = vec![entry("/workspace/root", FileKind::Directory)];
+    browser.entries = vec![entry("/workspace/root", FileKind::Directory)].into();
     browser.icon_grid_expansion = Some(IconGridExpansionState::new(
         root_context(),
         root_anchor(),
@@ -113,7 +118,7 @@ fn unavailable_icon_root_is_removed_without_a_global_error() {
     let root = PathBuf::from("/workspace/root");
     let request = icon_request(&mut browser, &root, ROOT_GENERATION);
 
-    drop(browser.accept_icon_grid_directory(
+    drop(browser.accept_complete_icon_grid_directory_fixture(
         request,
         Err(DirectoryLoadFailure::DirectoryUnavailable {
             message: "root disappeared".to_owned(),
@@ -146,7 +151,7 @@ fn unavailable_icon_child_removes_only_its_subtree_without_a_global_error() {
         ));
 
     let request = icon_request(&mut browser, &child, 13);
-    drop(browser.accept_icon_grid_directory(
+    drop(browser.accept_complete_icon_grid_directory_fixture(
         request,
         Err(DirectoryLoadFailure::DirectoryUnavailable {
             message: "child disappeared".to_owned(),
@@ -169,7 +174,7 @@ fn icon_read_failure_keeps_an_error_panel_and_reports_the_failure() {
     let root = PathBuf::from("/workspace/root");
     let request = icon_request(&mut browser, &root, ROOT_GENERATION);
 
-    drop(browser.accept_icon_grid_directory(
+    drop(browser.accept_complete_icon_grid_directory_fixture(
         request,
         Err(DirectoryLoadFailure::ReadFailed {
             message: "permission denied".to_owned(),

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
+use super::super::FileOperationControls;
 use super::RecoverableTransferError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -13,9 +14,28 @@ pub struct ObjectFingerprint(pub [u8; 32]);
 pub async fn fingerprint_object(
     root: &Path,
 ) -> Result<ObjectFingerprint, RecoverableTransferError> {
+    fingerprint_object_with_checkpoint(root, || Ok(())).await
+}
+
+pub async fn fingerprint_object_with_controls(
+    root: &Path,
+    controls: &FileOperationControls,
+) -> Result<ObjectFingerprint, RecoverableTransferError> {
+    let controls = controls.clone();
+    fingerprint_object_with_checkpoint(root, move || controls.checkpoint_now().map_err(Into::into))
+        .await
+}
+
+async fn fingerprint_object_with_checkpoint<C>(
+    root: &Path,
+    checkpoint: C,
+) -> Result<ObjectFingerprint, RecoverableTransferError>
+where
+    C: FnMut() -> Result<(), RecoverableTransferError> + Send + 'static,
+{
     let root = root.to_path_buf();
     let error_path = root.clone();
-    tokio::task::spawn_blocking(move || fingerprint_object_blocking(&root))
+    tokio::task::spawn_blocking(move || fingerprint_object_blocking(&root, checkpoint))
         .await
         .map_err(|join_error| {
             RecoverableTransferError::file_system(
@@ -26,12 +46,19 @@ pub async fn fingerprint_object(
         })?
 }
 
-fn fingerprint_object_blocking(root: &Path) -> Result<ObjectFingerprint, RecoverableTransferError> {
+fn fingerprint_object_blocking<C>(
+    root: &Path,
+    mut checkpoint: C,
+) -> Result<ObjectFingerprint, RecoverableTransferError>
+where
+    C: FnMut() -> Result<(), RecoverableTransferError>,
+{
     let mut hasher = blake3::Hasher::new();
     let mut pending = vec![(PathBuf::new(), root.to_path_buf())];
     let mut buffer = vec![0; 1024 * 1024];
 
     while let Some((relative_path, path)) = pending.pop() {
+        checkpoint()?;
         let metadata = std::fs::symlink_metadata(&path).map_err(|source| {
             RecoverableTransferError::file_system("read fingerprint metadata for", &path, source)
         })?;
@@ -44,6 +71,7 @@ fn fingerprint_object_blocking(root: &Path) -> Result<ObjectFingerprint, Recover
                 RecoverableTransferError::file_system("open fingerprint file", &path, source)
             })?;
             loop {
+                checkpoint()?;
                 let read = file.read(&mut buffer).map_err(|source| {
                     RecoverableTransferError::file_system("read fingerprint file", &path, source)
                 })?;
@@ -74,19 +102,18 @@ fn fingerprint_object_blocking(root: &Path) -> Result<ObjectFingerprint, Recover
         let entries = std::fs::read_dir(&path).map_err(|source| {
             RecoverableTransferError::file_system("read fingerprint directory", &path, source)
         })?;
-        let mut children = entries
-            .map(|entry| {
-                entry
-                    .map(|entry| (entry.file_name(), entry.path()))
-                    .map_err(|source| {
-                        RecoverableTransferError::file_system(
-                            "read fingerprint directory entry",
-                            &path,
-                            source,
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, RecoverableTransferError>>()?;
+        let mut children = Vec::new();
+        for entry in entries {
+            checkpoint()?;
+            let entry = entry.map_err(|source| {
+                RecoverableTransferError::file_system(
+                    "read fingerprint directory entry",
+                    &path,
+                    source,
+                )
+            })?;
+            children.push((entry.file_name(), entry.path()));
+        }
         children.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (name, child_path) in children.into_iter().rev() {
             pending.push((relative_path.join(name), child_path));
@@ -109,5 +136,31 @@ fn update_component(hasher: &mut blake3::Hasher, value: &OsStr) {
         let bytes = encoded.as_bytes();
         hasher.update(&(bytes.len() as u64).to_le_bytes());
         hasher.update(bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::FileOperationRunState;
+    use tokio::sync::watch;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn controlled_fingerprint_stops_before_reading_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("content.bin");
+        std::fs::write(&path, vec![7_u8; 1024 * 1024]).unwrap();
+        let (_sender, receiver) = watch::channel(FileOperationRunState::ApplicationStopping);
+        let controls = FileOperationControls::new(CancellationToken::new(), receiver);
+
+        let error = fingerprint_object_with_controls(&path, &controls)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RecoverableTransferError::FileOperation(crate::FileError::ApplicationStopping)
+        ));
     }
 }

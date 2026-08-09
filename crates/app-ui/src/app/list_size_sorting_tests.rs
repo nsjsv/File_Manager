@@ -19,6 +19,7 @@ fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
 fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
     ExpandedDirectory {
         entries,
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -26,6 +27,10 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -35,6 +40,7 @@ fn pane_from_tab_for_test(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPan
         current_dir: tab.directory.clone(),
         is_trash_view: tab.is_trash_view,
         entries: tab.entries.clone(),
+        directory_discovery: tab.directory_discovery.clone(),
         directory_loading_placeholder_entries: Vec::new(),
         trash_entries: tab.trash_entries.clone(),
         selected: tab.selected.clone(),
@@ -51,7 +57,11 @@ fn pane_from_tab_for_test(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPan
         directory_load_cancel: None,
         back_stack: Vec::new(),
         forward_stack: Vec::new(),
-        is_loading: false,
+        directory_collection_phase: crate::model::DirectoryCollectionPhase::Ready,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -68,12 +78,12 @@ fn recursive_size_sort_reorders_expanded_entries_and_inactive_pane() {
 
     browser.current_dir = active_root.clone();
     browser.view_mode = BrowserViewMode::List;
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     browser.user_config.list_directory_size_display_mode =
         ListDirectorySizeDisplayMode::RecursiveTotalSize;
     browser.options.sort_field = SortField::Size;
     browser.options.sort_direction = SortDirection::Ascending;
-    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(parent.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         parent.clone(),
         loaded_directory(vec![
@@ -92,7 +102,8 @@ fn recursive_size_sort_reorders_expanded_entries_and_inactive_pane() {
     inactive_tab.entries = vec![
         test_entry(inactive_large.clone(), FileKind::Directory),
         test_entry(inactive_small.clone(), FileKind::Directory),
-    ];
+    ]
+    .into();
     inactive_tab.selected_paths = HashSet::new();
     browser.tabs = vec![active_tab.clone()];
     browser.active_tab_id = active_tab.id;

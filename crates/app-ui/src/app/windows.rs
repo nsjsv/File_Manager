@@ -49,7 +49,7 @@ pub(super) fn main_window_settings() -> window::Settings {
     let mut settings = window::Settings {
         size: Size::new(MAIN_WINDOW_INITIAL_WIDTH, MAIN_WINDOW_INITIAL_HEIGHT),
         decorations: false,
-        exit_on_close_request: false,
+        exit_on_close_request: true,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
@@ -67,7 +67,7 @@ fn settings_window_settings() -> window::Settings {
             MIN_SETTINGS_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
         )),
         decorations: false,
-        exit_on_close_request: false,
+        exit_on_close_request: true,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = SETTINGS_WINDOW_APP_ID.to_owned();
@@ -85,7 +85,7 @@ fn properties_window_settings() -> window::Settings {
             MIN_PROPERTIES_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
         )),
         decorations: false,
-        exit_on_close_request: false,
+        exit_on_close_request: true,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = PROPERTIES_WINDOW_APP_ID.to_owned();
@@ -102,7 +102,7 @@ fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> 
             height: min_size.height,
         })),
         decorations: false,
-        exit_on_close_request: false,
+        exit_on_close_request: true,
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = PREVIEW_WINDOW_APP_ID.to_owned();
@@ -640,12 +640,12 @@ impl FileBrowser {
     }
 
     pub(super) fn close_auxiliary_window(&mut self, window_id: window::Id) -> Task<Message> {
-        if self.is_shutting_down {
+        if !self.application_shutdown_phase.is_running() {
             return Task::none();
         }
 
         if window_id == self.main_window {
-            return self.close_all_windows();
+            return self.begin_application_shutdown();
         }
 
         if self.settings_window == Some(window_id) {
@@ -657,42 +657,6 @@ impl FileBrowser {
         } else {
             Task::none()
         }
-    }
-
-    fn close_all_windows(&mut self) -> Task<Message> {
-        self.is_shutting_down = true;
-        self.system_focused_window = None;
-        self.maximized_windows.clear();
-        self.discard_search_workspace();
-        self.invalidate_startup_directory_validation();
-        let _ = self.operation_queue.prepare_for_shutdown();
-        self.clear_file_properties_state();
-        self.archive_creation = None;
-        self.archive_extraction = None;
-        self.cancel_file_drag_interaction();
-        self.clear_preview();
-        self.pending_preview_resize = None;
-
-        let mut auxiliary_close_commands = Vec::with_capacity(3);
-        if let Some(window) = self.settings_window.take() {
-            auxiliary_close_commands.push(window::close(window));
-        }
-        if let Some(window) = self.properties_window.take() {
-            auxiliary_close_commands.push(window::close(window));
-        }
-        if let Some(window) = self.preview_window.take() {
-            auxiliary_close_commands.push(window::close(window));
-        }
-
-        let close_main_window_and_exit = Task::batch([
-            window::close(self.main_window),
-            // Iced daemon 没有窗口后仍会运行，主窗口关闭时必须显式退出运行时。
-            iced::exit(),
-        ]);
-        Task::batch(auxiliary_close_commands).chain(shutdown_after_browser_session_save(
-            self.flush_browser_session_save(),
-            close_main_window_and_exit,
-        ))
     }
 
     pub(super) fn handle_auxiliary_window_resized(
@@ -739,17 +703,13 @@ impl FileBrowser {
                 height = self.preview_size.height,
                 "preview window resized"
             );
-            return self.refresh_preview_thumbnail_for_size();
+            return Task::batch([
+                self.resize_document_preview(),
+                self.refresh_preview_thumbnail_for_size(),
+            ]);
         }
         Task::none()
     }
-}
-
-fn shutdown_after_browser_session_save(
-    browser_session_save: Task<Message>,
-    close_main_window_and_exit: Task<Message>,
-) -> Task<Message> {
-    browser_session_save.chain(close_main_window_and_exit)
 }
 
 #[cfg(test)]

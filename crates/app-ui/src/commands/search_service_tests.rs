@@ -19,7 +19,7 @@ use crate::model::{SearchServiceDiagnosticKind, SearchServiceRecoveryAction};
 const SEARCH_ENDPOINT_SERVER_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn valid_snapshot_text() -> &'static str {
-    "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=96000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=80000000\nFragmentPath=/home/test/.config/systemd/user/file-manager-search.service\nDropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/override.conf\nExecStart={ path=/home/test/.local/share/file-manager-dev/file-searchd ; argv[]=/home/test/.local/share/file-manager-dev/file-searchd ; }\n"
+    "NRestarts=0\nMemorySwapMax=0\nSubState=running\nResult=success\nControlGroup=/user.slice/search.service\nMemoryMax=192000000\nActiveState=active\nExecMainStatus=0\nMainPID=42\nMemoryHigh=160000000\nFragmentPath=/home/test/.config/systemd/user/file-manager-search.service\nDropInPaths=/home/test/.config/systemd/user/file-manager-search.service.d/override.conf\nExecStart={ path=/home/test/.local/share/file-manager-dev/file-searchd ; argv[]=/home/test/.local/share/file-manager-dev/file-searchd ; }\n"
 }
 
 fn create_systemctl_test_peer(
@@ -42,10 +42,10 @@ fn create_systemctl_test_peer(
 async fn create_valid_search_cgroup(cgroup_root: &Path) -> PathBuf {
     let cgroup_directory = cgroup_root.join("user.slice/search.service");
     tokio::fs::create_dir_all(&cgroup_directory).await.unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.high"), "80000000\n")
+    tokio::fs::write(cgroup_directory.join("memory.high"), "160000000\n")
         .await
         .unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.max"), "96000000\n")
+    tokio::fs::write(cgroup_directory.join("memory.max"), "192000000\n")
         .await
         .unwrap();
     tokio::fs::write(cgroup_directory.join("memory.swap.max"), "0\n")
@@ -157,8 +157,8 @@ fn unit_snapshot_parses_properties_without_order_dependency() {
         snapshot.control_group,
         Some(PathBuf::from("/user.slice/search.service"))
     );
-    assert_eq!(snapshot.memory_high, 80_000_000);
-    assert_eq!(snapshot.memory_max, 96_000_000);
+    assert_eq!(snapshot.memory_high, 160_000_000);
+    assert_eq!(snapshot.memory_max, 192_000_000);
     assert_eq!(snapshot.memory_swap_max, 0);
     assert_eq!(snapshot.service_result, "success");
     assert_eq!(snapshot.exec_main_status, 0);
@@ -431,10 +431,10 @@ async fn effective_cgroup_accepts_only_safe_kernel_rounding() {
         NonZeroU32::new(42).unwrap()
     );
 
-    tokio::fs::write(cgroup_directory.join("memory.high"), "79998976\n")
+    tokio::fs::write(cgroup_directory.join("memory.high"), "159998976\n")
         .await
         .unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.max"), "95997952\n")
+    tokio::fs::write(cgroup_directory.join("memory.max"), "191995904\n")
         .await
         .unwrap();
     assert_eq!(
@@ -442,20 +442,20 @@ async fn effective_cgroup_accepts_only_safe_kernel_rounding() {
         NonZeroU32::new(42).unwrap()
     );
 
-    tokio::fs::write(cgroup_directory.join("memory.max"), "100000000\n")
+    tokio::fs::write(cgroup_directory.join("memory.max"), "200000000\n")
         .await
         .unwrap();
     assert!(unit_controller.validated_main_pid(&snapshot).await.is_err());
 
-    tokio::fs::write(cgroup_directory.join("memory.high"), "79934464\n")
+    tokio::fs::write(cgroup_directory.join("memory.high"), "159934464\n")
         .await
         .unwrap();
     assert!(unit_controller.validated_main_pid(&snapshot).await.is_err());
 
-    tokio::fs::write(cgroup_directory.join("memory.high"), "80000000\n")
+    tokio::fs::write(cgroup_directory.join("memory.high"), "160000000\n")
         .await
         .unwrap();
-    tokio::fs::write(cgroup_directory.join("memory.max"), "95934464\n")
+    tokio::fs::write(cgroup_directory.join("memory.max"), "191934464\n")
         .await
         .unwrap();
     assert!(unit_controller.validated_main_pid(&snapshot).await.is_err());
@@ -465,7 +465,7 @@ async fn effective_cgroup_accepts_only_safe_kernel_rounding() {
         .unwrap();
     assert!(unit_controller.validated_main_pid(&snapshot).await.is_err());
 
-    tokio::fs::write(cgroup_directory.join("memory.max"), "96000000\n")
+    tokio::fs::write(cgroup_directory.join("memory.max"), "192000000\n")
         .await
         .unwrap();
     tokio::fs::write(cgroup_directory.join("memory.swap.max"), "1\n")

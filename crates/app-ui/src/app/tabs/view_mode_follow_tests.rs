@@ -31,6 +31,7 @@ fn test_entry(path: PathBuf, kind: FileKind) -> DirectoryEntry {
 fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
     ExpandedDirectory {
         entries,
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -38,6 +39,10 @@ fn loaded_directory(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -82,7 +87,7 @@ fn navigation_cancels_icons_to_list_follow_before_old_load_completes() {
     let destination = PathBuf::from("/elsewhere");
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = root.clone();
-    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)].into();
     browser.view_mode = BrowserViewMode::Icons;
     browser.icon_grid_expansion = Some(IconGridExpansionState::new(
         IconGridExpansionContext {
@@ -103,7 +108,7 @@ fn navigation_cancels_icons_to_list_follow_before_old_load_completes() {
     let request = list_request(&browser, &project);
 
     drop(browser.navigate_to(destination.clone(), NavigationMode::RecordHistory));
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         request,
         Ok(DirectoryScan {
             path: project,
@@ -138,7 +143,8 @@ fn nested_icon_selection() -> NestedIconSelection {
     browser.entries = vec![
         test_entry(project.clone(), FileKind::Directory),
         test_entry(other.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.view_mode = BrowserViewMode::Icons;
     let mut expansion = IconGridExpansionState::new(
         IconGridExpansionContext {
@@ -189,7 +195,7 @@ fn completed_path_migration_cancels_icons_to_list_follow() {
 
     assert!(browser.list_expansion_follow.is_none());
     assert!(!browser.expanded_directories.contains_key(&project));
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         stale_request,
         Ok(DirectoryScan {
             path: project.clone(),
@@ -210,7 +216,7 @@ fn completed_path_migration_cancels_list_to_icons_follow() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = root;
     browser.view_mode = BrowserViewMode::List;
-    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         project.clone(),
         loaded_directory(vec![test_entry(source.clone(), FileKind::Directory)]),
@@ -281,7 +287,7 @@ fn stale_list_follow_session_cannot_write_into_restarted_same_path_and_generatio
     assert_eq!(stale_request.generation, current_request.generation);
     assert_ne!(stale_request.context, current_request.context);
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         stale_request,
         Ok(DirectoryScan {
             path: project.clone(),
@@ -315,7 +321,7 @@ fn browser_tree_request_cannot_write_into_list_follow_owned_node() {
         generation: current_request.generation,
     };
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         stale_browser_tree_request,
         Ok(DirectoryScan {
             path: project.clone(),
@@ -330,7 +336,7 @@ fn browser_tree_request_cannot_write_into_list_follow_owned_node() {
         .is_some_and(|expanded| matches!(expanded.status, ExpandedDirectoryStatus::Loading)));
     assert_eq!(list_request(&browser, &project), current_request);
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         current_request,
         Ok(DirectoryScan {
             path: project,
@@ -348,7 +354,7 @@ fn stale_nested_selection_does_not_start_list_to_icons_follow() {
     let stale_target = project.join("removed.txt");
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = root;
-    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)].into();
     browser.view_mode = BrowserViewMode::List;
     browser
         .expanded_directories
@@ -383,7 +389,7 @@ fn select_all_cancels_icons_to_list_follow() {
     drop(browser.select_all_in_file_selection_scope());
     assert!(cancellation.is_cancelled());
     assert!(!browser.expanded_directories.contains_key(&project));
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         request,
         Ok(DirectoryScan {
             path: project.clone(),
@@ -414,7 +420,7 @@ fn watcher_refresh_keeps_current_list_follow_session_and_rejects_prior_generatio
     assert_eq!(stale_request.context, refreshed_request.context);
     assert!(refreshed_request.generation > stale_request.generation);
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         stale_request,
         Ok(DirectoryScan {
             path: project.clone(),
@@ -427,7 +433,7 @@ fn watcher_refresh_keeps_current_list_follow_session_and_rejects_prior_generatio
         .get(&project)
         .is_some_and(|expanded| matches!(expanded.status, ExpandedDirectoryStatus::Loading)));
 
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         refreshed_request,
         Ok(DirectoryScan {
             path: project,
@@ -450,7 +456,8 @@ fn select_all_cancels_list_to_icons_follow() {
     browser.entries = vec![
         test_entry(project.clone(), FileKind::Directory),
         test_entry(other.clone(), FileKind::File),
-    ];
+    ]
+    .into();
     browser.view_mode = BrowserViewMode::List;
     browser.expanded_directories.insert(
         project.clone(),
@@ -481,7 +488,7 @@ fn select_all_cancels_list_to_icons_follow() {
     };
 
     drop(browser.select_all_in_file_selection_scope());
-    drop(browser.accept_expanded_directory(
+    drop(browser.accept_complete_expanded_directory_fixture(
         request,
         Ok(DirectoryScan {
             path: project,

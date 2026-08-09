@@ -1,6 +1,7 @@
 use iced::widget::{button, scrollable, svg};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
+mod document_preview;
 mod navigation_input;
 mod container {
     pub use iced::widget::container::*;
@@ -10,6 +11,7 @@ mod icon_grid;
 mod list_header;
 mod window_chrome;
 
+pub(crate) use document_preview::document_page_style;
 pub(crate) use icon_grid::icon_grid_expansion_panel_style;
 pub(crate) use navigation_input::{address_bar_style, navigation_text_input_style};
 pub(crate) use window_chrome::{

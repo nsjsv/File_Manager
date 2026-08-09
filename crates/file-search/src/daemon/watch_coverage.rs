@@ -15,9 +15,9 @@ use super::bounded_paths::{estimated_path_bytes, BoundedPathSet};
 use super::watch_budget_patrol::WatchBudgetPatrol;
 use super::watch_ingress::{deliver_watch_event, WatchOverflowState};
 
-const TARGET_REGISTERED_DIRECTORIES: usize = 32_768;
-const RESERVED_SYSTEM_WATCHES: usize = 500;
-const MAX_REGISTERED_PATH_BYTES: usize = 16_000_000;
+const TARGET_REGISTERED_DIRECTORIES: usize = 96_000;
+const RESERVED_SYSTEM_WATCHES: usize = 16_384;
+const MAX_REGISTERED_PATH_BYTES: usize = 32_000_000;
 const MAX_COVERAGE_GAPS: usize = 256;
 const MAX_COVERAGE_GAP_BYTES: usize = 262_144;
 const MAX_COVERAGE_MESSAGE_BYTES: usize = 512;
@@ -76,7 +76,17 @@ impl RecommendedWatchCoverage {
     }
 
     pub(super) fn initialize(&mut self) -> SearchResult<WatchCoverageRefresh> {
-        self.restore_snapshot_directories()
+        let refresh = self.restore_snapshot_directories()?;
+        tracing::info!(
+            target: "file_search::watch",
+            event = "watch_coverage_initialized",
+            registered_directories = self.inner.registered_directories.len(),
+            registered_path_bytes = self.inner.registered_directories.estimated_bytes(),
+            hybrid_roots = self.inner.watch_budget_overflow_roots.len(),
+            health = ?refresh.health,
+            "filesystem watch coverage initialized"
+        );
+        Ok(refresh)
     }
 
     pub(super) fn restore_snapshot_directories(&mut self) -> SearchResult<WatchCoverageRefresh> {
@@ -707,7 +717,10 @@ mod tests {
     }
 
     #[test]
-    fn target_limit_can_cover_the_observed_twenty_thousand_directories() {
-        assert!(watch_limit_for(524_288) >= 20_825);
+    fn watch_budget_covers_the_observed_seventy_eight_thousand_directories() {
+        assert_eq!(watch_limit_for(524_288), TARGET_REGISTERED_DIRECTORIES);
+        assert!(watch_limit_for(524_288) >= 78_710);
+        assert_eq!(watch_limit_for(100_000), 100_000 - RESERVED_SYSTEM_WATCHES);
+        assert_eq!(watch_limit_for(RESERVED_SYSTEM_WATCHES), 1);
     }
 }

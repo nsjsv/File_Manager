@@ -1,7 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use file_core::{DirectoryEntry, TrashEntry};
+use file_core::{
+    DirectoryDiscovery, DirectoryEntry, DirectoryMetadataRequirement, SortDirection, SortField,
+    TrashEntry,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::operation_history::{
@@ -11,6 +15,12 @@ use crate::operation_history::{
 use crate::thumbnail_cache::ColumnViewport;
 
 use super::{displayed_address_directory, TabDropDestination};
+
+pub(crate) type DirectoryEntrySnapshot = Arc<Vec<DirectoryEntry>>;
+
+pub(crate) fn empty_directory_entry_snapshot() -> DirectoryEntrySnapshot {
+    Arc::new(Vec::new())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct BrowserPaneId(pub(crate) u64);
@@ -48,6 +58,42 @@ pub(crate) struct DirectoryLoadRequest {
     pub(crate) generation: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum DirectoryMetadataLoadContext {
+    Root {
+        pane_id: BrowserPaneId,
+        path: PathBuf,
+        collection_generation: u64,
+    },
+    Expanded {
+        pane_id: BrowserPaneId,
+        path: PathBuf,
+        load_generation: u64,
+    },
+}
+
+impl DirectoryMetadataLoadContext {
+    pub(crate) fn pane_id(&self) -> BrowserPaneId {
+        match self {
+            Self::Root { pane_id, .. } | Self::Expanded { pane_id, .. } => *pane_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DirectoryMetadataLoadRequest {
+    pub(crate) context: DirectoryMetadataLoadContext,
+    pub(crate) request_generation: u64,
+    pub(crate) requirement: DirectoryMetadataRequirement,
+    pub(crate) targets: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirectoryMetadataLoadFailure {
+    Cancelled,
+    ReadFailed(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DirectoryExpansionLoadContext {
     BrowserTree {
@@ -77,6 +123,37 @@ pub(crate) struct ExpandedDirectoryLoadRequest {
 pub(crate) enum DirectoryLoadFailure {
     DirectoryUnavailable { message: String },
     ReadFailed { message: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectoryCollectionPhase {
+    Discovering,
+    Ready,
+}
+
+impl DirectoryCollectionPhase {
+    pub(crate) fn is_discovering(self) -> bool {
+        matches!(self, Self::Discovering)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectoryOrderPhase {
+    Ready {
+        field: SortField,
+        direction: SortDirection,
+    },
+    WaitingForMetadata {
+        request_generation: u64,
+        field: SortField,
+        direction: SortDirection,
+    },
+}
+
+impl DirectoryOrderPhase {
+    pub(crate) fn is_ready(self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,7 +262,8 @@ pub(crate) struct BrowserPane {
     pub(crate) id: BrowserPaneId,
     pub(crate) current_dir: PathBuf,
     pub(crate) is_trash_view: bool,
-    pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) entries: DirectoryEntrySnapshot,
+    pub(crate) directory_discovery: Option<DirectoryDiscovery>,
     pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
     pub(crate) trash_entries: Vec<TrashEntry>,
     pub(crate) selected: Option<PathBuf>,
@@ -202,7 +280,8 @@ pub(crate) struct BrowserPane {
     pub(crate) directory_load_cancel: Option<CancellationToken>,
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
-    pub(crate) is_loading: bool,
+    pub(crate) directory_collection_phase: DirectoryCollectionPhase,
+    pub(crate) directory_order_phase: DirectoryOrderPhase,
 }
 
 impl BrowserPane {
@@ -218,6 +297,7 @@ impl BrowserPane {
         tab.directory = self.current_dir.clone();
         tab.is_trash_view = self.is_trash_view;
         tab.entries = self.entries.clone();
+        tab.directory_discovery = self.directory_discovery.clone();
         tab.trash_entries = self.trash_entries.clone();
         tab.selected = self.selected.clone();
         tab.selected_paths = self.selected_paths.clone();
@@ -227,6 +307,8 @@ impl BrowserPane {
         tab.view_mode = self.view_mode;
         tab.back_stack = self.back_stack.clone();
         tab.forward_stack = self.forward_stack.clone();
+        tab.directory_collection_phase = self.directory_collection_phase;
+        tab.directory_order_phase = self.directory_order_phase;
     }
 
     pub(crate) fn migrate_completed_paths(&mut self, migrations: &[CompletedPathMigration]) {
@@ -274,12 +356,18 @@ impl BrowserPane {
         }
         self.forward_stack
             .retain(|path| !path.starts_with(unavailable_directory));
-        self.is_loading = true;
+        self.directory_collection_phase = DirectoryCollectionPhase::Discovering;
+        self.directory_discovery = None;
         self.sync_active_tab_state();
     }
 
     pub(crate) fn discard_unavailable_directory_subtree(&mut self, unavailable_directory: &Path) {
-        self.entries
+        detach_directory_discovery(
+            Arc::make_mut(&mut self.entries).as_mut_slice(),
+            &mut self.directory_discovery,
+            &mut self.directory_order_phase,
+        );
+        Arc::make_mut(&mut self.entries)
             .retain(|entry| !entry.path.starts_with(unavailable_directory));
         self.directory_loading_placeholder_entries
             .retain(|placeholder| !placeholder.entry.path.starts_with(unavailable_directory));
@@ -304,9 +392,20 @@ impl BrowserPane {
                 });
         }
         for expanded_directory in self.expanded_directories.values_mut() {
-            expanded_directory
+            if expanded_directory
                 .entries
-                .retain(|entry| !entry.path.starts_with(unavailable_directory));
+                .iter()
+                .any(|entry| entry.path.starts_with(unavailable_directory))
+            {
+                detach_directory_discovery(
+                    &mut expanded_directory.entries,
+                    &mut expanded_directory.directory_discovery,
+                    &mut expanded_directory.directory_order_phase,
+                );
+                expanded_directory
+                    .entries
+                    .retain(|entry| !entry.path.starts_with(unavailable_directory));
+            }
         }
         self.expanded_directories
             .retain(|path, expanded_directory| {
@@ -327,12 +426,22 @@ impl BrowserPane {
         if let Some(cancellation) = self.directory_load_cancel.take() {
             cancellation.cancel();
         }
+        detach_directory_discovery(
+            Arc::make_mut(&mut self.entries).as_mut_slice(),
+            &mut self.directory_discovery,
+            &mut self.directory_order_phase,
+        );
         self.directory_load_generation = self.directory_load_generation.saturating_add(1);
-        self.is_loading = false;
+        self.directory_collection_phase = DirectoryCollectionPhase::Ready;
     }
 
     fn migrate_cached_directory_tree_paths(&mut self, migrations: &[CompletedPathMigration]) {
-        migrate_directory_entries(&mut self.entries, migrations);
+        detach_directory_discovery(
+            Arc::make_mut(&mut self.entries).as_mut_slice(),
+            &mut self.directory_discovery,
+            &mut self.directory_order_phase,
+        );
+        migrate_directory_entries(Arc::make_mut(&mut self.entries).as_mut_slice(), migrations);
         for placeholder in &mut self.directory_loading_placeholder_entries {
             migrate_directory_entry(&mut placeholder.entry, migrations);
         }
@@ -345,7 +454,8 @@ impl BrowserPane {
     }
 
     fn invalidate_cached_directory_tree(&mut self) {
-        self.entries.clear();
+        Arc::make_mut(&mut self.entries).clear();
+        self.directory_discovery = None;
         self.directory_loading_placeholder_entries.clear();
         self.selected = None;
         self.selected_paths.clear();
@@ -362,7 +472,8 @@ pub(crate) struct BrowserTab {
     pub(crate) id: usize,
     pub(crate) directory: PathBuf,
     pub(crate) is_trash_view: bool,
-    pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) entries: DirectoryEntrySnapshot,
+    pub(crate) directory_discovery: Option<DirectoryDiscovery>,
     pub(crate) trash_entries: Vec<TrashEntry>,
     pub(crate) selected: Option<PathBuf>,
     pub(crate) selected_paths: HashSet<PathBuf>,
@@ -372,6 +483,8 @@ pub(crate) struct BrowserTab {
     pub(crate) view_mode: BrowserViewMode,
     pub(crate) back_stack: Vec<PathBuf>,
     pub(crate) forward_stack: Vec<PathBuf>,
+    pub(crate) directory_collection_phase: DirectoryCollectionPhase,
+    pub(crate) directory_order_phase: DirectoryOrderPhase,
 }
 
 impl BrowserTab {
@@ -395,7 +508,8 @@ impl BrowserTab {
             id,
             directory,
             is_trash_view: false,
-            entries: Vec::new(),
+            entries: empty_directory_entry_snapshot(),
+            directory_discovery: None,
             trash_entries: Vec::new(),
             selected: None,
             selected_paths: HashSet::new(),
@@ -405,6 +519,11 @@ impl BrowserTab {
             view_mode: BrowserViewMode::Columns,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
+            directory_collection_phase: DirectoryCollectionPhase::Discovering,
+            directory_order_phase: DirectoryOrderPhase::Ready {
+                field: SortField::Name,
+                direction: SortDirection::Ascending,
+            },
         }
     }
 
@@ -413,7 +532,8 @@ impl BrowserTab {
             id,
             directory: super::trash_location_path(),
             is_trash_view: true,
-            entries: Vec::new(),
+            entries: empty_directory_entry_snapshot(),
+            directory_discovery: None,
             trash_entries: Vec::new(),
             selected: None,
             selected_paths: HashSet::new(),
@@ -423,6 +543,11 @@ impl BrowserTab {
             view_mode: BrowserViewMode::Columns,
             back_stack: Vec::new(),
             forward_stack: Vec::new(),
+            directory_collection_phase: DirectoryCollectionPhase::Discovering,
+            directory_order_phase: DirectoryOrderPhase::Ready {
+                field: SortField::Name,
+                direction: SortDirection::Ascending,
+            },
         }
     }
 
@@ -444,7 +569,12 @@ impl BrowserTab {
     }
 
     fn migrate_cached_directory_tree_paths(&mut self, migrations: &[CompletedPathMigration]) {
-        migrate_directory_entries(&mut self.entries, migrations);
+        detach_directory_discovery(
+            Arc::make_mut(&mut self.entries).as_mut_slice(),
+            &mut self.directory_discovery,
+            &mut self.directory_order_phase,
+        );
+        migrate_directory_entries(Arc::make_mut(&mut self.entries).as_mut_slice(), migrations);
         migrate_optional_path(&mut self.selected, migrations);
         migrate_path_set(&mut self.selected_paths, migrations);
         migrate_optional_path(&mut self.selection_anchor, migrations);
@@ -453,7 +583,8 @@ impl BrowserTab {
     }
 
     fn invalidate_cached_directory_tree(&mut self) {
-        self.entries.clear();
+        Arc::make_mut(&mut self.entries).clear();
+        self.directory_discovery = None;
         self.selected = None;
         self.selected_paths.clear();
         self.selection_anchor = None;
@@ -465,6 +596,7 @@ impl BrowserTab {
 #[derive(Debug, Clone)]
 pub(crate) struct ExpandedDirectory {
     pub(crate) entries: Vec<DirectoryEntry>,
+    pub(crate) directory_discovery: Option<DirectoryDiscovery>,
     pub(crate) status: ExpandedDirectoryStatus,
     pub(crate) is_expanded: bool,
     pub(crate) is_collapsing: bool,
@@ -472,6 +604,7 @@ pub(crate) struct ExpandedDirectory {
     pub(crate) load_generation: u64,
     pub(crate) load_context: Option<DirectoryExpansionLoadContext>,
     pub(crate) load_cancel: Option<CancellationToken>,
+    pub(crate) directory_order_phase: DirectoryOrderPhase,
 }
 
 #[derive(Debug, Clone)]
@@ -569,6 +702,32 @@ fn migrate_path_map_keys<Value>(
         .collect();
 }
 
+fn detach_directory_discovery(
+    entries: &mut [DirectoryEntry],
+    discovery: &mut Option<DirectoryDiscovery>,
+    order_phase: &mut DirectoryOrderPhase,
+) {
+    if let Some(discovery) = discovery.take() {
+        for entry in entries {
+            let Some(index) = entry.discovery_index.take() else {
+                continue;
+            };
+            let Some(discovered) = discovery.entries.get(index) else {
+                continue;
+            };
+            let materialized = discovered.display_entry();
+            entry.metadata = materialized.metadata;
+            entry.is_broken_symlink = materialized.is_broken_symlink;
+        }
+    }
+    if let DirectoryOrderPhase::WaitingForMetadata {
+        field, direction, ..
+    } = *order_phase
+    {
+        *order_phase = DirectoryOrderPhase::Ready { field, direction };
+    }
+}
+
 fn migrate_expanded_directories(
     directories: &mut HashMap<PathBuf, ExpandedDirectory>,
     migrations: &[CompletedPathMigration],
@@ -582,6 +741,11 @@ fn migrate_expanded_directories(
             if matches!(directory.status, ExpandedDirectoryStatus::Loading) {
                 return None;
             }
+            detach_directory_discovery(
+                &mut directory.entries,
+                &mut directory.directory_discovery,
+                &mut directory.directory_order_phase,
+            );
             migrate_directory_entries(&mut directory.entries, migrations);
             Some((
                 path_after_completed_migrations(&path, migrations),

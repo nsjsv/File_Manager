@@ -28,19 +28,23 @@ pub(super) fn encode_checkpoint(
     )
 }
 
-pub(super) fn encode_manifest_entries(
+pub(super) fn encode_manifest_entries_while(
     transfer_index: u64,
     manifest: &SourceManifest,
-) -> Vec<StoredManifestEntry> {
-    manifest
-        .entries
-        .iter()
-        .map(|entry| StoredManifestEntry {
+    mut continue_encoding: impl FnMut() -> bool,
+) -> Option<Vec<StoredManifestEntry>> {
+    let mut entries = Vec::with_capacity(manifest.entries.len());
+    for entry in &manifest.entries {
+        if !continue_encoding() {
+            return None;
+        }
+        entries.push(StoredManifestEntry {
             transfer_index,
             relative_path: StoredPath::from_path(&entry.relative_path),
             identity: encode_identity(&entry.identity),
-        })
-        .collect()
+        });
+    }
+    Some(entries)
 }
 
 pub(super) fn encode_merge_completion(
@@ -340,6 +344,28 @@ mod tests {
             changed_nanoseconds: 7,
             symbolic_link_target: None,
         }
+    }
+
+    #[test]
+    fn manifest_encoding_stops_before_finishing_the_collection() {
+        let manifest = SourceManifest {
+            root: PathBuf::from("/tmp/source"),
+            entries: (0..100)
+                .map(|index| file_core::SourceManifestEntry {
+                    relative_path: PathBuf::from(format!("file-{index}")),
+                    identity: identity(index),
+                })
+                .collect(),
+        };
+        let mut checks = 0;
+
+        let encoded = encode_manifest_entries_while(0, &manifest, || {
+            checks += 1;
+            checks < 8
+        });
+
+        assert!(encoded.is_none());
+        assert_eq!(checks, 8);
     }
 
     #[test]

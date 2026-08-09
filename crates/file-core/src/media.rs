@@ -1,8 +1,8 @@
 use std::path::Path;
 
 const SUPPORTED_AUDIO_EXTENSIONS: [&str; 7] = ["mp3", "wav", "flac", "ogg", "oga", "m4a", "aac"];
-const SUPPORTED_IMAGE_EXTENSIONS: [&str; 10] = [
-    "bmp", "gif", "ico", "jpg", "jpeg", "png", "svg", "tif", "tiff", "webp",
+const SUPPORTED_IMAGE_EXTENSIONS: [&str; 11] = [
+    "avif", "bmp", "gif", "ico", "jpg", "jpeg", "png", "svg", "tif", "tiff", "webp",
 ];
 const SUPPORTED_VIDEO_EXTENSIONS: [&str; 6] = ["mp4", "m4v", "mkv", "mov", "webm", "avi"];
 
@@ -82,7 +82,7 @@ mod tests {
             Some(SupportedMediaKind::Audio)
         );
         assert_eq!(
-            supported_media_kind_for_path("photo.WEBP"),
+            supported_media_kind_for_path("photo.AVIF"),
             Some(SupportedMediaKind::Image)
         );
         assert_eq!(
@@ -96,6 +96,7 @@ mod tests {
     fn exposes_specific_media_predicates() {
         assert!(is_supported_audio_path("voice.m4a"));
         for path in [
+            "image.avif",
             "icon.bmp",
             "animation.gif",
             "favicon.ico",
@@ -111,5 +112,7 @@ mod tests {
         }
         assert!(is_supported_video_path("movie.webm"));
         assert!(!is_supported_audio_path("archive.zip"));
+        assert!(!is_supported_image_path("photo.heic"));
+        assert!(!is_supported_image_path("photo.heif"));
     }
 }

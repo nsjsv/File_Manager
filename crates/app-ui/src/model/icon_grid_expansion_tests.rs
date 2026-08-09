@@ -20,6 +20,7 @@ fn entry(path: &str, kind: FileKind) -> DirectoryEntry {
 fn loaded(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
     ExpandedDirectory {
         entries,
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -27,6 +28,10 @@ fn loaded(entries: Vec<DirectoryEntry>) -> ExpandedDirectory {
         load_generation: 1,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 

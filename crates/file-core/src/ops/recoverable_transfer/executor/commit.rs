@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use tokio::fs;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     commit_artifact, commit_payload_path, inspect_optional_identity, manifest_root_identity,
@@ -8,15 +9,16 @@ use super::{
     record_replacement_manifest, sync_rename_parents, target_parent,
 };
 use crate::ops::recoverable_transfer::{
-    fingerprint_object, inspect_file_identity, plan_owned_artifact, recover_owned_artifact,
-    remove_empty_owned_artifact, rename_noreplace, validate_owned_artifact, verify_source_manifest,
-    CommitPayload, CommitTransfer, CommittedTransfer, CompletedTarget, FileIdentity,
-    FileObjectKind, NoReplaceRenameError, OwnedArtifact, OwnedArtifactKind,
-    OwnedTreeEntryDeletionIntent, PreparedTransfer, RecoverableTransferError,
-    RecoverableTransferOperation, RetiredSource, SourceDisposition, SourceManifestEntry,
-    SourceRetirementPlan, StagedSourceLocation, TransferCheckpoint, TransferExecutionKind,
-    TransferJournal, TransferJournalRecord,
+    fingerprint_object, fingerprint_object_with_controls, inspect_file_identity,
+    plan_owned_artifact, recover_owned_artifact, remove_empty_owned_artifact, rename_noreplace,
+    validate_owned_artifact, verify_source_manifest_with_controls, CommitPayload, CommitTransfer,
+    CommittedTransfer, CompletedTarget, FileIdentity, FileObjectKind, NoReplaceRenameError,
+    OwnedArtifact, OwnedArtifactKind, OwnedTreeEntryDeletionIntent, PreparedTransfer,
+    RecoverableTransferError, RecoverableTransferOperation, RetiredSource, SourceDisposition,
+    SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation, TransferCheckpoint,
+    TransferExecutionKind, TransferJournal, TransferJournalRecord,
 };
+use crate::ops::FileOperationControls;
 use crate::transfer_conflict::available_transfer_target_path_candidate;
 
 pub(super) async fn commit_transfer<J: TransferJournal>(
@@ -772,11 +774,22 @@ pub(super) async fn verify_prepared_source(
     record: &TransferJournalRecord,
     prepared: &PreparedTransfer,
 ) -> Result<(), RecoverableTransferError> {
+    let controls = FileOperationControls::running(CancellationToken::new());
+    verify_prepared_source_with_controls(record, prepared, &controls).await
+}
+
+pub(super) async fn verify_prepared_source_with_controls(
+    record: &TransferJournalRecord,
+    prepared: &PreparedTransfer,
+    controls: &FileOperationControls,
+) -> Result<(), RecoverableTransferError> {
     let manifest = record_manifest(record)?;
-    verify_source_manifest(manifest).await?;
+    let mut manifest_controls = controls.clone();
+    verify_source_manifest_with_controls(manifest, &mut manifest_controls).await?;
     let source_identity = inspect_file_identity(&record.request.source).await?;
     if source_identity != prepared.source_identity
-        || fingerprint_object(&record.request.source).await? != prepared.source_fingerprint
+        || fingerprint_object_with_controls(&record.request.source, controls).await?
+            != prepared.source_fingerprint
     {
         return Err(RecoverableTransferError::SourceChanged {
             path: record.request.source.clone(),

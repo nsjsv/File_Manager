@@ -16,6 +16,7 @@ file-operation-store = { path = "../file-operation-store" }
 gif = "0.14.2"
 iced.workspace = true
 image.workspace = true
+libc = "0.2"
 lexopt.workspace = true
 pulldown-cmark = "0.13.4"
 regex = "1.12.3"
@@ -25,14 +26,15 @@ rustix.workspace = true
 serde_json.workspace = true
 thumbnails = { path = "../thumbnails" }
 time.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml = "1.1.2"
 tracing.workspace = true
+url.workspace = true
 tracing-journald.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 chrono-tz = "0.10.4"
 iced_runtime = "0.14"
-tempfile.workspace = true

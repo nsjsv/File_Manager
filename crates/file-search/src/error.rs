@@ -24,6 +24,13 @@ pub enum SearchError {
     Database(#[from] rusqlite::Error),
     #[error("search database schema {found} is newer than supported schema {supported}")]
     UnsupportedDatabaseSchema { found: i64, supported: i64 },
+    #[error("invalid search database schema: {message}")]
+    InvalidDatabaseSchema { message: String },
+    #[error("search database storage migration failed for {database_path:?}: {message}")]
+    DatabaseStorageMigrationFailed {
+        database_path: PathBuf,
+        message: String,
+    },
     #[error("managed search index member is not a regular file: {path:?}")]
     InvalidManagedIndexMember { path: PathBuf },
     #[error(

@@ -68,6 +68,7 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
     let interrupted_journal = InterruptSourceRetiredJournal {
         inner: TaskQueueTransferJournal {
             store: store.clone(),
+            controls: running.controls.clone(),
         },
         interrupted: Default::default(),
     };

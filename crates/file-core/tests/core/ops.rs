@@ -692,3 +692,16 @@ async fn copy_operation_waits_while_paused_and_resumes() {
 
     assert_eq!(fs::read(copied).unwrap(), b"pause me");
 }
+
+#[tokio::test]
+async fn application_stopping_takes_precedence_over_user_cancellation() {
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let (_run_state_sender, run_state_receiver) =
+        tokio::sync::watch::channel(FileOperationRunState::ApplicationStopping);
+    let mut controls = FileOperationControls::new(cancel, run_state_receiver);
+
+    let error = controls.wait_until_running().await.unwrap_err();
+
+    assert!(matches!(error, FileError::ApplicationStopping));
+}

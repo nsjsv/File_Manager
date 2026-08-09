@@ -24,12 +24,20 @@ pub use artifacts::{
     ArtifactOwner, ArtifactToken, OwnedArtifact, OwnedArtifactKind, OwnedArtifactPlan,
 };
 pub(crate) use durability::{sync_parent_blocking, sync_tree_blocking};
-pub use executor::{persist_recoverable_source_manifest, run_recoverable_transfer};
-pub(crate) use fingerprint::fingerprint_object;
+pub use executor::{
+    persist_recoverable_source_manifest, persist_recoverable_source_manifest_with_controls,
+    run_recoverable_transfer,
+};
 pub use fingerprint::ObjectFingerprint;
+pub(crate) use fingerprint::{fingerprint_object, fingerprint_object_with_controls};
 pub(crate) use identity::inspect_file_identity;
 pub use identity::{FileIdentity, FileObjectKind};
-pub(crate) use manifest::{build_source_manifest, verify_source_manifest};
+#[cfg(test)]
+pub(crate) use manifest::build_source_manifest;
+pub(crate) use manifest::{
+    build_source_manifest_with_controls, verify_source_manifest,
+    verify_source_manifest_with_controls,
+};
 pub use manifest::{SourceManifest, SourceManifestEntry};
 pub use protocol::{
     CommitPayload, CommitTransfer, CommittedTransfer, CompletedTarget, MergeChildCompletion,

@@ -10,8 +10,18 @@ pub enum FileKind {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DirectoryMetadataAvailability {
+    Pending,
+    #[default]
+    Complete,
+    Unavailable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EntryMetadata {
+    pub filesystem_availability: DirectoryMetadataAvailability,
+    pub identity_names_availability: DirectoryMetadataAvailability,
     pub len: u64,
     pub modified: Option<SystemTime>,
     pub accessed: Option<SystemTime>,
@@ -20,6 +30,16 @@ pub struct EntryMetadata {
     pub owner_name: Option<String>,
     pub group_name: Option<String>,
     pub permissions_mode: Option<u32>,
+}
+
+impl EntryMetadata {
+    pub(crate) fn pending() -> Self {
+        Self {
+            filesystem_availability: DirectoryMetadataAvailability::Pending,
+            identity_names_availability: DirectoryMetadataAvailability::Pending,
+            ..Self::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -31,6 +51,14 @@ mod tests {
         let metadata = EntryMetadata::default();
 
         assert_eq!(metadata.len, 0);
+        assert_eq!(
+            metadata.filesystem_availability,
+            DirectoryMetadataAvailability::Complete
+        );
+        assert_eq!(
+            metadata.identity_names_availability,
+            DirectoryMetadataAvailability::Complete
+        );
         assert_eq!(metadata.modified, None);
         assert_eq!(metadata.accessed, None);
         assert_eq!(metadata.created, None);
@@ -50,6 +78,7 @@ pub struct DirectoryEntry {
     pub is_hidden: bool,
     pub is_symlink: bool,
     pub is_broken_symlink: bool,
+    pub discovery_index: Option<usize>,
 }
 
 impl DirectoryEntry {
@@ -94,7 +123,13 @@ impl DirectoryEntry {
             is_hidden,
             is_symlink,
             is_broken_symlink,
+            discovery_index: None,
         }
+    }
+
+    pub fn with_discovery_index(mut self, index: usize) -> Self {
+        self.discovery_index = Some(index);
+        self
     }
 
     pub fn path(&self) -> &Path {

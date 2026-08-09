@@ -265,6 +265,54 @@ fn manifest_and_checkpoint_update_are_atomic() {
 }
 
 #[test]
+fn interrupted_manifest_transaction_rolls_back_checkpoint_and_entries() {
+    let directory = tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let task_id = store
+        .insert_recoverable_transfer_task(&recoverable_copy(vec![transfer(
+            Path::new("/tmp/source"),
+            Path::new("/tmp/target"),
+        )]))
+        .unwrap();
+    let key = StoredTransferWorkKey::top_level(0);
+    let manifest = (0..100)
+        .map(|index| StoredManifestEntry {
+            transfer_index: 0,
+            relative_path: StoredPath::from_path(Path::new(&format!("file-{index}"))),
+            identity: identity(index),
+        })
+        .collect::<Vec<_>>();
+    let checkpoint = stored_checkpoint(StoredTransferCheckpointKind::StageCreationIntent);
+    let mut checks = 0;
+
+    let revision = store
+        .install_transfer_manifests_and_checkpoint_while(
+            task_id,
+            TransferManifestCheckpointUpdate {
+                key: &key,
+                expected_revision: 0,
+                manifest_entries: &manifest,
+                replacement_manifest_entries: &[],
+                checkpoint: &checkpoint,
+            },
+            || {
+                checks += 1;
+                checks < 8
+            },
+        )
+        .unwrap();
+
+    assert_eq!(revision, None);
+    let snapshot = store.read_transfer_recovery(task_id).unwrap();
+    assert!(snapshot.manifest_entries.is_empty());
+    assert_eq!(snapshot.journal_entries[0].revision, 0);
+    assert_eq!(
+        snapshot.journal_entries[0].checkpoint,
+        StoredTransferCheckpoint::awaiting_manifest()
+    );
+}
+
+#[test]
 fn replacement_manifest_and_checkpoint_commit_atomically() {
     let directory = tempdir().unwrap();
     let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();

@@ -184,6 +184,14 @@ impl X11FileDndRuntime {
                 .poll_for_event()
                 .map_err(|error| X11DndError::request("poll-event", error))?
             {
+                if matches!(
+                    event,
+                    Event::DestroyNotify(ref destroyed)
+                        if destroyed.window == self.lifecycle.main_window
+                ) {
+                    let _ = self.event_sender.send(X11DndEvent::MainWindowDestroyed);
+                    return Ok(());
+                }
                 self.handle_event(event)?;
             }
             self.expire_selection();
@@ -215,12 +223,10 @@ impl X11FileDndRuntime {
                 self.handle_selection_chunk(event.atom)
             }
             Event::DestroyNotify(event) => {
-                if event.window == self.lifecycle.main_window
-                    || event.window == self.lifecycle.proxy_window()
-                {
+                if event.window == self.lifecycle.proxy_window() {
                     return Err(X11DndError::Setup {
                         stage: "window-destroyed",
-                        details: "main or proxy X11 window was destroyed".to_owned(),
+                        details: "X11 drag-and-drop proxy window was destroyed".to_owned(),
                     });
                 }
                 if self

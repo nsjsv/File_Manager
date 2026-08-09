@@ -15,8 +15,8 @@ fn current_column_distinguishes_pending_empty_and_streamed_entries() {
     let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
     let pane_id = browser.active_pane_id();
     browser.current_dir = PathBuf::from("/workspace");
-    browser.entries.clear();
-    browser.is_loading = true;
+    browser.entries = Vec::new().into();
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
 
     assert!(matches!(
         column_content(
@@ -26,7 +26,7 @@ fn current_column_distinguishes_pending_empty_and_streamed_entries() {
         ColumnContent::Pending
     ));
 
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     assert!(matches!(
         column_content(
             browser.pane_view(pane_id).expect("active pane"),
@@ -35,11 +35,12 @@ fn current_column_distinguishes_pending_empty_and_streamed_entries() {
         ColumnContent::Empty
     ));
 
-    browser.is_loading = true;
-    browser.entries.push(test_entry(
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Discovering;
+    browser.entries = vec![test_entry(
         browser.current_dir.join("streamed.txt"),
         FileKind::File,
-    ));
+    )]
+    .into();
     let ColumnContent::Entries(entries) = column_content(
         browser.pane_view(pane_id).expect("active pane"),
         &browser.current_dir,
@@ -54,13 +55,14 @@ fn child_column_preserves_pending_loaded_and_failed_mappings() {
     let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
     let pane_id = browser.active_pane_id();
     browser.current_dir = PathBuf::from("/workspace");
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     let directory = browser.current_dir.join("project");
-    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)];
+    browser.entries = vec![test_entry(directory.clone(), FileKind::Directory)].into();
     browser.expanded_directories.insert(
         directory.clone(),
         ExpandedDirectory {
             entries: Vec::new(),
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loading,
             is_expanded: true,
             is_collapsing: false,
@@ -68,6 +70,10 @@ fn child_column_preserves_pending_loaded_and_failed_mappings() {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
 

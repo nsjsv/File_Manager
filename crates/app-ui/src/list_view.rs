@@ -1,4 +1,6 @@
-use file_core::{DirectoryEntry, FileKind, SortDirection};
+use file_core::{
+    DirectoryEntry, DirectoryMetadataAvailability, EntryMetadata, FileKind, SortDirection,
+};
 use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, Row, Space, Stack};
 use iced::{Alignment, Element, Length};
 
@@ -532,18 +534,22 @@ fn list_entry_cell<'a>(
     icon_tone: FileEntryIconTone,
     column: &ListColumnConfig,
 ) -> Element<'a, Message> {
+    let metadata = pane.metadata_for_entry(entry);
     match column.kind {
         ListColumnKind::Name => {
             list_name_cell(browser, pane, entry, depth, icon_tone, column.width)
         }
-        ListColumnKind::Modified => text_cell(modified_text(entry), column.width),
-        ListColumnKind::Size => text_cell(browser.list_directory_size_text(entry), column.width),
+        ListColumnKind::Modified => text_cell(modified_text(&metadata), column.width),
+        ListColumnKind::Size => text_cell(
+            browser.list_directory_size_text(entry, &metadata),
+            column.width,
+        ),
         ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
-        ListColumnKind::Owner => text_cell(owner_text(entry), column.width),
-        ListColumnKind::Group => text_cell(group_text(entry), column.width),
-        ListColumnKind::Permissions => text_cell(permissions_text(entry), column.width),
-        ListColumnKind::Accessed => text_cell(accessed_text(entry), column.width),
-        ListColumnKind::Created => text_cell(created_text(entry), column.width),
+        ListColumnKind::Owner => text_cell(owner_text(&metadata), column.width),
+        ListColumnKind::Group => text_cell(group_text(&metadata), column.width),
+        ListColumnKind::Permissions => text_cell(permissions_text(&metadata), column.width),
+        ListColumnKind::Accessed => text_cell(accessed_text(&metadata), column.width),
+        ListColumnKind::Created => text_cell(created_text(&metadata), column.width),
     }
 }
 
@@ -555,14 +561,17 @@ fn list_placeholder_entry_cell<'a>(
 ) -> Element<'a, Message> {
     match column.kind {
         ListColumnKind::Name => list_placeholder_name_cell(browser, entry, depth, column.width),
-        ListColumnKind::Modified => text_cell(modified_text(entry), column.width),
-        ListColumnKind::Size => text_cell(browser.list_directory_size_text(entry), column.width),
+        ListColumnKind::Modified => text_cell(modified_text(&entry.metadata), column.width),
+        ListColumnKind::Size => text_cell(
+            browser.list_directory_size_text(entry, &entry.metadata),
+            column.width,
+        ),
         ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
-        ListColumnKind::Owner => text_cell(owner_text(entry), column.width),
-        ListColumnKind::Group => text_cell(group_text(entry), column.width),
-        ListColumnKind::Permissions => text_cell(permissions_text(entry), column.width),
-        ListColumnKind::Accessed => text_cell(accessed_text(entry), column.width),
-        ListColumnKind::Created => text_cell(created_text(entry), column.width),
+        ListColumnKind::Owner => text_cell(owner_text(&entry.metadata), column.width),
+        ListColumnKind::Group => text_cell(group_text(&entry.metadata), column.width),
+        ListColumnKind::Permissions => text_cell(permissions_text(&entry.metadata), column.width),
+        ListColumnKind::Accessed => text_cell(accessed_text(&entry.metadata), column.width),
+        ListColumnKind::Created => text_cell(created_text(&entry.metadata), column.width),
     }
 }
 
@@ -675,8 +684,11 @@ fn text_cell(text: String, width: f32) -> Element<'static, Message> {
         .into()
 }
 
-fn modified_text(entry: &DirectoryEntry) -> String {
-    timestamp_text(entry.metadata.modified)
+fn modified_text(metadata: &EntryMetadata) -> String {
+    if metadata.filesystem_availability != DirectoryMetadataAvailability::Complete {
+        return "-".to_owned();
+    }
+    timestamp_text(metadata.modified)
 }
 
 fn kind_text(entry: &DirectoryEntry) -> String {
@@ -690,25 +702,31 @@ fn kind_text(entry: &DirectoryEntry) -> String {
     crate::localization::translate_current(kind)
 }
 
-fn owner_text(entry: &DirectoryEntry) -> String {
-    entry
-        .metadata
+fn owner_text(metadata: &EntryMetadata) -> String {
+    if metadata.identity_names_availability != DirectoryMetadataAvailability::Complete {
+        return "-".to_owned();
+    }
+    metadata
         .owner_name
         .clone()
         .unwrap_or_else(|| "-".to_owned())
 }
 
-fn group_text(entry: &DirectoryEntry) -> String {
-    entry
-        .metadata
+fn group_text(metadata: &EntryMetadata) -> String {
+    if metadata.identity_names_availability != DirectoryMetadataAvailability::Complete {
+        return "-".to_owned();
+    }
+    metadata
         .group_name
         .clone()
         .unwrap_or_else(|| "-".to_owned())
 }
 
-fn permissions_text(entry: &DirectoryEntry) -> String {
-    entry
-        .metadata
+fn permissions_text(metadata: &EntryMetadata) -> String {
+    if metadata.filesystem_availability != DirectoryMetadataAvailability::Complete {
+        return "-".to_owned();
+    }
+    metadata
         .permissions_mode
         .map(FilePropertiesPermissions::from_mode)
         .map(|permissions| {
@@ -721,12 +739,18 @@ fn permissions_text(entry: &DirectoryEntry) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
-fn accessed_text(entry: &DirectoryEntry) -> String {
-    timestamp_text(entry.metadata.accessed)
+fn accessed_text(metadata: &EntryMetadata) -> String {
+    if metadata.filesystem_availability != DirectoryMetadataAvailability::Complete {
+        return "-".to_owned();
+    }
+    timestamp_text(metadata.accessed)
 }
 
-fn created_text(entry: &DirectoryEntry) -> String {
-    timestamp_text(entry.metadata.created)
+fn created_text(metadata: &EntryMetadata) -> String {
+    if metadata.filesystem_availability != DirectoryMetadataAvailability::Complete {
+        return "-".to_owned();
+    }
+    timestamp_text(metadata.created)
 }
 
 fn timestamp_text(value: Option<std::time::SystemTime>) -> String {
@@ -780,11 +804,11 @@ mod tests {
     fn new_metadata_columns_render_placeholder_when_metadata_is_missing() {
         let entry = test_entry(EntryMetadata::default());
 
-        assert_eq!(owner_text(&entry), "-");
-        assert_eq!(group_text(&entry), "-");
-        assert_eq!(permissions_text(&entry), "-");
-        assert_eq!(accessed_text(&entry), "-");
-        assert_eq!(created_text(&entry), "-");
+        assert_eq!(owner_text(&entry.metadata), "-");
+        assert_eq!(group_text(&entry.metadata), "-");
+        assert_eq!(permissions_text(&entry.metadata), "-");
+        assert_eq!(accessed_text(&entry.metadata), "-");
+        assert_eq!(created_text(&entry.metadata), "-");
     }
 
     #[test]
@@ -794,6 +818,6 @@ mod tests {
             ..EntryMetadata::default()
         });
 
-        assert_eq!(permissions_text(&entry), "rwxr-xr-x (0755)");
+        assert_eq!(permissions_text(&entry.metadata), "rwxr-xr-x (0755)");
     }
 }

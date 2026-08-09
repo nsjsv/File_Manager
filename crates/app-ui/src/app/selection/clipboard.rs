@@ -426,7 +426,11 @@ mod tests {
     fn browser_with_entries(paths: &[PathBuf]) -> FileBrowser {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         browser.current_dir = PathBuf::from("/workspace");
-        browser.entries = paths.iter().map(|path| test_entry(path)).collect();
+        browser.entries = paths
+            .iter()
+            .map(|path| test_entry(path))
+            .collect::<Vec<_>>()
+            .into();
         browser.selected_paths = paths.iter().cloned().collect::<HashSet<_>>();
         browser.selected = paths.first().cloned();
         browser

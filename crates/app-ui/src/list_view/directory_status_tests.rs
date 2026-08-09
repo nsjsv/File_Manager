@@ -23,13 +23,14 @@ fn browser_with_expanded_directory(
 ) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
     browser.current_dir = PathBuf::from("/workspace");
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     let expanded_path = browser.current_dir.join("project");
-    browser.entries = vec![test_directory_entry(expanded_path.clone())];
+    browser.entries = vec![test_directory_entry(expanded_path.clone())].into();
     browser.expanded_directories.insert(
         expanded_path,
         ExpandedDirectory {
             entries: child_entries,
+            directory_discovery: None,
             status,
             is_expanded: true,
             is_collapsing: false,
@@ -37,6 +38,10 @@ fn browser_with_expanded_directory(
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
     browser

@@ -12,6 +12,7 @@ use crate::commands::{
     load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
     start_audio_preview_command,
 };
+use crate::document_preview::document_preview_format_for_path;
 use crate::formatting::format_file_size;
 use crate::model::{
     AudioPreviewPlayback, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
@@ -318,6 +319,7 @@ impl FileBrowser {
 
         let mut expanded = ExpandedDirectory {
             entries: Vec::new(),
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loading,
             is_expanded: true,
             is_collapsing: false,
@@ -325,6 +327,10 @@ impl FileBrowser {
             load_generation: 0,
             load_context: None,
             load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         };
         let (request, cancellation) = Self::next_expanded_directory_load_request(
             DirectoryExpansionLoadContext::BrowserTree {
@@ -371,6 +377,13 @@ impl FileBrowser {
         path: PathBuf,
         kind: FileKind,
     ) -> Task<Message> {
+        let document_format = (kind == FileKind::File)
+            .then(|| document_preview_format_for_path(&path))
+            .flatten();
+        if let Some(document_format) = document_format {
+            return self.start_document_preview(path, document_format);
+        }
+
         let is_audio_preview = kind == FileKind::File && is_supported_audio_path(&path);
         let is_video_preview = kind == FileKind::File && is_supported_video_path(&path);
         let is_animated_image_preview =
@@ -514,7 +527,7 @@ mod tests {
         browser.view_mode = BrowserViewMode::Icons;
         browser.main_window_width = 500.0;
         browser.sidebar_width = 0.0;
-        browser.entries = (0..8).map(entry).collect();
+        browser.entries = (0..8).map(entry).collect::<Vec<_>>().into();
         browser.select_path(browser.entries[1].path.clone());
 
         drop(browser.move_file_selection(FileSelectionDirection::Down));
@@ -531,7 +544,7 @@ mod tests {
         browser.view_mode = BrowserViewMode::Icons;
         browser.main_window_width = 500.0;
         browser.sidebar_width = 0.0;
-        browser.entries = (0..8).map(entry).collect();
+        browser.entries = (0..8).map(entry).collect::<Vec<_>>().into();
         browser.select_path(browser.entries[5].path.clone());
 
         drop(browser.move_file_selection(FileSelectionDirection::Down));

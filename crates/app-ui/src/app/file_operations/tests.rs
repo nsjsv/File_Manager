@@ -58,6 +58,7 @@ fn finish_queued_rename(browser: &mut FileBrowser, from: PathBuf, to: PathBuf) {
 fn loaded_expanded_directory() -> ExpandedDirectory {
     ExpandedDirectory {
         entries: Vec::new(),
+        directory_discovery: None,
         status: ExpandedDirectoryStatus::Loaded,
         is_expanded: true,
         is_collapsing: false,
@@ -65,6 +66,10 @@ fn loaded_expanded_directory() -> ExpandedDirectory {
         load_generation: 0,
         load_context: None,
         load_cancel: None,
+        directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+            field: file_core::SortField::Name,
+            direction: file_core::SortDirection::Ascending,
+        },
     }
 }
 
@@ -339,12 +344,13 @@ fn cross_directory_move_invalidates_source_and_target_tab_caches() {
 
     let mut pane = browser.capture_active_pane_snapshot();
     pane.current_dir = source_directory.clone();
-    pane.entries = vec![directory_entry("/source/item")];
+    pane.entries = vec![directory_entry("/source/item")].into();
     pane.selected = Some(source_path.clone());
     pane.expanded_directories.insert(
         source_path.clone(),
         ExpandedDirectory {
             entries: Vec::new(),
+            directory_discovery: None,
             status: ExpandedDirectoryStatus::Loading,
             is_expanded: true,
             is_collapsing: false,
@@ -352,17 +358,22 @@ fn cross_directory_move_invalidates_source_and_target_tab_caches() {
             load_generation: 1,
             load_context: None,
             load_cancel: Some(source_load_cancellation.clone()),
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
         },
     );
     let source_tab_id = 20;
     let target_tab_id = 21;
     pane.tabs = vec![BrowserTab::directory(source_tab_id, source_directory), {
         let mut target_tab = BrowserTab::directory(target_tab_id, target_directory);
-        target_tab.entries = vec![directory_entry("/target/existing")];
+        target_tab.entries = vec![directory_entry("/target/existing")].into();
         target_tab.expanded_directories.insert(
             PathBuf::from("/target/existing"),
             ExpandedDirectory {
                 entries: Vec::new(),
+                directory_discovery: None,
                 status: ExpandedDirectoryStatus::Loading,
                 is_expanded: true,
                 is_collapsing: false,
@@ -370,6 +381,10 @@ fn cross_directory_move_invalidates_source_and_target_tab_caches() {
                 load_generation: 1,
                 load_context: None,
                 load_cancel: Some(target_load_cancellation.clone()),
+                directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                    field: file_core::SortField::Name,
+                    direction: file_core::SortDirection::Ascending,
+                },
             },
         );
         target_tab
@@ -645,7 +660,7 @@ fn finished_delete_operation_only_invalidates_affected_directory_chain() {
     let unrelated = root.join("archive");
 
     browser.current_dir = current_dir.clone();
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
 
     remember_summary(&mut browser, &root, 3, 4096);
     remember_summary(&mut browser, &current_dir, 2, 2048);
@@ -694,7 +709,7 @@ fn finished_directory_delete_operation_clears_cached_descendant_summaries() {
     let unrelated = root.join("archive");
 
     browser.current_dir = current_dir.clone();
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
 
     remember_summary(&mut browser, &root, 3, 4096);
     remember_summary(&mut browser, &current_dir, 2, 2048);

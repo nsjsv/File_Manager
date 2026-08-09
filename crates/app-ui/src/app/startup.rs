@@ -140,11 +140,14 @@ impl FileBrowser {
 
     fn thumbnail_refresh_matches_pane(&self, pane_id: BrowserPaneId, directory: &Path) -> bool {
         if pane_id == self.active_pane_id() {
-            return !self.is_loading && self.current_dir.as_path() == directory;
+            return !self.directory_collection_phase.is_discovering()
+                && self.current_dir.as_path() == directory;
         }
 
-        self.pane_by_id(pane_id)
-            .is_some_and(|pane| !pane.is_loading && pane.current_dir.as_path() == directory)
+        self.pane_by_id(pane_id).is_some_and(|pane| {
+            !pane.directory_collection_phase.is_discovering()
+                && pane.current_dir.as_path() == directory
+        })
     }
 
     fn apply_loaded_user_config(&mut self, mut user_config: UserConfig) {
@@ -356,7 +359,7 @@ mod tests {
         assert_eq!(browser.current_dir, home);
         assert!(!browser.is_trash_view);
         assert_eq!(browser.error, None);
-        assert!(browser.is_loading);
+        assert!(browser.directory_collection_phase.is_discovering());
         assert_eq!(browser.tabs.len(), 1);
         assert_eq!(browser.pane_layout.active(), BrowserPaneId::PRIMARY);
     }
@@ -383,7 +386,7 @@ mod tests {
 
         assert_eq!(browser.current_dir, workspace);
         assert_eq!(browser.error, None);
-        assert!(browser.is_loading);
+        assert!(browser.directory_collection_phase.is_discovering());
     }
 
     #[test]

@@ -23,7 +23,7 @@ fn browser_for_search_tests(root: PathBuf) -> FileBrowser {
     };
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     browser.current_dir = root.clone();
-    browser.is_loading = false;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
     let pane_id = browser.active_pane_id();
     browser.pane_by_id_mut(pane_id).unwrap().current_dir = root;
     browser

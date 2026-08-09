@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use file_core::{scan_directory_with_progress, DirectoryScanBatch, FileError, ScanOptions};
-use iced::futures::channel::mpsc::Sender as IcedSender;
+use file_core::{
+    discover_directory_with_progress, DirectoryDiscovery, DirectoryDiscoveryBatch, FileError,
+    ScanOptions,
+};
 use iced::futures::SinkExt;
 use iced::Task;
 use tokio_util::sync::CancellationToken;
@@ -21,15 +23,28 @@ pub(crate) fn load_directory_command(
     Task::stream(iced::stream::channel(
         DIRECTORY_LOAD_CHANNEL_SIZE,
         async move |mut output| {
-            let scan = load_directory_with_batches(
+            let collected = collect_directory_with_hints(
                 request.path.clone(),
                 options,
                 cancellation,
-                |batch| Message::DirectoryLoadBatch(request.clone(), batch),
-                &mut output,
+                |batch| {
+                    output
+                        .try_send(Message::DirectoryDiscoveryBatch(request.clone(), batch))
+                        .is_ok()
+                },
             )
             .await;
-            let _ = output.send(Message::Loaded(request, scan)).await;
+            let authoritative = collected.map(|collected| {
+                startup_trace::record_directory_collection_hint_counts(
+                    collected.produced_hint_count,
+                    collected.accepted_hint_count,
+                    collected.dropped_hint_count,
+                );
+                collected.discovery
+            });
+            let _ = output
+                .send(Message::DirectoryEntriesReady(request, authoritative))
+                .await;
         },
     ))
 }
@@ -42,36 +57,69 @@ pub(crate) fn load_expanded_directory_command(
     Task::stream(iced::stream::channel(
         DIRECTORY_LOAD_CHANNEL_SIZE,
         async move |mut output| {
-            let scan = load_directory_with_batches(
+            let collected = collect_directory_with_hints(
                 request.path.clone(),
                 options,
                 cancellation,
-                |batch| Message::ExpandedDirectoryLoadBatch(request.clone(), batch),
-                &mut output,
+                |batch| {
+                    output
+                        .try_send(Message::ExpandedDirectoryDiscoveryBatch(
+                            request.clone(),
+                            batch,
+                        ))
+                        .is_ok()
+                },
             )
             .await;
+            let authoritative = collected.map(|collected| {
+                startup_trace::record_directory_collection_hint_counts(
+                    collected.produced_hint_count,
+                    collected.accepted_hint_count,
+                    collected.dropped_hint_count,
+                );
+                collected.discovery
+            });
             let _ = output
-                .send(Message::ExpandedDirectoryLoaded(request, scan))
+                .send(Message::ExpandedDirectoryEntriesReady(
+                    request,
+                    authoritative,
+                ))
                 .await;
         },
     ))
 }
 
-async fn load_directory_with_batches(
+struct CollectedDirectory {
+    discovery: DirectoryDiscovery,
+    produced_hint_count: usize,
+    accepted_hint_count: usize,
+    dropped_hint_count: usize,
+}
+
+async fn collect_directory_with_hints(
     path: PathBuf,
     options: ScanOptions,
     cancellation: CancellationToken,
-    mut message_for_batch: impl FnMut(DirectoryScanBatch) -> Message,
-    output: &mut IcedSender<Message>,
-) -> Result<file_core::DirectoryScan, DirectoryLoadFailure> {
-    startup_trace::mark_once("initial_directory_scan_started");
-    let scan_outcome = scan_directory_with_progress(path, options, cancellation, |batch| {
-        let _ = output.try_send(message_for_batch(batch));
+    mut emit_hint: impl FnMut(DirectoryDiscoveryBatch) -> bool,
+) -> Result<CollectedDirectory, DirectoryLoadFailure> {
+    startup_trace::mark_once("initial_directory_collection_started");
+    let mut produced_hint_count = 0;
+    let mut accepted_hint_count = 0;
+    let discovery = discover_directory_with_progress(path, options, cancellation, |batch| {
+        produced_hint_count += 1;
+        if emit_hint(batch) {
+            accepted_hint_count += 1;
+        }
     })
     .await
-    .map_err(classify_directory_load_failure);
-    startup_trace::mark_once("initial_directory_scan_finished");
-    scan_outcome
+    .map_err(classify_directory_load_failure)?;
+    startup_trace::mark_once("initial_directory_collection_finished");
+    Ok(CollectedDirectory {
+        discovery,
+        produced_hint_count,
+        accepted_hint_count,
+        dropped_hint_count: produced_hint_count - accepted_hint_count,
+    })
 }
 
 fn classify_directory_load_failure(file_error: FileError) -> DirectoryLoadFailure {
@@ -95,6 +143,28 @@ fn classify_directory_load_failure(file_error: FileError) -> DirectoryLoadFailur
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dropped_hints_do_not_change_authoritative_collection() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..300 {
+            std::fs::write(directory.path().join(format!("file-{index:03}.dat")), []).unwrap();
+        }
+
+        let collected = collect_directory_with_hints(
+            directory.path().to_path_buf(),
+            ScanOptions::default(),
+            CancellationToken::new(),
+            |_| false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(collected.discovery.entries.len(), 300);
+        assert_eq!(collected.produced_hint_count, 3);
+        assert_eq!(collected.accepted_hint_count, 0);
+        assert_eq!(collected.dropped_hint_count, 3);
+    }
 
     #[test]
     fn missing_directory_is_classified_as_unavailable() {

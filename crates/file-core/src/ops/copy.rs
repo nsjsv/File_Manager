@@ -51,6 +51,7 @@ pub enum FileOperationVerification {
 pub enum FileOperationRunState {
     Running,
     Paused,
+    ApplicationStopping,
 }
 
 #[derive(Clone)]
@@ -76,21 +77,40 @@ impl FileOperationControls {
         self.cancel.clone()
     }
 
+    pub fn checkpoint_now(&self) -> Result<(), FileError> {
+        match *self.run_state.borrow() {
+            FileOperationRunState::ApplicationStopping => Err(FileError::ApplicationStopping),
+            FileOperationRunState::Running if self.cancel.is_cancelled() => {
+                Err(FileError::Cancelled)
+            }
+            FileOperationRunState::Running | FileOperationRunState::Paused => Ok(()),
+        }
+    }
+
     pub async fn wait_until_running(&mut self) -> Result<(), FileError> {
         loop {
-            if self.cancel.is_cancelled() {
-                return Err(FileError::Cancelled);
-            }
-            if *self.run_state.borrow() == FileOperationRunState::Running {
-                return Ok(());
+            match *self.run_state.borrow() {
+                FileOperationRunState::ApplicationStopping => {
+                    return Err(FileError::ApplicationStopping)
+                }
+                FileOperationRunState::Running if self.cancel.is_cancelled() => {
+                    return Err(FileError::Cancelled)
+                }
+                FileOperationRunState::Running => return Ok(()),
+                FileOperationRunState::Paused => {}
             }
 
             tokio::select! {
-                _ = self.cancel.cancelled() => return Err(FileError::Cancelled),
                 changed = self.run_state.changed() => {
                     if changed.is_err() {
                         return Ok(());
                     }
+                }
+                _ = self.cancel.cancelled() => {
+                    if *self.run_state.borrow() == FileOperationRunState::ApplicationStopping {
+                        return Err(FileError::ApplicationStopping);
+                    }
+                    return Err(FileError::Cancelled);
                 }
             }
         }

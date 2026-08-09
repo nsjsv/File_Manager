@@ -215,14 +215,17 @@ fn future_schema_and_busy_database_are_not_quarantined() {
         Ok(_) => panic!("busy database opened successfully"),
         Err(error) => error,
     };
-    assert!(matches!(
-        busy_error,
-        SearchError::Database(ref error)
-            if matches!(
-                error.sqlite_error_code(),
-                Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-            )
-    ));
+    assert!(
+        matches!(
+            busy_error,
+            SearchError::Database(ref error)
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+                )
+        ),
+        "unexpected busy migration error: {busy_error:?}"
+    );
     assert!(busy_path.exists());
     assert!(quarantine_directories(directory.path()).is_empty());
     locking_connection.execute_batch("ROLLBACK;").unwrap();

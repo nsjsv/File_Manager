@@ -4,7 +4,8 @@ use iced::Task;
 use super::FileBrowser;
 use crate::commands::{delayed_thumbnail_refresh_command, load_trash_command};
 use crate::model::{
-    trash_location_path, BrowserPane, BrowserTab, Message, TrashRefreshCompletionDecision,
+    trash_location_path, BrowserPane, BrowserTab, DirectoryCollectionPhase, Message,
+    TrashRefreshCompletionDecision,
 };
 
 impl FileBrowser {
@@ -79,12 +80,12 @@ impl FileBrowser {
 
     fn finish_trash_views_loading(&mut self) {
         if self.is_trash_view {
-            self.is_loading = false;
+            self.directory_collection_phase = DirectoryCollectionPhase::Ready;
             self.directory_loading_placeholder_entries.clear();
         }
         for pane in &mut self.panes {
             if pane.is_trash_view {
-                pane.is_loading = false;
+                pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
                 pane.directory_loading_placeholder_entries.clear();
                 pane.sync_active_tab_state();
             }
@@ -138,7 +139,8 @@ fn apply_trash_snapshot_to_pane(pane: &mut BrowserPane, entries: &[TrashEntry]) 
     pane.entries = entries
         .iter()
         .map(|trash_entry| trash_entry.entry.clone())
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     crate::model::retain_direct_entry_selection(
         &pane.entries,
         &mut pane.selected,
@@ -153,7 +155,7 @@ fn apply_trash_snapshot_to_pane(pane: &mut BrowserPane, entries: &[TrashEntry]) 
         }
     }
     pane.expanded_directories.clear();
-    pane.is_loading = false;
+    pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
     pane.sync_active_tab_state();
 }
 
@@ -163,7 +165,8 @@ fn apply_trash_snapshot_to_tab(tab: &mut BrowserTab, entries: &[TrashEntry]) {
     tab.entries = entries
         .iter()
         .map(|trash_entry| trash_entry.entry.clone())
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     crate::model::retain_direct_entry_selection(
         &tab.entries,
         &mut tab.selected,
@@ -177,4 +180,5 @@ fn apply_trash_snapshot_to_tab(tab: &mut BrowserTab, entries: &[TrashEntry]) {
         }
     }
     tab.expanded_directories.clear();
+    tab.directory_collection_phase = DirectoryCollectionPhase::Ready;
 }

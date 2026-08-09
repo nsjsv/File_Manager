@@ -9,7 +9,10 @@ use desktop_linux::{
     WaylandFileDropTargetEvent, WaylandFileDropTargetSessionId,
 };
 use file_core::FileOperationVerification;
-use file_core::{DirectoryEntry, DirectoryScan, DirectoryScanBatch, TrashRestoreEntry, TrashScan};
+use file_core::{
+    DirectoryDiscovery, DirectoryDiscoveryBatch, DirectoryEntry, DirectoryMetadataResolution,
+    TrashRestoreEntry, TrashScan,
+};
 use file_operation_store::TaskQueueStore;
 use file_search::{SearchHit, SearchServiceStatus, SearchTextScope};
 use iced::keyboard;
@@ -21,6 +24,7 @@ use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UiLanguage, UiLanguageSetting, UserConfig};
+use crate::document_preview::DocumentPreviewMessage;
 use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
@@ -47,11 +51,14 @@ pub(crate) use address_bar::{
 };
 mod browser_panes;
 pub(crate) use browser_panes::{
-    retain_direct_entry_selection, BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab,
-    BrowserViewMode, ColumnBrowserViewport, DirectoryExpansionLoadContext, DirectoryLoadFailure,
-    DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry, ExpandedDirectory,
-    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridExpansionSessionId,
-    IconGridViewport, ListExpansionFollowSessionId, SplitAxis, SplitRegion,
+    empty_directory_entry_snapshot, retain_direct_entry_selection, BrowserPane, BrowserPaneId,
+    BrowserPaneLayout, BrowserTab, BrowserViewMode, ColumnBrowserViewport,
+    DirectoryCollectionPhase, DirectoryEntrySnapshot, DirectoryExpansionLoadContext,
+    DirectoryLoadFailure, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
+    DirectoryMetadataLoadContext, DirectoryMetadataLoadFailure, DirectoryMetadataLoadRequest,
+    DirectoryOrderPhase, ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
+    IconGridExpansionSessionId, IconGridViewport, ListExpansionFollowSessionId, SplitAxis,
+    SplitRegion,
 };
 mod trash;
 pub(crate) use trash::{TrashRefreshCompletionDecision, TrashRefreshState};
@@ -173,6 +180,7 @@ pub(crate) enum ScrollbarRegion {
     SearchResults,
     PreviewDirectory,
     PreviewArchive,
+    PreviewDocument,
     MarkdownPreview,
 }
 
@@ -243,10 +251,14 @@ pub(crate) enum Message {
     ),
     NetworkConnection(NetworkConnectionMessage),
     OperationStoreLoaded(Result<LoadedOperationStore, String>),
-    DirectoryLoadBatch(DirectoryLoadRequest, DirectoryScanBatch),
-    Loaded(
+    DirectoryDiscoveryBatch(DirectoryLoadRequest, DirectoryDiscoveryBatch),
+    DirectoryEntriesReady(
         DirectoryLoadRequest,
-        Result<DirectoryScan, DirectoryLoadFailure>,
+        Result<DirectoryDiscovery, DirectoryLoadFailure>,
+    ),
+    DirectoryMetadataResolved(
+        DirectoryMetadataLoadRequest,
+        Result<DirectoryMetadataResolution, DirectoryMetadataLoadFailure>,
     ),
     TrashLoaded(u64, Result<TrashScan, String>),
     TrashRefreshTick,
@@ -259,6 +271,7 @@ pub(crate) enum Message {
     OpenWithApplicationFinished(Result<(), String>),
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
+    DocumentPreview(DocumentPreviewMessage),
     RemotePreviewCache(RemotePreviewCacheMessage),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
     FileProperties(FilePropertiesMessage),
@@ -441,10 +454,10 @@ pub(crate) enum Message {
     UserPreferencesSaved(Result<(), String>),
     AppConfigSaved(Result<(), String>),
     ColumnWidthOverrideSaved(Result<(), String>),
-    ExpandedDirectoryLoadBatch(ExpandedDirectoryLoadRequest, DirectoryScanBatch),
-    ExpandedDirectoryLoaded(
+    ExpandedDirectoryDiscoveryBatch(ExpandedDirectoryLoadRequest, DirectoryDiscoveryBatch),
+    ExpandedDirectoryEntriesReady(
         ExpandedDirectoryLoadRequest,
-        Result<DirectoryScan, DirectoryLoadFailure>,
+        Result<DirectoryDiscovery, DirectoryLoadFailure>,
     ),
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
@@ -480,6 +493,9 @@ pub(crate) enum Message {
     ),
     BrowserSessionSaved(Result<(), String>),
     BrowserSessionSaveDelayElapsed,
+    ApplicationWindowClosed(window::Id),
+    ApplicationWindowCloseCommandsFinished,
+    ApplicationShutdownPersisted(Result<(), String>),
     FileOperationVerificationSelected(FileOperationVerification),
     TerminalEmulatorSelected(TerminalEmulator),
     RenderingGpuPreferenceSelected(RenderingGpuPreference),

@@ -33,7 +33,7 @@ fn column_tab_hover_renders_target_columns_without_losing_source_snapshot() {
     browser.current_dir = root.clone();
     browser.view_mode = BrowserViewMode::Columns;
     browser.deepest_open_column_directory = Some(source_directory.clone());
-    browser.entries = vec![file_entry(source_path.clone())];
+    browser.entries = vec![file_entry(source_path.clone())].into();
     browser.selected_paths.insert(source_path.clone());
     browser.start_file_drag(
         source_path,

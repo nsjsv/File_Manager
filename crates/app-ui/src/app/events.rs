@@ -13,6 +13,7 @@ pub(super) fn global_event_message(
             iced::window::Event::CloseRequested => {
                 Some(Message::AuxiliaryWindowCloseRequested(window))
             }
+            iced::window::Event::Closed => Some(Message::ApplicationWindowClosed(window)),
             iced::window::Event::Resized(size) => Some(Message::AuxiliaryWindowResized(
                 window,
                 size.width,
@@ -130,6 +131,29 @@ mod tests {
             text: None,
             repeat: false,
         })
+    }
+
+    #[test]
+    fn requested_and_observed_window_close_have_distinct_messages() {
+        let window = iced::window::Id::unique();
+        assert!(matches!(
+            route_event_with_window(
+                Event::Window(iced::window::Event::CloseRequested),
+                event::Status::Ignored,
+                window,
+            ),
+            Some(Message::AuxiliaryWindowCloseRequested(routed_window))
+                if routed_window == window
+        ));
+        assert!(matches!(
+            route_event_with_window(
+                Event::Window(iced::window::Event::Closed),
+                event::Status::Ignored,
+                window,
+            ),
+            Some(Message::ApplicationWindowClosed(routed_window))
+                if routed_window == window
+        ));
     }
 
     #[test]
