@@ -636,6 +636,7 @@ impl FileBrowser {
         self.hovered_entry = None;
         self.hovered_sidebar = None;
         self.cursor_paste_directory = None;
+        self.focused_column_directory = None;
         self.last_activation_click = None;
         self.column_return_targets.clear();
         self.pending_keyboard_column_focus = None;

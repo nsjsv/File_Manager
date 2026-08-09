@@ -651,6 +651,44 @@ fn icon_grid_select_all_and_range_only_use_direct_entries() {
 }
 
 #[test]
+fn clicking_child_column_blank_keeps_select_all_focused_on_that_column() {
+    let project = PathBuf::from("/workspace/project");
+    let source = project.join("src");
+    let first_child = source.join("main.rs");
+    let second_child = source.join("lib.rs");
+    let mut browser = browser_with_entries(&[]);
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)].into();
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(source.clone(), FileKind::Directory)]),
+    );
+    browser.expanded_directories.insert(
+        source.clone(),
+        loaded_directory(vec![
+            test_entry(first_child.clone(), FileKind::File),
+            test_entry(second_child.clone(), FileKind::File),
+        ]),
+    );
+    browser.deepest_open_column_directory = Some(source.clone());
+    browser.selected = Some(source.clone());
+    browser.selected_paths = HashSet::from([source.clone()]);
+    browser.cursor_paste_directory = Some(source.clone());
+
+    drop(browser.start_column_blank_selection_marquee(source.clone()));
+    drop(browser.finish_drag_selection(None));
+    assert!(browser.cursor_paste_directory.is_none());
+
+    drop(browser.select_all_in_file_selection_scope());
+
+    assert_eq!(
+        browser.selected_paths,
+        HashSet::from([first_child.clone(), second_child])
+    );
+    assert_eq!(browser.selected, Some(first_child));
+    assert_eq!(browser.deepest_open_column_directory, Some(source));
+}
+
+#[test]
 fn column_select_all_uses_hovered_column_directory() {
     let project = PathBuf::from("/workspace/project");
     let sibling = PathBuf::from("/workspace/readme.txt");

@@ -199,6 +199,7 @@ impl FileBrowser {
         let cancel_address_editing = self.cancel_address_editing();
         self.sync_active_tab_state();
         self.active_tab_id = tab.id;
+        self.focused_column_directory = None;
         self.is_trash_view = tab.is_trash_view;
         self.entries = tab.entries;
         self.directory_discovery = tab.directory_discovery;

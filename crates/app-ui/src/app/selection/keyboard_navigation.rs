@@ -131,9 +131,12 @@ impl FileBrowser {
 
     fn move_file_selection_vertically(&mut self, step: SelectionStep) -> Task<Message> {
         let directory = self
-            .selected
-            .as_ref()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .focused_rendered_column_directory()
+            .or_else(|| {
+                self.selected
+                    .as_ref()
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+            })
             .unwrap_or_else(|| self.current_dir.clone());
         let paths = self.entry_paths_in_directory(&directory);
         let Some(target) = stepped_selection_target(&paths, self.selected.as_deref(), step) else {
@@ -246,6 +249,9 @@ impl FileBrowser {
     }
 
     pub(crate) fn select_path_from_keyboard(&mut self, path: PathBuf) {
+        if self.view_mode == BrowserViewMode::Columns {
+            self.focused_column_directory = Some(self.entry_parent_directory(&path));
+        }
         self.select_path(path.clone());
         self.selection_anchor = Some(path);
         self.drag_selection_anchor = None;

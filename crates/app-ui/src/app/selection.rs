@@ -49,6 +49,7 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_column_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
+        self.focused_column_directory = Some(self.entry_parent_directory(&path));
         let column_directories_snapshot = crate::three_column_view::column_directories(self);
         self.handle_file_entry_clicked(
             path,
@@ -271,6 +272,7 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Task<Message> {
+        self.focused_column_directory = Some(directory.clone());
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.context_menu = None;
@@ -362,6 +364,7 @@ impl FileBrowser {
         &mut self,
         directory: PathBuf,
     ) -> Task<Message> {
+        self.focused_column_directory = Some(directory.clone());
         if self.renaming.is_some() {
             return self.handle_column_blank_clicked(directory);
         }
@@ -576,6 +579,10 @@ impl FileBrowser {
     }
 
     fn column_select_all_directory(&self) -> PathBuf {
+        if let Some(directory) = self.focused_rendered_column_directory() {
+            return directory;
+        }
+
         if let Some(path) = &self.hovered_entry {
             return self.entry_parent_directory(path);
         }
@@ -589,6 +596,13 @@ impl FileBrowser {
             .and_then(Path::parent)
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.current_dir.clone())
+    }
+
+    fn focused_rendered_column_directory(&self) -> Option<PathBuf> {
+        let directory = self.focused_column_directory.as_ref()?;
+        crate::three_column_view::column_directories(self)
+            .into_iter()
+            .find(|rendered_directory| rendered_directory == directory)
     }
 
     fn hovered_column_directory(&self) -> Option<PathBuf> {
