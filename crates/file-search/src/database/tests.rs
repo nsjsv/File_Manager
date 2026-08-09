@@ -1394,6 +1394,58 @@ fn signatures_round_trip_and_detect_changes() {
 }
 
 #[test]
+fn recursive_root_pages_return_each_exact_path_once() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut root_file = indexed_file("/root-placeholder", "/", "root");
+    root_file.path = Path::new("/").to_path_buf();
+    root_file.parent_path = Path::new("/").to_path_buf();
+    database.upsert_file(&root_file).unwrap();
+    database
+        .upsert_file(&indexed_file("/child.txt", "child.txt", "child"))
+        .unwrap();
+    for (path, parent_path, inode) in [("/", "/", 10), ("/child", "/", 11)] {
+        database
+            .upsert_directory_snapshot(&DirectorySnapshot {
+                path: Path::new(path).to_path_buf(),
+                parent_path: Path::new(parent_path).to_path_buf(),
+                root_path: Path::new("/").to_path_buf(),
+                signature: DirectorySignature {
+                    device: 1,
+                    inode,
+                    mtime_ns: 20,
+                    ctime_ns: 30,
+                },
+                observation_state: EntryObservationState::Observable,
+            })
+            .unwrap();
+    }
+
+    let first_file_page = database.known_files_page(Path::new("/"), None, 1).unwrap();
+    let second_file_page = database
+        .known_files_page(Path::new("/"), Some(&first_file_page[0].path), 1)
+        .unwrap();
+    let final_file_page = database
+        .known_files_page(Path::new("/"), Some(&second_file_page[0].path), 1)
+        .unwrap();
+    assert_eq!(first_file_page[0].path, Path::new("/"));
+    assert_eq!(second_file_page[0].path, Path::new("/child.txt"));
+    assert!(final_file_page.is_empty());
+
+    let first_snapshot_page = database
+        .directory_snapshots_page(Path::new("/"), None, 1)
+        .unwrap();
+    let second_snapshot_page = database
+        .directory_snapshots_page(Path::new("/"), Some(&first_snapshot_page[0].path), 1)
+        .unwrap();
+    let final_snapshot_page = database
+        .directory_snapshots_page(Path::new("/"), Some(&second_snapshot_page[0].path), 1)
+        .unwrap();
+    assert_eq!(first_snapshot_page[0].path, Path::new("/"));
+    assert_eq!(second_snapshot_page[0].path, Path::new("/child"));
+    assert!(final_snapshot_page.is_empty());
+}
+
+#[test]
 fn directory_snapshots_page_stably_and_local_delete_cleans_all_rows() {
     let database = SearchDatabase::in_memory().unwrap();
     database

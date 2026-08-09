@@ -15,10 +15,10 @@ const MAXIMUM_SYSTEMCTL_STDOUT_BYTES: usize = 64 * 1024;
 const MAXIMUM_SYSTEMCTL_STDERR_BYTES: usize = 16 * 1024;
 const MAXIMUM_SYSTEMD_SOURCE_FIELD_CHARS: usize = 4096;
 const MAXIMUM_SYSTEMD_EXEC_START_FIELD_CHARS: usize = 16 * 1024;
-const REQUIRED_MEMORY_HIGH: u64 = 160_000_000;
-const REQUIRED_MEMORY_MAX: u64 = 192_000_000;
+const REQUIRED_MEMORY_HIGH: u64 = 512_000_000;
+const REQUIRED_MEMORY_MAX: u64 = 640_000_000;
 const REQUIRED_MEMORY_SWAP_MAX: u64 = 0;
-const REQUIRED_CPU_QUOTA_PERCENT: u64 = 5;
+const REQUIRED_SERVICE_SLICE: &str = "background.slice";
 const MAXIMUM_SUPPORTED_BASE_PAGE_BYTES: u64 = 65_536;
 const PACKAGED_RELEASE_FRAGMENT_PATH: &str = "/usr/lib/systemd/user/file-manager-search.service";
 const PACKAGED_RELEASE_EXEC_START_PATH: &str = "/usr/lib/file-manager/file-searchd";
@@ -46,6 +46,8 @@ impl SearchUnitAction {
                 "--property=MemoryHigh",
                 "--property=MemoryMax",
                 "--property=MemorySwapMax",
+                "--property=Slice",
+                "--property=CPUQuotaPerSecUSec",
                 "--property=Result",
                 "--property=ExecMainStatus",
                 "--property=NRestarts",
@@ -256,44 +258,7 @@ impl SearchUnitController {
             ));
         }
 
-        let cpu_max_path = cgroup_directory.join("cpu.max");
-        let cpu_max_text = read_effective_cgroup_setting(&cpu_max_path, snapshot).await?;
-        let cpu_max_fields = cpu_max_text.split_whitespace().collect::<Vec<_>>();
-        let [cpu_quota_text, cpu_period_text] = cpu_max_fields.as_slice() else {
-            return Err(format!(
-                "effective cgroup limit {} must contain quota and period; {}",
-                cpu_max_path.display(),
-                snapshot.description()
-            ));
-        };
-        let cpu_quota = cpu_quota_text.parse::<u64>().map_err(|error| {
-            format!(
-                "effective cgroup quota {} is invalid: {error}; {}",
-                cpu_max_path.display(),
-                snapshot.description()
-            )
-        })?;
-        let cpu_period = cpu_period_text.parse::<u64>().map_err(|error| {
-            format!(
-                "effective cgroup period {} is invalid: {error}; {}",
-                cpu_max_path.display(),
-                snapshot.description()
-            )
-        })?;
-        if cpu_period == 0
-            || u128::from(cpu_quota) * 100
-                > u128::from(cpu_period) * u128::from(REQUIRED_CPU_QUOTA_PERCENT)
-        {
-            return Err(format!(
-                "effective cgroup limit {}={} {} exceeds {}%; {}",
-                cpu_max_path.display(),
-                cpu_quota,
-                cpu_period,
-                REQUIRED_CPU_QUOTA_PERCENT,
-                snapshot.description()
-            ));
-        }
-
+        validate_optional_unbounded_cpu_max(&cgroup_directory.join("cpu.max"), snapshot).await?;
         Ok(())
     }
 
@@ -305,6 +270,48 @@ impl SearchUnitController {
         self.validate_effective_cgroup(snapshot).await?;
         Ok(main_pid)
     }
+}
+
+async fn validate_optional_unbounded_cpu_max(
+    cpu_max_path: &Path,
+    snapshot: &SearchUnitSnapshot,
+) -> Result<(), String> {
+    let cpu_max_text = match tokio::fs::read_to_string(cpu_max_path).await {
+        Ok(cpu_max_text) => cpu_max_text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "could not read effective cgroup limit {}: {error}; {}",
+                cpu_max_path.display(),
+                snapshot.description()
+            ));
+        }
+    };
+    let cpu_max_fields = cpu_max_text.split_whitespace().collect::<Vec<_>>();
+    let [quota_text, period_text] = cpu_max_fields.as_slice() else {
+        return Err(format!(
+            "effective cgroup limit {} must contain quota and period; {}",
+            cpu_max_path.display(),
+            snapshot.description()
+        ));
+    };
+    let period = period_text.parse::<u64>().map_err(|error| {
+        format!(
+            "effective cgroup period {} is invalid: {error}; {}",
+            cpu_max_path.display(),
+            snapshot.description()
+        )
+    })?;
+    if *quota_text != "max" || period == 0 {
+        return Err(format!(
+            "effective cgroup limit {}={} {} is not unbounded; {}",
+            cpu_max_path.display(),
+            quota_text,
+            period_text,
+            snapshot.description()
+        ));
+    }
+    Ok(())
 }
 
 async fn read_effective_cgroup_setting(
@@ -378,6 +385,8 @@ pub(super) struct SearchUnitSnapshot {
     pub(super) memory_high: u64,
     pub(super) memory_max: u64,
     pub(super) memory_swap_max: u64,
+    pub(super) service_slice: String,
+    pub(super) cpu_quota_per_sec_usec: String,
     pub(super) service_result: String,
     pub(super) exec_main_status: u32,
     pub(super) restart_count: u64,
@@ -399,6 +408,8 @@ impl SearchUnitSnapshot {
         let mut memory_high = None;
         let mut memory_max = None;
         let mut memory_swap_max = None;
+        let mut service_slice = None;
+        let mut cpu_quota_per_sec_usec = None;
         let mut service_result = None;
         let mut exec_main_status = None;
         let mut restart_count = None;
@@ -460,6 +471,22 @@ impl SearchUnitSnapshot {
                     parse_u64_property(property_name, property_value)?,
                     property_name,
                 )?,
+                "Slice" => {
+                    if property_value.is_empty() {
+                        return Err("systemd reported empty Slice".to_owned());
+                    }
+                    replace_once(&mut service_slice, property_value.to_owned(), property_name)?;
+                }
+                "CPUQuotaPerSecUSec" => {
+                    if property_value.is_empty() {
+                        return Err("systemd reported empty CPUQuotaPerSecUSec".to_owned());
+                    }
+                    replace_once(
+                        &mut cpu_quota_per_sec_usec,
+                        property_value.to_owned(),
+                        property_name,
+                    )?;
+                }
                 "Result" => {
                     if property_value.is_empty() {
                         return Err("systemd reported empty Result".to_owned());
@@ -507,6 +534,11 @@ impl SearchUnitSnapshot {
             memory_high: required_property(memory_high, "MemoryHigh")?,
             memory_max: required_property(memory_max, "MemoryMax")?,
             memory_swap_max: required_property(memory_swap_max, "MemorySwapMax")?,
+            service_slice: required_property(service_slice, "Slice")?,
+            cpu_quota_per_sec_usec: required_property(
+                cpu_quota_per_sec_usec,
+                "CPUQuotaPerSecUSec",
+            )?,
             service_result: required_property(service_result, "Result")?,
             exec_main_status: required_property(exec_main_status, "ExecMainStatus")?,
             restart_count: required_property(restart_count, "NRestarts")?,
@@ -556,6 +588,13 @@ impl SearchUnitSnapshot {
                 self.description()
             ));
         }
+        if self.service_slice != REQUIRED_SERVICE_SLICE || self.cpu_quota_per_sec_usec != "infinity"
+        {
+            return Err(format!(
+                "search service unit does not use the required unbounded background CPU policy: {}",
+                self.description()
+            ));
+        }
         if self.service_result != "success" || self.exec_main_status != 0 || self.restart_count != 0
         {
             return Err(format!(
@@ -589,7 +628,7 @@ impl SearchUnitSnapshot {
         let drop_in_paths = display_optional_text(&self.drop_in_paths);
         let exec_start_path = display_optional_text(&self.exec_start_path);
         let facts = format!(
-            "Unit={}, ActiveState={}, SubState={}, MainPID={}, ControlGroup={}, MemoryHigh={}, MemoryMax={}, MemorySwapMax={}, Result={}, ExecMainStatus={}, NRestarts={}, FragmentPath={}, DropInPaths={}, ExecStartPath={}",
+            "Unit={}, ActiveState={}, SubState={}, MainPID={}, ControlGroup={}, MemoryHigh={}, MemoryMax={}, MemorySwapMax={}, Slice={}, CPUQuotaPerSecUSec={}, Result={}, ExecMainStatus={}, NRestarts={}, FragmentPath={}, DropInPaths={}, ExecStartPath={}",
             self.runtime_identity.systemd_unit(),
             self.active_state,
             self.sub_state,
@@ -598,6 +637,8 @@ impl SearchUnitSnapshot {
             self.memory_high,
             self.memory_max,
             self.memory_swap_max,
+            self.service_slice,
+            self.cpu_quota_per_sec_usec,
             self.service_result,
             self.exec_main_status,
             self.restart_count,

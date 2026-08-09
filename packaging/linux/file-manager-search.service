@@ -13,10 +13,10 @@ ExecStart=/usr/lib/file-manager/file-searchd
 
 MemoryAccounting=yes
 IOAccounting=yes
-MemoryHigh=160000000
-MemoryMax=192000000
+MemoryHigh=512000000
+MemoryMax=640000000
 MemorySwapMax=0
-CPUQuota=5%
+Slice=background.slice
 
 OOMPolicy=kill
 Restart=on-failure

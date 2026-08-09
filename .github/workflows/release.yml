@@ -36,6 +36,7 @@ jobs:
             acl \
             alsa-lib \
             cargo \
+            dav1d \
             fontconfig \
             glib2 \
             git \
