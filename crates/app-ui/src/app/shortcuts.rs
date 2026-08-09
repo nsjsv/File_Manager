@@ -5,8 +5,8 @@ use super::text_input_shortcuts;
 use super::FileBrowser;
 use crate::model::{Message, PathSuggestionDirection};
 use crate::shortcuts::{
-    KeyBinding, ShortcutAction, ShortcutBindingId, ShortcutCaptureState, ShortcutConfig,
-    ShortcutRoutingContext,
+    FileBrowserShortcutOwnership, KeyBinding, ShortcutAction, ShortcutBindingId,
+    ShortcutCaptureState, ShortcutConfig, ShortcutRoutingContext,
 };
 
 impl FileBrowser {
@@ -34,8 +34,11 @@ impl FileBrowser {
         let Some(action) = self.user_config.shortcuts.matching_action(&key, modifiers) else {
             return Task::none();
         };
-        match keyboard_shortcut_route(action, status) {
-            KeyboardShortcutRoute::Invoke => self.invoke_shortcut(action),
+        match keyboard_shortcut_route(action, &key, status) {
+            KeyboardShortcutRoute::InvokeApplication => self.invoke_shortcut(action),
+            KeyboardShortcutRoute::InvokeFileBrowserContent => {
+                self.invoke_file_browser_content_shortcut(action)
+            }
             KeyboardShortcutRoute::QueryTextInputFocus => {
                 text_input_shortcuts::route_ignored_file_content_shortcut(action)
             }
@@ -76,14 +79,24 @@ impl FileBrowser {
         }
     }
 
+    fn invoke_file_browser_content_shortcut(&mut self, action: ShortcutAction) -> Task<Message> {
+        if self.file_browser_content_shortcuts_enabled() {
+            self.invoke_shortcut(action)
+        } else {
+            Task::none()
+        }
+    }
+
     pub(super) fn file_browser_content_shortcuts_enabled(&self) -> bool {
         self.destructive_action_confirmation.is_none()
+            && self.file_drop_prompt.is_none()
             && self.transfer_conflict.is_none()
             && self.context_menu.is_none()
             && self.open_with.is_none()
             && self.archive_creation.is_none()
             && self.archive_extraction.is_none()
             && self.batch_rename.is_none()
+            && self.network_connection_editor.is_none()
             && self.settings_window != Some(self.focused_window)
             && self.properties_window != Some(self.focused_window)
             && self.preview_window != Some(self.focused_window)
@@ -193,25 +206,39 @@ impl FileBrowser {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyboardShortcutRoute {
-    Invoke,
+    InvokeApplication,
+    InvokeFileBrowserContent,
     QueryTextInputFocus,
     CapturedPreview,
     Stop,
 }
 
-fn keyboard_shortcut_route(action: ShortcutAction, status: event::Status) -> KeyboardShortcutRoute {
+fn keyboard_shortcut_route(
+    action: ShortcutAction,
+    key: &keyboard::Key,
+    status: event::Status,
+) -> KeyboardShortcutRoute {
     if action.is_preview_toggle() && matches!(status, event::Status::Captured) {
         return KeyboardShortcutRoute::CapturedPreview;
     }
 
-    match (action.routing_context(), status) {
-        (ShortcutRoutingContext::Application, _) => KeyboardShortcutRoute::Invoke,
-        (ShortcutRoutingContext::FileBrowserContent, event::Status::Captured) => {
+    match (action.routing_context(key), status) {
+        (ShortcutRoutingContext::Application, _) => KeyboardShortcutRoute::InvokeApplication,
+        (ShortcutRoutingContext::FileBrowserContent(_), event::Status::Captured) => {
             KeyboardShortcutRoute::Stop
         }
-        (ShortcutRoutingContext::FileBrowserContent, event::Status::Ignored) => {
-            KeyboardShortcutRoute::QueryTextInputFocus
-        }
+        (
+            ShortcutRoutingContext::FileBrowserContent(
+                FileBrowserShortcutOwnership::CapturedDeleteEvent,
+            ),
+            event::Status::Ignored,
+        ) => KeyboardShortcutRoute::InvokeFileBrowserContent,
+        (
+            ShortcutRoutingContext::FileBrowserContent(
+                FileBrowserShortcutOwnership::FocusedTextInputProbe,
+            ),
+            event::Status::Ignored,
+        ) => KeyboardShortcutRoute::QueryTextInputFocus,
     }
 }
 
@@ -288,21 +315,157 @@ mod tests {
     }
 
     #[test]
+    fn ignored_delete_enqueues_immediately_while_captured_delete_stops() {
+        let selected_path = PathBuf::from("/workspace/report.txt");
+        let mut ignored_browser = FileBrowser::new(config::default_user_config()).0;
+        ignored_browser.current_dir = PathBuf::from("/workspace");
+        ignored_browser.entries = vec![test_entry(&selected_path)].into();
+        ignored_browser.selected = Some(selected_path.clone());
+        ignored_browser.selected_paths = HashSet::from([selected_path.clone()]);
+
+        drop(ignored_browser.handle_keyboard_key_pressed(
+            keyboard::Key::Named(key::Named::Delete),
+            keyboard::Modifiers::default(),
+            event::Status::Ignored,
+        ));
+
+        assert_eq!(ignored_browser.operation_queue.tasks().len(), 1);
+        assert!(matches!(
+            &ignored_browser.operation_queue.tasks()[0].operation,
+            QueuedFileOperation::Trash { paths } if paths == &vec![selected_path.clone()]
+        ));
+
+        let mut captured_browser = FileBrowser::new(config::default_user_config()).0;
+        captured_browser.current_dir = PathBuf::from("/workspace");
+        captured_browser.entries = vec![test_entry(&selected_path)].into();
+        captured_browser.selected = Some(selected_path.clone());
+        captured_browser.selected_paths = HashSet::from([selected_path]);
+
+        drop(captured_browser.handle_keyboard_key_pressed(
+            keyboard::Key::Named(key::Named::Delete),
+            keyboard::Modifiers::default(),
+            event::Status::Captured,
+        ));
+
+        assert!(captured_browser.operation_queue.tasks().is_empty());
+    }
+
+    #[test]
+    fn ignored_delete_does_not_cross_destructive_confirmation() {
+        let selected_path = PathBuf::from("/workspace/report.txt");
+        let mut browser = FileBrowser::new(config::default_user_config()).0;
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.entries = vec![test_entry(&selected_path)].into();
+        browser.selected = Some(selected_path.clone());
+        browser.selected_paths = HashSet::from([selected_path.clone()]);
+        browser.destructive_action_confirmation = Some(
+            crate::model::DestructiveActionConfirmation::DeletePermanently {
+                paths: vec![selected_path],
+            },
+        );
+
+        drop(browser.handle_keyboard_key_pressed(
+            keyboard::Key::Named(key::Named::Delete),
+            keyboard::Modifiers::default(),
+            event::Status::Ignored,
+        ));
+
+        assert!(browser.operation_queue.tasks().is_empty());
+        assert!(browser.destructive_action_confirmation.is_some());
+    }
+
+    #[test]
+    fn ignored_delete_does_not_cross_file_drop_prompt() {
+        let selected_path = PathBuf::from("/workspace/report.txt");
+        let mut browser = FileBrowser::new(config::default_user_config()).0;
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.entries = vec![test_entry(&selected_path)].into();
+        browser.selected = Some(selected_path.clone());
+        browser.selected_paths = HashSet::from([selected_path]);
+        browser.file_drop_prompt = Some(crate::model::FileDropPrompt {
+            paste_directory: PathBuf::from("/workspace"),
+            paths: vec![PathBuf::from("/incoming/report.txt")],
+        });
+
+        drop(browser.handle_keyboard_key_pressed(
+            keyboard::Key::Named(key::Named::Delete),
+            keyboard::Modifiers::default(),
+            event::Status::Ignored,
+        ));
+
+        assert!(browser.operation_queue.tasks().is_empty());
+        assert!(browser.file_drop_prompt.is_some());
+    }
+
+    #[test]
+    fn ignored_delete_does_not_cross_network_connection_editor() {
+        let selected_path = PathBuf::from("/workspace/report.txt");
+        let mut browser = FileBrowser::new(config::default_user_config()).0;
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.entries = vec![test_entry(&selected_path)].into();
+        browser.selected = Some(selected_path.clone());
+        browser.selected_paths = HashSet::from([selected_path]);
+        browser.network_connection_editor =
+            Some(crate::network_connections::NetworkConnectionEditorState::add());
+
+        drop(browser.handle_keyboard_key_pressed(
+            keyboard::Key::Named(key::Named::Delete),
+            keyboard::Modifiers::default(),
+            event::Status::Ignored,
+        ));
+
+        assert!(browser.operation_queue.tasks().is_empty());
+        assert!(browser.network_connection_editor.is_some());
+    }
+
+    #[test]
     fn keyboard_shortcut_route_enforces_context_ownership_matrix() {
         assert_eq!(
-            keyboard_shortcut_route(ShortcutAction::SelectAll, event::Status::Captured),
+            keyboard_shortcut_route(
+                ShortcutAction::Delete,
+                &keyboard::Key::Named(key::Named::Delete),
+                event::Status::Captured,
+            ),
             KeyboardShortcutRoute::Stop
         );
         assert_eq!(
-            keyboard_shortcut_route(ShortcutAction::Undo, event::Status::Ignored),
+            keyboard_shortcut_route(
+                ShortcutAction::Delete,
+                &keyboard::Key::Named(key::Named::Delete),
+                event::Status::Ignored,
+            ),
+            KeyboardShortcutRoute::InvokeFileBrowserContent
+        );
+        assert_eq!(
+            keyboard_shortcut_route(
+                ShortcutAction::Undo,
+                &keyboard::Key::Character("z".into()),
+                event::Status::Ignored,
+            ),
             KeyboardShortcutRoute::QueryTextInputFocus
         );
         assert_eq!(
-            keyboard_shortcut_route(ShortcutAction::Escape, event::Status::Captured),
-            KeyboardShortcutRoute::Invoke
+            keyboard_shortcut_route(
+                ShortcutAction::Delete,
+                &keyboard::Key::Character("d".into()),
+                event::Status::Ignored,
+            ),
+            KeyboardShortcutRoute::QueryTextInputFocus
         );
         assert_eq!(
-            keyboard_shortcut_route(ShortcutAction::Preview, event::Status::Captured),
+            keyboard_shortcut_route(
+                ShortcutAction::Escape,
+                &keyboard::Key::Named(key::Named::Escape),
+                event::Status::Captured,
+            ),
+            KeyboardShortcutRoute::InvokeApplication
+        );
+        assert_eq!(
+            keyboard_shortcut_route(
+                ShortcutAction::Preview,
+                &keyboard::Key::Named(key::Named::Space),
+                event::Status::Captured,
+            ),
             KeyboardShortcutRoute::CapturedPreview
         );
     }

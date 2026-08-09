@@ -31,13 +31,19 @@ pub(crate) enum ShortcutAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileBrowserShortcutOwnership {
+    CapturedDeleteEvent,
+    FocusedTextInputProbe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShortcutRoutingContext {
     Application,
-    FileBrowserContent,
+    FileBrowserContent(FileBrowserShortcutOwnership),
 }
 
 impl ShortcutAction {
-    pub(crate) fn routing_context(self) -> ShortcutRoutingContext {
+    pub(crate) fn routing_context(self, key: &Key) -> ShortcutRoutingContext {
         match self {
             Self::Refresh
             | Self::Escape
@@ -45,7 +51,13 @@ impl ShortcutAction {
             | Self::NavigateBack
             | Self::NavigateForward
             | Self::NavigateUp => ShortcutRoutingContext::Application,
-            Self::OpenSelected
+            Self::Delete if matches!(key.as_ref(), Key::Named(key::Named::Delete)) => {
+                ShortcutRoutingContext::FileBrowserContent(
+                    FileBrowserShortcutOwnership::CapturedDeleteEvent,
+                )
+            }
+            Self::Delete
+            | Self::OpenSelected
             | Self::RenameSelected
             | Self::MoveSelection(_)
             | Self::FileProperties
@@ -54,9 +66,10 @@ impl ShortcutAction {
             | Self::Copy
             | Self::Paste
             | Self::Cut
-            | Self::Delete
             | Self::Undo
-            | Self::Redo => ShortcutRoutingContext::FileBrowserContent,
+            | Self::Redo => ShortcutRoutingContext::FileBrowserContent(
+                FileBrowserShortcutOwnership::FocusedTextInputProbe,
+            ),
         }
     }
 
