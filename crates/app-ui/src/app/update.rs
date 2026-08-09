@@ -220,6 +220,31 @@ impl FileBrowser {
                 }
                 Task::none()
             }
+            Message::FileOperationDetailsCopyRequested(task_id) => self
+                .operation_queue
+                .tasks()
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|task| {
+                    crate::operation_queue_display::file_operation_copy_text(
+                        task,
+                        crate::localization::current_language(),
+                    )
+                })
+                .map(iced::clipboard::write)
+                .unwrap_or_else(Task::none),
+            Message::FileOperationClearRequested(task_id) => {
+                if let Some(error) = self.operation_queue.clear_terminal_task(task_id) {
+                    self.show_global_error(error);
+                }
+                Task::none()
+            }
+            Message::FileOperationClearFinishedRequested => {
+                if let Some(error) = self.operation_queue.clear_terminal_tasks() {
+                    self.show_global_error(error);
+                }
+                Task::none()
+            }
             Message::PreviewTreeDirectoryToggled(entry_id) => {
                 self.toggle_preview_tree_directory(entry_id)
             }

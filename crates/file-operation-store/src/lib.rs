@@ -574,6 +574,22 @@ impl TaskQueueStore {
         Ok(())
     }
 
+    pub fn delete_tasks(&self, ids: &[u64]) -> StoreResult<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        {
+            let mut statement = transaction.prepare("DELETE FROM task_queue WHERE id = ?1")?;
+            for id in ids {
+                statement.execute(params![id])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn clear_tasks(&self) -> StoreResult<()> {
         let connection = self.connection()?;
         connection.execute("DELETE FROM task_queue", [])?;

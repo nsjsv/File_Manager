@@ -99,6 +99,149 @@ fn recoverable_transfer_enqueue_atomically_creates_journal() {
 }
 
 #[test]
+fn only_completed_failed_and_canceled_statuses_are_terminal() {
+    for (status, expected) in [
+        (FileOperationStatus::Pending, false),
+        (FileOperationStatus::Running, false),
+        (FileOperationStatus::Paused, false),
+        (FileOperationStatus::Canceling, false),
+        (FileOperationStatus::Failed, true),
+        (FileOperationStatus::Completed, true),
+        (FileOperationStatus::Canceled, true),
+    ] {
+        assert_eq!(status.is_terminal(), expected, "{status:?}");
+    }
+}
+
+#[test]
+fn clearing_all_terminal_tasks_keeps_running_and_pending_tasks() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store(store.clone());
+    for _ in 0..5 {
+        assert!(queue.enqueue(sample_operation()).error().is_none());
+    }
+    let completed_id = queue.tasks()[0].id;
+    let failed_id = queue.tasks()[1].id;
+    let canceled_id = queue.tasks()[2].id;
+    let running_id = queue.tasks()[3].id;
+    let pending_id = queue.tasks()[4].id;
+    assert_eq!(
+        queue.finish(completed_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    assert!(queue.cancel(canceled_id).is_none());
+    assert_eq!(
+        queue
+            .finish(
+                failed_id,
+                FileOperationFinish::Failed("create failed".to_owned()),
+            )
+            .0,
+        Some(FileOperationTerminalStatus::Failed)
+    );
+    assert!(queue.has_terminal_tasks());
+
+    assert!(queue.clear_terminal_tasks().is_none());
+
+    assert!(!queue.has_terminal_tasks());
+
+    let remaining_ids = queue.tasks().iter().map(|task| task.id).collect::<Vec<_>>();
+    assert_eq!(remaining_ids, vec![running_id, pending_id]);
+    assert!(store.read_task(completed_id).unwrap().is_none());
+    assert!(store.read_task(failed_id).unwrap().is_none());
+    assert!(store.read_task(canceled_id).unwrap().is_none());
+    assert!(store.read_task(running_id).unwrap().is_some());
+    assert!(store.read_task(pending_id).unwrap().is_some());
+}
+
+#[test]
+fn clearing_all_terminal_tasks_keeps_memory_when_persisted_delete_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&database_path).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store(store);
+    assert!(queue.enqueue(sample_operation()).error().is_none());
+    assert!(queue.enqueue(sample_operation()).error().is_none());
+    let completed_id = queue.tasks()[0].id;
+    let running_id = queue.tasks()[1].id;
+    assert_eq!(
+        queue.finish(completed_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    std::fs::remove_file(&database_path).unwrap();
+    std::fs::create_dir(&database_path).unwrap();
+
+    let error = queue
+        .clear_terminal_tasks()
+        .expect("invalid database path must fail bulk deletion");
+
+    assert!(error.contains("File operation queue storage failed"));
+    assert_eq!(
+        queue.tasks().iter().map(|task| task.id).collect::<Vec<_>>(),
+        vec![completed_id, running_id]
+    );
+}
+
+#[test]
+fn clearing_terminal_task_removes_memory_and_persisted_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store(store.clone());
+    assert!(queue.enqueue(sample_operation()).error().is_none());
+    let task_id = queue.tasks()[0].id;
+    assert_eq!(
+        queue.finish(task_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+
+    assert!(queue.clear_terminal_task(task_id).is_none());
+
+    assert!(queue.tasks().is_empty());
+    assert!(store.read_task(task_id).unwrap().is_none());
+}
+
+#[test]
+fn clearing_rejects_nonterminal_tasks() {
+    let mut queue = FileOperationQueue::new();
+    assert!(queue.enqueue(sample_operation()).error().is_none());
+    let task_id = queue.tasks()[0].id;
+
+    assert!(queue.clear_terminal_task(task_id).is_none());
+
+    assert_eq!(queue.tasks().len(), 1);
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Running);
+}
+
+#[test]
+fn clearing_keeps_terminal_task_when_persisted_delete_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&database_path).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store(store.clone());
+    assert!(queue.enqueue(sample_operation()).error().is_none());
+    let task_id = queue.tasks()[0].id;
+    assert_eq!(
+        queue.finish(task_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    std::fs::remove_file(&database_path).unwrap();
+    std::fs::create_dir(&database_path).unwrap();
+
+    let error = queue
+        .clear_terminal_task(task_id)
+        .expect("invalid database path must fail deletion");
+
+    assert!(error.contains("File operation queue storage failed"));
+    assert_eq!(queue.tasks().len(), 1);
+    assert_eq!(queue.tasks()[0].id, task_id);
+}
+
+#[test]
 fn terminal_completion_releases_recoverable_runner_lease() {
     let directory = tempfile::tempdir().unwrap();
     let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();

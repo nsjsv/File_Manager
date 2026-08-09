@@ -58,6 +58,15 @@ fn translates_known_static_text() {
         "Symbolic Link",
         "No compression",
         "Open Terminal Here",
+        "Task",
+        "Items",
+        "Status",
+        "Progress",
+        "Indeterminate",
+        "Processing...",
+        "Copy Details",
+        "Clear",
+        "Clear Finished",
     ] {
         assert_ne!(translate(UiLanguage::Chinese, text), text);
     }

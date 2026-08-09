@@ -111,6 +111,40 @@ fn marks_unfinished_tasks_failed_without_touching_failed_rows() {
 }
 
 #[test]
+fn delete_tasks_removes_only_selected_rows() {
+    let (store, root) = test_store();
+    let operation = StoredOperation::CreateDirectory {
+        parent: StoredPath::from_path(Path::new("/tmp")),
+    };
+    let first_id = store.insert_task(&operation).unwrap();
+    let kept_id = store.insert_task(&operation).unwrap();
+    let third_id = store.insert_task(&operation).unwrap();
+
+    store.delete_tasks(&[first_id, third_id]).unwrap();
+
+    assert!(store.read_task(first_id).unwrap().is_none());
+    assert!(store.read_task(third_id).unwrap().is_none());
+    assert!(store.read_task(kept_id).unwrap().is_some());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn delete_tasks_rolls_back_when_any_id_is_invalid() {
+    let (store, root) = test_store();
+    let operation = StoredOperation::CreateDirectory {
+        parent: StoredPath::from_path(Path::new("/tmp")),
+    };
+    let first_id = store.insert_task(&operation).unwrap();
+    let second_id = store.insert_task(&operation).unwrap();
+
+    assert!(store.delete_tasks(&[first_id, u64::MAX]).is_err());
+
+    assert!(store.read_task(first_id).unwrap().is_some());
+    assert!(store.read_task(second_id).unwrap().is_some());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn clear_tasks_removes_all_rows() {
     let (store, root) = test_store();
     let operation = StoredOperation::CreateDirectory {

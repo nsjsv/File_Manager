@@ -7,13 +7,13 @@ use crate::appearance::{
     context_menu_style, error_notification_style, operation_queue_indicator_button_style,
     path_suggestion_item_style,
 };
-use crate::formatting::{format_file_size, format_middle_ellipsized_text};
+use crate::formatting::format_middle_ellipsized_text;
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
 use crate::operation_progress::{
     active_indeterminate_track_handle, static_indeterminate_track_handle,
 };
 use crate::operation_queue::{FileOperationQueue, FileOperationStatus, FileOperationTask};
-use crate::operation_queue_display::FileOperationPathLines;
+use crate::operation_queue_display::{file_operation_progress_text, FileOperationPathLines};
 use crate::typography::readable_text;
 
 pub(crate) const OPERATION_QUEUE_PANEL_WIDTH: f32 = 360.0;
@@ -55,23 +55,29 @@ pub(crate) fn operation_queue_panel(
     scrollbar_visibility: ScrollbarVisibility,
     animation_frame: u8,
 ) -> Element<'_, Message> {
-    let header = row![
-        readable_text("Tasks").size(16).width(Length::Fill),
+    let mut header = row![readable_text("Tasks").size(16).width(Length::Fill)]
+        .spacing(8)
+        .align_y(Alignment::Center);
+    if queue.has_terminal_tasks() {
+        header = header.push(task_control_button(
+            "Clear Finished",
+            Message::FileOperationClearFinishedRequested,
+        ));
+    }
+    let header = header.push(
         readable_text(if crate::localization::current_language_is_chinese() {
             format!("{} 个任务", queue.task_count())
         } else {
             format!("{} tasks", queue.task_count())
         })
         .size(12),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
+    );
 
     let mut tasks = column![].spacing(6);
     if queue.tasks().is_empty() {
         tasks = tasks.push(empty_queue_row());
     } else {
-        for task in queue.tasks() {
+        for task in operation_queue_display_tasks(queue) {
             tasks = tasks.push(operation_task_row(task, animation_frame));
         }
     }
@@ -96,6 +102,12 @@ pub(crate) fn operation_queue_panel(
         .width(Length::Fixed(OPERATION_QUEUE_PANEL_WIDTH))
         .style(context_menu_style)
         .into()
+}
+
+fn operation_queue_display_tasks(
+    queue: &FileOperationQueue,
+) -> impl Iterator<Item = &FileOperationTask> {
+    queue.tasks().iter().rev()
 }
 
 fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<'_, Message> {
@@ -140,7 +152,9 @@ fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<
         .spacing(4)
         .width(Length::Fill);
 
-    if let Some(detail) = operation_progress_detail(task) {
+    if let Some(detail) =
+        file_operation_progress_text(task, crate::localization::current_language())
+    {
         body = body.push(readable_text(detail).size(11).width(Length::Fill));
     }
 
@@ -161,10 +175,9 @@ fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<
         );
     }
 
-    let mut content = column![body].spacing(6);
-    if let Some(controls) = operation_task_controls(task) {
-        content = content.push(controls);
-    }
+    let content = column![body, operation_task_controls(task)]
+        .spacing(6)
+        .width(Length::Fill);
     let item = container(content).padding(8).width(Length::Fill);
     let item = if task.status == FileOperationStatus::Failed {
         item.style(error_notification_style)
@@ -173,42 +186,6 @@ fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<
     };
 
     item.into()
-}
-
-fn operation_progress_detail(task: &FileOperationTask) -> Option<String> {
-    let byte_detail = task.progress.bytes().map(|(completed_bytes, total_bytes)| {
-        format!(
-            "{} / {}",
-            format_file_size(completed_bytes),
-            format_file_size(total_bytes)
-        )
-    });
-    let item_detail = task.progress.items().map(|(completed_items, total_items)| {
-        if crate::localization::current_language_is_chinese() {
-            format!("{completed_items} / {total_items} 项")
-        } else {
-            format!("{completed_items} / {total_items} items")
-        }
-    });
-
-    match (byte_detail, item_detail) {
-        (Some(bytes), Some(items)) => Some(format!("{bytes} | {items}")),
-        (Some(bytes), None) => Some(bytes),
-        (None, Some(items)) => Some(items),
-        (None, None)
-            if matches!(
-                task.status,
-                FileOperationStatus::Running | FileOperationStatus::Canceling
-            ) =>
-        {
-            Some(if crate::localization::current_language_is_chinese() {
-                "处理中...".to_owned()
-            } else {
-                "Processing...".to_owned()
-            })
-        }
-        (None, None) => None,
-    }
 }
 
 fn operation_title_text(title: &str, path_lines: &FileOperationPathLines) -> String {
@@ -235,7 +212,7 @@ fn empty_queue_row() -> Element<'static, Message> {
         .into()
 }
 
-fn operation_task_controls(task: &FileOperationTask) -> Option<Element<'static, Message>> {
+fn operation_task_controls(task: &FileOperationTask) -> Element<'static, Message> {
     let pause_label = match task.status {
         FileOperationStatus::Paused => "Resume",
         _ => "Pause",
@@ -249,11 +226,12 @@ fn operation_task_controls(task: &FileOperationTask) -> Option<Element<'static, 
         FileOperationStatus::Pending | FileOperationStatus::Running | FileOperationStatus::Paused
     );
 
-    if !can_pause && !can_cancel {
-        return None;
-    }
-
-    let mut controls = row![].spacing(6).align_y(Alignment::Center);
+    let mut controls = row![task_control_button(
+        "Copy Details",
+        Message::FileOperationDetailsCopyRequested(task.id),
+    )]
+    .spacing(6)
+    .align_y(Alignment::Center);
     if can_pause {
         controls = controls.push(task_control_button(
             pause_label,
@@ -266,8 +244,14 @@ fn operation_task_controls(task: &FileOperationTask) -> Option<Element<'static, 
             Message::FileOperationCancelRequested(task.id),
         ));
     }
+    if task.status.is_terminal() {
+        controls = controls.push(task_control_button(
+            "Clear",
+            Message::FileOperationClearRequested(task.id),
+        ));
+    }
 
-    Some(controls.into())
+    controls.into()
 }
 
 fn task_control_button(label: &'static str, message: Message) -> Element<'static, Message> {
@@ -424,6 +408,36 @@ mod tests {
         assert!(svg.contains(r#"data-progress-kind="indeterminate""#));
         assert!(svg.contains(r#"stroke-dasharray="7 5""#));
         assert!(!svg.contains("0.35"));
+    }
+
+    #[test]
+    fn task_panel_displays_newest_first_without_changing_fifo_runner() {
+        let mut queue = FileOperationQueue::new();
+        assert!(queue
+            .enqueue(
+                crate::operation_queue::QueuedFileOperation::CreateDirectory {
+                    parent: std::path::PathBuf::from("/first"),
+                }
+            )
+            .error()
+            .is_none());
+        let first_id = queue.tasks()[0].id;
+        assert!(queue
+            .enqueue(
+                crate::operation_queue::QueuedFileOperation::CreateDirectory {
+                    parent: std::path::PathBuf::from("/second"),
+                }
+            )
+            .error()
+            .is_none());
+        let second_id = queue.tasks()[1].id;
+
+        let displayed_ids = operation_queue_display_tasks(&queue)
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(displayed_ids, vec![second_id, first_id]);
+        assert_eq!(queue.active_subscription().unwrap().id, first_id);
     }
 
     #[test]

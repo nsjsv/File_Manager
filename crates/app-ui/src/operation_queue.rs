@@ -185,6 +185,10 @@ impl FileOperationStatus {
         }
     }
 
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, Self::Failed | Self::Completed | Self::Canceled)
+    }
+
     fn to_stored(self) -> StoredTaskStatus {
         match self {
             Self::Pending => StoredTaskStatus::Pending,
@@ -429,6 +433,53 @@ impl FileOperationQueue {
             .iter()
             .find(|task| task.id == id)
             .map(|task| &task.operation)
+    }
+
+    pub(crate) fn has_terminal_tasks(&self) -> bool {
+        self.tasks.iter().any(|task| task.status.is_terminal())
+    }
+
+    pub(crate) fn clear_terminal_task(&mut self, id: u64) -> Option<String> {
+        let task_ids = self
+            .tasks
+            .iter()
+            .filter(|task| task.id == id && task.status.is_terminal())
+            .map(|task| task.id)
+            .collect::<BTreeSet<_>>();
+        self.clear_terminal_task_ids(&task_ids)
+    }
+
+    pub(crate) fn clear_terminal_tasks(&mut self) -> Option<String> {
+        let task_ids = self
+            .tasks
+            .iter()
+            .filter(|task| task.status.is_terminal())
+            .map(|task| task.id)
+            .collect::<BTreeSet<_>>();
+        self.clear_terminal_task_ids(&task_ids)
+    }
+
+    fn clear_terminal_task_ids(&mut self, task_ids: &BTreeSet<u64>) -> Option<String> {
+        if task_ids.is_empty() {
+            return None;
+        }
+        let persisted_ids = self
+            .tasks
+            .iter()
+            .filter(|task| task.is_persisted && task_ids.contains(&task.id))
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        if !persisted_ids.is_empty() {
+            let store = self
+                .store
+                .as_ref()
+                .expect("persisted file operation task has an operation store");
+            if let Err(error) = store.delete_tasks(&persisted_ids) {
+                return Some(storage_error(error));
+            }
+        }
+        self.tasks.retain(|task| !task_ids.contains(&task.id));
+        None
     }
 
     pub(crate) fn update_progress(

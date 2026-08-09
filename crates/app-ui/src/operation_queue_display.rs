@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-use file_core::FileOperationVerification;
 use file_core::TrashRestoreEntry;
 
+use crate::config::UiLanguage;
+use crate::formatting::format_file_size;
 use crate::operation_queue::{
-    QueuedFileOperation, QueuedTransfer, NEW_DIRECTORY_NAME, NEW_FILE_NAME,
+    FileOperationStatus, FileOperationTask, QueuedFileOperation, QueuedTransfer,
+    NEW_DIRECTORY_NAME, NEW_FILE_NAME,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +89,80 @@ impl FileOperationPathLines {
     }
 }
 
+pub(crate) fn file_operation_progress_text(
+    task: &FileOperationTask,
+    language: UiLanguage,
+) -> Option<String> {
+    let byte_detail = task.progress.bytes().map(|(completed_bytes, total_bytes)| {
+        format!(
+            "{} / {}",
+            format_file_size(completed_bytes),
+            format_file_size(total_bytes)
+        )
+    });
+    let item_detail = task.progress.items().map(|(completed_items, total_items)| {
+        if language == UiLanguage::Chinese {
+            format!("{completed_items} / {total_items} 项")
+        } else {
+            format!("{completed_items} / {total_items} items")
+        }
+    });
+
+    match (byte_detail, item_detail) {
+        (Some(bytes), Some(items)) => Some(format!("{bytes} | {items}")),
+        (Some(bytes), None) => Some(bytes),
+        (None, Some(items)) => Some(items),
+        (None, None)
+            if matches!(
+                task.status,
+                FileOperationStatus::Running | FileOperationStatus::Canceling
+            ) =>
+        {
+            Some(crate::localization::translate(language, "Processing...").into_owned())
+        }
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn file_operation_copy_text(task: &FileOperationTask, language: UiLanguage) -> String {
+    let paths = task.operation.path_lines();
+    let translate = |text| crate::localization::translate(language, text).into_owned();
+    let progress = file_operation_progress_text(task, language).unwrap_or_else(|| {
+        task.progress
+            .fraction()
+            .map(|fraction| format!("{:.0}%", fraction * 100.0))
+            .unwrap_or_else(|| translate("Indeterminate"))
+    });
+    let mut lines = vec![
+        format!(
+            "{}: {}",
+            translate("Task"),
+            translate(task.operation.title())
+        ),
+        format!("{}: {}", translate("File name"), paths.file_name),
+        format!("{}: {}", translate("Items"), paths.total_items),
+        format!("{}: {}", translate("Original"), paths.original_path),
+        format!("{}: {}", translate("Directory"), paths.directory_path),
+        format!(
+            "{}: {}",
+            translate("Status"),
+            translate(task.status.label())
+        ),
+        format!("{}: {progress}", translate("Progress")),
+    ];
+    if let Some(warning) = task.completion_warning.as_deref() {
+        lines.push(format!(
+            "{}: {}",
+            translate("Warning"),
+            crate::localization::trash_tracking_warning(language, warning)
+        ));
+    }
+    if let Some(error) = task.error.as_deref() {
+        lines.push(format!("{}: {}", translate("Error"), translate(error)));
+    }
+    lines.join("\n")
+}
+
 fn created_entry_path_lines(parent: &Path, name: &str) -> FileOperationPathLines {
     let target = parent.join(name);
     FileOperationPathLines::from_paths(&target, &target, parent, 1)
@@ -167,6 +242,7 @@ fn path_parent_text(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use file_core::FileOperationVerification;
 
     #[test]
     fn transfer_path_lines_expose_name_original_and_directory() {
@@ -184,5 +260,40 @@ mod tests {
         assert_eq!(path_lines.original_path, "/home/user/report.txt");
         assert_eq!(path_lines.directory_path, "/tmp");
         assert_eq!(path_lines.total_items, 1);
+    }
+
+    #[test]
+    fn copied_task_details_keep_full_paths_status_progress_and_error() {
+        let long_parent = PathBuf::from(
+            "/workspace/destination/another-very-long-directory-name-that-must-remain-complete",
+        );
+        let mut queue = crate::operation_queue::FileOperationQueue::new();
+        assert!(queue
+            .enqueue(QueuedFileOperation::CreateDirectory {
+                parent: long_parent.clone(),
+            })
+            .error()
+            .is_none());
+        let task_id = queue.tasks()[0].id;
+        let full_error =
+            "a complete diagnostic that is intentionally longer than the task row error limit"
+                .repeat(3);
+        assert_eq!(
+            queue
+                .finish(
+                    task_id,
+                    crate::operation_queue::FileOperationFinish::Failed(full_error.clone()),
+                )
+                .0,
+            Some(crate::operation_queue::FileOperationTerminalStatus::Failed)
+        );
+
+        let copied = file_operation_copy_text(&queue.tasks()[0], UiLanguage::English);
+
+        assert!(copied.contains(long_parent.to_string_lossy().as_ref()));
+        assert!(copied.contains("Status: Failed"));
+        assert!(copied.contains("Progress: Indeterminate"));
+        assert!(copied.contains(&full_error));
+        assert!(!copied.contains('…'));
     }
 }
