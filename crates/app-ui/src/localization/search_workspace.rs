@@ -34,7 +34,7 @@ pub(super) fn translate(text: &str) -> Option<String> {
         "Clear search text" => Some("清空搜索文字"),
         "Close search" => Some("关闭搜索"),
         "Open folder" | "Open Containing Folder" => Some("打开所在目录"),
-        "Showing the first 100 results" => Some("仅显示前 100 条结果"),
+        "Scroll to load more results" => Some("滚动以加载更多结果"),
         "Search is available from a local folder" => Some("请从本地文件夹开始搜索"),
         "Search is unavailable for remote folders" => Some("远程文件夹暂不支持搜索"),
         "The result has no containing directory" => Some("该结果没有所在目录"),

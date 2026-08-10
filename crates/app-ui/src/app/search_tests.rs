@@ -14,9 +14,10 @@ use super::FileBrowser;
 use crate::config;
 use crate::model::search::{SearchProvider, SEARCH_RESULT_WINDOW};
 use crate::model::{
-    ContextMenuState, DirectoryFallbackOutcome, IndexedSearchOutcome, SearchEntryTypeMenuState,
-    SearchEntryTypePreset, SearchResultCompletion, SearchServiceDiagnosticKind, SelectionMarquee,
-    SelectionMarqueePhase, SelectionMarqueeScrollAnchor, SelectionMarqueeSource,
+    ContextMenuState, DirectoryFallbackOutcome, IndexedSearchOutcome, IndexedSearchRequest,
+    SearchEntryTypeMenuState, SearchEntryTypePreset, SearchResultCompletion,
+    SearchServiceDiagnosticKind, SelectionMarquee, SelectionMarqueePhase,
+    SelectionMarqueeScrollAnchor, SelectionMarqueeSource,
 };
 
 fn browser_for_search_tests(root: PathBuf) -> FileBrowser {
@@ -61,6 +62,16 @@ fn indexed_batch(query_id: u64, hits: Vec<SearchHit>, finished: bool) -> SearchR
         }),
         finished,
     }
+}
+
+fn pending_indexed_request(browser: &FileBrowser) -> IndexedSearchRequest {
+    browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .pending_indexed_request
+        .expect("pending indexed request")
 }
 
 fn stabilize_search_input(browser: &mut FileBrowser, value: &str) {
@@ -136,7 +147,8 @@ fn workspace_freezes_root_and_empty_input_runs_a_query() {
 fn indexed_window_truth_comes_from_provider_completion() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
     drop(browser.submit_search());
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = pending_indexed_request(&browser);
+    let generation = request.generation;
     let hits = (0..SEARCH_RESULT_WINDOW)
         .map(|index| {
             search_hit(
@@ -146,7 +158,7 @@ fn indexed_window_truth_comes_from_provider_completion() {
         })
         .collect();
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::Batch(indexed_batch(generation, hits, true)),
     ));
 
@@ -157,13 +169,67 @@ fn indexed_window_truth_comes_from_provider_completion() {
 }
 
 #[test]
+fn approaching_loaded_end_requests_and_appends_one_indexed_page() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    drop(browser.submit_search());
+    let first_request = pending_indexed_request(&browser);
+    let generation = first_request.generation;
+    let first_hits = (0..SEARCH_RESULT_WINDOW)
+        .map(|index| {
+            search_hit(
+                PathBuf::from(format!("/workspace/result-{index}.txt")),
+                SearchFileKind::File,
+            )
+        })
+        .collect();
+    drop(browser.accept_search_results(
+        first_request,
+        IndexedSearchOutcome::Batch(indexed_batch(generation, first_hits, false)),
+    ));
+
+    let viewport_height = crate::view::SEARCH_RESULT_ROW_HEIGHT * 4.0;
+    let offset_y = crate::view::SEARCH_RESULT_ROW_HEIGHT * 90.0;
+    drop(browser.update_search_results_viewport(offset_y, viewport_height));
+    let next_request = pending_indexed_request(&browser);
+    assert_eq!(
+        next_request.cursor,
+        Some(file_search::SearchCursor {
+            offset: SEARCH_RESULT_WINDOW,
+        })
+    );
+    drop(browser.update_search_results_viewport(offset_y, viewport_height));
+    assert_eq!(pending_indexed_request(&browser), next_request);
+
+    let second_hits = (SEARCH_RESULT_WINDOW..SEARCH_RESULT_WINDOW * 2)
+        .map(|index| {
+            search_hit(
+                PathBuf::from(format!("/workspace/result-{index}.txt")),
+                SearchFileKind::File,
+            )
+        })
+        .collect();
+    drop(browser.accept_search_results(
+        next_request,
+        IndexedSearchOutcome::Batch(indexed_batch(generation, second_hits, true)),
+    ));
+
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert_eq!(workspace.window.hits.len(), SEARCH_RESULT_WINDOW * 2);
+    assert_eq!(
+        workspace.window.completion,
+        Some(SearchResultCompletion::Complete)
+    );
+    assert!(workspace.run.pending_indexed_request.is_none());
+}
+
+#[test]
 fn unavailable_before_first_batch_switches_to_directory_fallback() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
     stabilize_search_input(&mut browser, "report");
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = pending_indexed_request(&browser);
 
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::ProviderUnavailable("index is starting".to_owned()),
     ));
 
@@ -180,20 +246,36 @@ fn unavailable_before_first_batch_switches_to_directory_fallback() {
 fn unavailable_after_indexed_batch_does_not_mix_providers() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
     stabilize_search_input(&mut browser, "report");
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    drop(browser.submit_search());
+    let request = browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .pending_indexed_request
+        .expect("new indexed request");
+    let generation = request.generation;
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::Batch(indexed_batch(
             generation,
             vec![search_hit(
                 PathBuf::from("/workspace/report.txt"),
                 SearchFileKind::File,
             )],
-            true,
+            false,
         )),
     ));
+    drop(browser.update_search_results_viewport(f32::MAX, crate::view::SEARCH_RESULT_ROW_HEIGHT));
+    let next_request = browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .pending_indexed_request
+        .expect("next indexed request");
     drop(browser.accept_search_results(
-        generation,
+        next_request,
         IndexedSearchOutcome::TransportUnavailable("socket closed".to_owned()),
     ));
 
@@ -207,9 +289,10 @@ fn unavailable_after_indexed_batch_does_not_mix_providers() {
 fn fallback_budget_and_overflow_have_distinct_truthful_states() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
     drop(browser.submit_search());
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = pending_indexed_request(&browser);
+    let generation = request.generation;
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::ProviderUnavailable("not ready".to_owned()),
     ));
     drop(browser.accept_directory_search_batch(
@@ -235,9 +318,10 @@ fn fallback_budget_and_overflow_have_distinct_truthful_states() {
     );
 
     drop(browser.submit_search());
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = pending_indexed_request(&browser);
+    let generation = request.generation;
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::ProviderUnavailable("not ready".to_owned()),
     ));
     let hits = (0..=SEARCH_RESULT_WINDOW)
@@ -250,8 +334,8 @@ fn fallback_budget_and_overflow_have_distinct_truthful_states() {
         .collect();
     drop(browser.accept_directory_search_batch(generation, hits));
     assert_eq!(
-        browser.search_workspace.as_ref().unwrap().window.completion,
-        Some(SearchResultCompletion::Truncated)
+        browser.search_workspace.as_ref().unwrap().window.hits.len(),
+        SEARCH_RESULT_WINDOW + 1
     );
 }
 
@@ -286,12 +370,12 @@ fn unavailable_frozen_root_cancels_the_run_without_switching_scope() {
 fn stale_generation_cannot_pollute_restarted_or_closed_workspace() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
     stabilize_search_input(&mut browser, "first");
-    let stale = browser.search_workspace.as_ref().unwrap().run.generation;
+    let stale = pending_indexed_request(&browser);
     stabilize_search_input(&mut browser, "second");
     drop(browser.accept_search_results(
         stale,
         IndexedSearchOutcome::Batch(indexed_batch(
-            stale,
+            stale.generation,
             vec![search_hit(
                 PathBuf::from("/workspace/stale.txt"),
                 SearchFileKind::File,
@@ -310,7 +394,7 @@ fn stale_generation_cannot_pollute_restarted_or_closed_workspace() {
     drop(browser.close_search_workspace());
     drop(browser.accept_search_results(
         stale,
-        IndexedSearchOutcome::Batch(indexed_batch(stale, Vec::new(), true)),
+        IndexedSearchOutcome::Batch(indexed_batch(stale.generation, Vec::new(), true)),
     ));
     assert!(browser.search_workspace.is_none());
 }
@@ -394,11 +478,12 @@ fn search_selection_does_not_mutate_browser_selection() {
         .selected_paths
         .insert(PathBuf::from("/workspace/browser.txt"));
     drop(browser.submit_search());
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = pending_indexed_request(&browser);
+    let generation = request.generation;
     let first = PathBuf::from("/workspace/first.txt");
     let second = PathBuf::from("/workspace/second.txt");
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::Batch(indexed_batch(
             generation,
             vec![
@@ -467,9 +552,10 @@ fn activating_non_utf8_directory_preserves_native_path_and_closes_workspace() {
     std::fs::create_dir(&path).unwrap();
     let mut browser = browser_for_search_tests(root.path().to_path_buf());
     drop(browser.submit_search());
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = pending_indexed_request(&browser);
+    let generation = request.generation;
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::Batch(indexed_batch(
             generation,
             vec![search_hit(path.clone(), SearchFileKind::Directory)],

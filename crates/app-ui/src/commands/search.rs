@@ -6,19 +6,19 @@ use iced::futures::SinkExt;
 use iced::Task;
 use tokio_util::sync::CancellationToken;
 
-use crate::model::{DirectoryFallbackOutcome, IndexedSearchOutcome, Message};
+use crate::model::{DirectoryFallbackOutcome, IndexedSearchOutcome, IndexedSearchRequest, Message};
 
 const DIRECTORY_FALLBACK_STREAM_CAPACITY: usize = 8;
 const DIRECTORY_FALLBACK_WORKER_CAPACITY: usize = 4;
 pub(crate) const DIRECTORY_FALLBACK_ENTRY_BUDGET: usize = 50_000;
 
 pub(crate) fn search_command(
-    generation: u64,
+    request: IndexedSearchRequest,
     query: SearchQuery,
     cancellation: CancellationToken,
 ) -> Task<Message> {
     Task::perform(search_once(query, cancellation), move |outcome| {
-        Message::SearchResultsLoaded(generation, outcome)
+        Message::SearchResultsLoaded(request, outcome)
     })
 }
 

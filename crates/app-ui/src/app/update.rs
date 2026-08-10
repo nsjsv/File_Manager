@@ -544,8 +544,8 @@ impl FileBrowser {
             Message::SearchFiltersReset => self.reset_search_filters(),
             Message::SearchKeywordCleared => self.clear_search_keyword(),
             Message::SearchWorkspaceClosed => self.close_search_workspace(),
-            Message::SearchResultsLoaded(generation, outcome) => {
-                self.accept_search_results(generation, outcome)
+            Message::SearchResultsLoaded(request, outcome) => {
+                self.accept_search_results(request, outcome)
             }
             Message::SearchDirectoryBatchLoaded(generation, hits) => {
                 self.accept_directory_search_batch(generation, hits)
@@ -559,9 +559,13 @@ impl FileBrowser {
                 self.open_search_containing_directory(path)
             }
             Message::SearchDeletePermanentlySelected => self.delete_search_selection_permanently(),
-            Message::SearchResultsScrolled => {
-                self.show_scrollbars_temporarily(Region::SearchResults)
-            }
+            Message::SearchResultsScrolled {
+                offset_y,
+                viewport_height,
+            } => Task::batch([
+                self.show_scrollbars_temporarily(Region::SearchResults),
+                self.update_search_results_viewport(offset_y, viewport_height),
+            ]),
             Message::SearchServiceEnsured(request, outcome) => {
                 self.accept_search_service_status(request, outcome)
             }

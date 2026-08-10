@@ -127,10 +127,10 @@ pub(crate) use application_logs::{
 };
 pub(crate) mod search;
 pub(crate) use search::{
-    DirectoryFallbackOutcome, IndexedSearchOutcome, SearchDateField, SearchDatePreset,
-    SearchEntryTypePreset, SearchInputStabilizationRequest, SearchKeyboardSelection,
-    SearchResultCompletion, SearchSelectionGesture, SearchSelectionStep, SearchWorkspaceSessionId,
-    SearchWorkspaceState,
+    DirectoryFallbackOutcome, IndexedSearchOutcome, IndexedSearchRequest, SearchDateField,
+    SearchDatePreset, SearchEntryTypePreset, SearchInputStabilizationRequest,
+    SearchKeyboardSelection, SearchResultCompletion, SearchSelectionGesture, SearchSelectionStep,
+    SearchWorkspaceSessionId, SearchWorkspaceState,
 };
 mod search_service;
 pub(crate) use search_service::{
@@ -429,14 +429,17 @@ pub(crate) enum Message {
     SearchFiltersReset,
     SearchKeywordCleared,
     SearchWorkspaceClosed,
-    SearchResultsLoaded(u64, IndexedSearchOutcome),
+    SearchResultsLoaded(IndexedSearchRequest, IndexedSearchOutcome),
     SearchDirectoryBatchLoaded(u64, Vec<SearchHit>),
     SearchDirectoryFinished(u64, DirectoryFallbackOutcome),
     SearchResultPressed(PathBuf),
     SearchResultRightClicked(PathBuf),
     SearchOpenContainingDirectory(PathBuf),
     SearchDeletePermanentlySelected,
-    SearchResultsScrolled,
+    SearchResultsScrolled {
+        offset_y: f32,
+        viewport_height: f32,
+    },
     SearchServiceEnsured(
         SearchServiceStatusRequest,
         Result<SearchServiceStatus, SearchServiceDiagnostic>,

@@ -43,7 +43,7 @@ fn translates_known_static_text() {
         "Content indexing is unavailable; matching file names only.",
         "Past 30 days",
         "Close search",
-        "Showing the first 100 results",
+        "Scroll to load more results",
         "Logs",
         "Appearance",
         "Files",

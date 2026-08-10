@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use file_search::{SearchHit, SearchQuery, SearchResultBatch, SearchTextScope};
+use file_search::{SearchCursor, SearchHit, SearchQuery, SearchResultBatch, SearchTextScope};
 use tokio_util::sync::CancellationToken;
 
 mod filters;
@@ -47,7 +47,7 @@ pub(crate) enum SearchProvider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchResultCompletion {
     Complete,
-    Truncated,
+    MoreAvailable,
     Partial { inspected_entries: usize },
 }
 
@@ -66,12 +66,19 @@ impl SearchRootSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IndexedSearchRequest {
+    pub(crate) generation: u64,
+    pub(crate) cursor: Option<SearchCursor>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SearchRunState {
     pub(crate) generation: u64,
     pub(crate) active_query: Option<SearchQuery>,
     pub(crate) provider: Option<SearchProvider>,
-    pub(crate) indexed_batch_seen: bool,
+    pub(crate) next_cursor: Option<SearchCursor>,
+    pub(crate) pending_indexed_request: Option<IndexedSearchRequest>,
     cancellation: Option<CancellationToken>,
 }
 
@@ -81,7 +88,8 @@ impl SearchRunState {
             generation: 0,
             active_query: None,
             provider: None,
-            indexed_batch_seen: false,
+            next_cursor: None,
+            pending_indexed_request: None,
             cancellation: None,
         }
     }
@@ -99,6 +107,8 @@ pub(crate) struct SearchResultWindow {
     pub(crate) is_loading: bool,
     pub(crate) failure: Option<String>,
     pub(crate) completion: Option<SearchResultCompletion>,
+    pub(crate) viewport_offset_y: f32,
+    pub(crate) viewport_height: f32,
 }
 
 impl SearchResultWindow {
@@ -108,6 +118,8 @@ impl SearchResultWindow {
             is_loading: false,
             failure: None,
             completion: None,
+            viewport_offset_y: 0.0,
+            viewport_height: 0.0,
         }
     }
 
@@ -116,6 +128,8 @@ impl SearchResultWindow {
         self.is_loading = true;
         self.failure = None;
         self.completion = None;
+        self.viewport_offset_y = 0.0;
+        self.viewport_height = 0.0;
     }
 }
 
@@ -330,42 +344,84 @@ impl SearchWorkspaceState {
         self.input_revision = self.input_revision.wrapping_add(1);
     }
 
-    pub(crate) fn begin_indexed_query(&mut self, query: SearchQuery) -> CancellationToken {
+    pub(crate) fn begin_indexed_query(
+        &mut self,
+        query: SearchQuery,
+    ) -> (IndexedSearchRequest, CancellationToken) {
         self.run.cancel();
         let cancellation = CancellationToken::new();
+        let request = IndexedSearchRequest {
+            generation: query.query_id,
+            cursor: None,
+        };
         self.run.cancellation = Some(cancellation.clone());
         self.run.generation = query.query_id;
         self.run.active_query = Some(query);
         self.run.provider = Some(SearchProvider::Indexed);
-        self.run.indexed_batch_seen = false;
+        self.run.next_cursor = None;
+        self.run.pending_indexed_request = Some(request);
         self.window.begin_loading();
         self.selection.clear();
-        cancellation
+        (request, cancellation)
     }
 
-    pub(crate) fn accepts_indexed_outcome(&self, generation: u64) -> bool {
-        generation == self.run.generation && self.run.provider == Some(SearchProvider::Indexed)
+    pub(crate) fn begin_next_indexed_page(
+        &mut self,
+    ) -> Option<(IndexedSearchRequest, SearchQuery, CancellationToken)> {
+        if self.run.provider != Some(SearchProvider::Indexed)
+            || self.run.pending_indexed_request.is_some()
+        {
+            return None;
+        }
+        let cursor = self.run.next_cursor?;
+        let mut query = self.run.active_query.clone()?;
+        query.cursor = Some(cursor);
+        let request = IndexedSearchRequest {
+            generation: self.run.generation,
+            cursor: Some(cursor),
+        };
+        let cancellation = CancellationToken::new();
+        self.run.cancellation = Some(cancellation.clone());
+        self.run.pending_indexed_request = Some(request);
+        self.window.is_loading = true;
+        self.window.failure = None;
+        Some((request, query, cancellation))
     }
 
-    pub(crate) fn apply_indexed_batch(&mut self, mut batch: SearchResultBatch) {
+    pub(crate) fn accepts_indexed_outcome(&self, request: IndexedSearchRequest) -> bool {
+        request.generation == self.run.generation
+            && self.run.provider == Some(SearchProvider::Indexed)
+            && self.run.pending_indexed_request == Some(request)
+    }
+
+    pub(crate) fn apply_indexed_batch(
+        &mut self,
+        request: IndexedSearchRequest,
+        mut batch: SearchResultBatch,
+    ) {
         self.run.cancellation = None;
-        let provider_returned_extra = batch.hits.len() > SEARCH_RESULT_WINDOW;
+        self.run.pending_indexed_request = None;
         batch.hits.truncate(SEARCH_RESULT_WINDOW);
-        self.window.hits = batch.hits;
-        self.run.indexed_batch_seen = true;
+        if request.cursor.is_none() {
+            self.window.hits = batch.hits;
+        } else {
+            self.window.hits.extend(batch.hits);
+        }
+        self.run.next_cursor = batch.next_cursor;
         self.window.is_loading = false;
         self.window.failure = None;
-        self.window.completion = Some(if provider_returned_extra || !batch.finished {
-            SearchResultCompletion::Truncated
-        } else {
+        self.window.completion = Some(if batch.finished {
             SearchResultCompletion::Complete
+        } else {
+            SearchResultCompletion::MoreAvailable
         });
         self.selection.reconcile(&self.window.hits);
     }
 
-    pub(crate) fn apply_indexed_failure(&mut self, message: String) {
+    pub(crate) fn apply_indexed_failure(&mut self, request: IndexedSearchRequest, message: String) {
         self.run.cancellation = None;
-        if !self.run.indexed_batch_seen {
+        self.run.pending_indexed_request = None;
+        if request.cursor.is_none() {
             self.window.hits.clear();
             self.selection.clear();
         }
@@ -373,10 +429,26 @@ impl SearchWorkspaceState {
         self.window.failure = Some(message);
     }
 
-    pub(crate) fn apply_indexed_cancellation(&mut self) {
+    pub(crate) fn apply_indexed_cancellation(&mut self, request: IndexedSearchRequest) {
         self.run.cancellation = None;
+        self.run.pending_indexed_request = None;
         self.window.is_loading = false;
         self.window.failure = None;
+        if request.cursor.is_none() {
+            self.run.next_cursor = None;
+        }
+    }
+
+    pub(crate) fn update_viewport(&mut self, offset_y: f32, height: f32) {
+        self.window.viewport_offset_y = offset_y.max(0.0);
+        self.window.viewport_height = height.max(0.0);
+    }
+
+    pub(crate) fn indexed_next_page_is_available(&self) -> bool {
+        self.run.provider == Some(SearchProvider::Indexed)
+            && self.window.completion == Some(SearchResultCompletion::MoreAvailable)
+            && self.run.next_cursor.is_some()
+            && self.run.pending_indexed_request.is_none()
     }
 
     pub(crate) fn begin_directory_fallback(&mut self) -> CancellationToken {
@@ -384,6 +456,8 @@ impl SearchWorkspaceState {
         let cancellation = CancellationToken::new();
         self.run.cancellation = Some(cancellation.clone());
         self.run.provider = Some(SearchProvider::DirectoryFallback);
+        self.run.next_cursor = None;
+        self.run.pending_indexed_request = None;
         self.window.begin_loading();
         self.selection.clear();
         cancellation
@@ -395,16 +469,7 @@ impl SearchWorkspaceState {
     }
 
     pub(crate) fn apply_directory_batch(&mut self, hits: Vec<SearchHit>) {
-        for hit in hits {
-            if self.window.hits.len() == SEARCH_RESULT_WINDOW {
-                self.window.completion = Some(SearchResultCompletion::Truncated);
-                if let Some(cancellation) = &self.run.cancellation {
-                    cancellation.cancel();
-                }
-                break;
-            }
-            self.window.hits.push(hit);
-        }
+        self.window.hits.extend(hits);
         self.window.failure = None;
     }
 
@@ -414,16 +479,14 @@ impl SearchWorkspaceState {
         match outcome {
             DirectoryFallbackOutcome::Completed(completion) => {
                 self.window.failure = None;
-                if self.window.completion != Some(SearchResultCompletion::Truncated) {
-                    self.window.completion = Some(match completion {
-                        file_search::DirectoryFallbackCompletion::TraversalComplete { .. } => {
-                            SearchResultCompletion::Complete
-                        }
-                        file_search::DirectoryFallbackCompletion::EntryBudgetReached {
-                            inspected_entries,
-                        } => SearchResultCompletion::Partial { inspected_entries },
-                    });
-                }
+                self.window.completion = Some(match completion {
+                    file_search::DirectoryFallbackCompletion::TraversalComplete { .. } => {
+                        SearchResultCompletion::Complete
+                    }
+                    file_search::DirectoryFallbackCompletion::EntryBudgetReached {
+                        inspected_entries,
+                    } => SearchResultCompletion::Partial { inspected_entries },
+                });
             }
             DirectoryFallbackOutcome::Cancelled => {
                 self.window.failure = None;
@@ -440,7 +503,8 @@ impl SearchWorkspaceState {
         self.run.generation = self.run.generation.saturating_add(1);
         self.run.active_query = None;
         self.run.provider = None;
-        self.run.indexed_batch_seen = false;
+        self.run.next_cursor = None;
+        self.run.pending_indexed_request = None;
         self.window.hits.clear();
         self.window.is_loading = false;
         self.window.failure = Some(message);
@@ -474,222 +538,5 @@ impl Drop for SearchWorkspaceState {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use file_search::{
-        MatchSource, SearchFileKind, SearchHit, SearchQuery, SearchResultBatch, SearchScope,
-        SearchTextScope,
-    };
-
-    use super::*;
-
-    fn directory_query(query_id: u64, terms: &str) -> SearchQuery {
-        SearchQuery {
-            query_id,
-            terms: terms.to_owned(),
-            text_scope: SearchTextScope::NameAndContent,
-            scope: SearchScope::Directory(PathBuf::from("/workspace")),
-            recursive: true,
-            filters: Default::default(),
-            limit: SEARCH_RESULT_WINDOW,
-            cursor: None,
-        }
-    }
-
-    fn hit(index: usize) -> SearchHit {
-        SearchHit {
-            path: PathBuf::from(format!("/workspace/result-{index}.txt")),
-            display_name: format!("result-{index}.txt"),
-            kind: SearchFileKind::File,
-            size: 0,
-            modified_ms: None,
-            accessed_ms: None,
-            created_ms: None,
-            rank: 1.0,
-            snippet: None,
-            match_source: MatchSource::Name,
-        }
-    }
-
-    #[test]
-    fn workspace_root_is_frozen_while_empty_input_is_a_valid_state() {
-        let workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace-a"), SearchWorkspaceSessionId(1));
-
-        assert_eq!(workspace.root.path(), Path::new("/workspace-a"));
-        assert!(workspace.input.is_empty());
-    }
-
-    #[test]
-    fn replacing_or_dropping_workspace_cancels_inflight_work() {
-        let mut workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        let first = workspace.begin_indexed_query(directory_query(1, "first"));
-        let second = workspace.begin_indexed_query(directory_query(2, "second"));
-
-        assert!(first.is_cancelled());
-        assert!(!second.is_cancelled());
-        drop(workspace);
-        assert!(second.is_cancelled());
-    }
-
-    #[test]
-    fn input_stabilization_accepts_only_the_current_revision() {
-        let mut workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        let stale = workspace.replace_input("rep".to_owned());
-        let current = workspace.replace_input("report".to_owned());
-
-        assert!(!workspace.accepts_input_stabilization(&stale));
-        assert!(workspace.accepts_input_stabilization(&current));
-
-        workspace.invalidate_input_stabilization();
-        assert!(!workspace.accepts_input_stabilization(&current));
-    }
-
-    #[test]
-    fn input_stabilization_cannot_cross_workspace_sessions() {
-        let mut first =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        let stale = first.replace_input("report".to_owned());
-        let mut reopened =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(2));
-        let _ = reopened.replace_input("report".to_owned());
-
-        assert!(!reopened.accepts_input_stabilization(&stale));
-    }
-
-    #[test]
-    fn content_degradation_is_derived_from_provider_and_active_text_scope() {
-        let mut workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        workspace.begin_indexed_query(directory_query(1, "report"));
-        workspace.begin_directory_fallback();
-        assert!(workspace.content_search_is_degraded());
-
-        let mut name_only = directory_query(2, "report");
-        name_only.text_scope = SearchTextScope::NameOnly;
-        workspace.begin_indexed_query(name_only);
-        workspace.begin_directory_fallback();
-        assert!(!workspace.content_search_is_degraded());
-    }
-
-    #[test]
-    fn indexed_completion_distinguishes_exact_window_from_real_overflow() {
-        let mut workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        workspace.begin_indexed_query(directory_query(1, ""));
-        workspace.apply_indexed_batch(SearchResultBatch {
-            query_id: 1,
-            hits: (0..SEARCH_RESULT_WINDOW).map(hit).collect(),
-            next_cursor: None,
-            finished: true,
-        });
-        assert_eq!(
-            workspace.window.completion,
-            Some(SearchResultCompletion::Complete)
-        );
-
-        workspace.begin_indexed_query(directory_query(2, ""));
-        workspace.apply_indexed_batch(SearchResultBatch {
-            query_id: 2,
-            hits: (0..SEARCH_RESULT_WINDOW).map(hit).collect(),
-            next_cursor: Some(file_search::SearchCursor {
-                offset: SEARCH_RESULT_WINDOW,
-            }),
-            finished: false,
-        });
-        assert_eq!(
-            workspace.window.completion,
-            Some(SearchResultCompletion::Truncated)
-        );
-    }
-
-    #[test]
-    fn fallback_needs_the_extra_hit_before_marking_the_window_truncated() {
-        let mut workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        workspace.begin_indexed_query(directory_query(1, ""));
-        let cancellation = workspace.begin_directory_fallback();
-        workspace.apply_directory_batch((0..SEARCH_RESULT_WINDOW).map(hit).collect());
-
-        assert_eq!(workspace.window.completion, None);
-        assert!(!cancellation.is_cancelled());
-
-        workspace.apply_directory_batch(vec![hit(SEARCH_RESULT_WINDOW)]);
-        assert_eq!(
-            workspace.window.completion,
-            Some(SearchResultCompletion::Truncated)
-        );
-        assert!(cancellation.is_cancelled());
-    }
-
-    #[test]
-    fn fallback_budget_completion_preserves_hits_as_partial_results() {
-        let mut workspace =
-            SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
-        workspace.begin_indexed_query(directory_query(1, "rare"));
-        workspace.begin_directory_fallback();
-        workspace.apply_directory_batch(vec![hit(1)]);
-        workspace.finish_directory_fallback(DirectoryFallbackOutcome::Completed(
-            file_search::DirectoryFallbackCompletion::EntryBudgetReached {
-                inspected_entries: 50_000,
-            },
-        ));
-
-        assert_eq!(workspace.window.hits.len(), 1);
-        assert_eq!(
-            workspace.window.completion,
-            Some(SearchResultCompletion::Partial {
-                inspected_entries: 50_000,
-            })
-        );
-    }
-
-    #[test]
-    fn search_selection_supports_plain_toggle_range_and_result_order() {
-        let hits = (0..5).map(hit).collect::<Vec<_>>();
-        let mut selection = SearchResultSelection::new();
-        selection.select(&hits, &hits[1].path, SearchSelectionGesture::Plain);
-        selection.select(&hits, &hits[3].path, SearchSelectionGesture::Range);
-        assert_eq!(
-            selection.selected_paths_in_result_order(&hits),
-            hits[1..=3]
-                .iter()
-                .map(|hit| hit.path.clone())
-                .collect::<Vec<_>>()
-        );
-
-        selection.select(&hits, &hits[2].path, SearchSelectionGesture::Toggle);
-        assert!(!selection.is_selected(&hits[2].path));
-        selection.select(&hits, &hits[4].path, SearchSelectionGesture::AdditiveRange);
-        assert!(selection.is_selected(&hits[4].path));
-    }
-
-    #[test]
-    fn keyboard_selection_moves_focus_and_select_all_uses_result_order() {
-        let hits = (0..3).map(hit).collect::<Vec<_>>();
-        let mut selection = SearchResultSelection::new();
-        assert_eq!(
-            selection.move_focus(
-                &hits,
-                SearchSelectionStep::Next,
-                SearchKeyboardSelection::Replace,
-            ),
-            Some(hits[0].path.clone())
-        );
-        assert_eq!(
-            selection.move_focus(
-                &hits,
-                SearchSelectionStep::Next,
-                SearchKeyboardSelection::Extend,
-            ),
-            Some(hits[1].path.clone())
-        );
-        assert_eq!(selection.selected_paths_in_result_order(&hits).len(), 2);
-
-        selection.select_all(&hits);
-        assert_eq!(selection.selected_paths_in_result_order(&hits).len(), 3);
-    }
-}
+#[path = "search_tests.rs"]
+mod tests;

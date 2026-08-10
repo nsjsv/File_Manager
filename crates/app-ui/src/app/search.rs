@@ -13,16 +13,17 @@ use crate::commands::{
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
     ContextMenuState, DestructiveActionConfirmation, DirectoryFallbackOutcome,
-    IndexedSearchOutcome, LastActivationClick, Message, NavigationMode, SearchContextMenuState,
-    SearchDateField, SearchDatePreset, SearchEntryTypeMenuState, SearchEntryTypePreset,
-    SearchInputStabilizationRequest, SearchKeyboardSelection, SearchSelectionGesture,
-    SearchSelectionStep, SearchServiceDiagnostic, SearchServiceDiagnosticKind,
-    SearchServiceRecoveryAction, SearchServiceStatusRequest, SearchWorkspaceSessionId,
-    SearchWorkspaceState,
+    IndexedSearchOutcome, IndexedSearchRequest, LastActivationClick, Message, NavigationMode,
+    SearchContextMenuState, SearchDateField, SearchDatePreset, SearchEntryTypeMenuState,
+    SearchEntryTypePreset, SearchInputStabilizationRequest, SearchKeyboardSelection,
+    SearchSelectionGesture, SearchSelectionStep, SearchServiceDiagnostic,
+    SearchServiceDiagnosticKind, SearchServiceRecoveryAction, SearchServiceStatusRequest,
+    SearchWorkspaceSessionId, SearchWorkspaceState,
 };
 use crate::shortcuts::{FileSelectionDirection, ShortcutAction};
 
 const SEARCH_INPUT_STABILIZATION_DELAY: Duration = Duration::from_millis(120);
+const SEARCH_PAGE_PREFETCH_ROWS: usize = 12;
 
 impl FileBrowser {
     pub(crate) fn invoke_search_workspace_shortcut(
@@ -234,48 +235,82 @@ impl FileBrowser {
         let Some(workspace) = self.search_workspace.as_mut() else {
             return Task::none();
         };
-        let cancellation = workspace.begin_indexed_query(query.clone());
-        search_command(generation, query, cancellation)
+        let (request, cancellation) = workspace.begin_indexed_query(query.clone());
+        search_command(request, query, cancellation)
     }
 
     pub(super) fn accept_search_results(
         &mut self,
-        generation: u64,
+        request: IndexedSearchRequest,
         outcome: IndexedSearchOutcome,
     ) -> Task<Message> {
         if !self
             .search_workspace
             .as_ref()
-            .is_some_and(|workspace| workspace.accepts_indexed_outcome(generation))
+            .is_some_and(|workspace| workspace.accepts_indexed_outcome(request))
         {
             return Task::none();
         }
         match outcome {
             IndexedSearchOutcome::Cancelled => {
                 if let Some(workspace) = self.search_workspace.as_mut() {
-                    workspace.apply_indexed_cancellation();
+                    workspace.apply_indexed_cancellation(request);
                 }
             }
             IndexedSearchOutcome::Batch(batch) => {
                 if let Some(workspace) = self.search_workspace.as_mut() {
-                    workspace.apply_indexed_batch(batch);
+                    workspace.apply_indexed_batch(request, batch);
                 }
             }
             IndexedSearchOutcome::TransportUnavailable(message) => {
                 self.search_service
                     .observe_query_transport_failure(&message);
-                return self.switch_to_directory_fallback(message);
+                if request.cursor.is_none() {
+                    return self.switch_to_directory_fallback(message);
+                }
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.apply_indexed_failure(request, message);
+                }
             }
             IndexedSearchOutcome::ProviderUnavailable(message) => {
-                return self.switch_to_directory_fallback(message);
+                if request.cursor.is_none() {
+                    return self.switch_to_directory_fallback(message);
+                }
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.apply_indexed_failure(request, message);
+                }
             }
             IndexedSearchOutcome::InvalidQuery(message) | IndexedSearchOutcome::Fatal(message) => {
                 if let Some(workspace) = self.search_workspace.as_mut() {
-                    workspace.apply_indexed_failure(message);
+                    workspace.apply_indexed_failure(request, message);
                 }
             }
         }
         Task::none()
+    }
+
+    pub(super) fn update_search_results_viewport(
+        &mut self,
+        offset_y: f32,
+        viewport_height: f32,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.update_viewport(offset_y, viewport_height);
+        let content_height =
+            workspace.window.hits.len() as f32 * crate::view::SEARCH_RESULT_ROW_HEIGHT;
+        let remaining_height = content_height - offset_y - viewport_height;
+        if remaining_height
+            > SEARCH_PAGE_PREFETCH_ROWS as f32 * crate::view::SEARCH_RESULT_ROW_HEIGHT
+            || !workspace.indexed_next_page_is_available()
+        {
+            return Task::none();
+        }
+        let Some((request, query, cancellation)) = workspace.begin_next_indexed_page() else {
+            return Task::none();
+        };
+        search_command(request, query, cancellation)
     }
 
     pub(super) fn accept_directory_search_batch(
@@ -567,12 +602,6 @@ impl FileBrowser {
         let Some(workspace) = self.search_workspace.as_ref() else {
             return Task::none();
         };
-        if workspace.run.indexed_batch_seen {
-            if let Some(workspace) = self.search_workspace.as_mut() {
-                workspace.apply_indexed_failure(unavailable_message);
-            }
-            return Task::none();
-        }
         let Some(query) = workspace.run.active_query.clone() else {
             self.fail_search_workspace(unavailable_message);
             return Task::none();

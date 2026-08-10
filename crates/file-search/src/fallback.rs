@@ -98,7 +98,6 @@ pub fn search_directory_fallback(
         .collect::<Vec<_>>();
     let batch_size = query.limit.clamp(1, 200);
     let mut batch = Vec::with_capacity(batch_size);
-    let mut first_window_emitted = false;
     let mut inspected_entries = 0;
 
     loop {
@@ -160,13 +159,12 @@ pub fn search_directory_fallback(
             },
         });
 
-        if batch.len() == batch_size || first_window_emitted {
+        if batch.len() == batch_size {
             ensure_not_cancelled(cancellation)?;
             emit_batch(std::mem::replace(
                 &mut batch,
                 Vec::with_capacity(batch_size),
             ));
-            first_window_emitted = true;
             ensure_not_cancelled(cancellation)?;
         }
     }
@@ -318,33 +316,29 @@ mod tests {
     }
 
     #[test]
-    fn emits_the_first_overflow_hit_immediately_for_cancellation() {
+    fn emits_matching_results_in_stable_batches() {
         let content = tempdir().unwrap();
-        for index in 0..300 {
+        for index in 0..250 {
             fs::write(content.path().join(format!("match-{index}.bin")), "match").unwrap();
         }
         let mut query = directory_query(content.path().to_path_buf(), "match");
         query.limit = 100;
-        let cancellation = CancellationToken::new();
-        let cancellation_after_overflow = cancellation.clone();
         let mut batch_lengths = Vec::new();
 
-        let error = search_directory_fallback(
+        let completion = search_directory_fallback(
             &query,
             &SearchExcludeRules::new(Vec::new()),
             complete_traversal_limits(),
-            &cancellation,
-            |batch| {
-                batch_lengths.push(batch.len());
-                if batch_lengths.len() == 2 {
-                    cancellation_after_overflow.cancel();
-                }
-            },
+            &CancellationToken::new(),
+            |batch| batch_lengths.push(batch.len()),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(error, SearchError::Cancelled));
-        assert_eq!(batch_lengths, vec![100, 1]);
+        assert!(matches!(
+            completion,
+            DirectoryFallbackCompletion::TraversalComplete { .. }
+        ));
+        assert_eq!(batch_lengths, vec![100, 100, 50]);
     }
 
     #[test]

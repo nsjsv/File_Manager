@@ -295,7 +295,12 @@ fn completed_path_migration_updates_inline_rename_and_restarts_frozen_root_searc
     );
     let workspace = browser.search_workspace.as_ref().unwrap();
     assert!(workspace.run.generation > previous_search_generation);
-    assert!(!workspace.accepts_indexed_outcome(previous_search_generation));
+    assert!(
+        !workspace.accepts_indexed_outcome(crate::model::IndexedSearchRequest {
+            generation: previous_search_generation,
+            cursor: None,
+        },)
+    );
     let active_query = workspace
         .run
         .active_query

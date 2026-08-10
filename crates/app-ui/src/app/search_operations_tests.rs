@@ -46,9 +46,16 @@ fn browser_with_search_selection() -> (FileBrowser, Vec<PathBuf>) {
         .selected_paths
         .insert(PathBuf::from("/underlying-browser-selection"));
     drop(browser.submit_search());
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    let request = browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .pending_indexed_request
+        .expect("pending indexed request");
+    let generation = request.generation;
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::Batch(SearchResultBatch {
             query_id: generation,
             hits: vec![search_hit(first.clone()), search_hit(second.clone())],
@@ -181,9 +188,17 @@ fn trash_and_permanent_delete_reuse_queue_and_confirmation_boundaries() {
 fn right_click_targets_search_selection_without_mutating_underlying_selection() {
     let (mut browser, expected_paths) = browser_with_search_selection();
     let third = browser.current_dir.join("third.txt");
-    let generation = browser.search_workspace.as_ref().unwrap().run.generation;
+    drop(browser.submit_search());
+    let request = browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .pending_indexed_request
+        .expect("new indexed request");
+    let generation = request.generation;
     drop(browser.accept_search_results(
-        generation,
+        request,
         IndexedSearchOutcome::Batch(SearchResultBatch {
             query_id: generation,
             hits: vec![

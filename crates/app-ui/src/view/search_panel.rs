@@ -3,7 +3,7 @@ use std::fmt;
 use file_search::{SearchFileKind, SearchTextScope};
 use iced::widget::{
     button, container, mouse_area, pick_list, responsive, row, scrollable, tooltip, Button, Column,
-    Row,
+    Row, Space,
 };
 use iced::{Alignment, Element, Length};
 
@@ -23,6 +23,7 @@ use crate::model::{
     SearchResultCompletion,
 };
 use crate::typography::{localized_text, readable_text};
+use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 use super::option_controls::{
     segmented_choice_button_style, segmented_choice_row, SegmentedChoice,
@@ -37,6 +38,8 @@ const SEARCH_DATE_PRESET_WIDTH: f32 = 138.0;
 const SEARCH_TEXT_SCOPE_WIDTH: f32 = 274.0;
 const SEARCH_FILTER_BUTTON_HEIGHT: f32 = 30.0;
 pub(crate) const SEARCH_RESULT_ROW_HEIGHT: f32 = 78.0;
+const SEARCH_RESULT_OVERSCAN_ROWS: usize = 12;
+const SEARCH_RESULT_INITIAL_ROWS: usize = SEARCH_RESULT_OVERSCAN_ROWS * 2 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SearchDateFieldOption(SearchDateField);
@@ -130,25 +133,52 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
         return container(readable_text("")).into();
     };
     let mut rows = Column::new().spacing(0).width(Length::Fill);
-    if let Some(failure) = &workspace.window.failure {
-        rows = rows.push(search_message(failure.clone()));
+    let range = if workspace.window.viewport_height > 0.0 {
+        virtual_range_for_viewport(
+            workspace.window.hits.len(),
+            SEARCH_RESULT_ROW_HEIGHT,
+            workspace.window.viewport_offset_y,
+            workspace.window.viewport_height,
+            SEARCH_RESULT_OVERSCAN_ROWS,
+        )
+    } else {
+        initial_virtual_range(
+            workspace.window.hits.len(),
+            SEARCH_RESULT_ROW_HEIGHT,
+            SEARCH_RESULT_INITIAL_ROWS,
+        )
+    };
+    if range.before_height > 0.0 {
+        rows = rows.push(Space::new().height(Length::Fixed(range.before_height)));
     }
-    for (index, hit) in workspace.window.hits.iter().enumerate() {
+    for (index, hit) in workspace.window.hits[range.start..range.end]
+        .iter()
+        .enumerate()
+    {
+        let row_index = range.start + index;
         rows = rows.push(search_result_row(
             hit.clone(),
-            index,
+            row_index,
             workspace.selection.is_selected(&hit.path),
             workspace.selection.focused_path() == Some(hit.path.as_path()),
             browser.file_entry_content_modifier(&hit.path),
         ));
+    }
+    if range.after_height > 0.0 {
+        rows = rows.push(Space::new().height(Length::Fixed(range.after_height)));
+    }
+    if let Some(failure) = &workspace.window.failure {
+        rows = rows.push(search_message(failure.clone()));
     }
     if workspace.window.is_loading {
         rows = rows.push(search_message("Searching..."));
     } else if workspace.window.hits.is_empty() && workspace.window.failure.is_none() {
         rows = rows.push(search_message("No search results"));
     }
-    if let Some(completion) = workspace.window.completion {
-        rows = rows.push(search_completion_message(completion));
+    if !workspace.window.is_loading {
+        if let Some(completion) = workspace.window.completion {
+            rows = rows.push(search_completion_message(completion));
+        }
     }
 
     let region = ScrollbarRegion::SearchResults;
@@ -159,7 +189,10 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
         .style(auto_hide_scrollbar_style(visibility))
         .width(Length::Fill)
         .height(Length::Fill)
-        .on_scroll(|_| Message::SearchResultsScrolled);
+        .on_scroll(|viewport| Message::SearchResultsScrolled {
+            offset_y: viewport.absolute_offset().y,
+            viewport_height: viewport.bounds().height,
+        });
 
     let mut content = Column::new().push(search_workspace_toolbar(browser));
     if workspace.content_search_is_degraded() {
@@ -510,7 +543,7 @@ fn search_content_degraded_notice() -> Element<'static, Message> {
 fn search_completion_message(completion: SearchResultCompletion) -> Element<'static, Message> {
     match completion {
         SearchResultCompletion::Complete => container(readable_text("")).into(),
-        SearchResultCompletion::Truncated => search_message("Showing the first 100 results"),
+        SearchResultCompletion::MoreAvailable => search_message("Scroll to load more results"),
         SearchResultCompletion::Partial { inspected_entries } => search_message(format!(
             "Partial results after inspecting {inspected_entries} entries"
         )),
