@@ -6,7 +6,7 @@ use iced::widget::scrollable;
 use iced::{Rectangle, Task, Vector};
 
 use super::FileBrowser;
-use crate::model::{BrowserPaneId, ColumnBrowserViewport, Message};
+use crate::model::{BrowserPaneId, ColumnBrowserViewport, Message, ScrollbarRegion};
 use crate::three_column_view::{
     column_directories, sidebar_underlay_width_for_pane, COLUMN_RESIZE_DIVIDER_WIDTH,
 };
@@ -89,7 +89,10 @@ impl FileBrowser {
         } else {
             return Task::none();
         }
-        self.request_browser_session_save()
+        Task::batch([
+            self.sync_selection_marquee_scroll(ScrollbarRegion::ColumnBrowser(pane_id), offset_x),
+            self.request_browser_session_save(),
+        ])
     }
 
     pub(super) fn restore_visible_column_browser_viewports(&self) -> Task<Message> {

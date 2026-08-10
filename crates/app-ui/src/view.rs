@@ -74,7 +74,7 @@ use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
     OPERATION_QUEUE_INDICATOR_RIGHT, OPERATION_QUEUE_PANEL_BOTTOM,
 };
-use crate::selection_marquee::selection_marquee_overlay;
+use crate::selection_marquee::selection_marquee_layer;
 use crate::three_column_view::column_browser_view;
 use crate::typography::readable_text;
 
@@ -219,8 +219,6 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             element: network_connection_editor_panel(editor),
             placement: FloatingPlacement::Center,
         });
-    } else if let Some(marquee) = &browser.selection_marquee {
-        floating.push(selection_marquee_overlay(marquee));
     } else if let Some(drag_preview) = drag_preview_panel(browser) {
         floating.push(FloatingContent {
             element: drag_preview,
@@ -427,8 +425,12 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
         }
     }
 
+    let marquee = (pane_id == browser.active_pane_id())
+        .then_some(browser.selection_marquee.as_ref())
+        .flatten();
+    let file_content = selection_marquee_layer(browser_content_view(browser, pane), marquee);
     let pane_content = main_content
-        .push(browser_content_view(browser, pane))
+        .push(file_content)
         .width(Length::Fill)
         .height(Length::Fill);
 

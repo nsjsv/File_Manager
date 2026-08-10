@@ -5,12 +5,11 @@ use std::time::Instant;
 use file_core::FileKind;
 use iced::Task;
 
-use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD, POINTER_DRAG_ACTIVATION_DISTANCE};
+use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 
 use crate::model::{
-    BrowserPaneId, BrowserViewMode, ColumnEntryBounds, ContextMenuState, FileContextMenuExpansion,
+    BrowserPaneId, BrowserViewMode, ContextMenuState, FileContextMenuExpansion,
     FileContextMenuState, FileDeleteAction, FileDragStationaryAction, LastActivationClick, Message,
-    SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
 };
 
 #[cfg(test)]
@@ -23,6 +22,7 @@ mod drag;
 mod file_drop;
 mod file_drop_target;
 mod keyboard_navigation;
+mod marquee;
 #[cfg(test)]
 mod tests;
 mod visible_paths;
@@ -352,83 +352,6 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn start_selection_marquee(&mut self) -> Task<Message> {
-        let expansion_command = self.dismiss_icon_grid_expansion_from_outside();
-        Task::batch([
-            expansion_command,
-            self.start_selection_marquee_from(SelectionMarqueeSource::PaneBlank),
-        ])
-    }
-
-    pub(super) fn start_column_blank_selection_marquee(
-        &mut self,
-        directory: PathBuf,
-    ) -> Task<Message> {
-        self.focused_column_directory = Some(directory.clone());
-        if self.renaming.is_some() {
-            return self.handle_column_blank_clicked(directory);
-        }
-
-        self.start_selection_marquee_from(SelectionMarqueeSource::ColumnBlank { directory })
-    }
-
-    pub(super) fn start_icon_grid_panel_selection_marquee(
-        &mut self,
-        directory: PathBuf,
-    ) -> Task<Message> {
-        if let Some(state) = self.icon_grid_expansion.as_mut() {
-            state.set_selection_directory(&directory);
-        }
-        self.start_selection_marquee_from(SelectionMarqueeSource::IconGridPanel { directory })
-    }
-
-    fn start_selection_marquee_from(&mut self, source: SelectionMarqueeSource) -> Task<Message> {
-        self.cancel_expansion_follow_plans();
-        if self.renaming.is_some() {
-            return self.commit_rename_if_active();
-        }
-
-        let column_context_directory = match &source {
-            SelectionMarqueeSource::ColumnBlank { directory } => {
-                self.column_blank_context_directory(directory)
-            }
-            SelectionMarqueeSource::PaneBlank | SelectionMarqueeSource::IconGridPanel { .. } => {
-                None
-            }
-        };
-        self.clear_preview();
-        self.context_menu = None;
-        self.drag_selection_anchor = None;
-        self.cancel_file_drag_interaction();
-        let preserve_existing = self.keyboard_modifiers.control();
-        let base_selection = self.selected_paths.clone();
-        if matches!(&source, SelectionMarqueeSource::PaneBlank) && !preserve_existing {
-            self.set_deepest_open_column_directory(None);
-        }
-        if !preserve_existing {
-            match (&source, column_context_directory) {
-                (_, Some(directory)) => self.select_path(directory),
-                (SelectionMarqueeSource::ColumnBlank { .. }, None)
-                | (SelectionMarqueeSource::IconGridPanel { .. }, _) => {
-                    self.clear_file_selection();
-                }
-                (SelectionMarqueeSource::PaneBlank, None) => {
-                    self.clear_column_blank_selection_context();
-                }
-            }
-        }
-        self.record_pane_drag_pointer_press();
-        self.selection_marquee = Some(SelectionMarquee {
-            start: self.cursor_position,
-            current: self.cursor_position,
-            source,
-            phase: SelectionMarqueePhase::WaitingForMovement,
-            base_selection,
-            preserve_existing,
-        });
-        Task::none()
-    }
-
     fn focus_column_blank_context_or_clear_selection(&mut self, directory: PathBuf) {
         if let Some(directory) = self.column_blank_context_directory(&directory) {
             self.set_deepest_open_column_directory(Some(directory.clone()));
@@ -471,71 +394,6 @@ impl FileBrowser {
     fn clear_column_blank_selection_context(&mut self) {
         self.deepest_open_column_directory = None;
         self.clear_file_selection();
-    }
-
-    pub(super) fn update_selection_marquee(&mut self, position: iced::Point) -> bool {
-        if let Some(marquee) = &mut self.selection_marquee {
-            marquee.current = position;
-            if marquee.phase == SelectionMarqueePhase::WaitingForMovement
-                && selection_marquee_distance_exceeded(marquee)
-            {
-                marquee.phase = SelectionMarqueePhase::Selecting;
-            }
-            return marquee.is_selecting();
-        }
-        false
-    }
-
-    pub(super) fn update_selection_from_column_entry_bounds(
-        &mut self,
-        bounds: Vec<ColumnEntryBounds>,
-    ) -> Task<Message> {
-        self.file_entry_bounds = bounds;
-        let Some(marquee) = self
-            .selection_marquee
-            .as_ref()
-            .filter(|marquee| marquee.is_selecting())
-        else {
-            return Task::none();
-        };
-        let marquee_rectangle = marquee.rectangle();
-        let icon_grid_panel_directory = match &marquee.source {
-            SelectionMarqueeSource::IconGridPanel { directory } => Some(directory.as_path()),
-            SelectionMarqueeSource::PaneBlank if self.view_mode == BrowserViewMode::Icons => {
-                Some(self.current_dir.as_path())
-            }
-            SelectionMarqueeSource::PaneBlank | SelectionMarqueeSource::ColumnBlank { .. } => None,
-        };
-        let active_pane_id = self.active_pane_id();
-        let visible_paths = self
-            .visible_entry_paths()
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let mut next_selection = if marquee.preserve_existing {
-            marquee.base_selection.clone()
-        } else {
-            HashSet::new()
-        };
-
-        for entry_bounds in &self.file_entry_bounds {
-            if entry_bounds.pane_id == active_pane_id
-                && visible_paths.contains(&entry_bounds.path)
-                && icon_grid_panel_directory
-                    .is_none_or(|directory| entry_bounds.path.parent() == Some(directory))
-                && rectangles_intersect(marquee_rectangle, entry_bounds.bounds)
-            {
-                next_selection.insert(entry_bounds.path.clone());
-            }
-        }
-
-        self.selected_paths = next_selection;
-        self.selected = self.last_visible_selected_path();
-        if let Some(selected) = self.selected.clone() {
-            self.update_rename_input(&selected);
-        } else {
-            self.rename_input.clear();
-        }
-        Task::none()
     }
 
     pub(super) fn select_all_in_file_selection_scope(&mut self) -> Task<Message> {
@@ -796,18 +654,4 @@ impl FileBrowser {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
     }
-}
-
-fn selection_marquee_distance_exceeded(marquee: &SelectionMarquee) -> bool {
-    let delta_x = marquee.current.x - marquee.start.x;
-    let delta_y = marquee.current.y - marquee.start.y;
-    delta_x * delta_x + delta_y * delta_y
-        >= POINTER_DRAG_ACTIVATION_DISTANCE * POINTER_DRAG_ACTIVATION_DISTANCE
-}
-
-fn rectangles_intersect(first: iced::Rectangle, second: iced::Rectangle) -> bool {
-    first.x < second.x + second.width
-        && first.x + first.width > second.x
-        && first.y < second.y + second.height
-        && first.y + first.height > second.y
 }

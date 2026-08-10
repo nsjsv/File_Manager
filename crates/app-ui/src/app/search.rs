@@ -192,6 +192,7 @@ impl FileBrowser {
         let session_id = SearchWorkspaceSessionId(self.next_search_workspace_session_id);
         self.next_search_workspace_session_id =
             self.next_search_workspace_session_id.wrapping_add(1);
+        self.clear_pointer_driven_interaction_state();
         self.search_workspace = Some(SearchWorkspaceState::new(root, session_id));
         Ok(())
     }

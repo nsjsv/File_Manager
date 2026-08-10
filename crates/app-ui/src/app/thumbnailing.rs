@@ -8,7 +8,7 @@ use super::{FileBrowser, PaneIconGridViewport};
 use crate::commands::thumbnail_batch_command;
 use crate::model::{
     sanitized_application_log_detail, BrowserPane, BrowserPaneId, BrowserViewMode,
-    IconGridViewport, Message, PreviewContent, PreviewState,
+    IconGridViewport, Message, PreviewContent, PreviewState, ScrollbarRegion,
 };
 use crate::thumbnail_cache::{
     request_for_entry, request_for_transfer_conflict_path, ColumnViewport, ThumbnailHandleEntry,
@@ -65,7 +65,13 @@ impl FileBrowser {
             &directory,
             ThumbnailPriority::Focused,
         );
-        self.pump_thumbnail_queue()
+        Task::batch([
+            self.sync_selection_marquee_scroll(
+                ScrollbarRegion::Column { pane_id, directory },
+                offset_y,
+            ),
+            self.pump_thumbnail_queue(),
+        ])
     }
 
     pub(super) fn handle_list_scrolled(
@@ -88,6 +94,7 @@ impl FileBrowser {
         }
         self.schedule_visible_list_thumbnail_range_for_pane(pane_id, Some(viewport));
         Task::batch([
+            self.sync_selection_marquee_scroll(ScrollbarRegion::PaneList(pane_id), offset_y),
             self.schedule_visible_list_directory_summary_range_for_pane(pane_id, Some(viewport)),
             self.pump_thumbnail_queue(),
         ])
@@ -115,7 +122,10 @@ impl FileBrowser {
             },
         );
         self.schedule_visible_icon_grid_thumbnails_for_pane(pane_id);
-        self.pump_thumbnail_queue()
+        Task::batch([
+            self.sync_selection_marquee_scroll(ScrollbarRegion::PaneIcons(pane_id), offset_y),
+            self.pump_thumbnail_queue(),
+        ])
     }
 
     pub(super) fn request_preview_thumbnail_for_entry(

@@ -156,10 +156,15 @@ mod tests {
             column_directories_snapshot: Vec::new(),
         });
         browser.selection_marquee = Some(SelectionMarquee {
+            gesture_origin: Point::new(0.0, 0.0),
             start: Point::new(0.0, 0.0),
             current: Point::new(10.0, 10.0),
             source: SelectionMarqueeSource::PaneBlank,
             phase: SelectionMarqueePhase::Selecting,
+            scroll_anchor: crate::model::SelectionMarqueeScrollAnchor::List {
+                pane_id: browser.active_pane_id(),
+                offset_y: 0.0,
+            },
             base_selection: HashSet::new(),
             preserve_existing: false,
         });

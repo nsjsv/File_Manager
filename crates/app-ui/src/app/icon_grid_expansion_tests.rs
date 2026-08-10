@@ -8,7 +8,8 @@ use super::*;
 use crate::config;
 use crate::model::{
     AddressEditingSession, AddressEditingSessionId, BatchRenameMessage, ColumnEntryBounds,
-    DirectoryLoadRequest, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
+    DirectoryLoadRequest, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeScrollAnchor,
+    SelectionMarqueeSource,
 };
 use crate::shortcuts::FileSelectionDirection;
 
@@ -486,12 +487,17 @@ fn icon_grid_panel_marquee_ignores_intersecting_entries_from_other_panels() {
     );
     finish_open_animation(&mut browser);
     browser.selection_marquee = Some(SelectionMarquee {
+        gesture_origin: Point::new(0.0, 0.0),
         start: Point::new(0.0, 0.0),
         current: Point::new(100.0, 100.0),
         source: SelectionMarqueeSource::IconGridPanel {
             directory: root.clone(),
         },
         phase: SelectionMarqueePhase::Selecting,
+        scroll_anchor: SelectionMarqueeScrollAnchor::Icons {
+            pane_id: BrowserPaneId::PRIMARY,
+            offset_y: 0.0,
+        },
         base_selection: HashSet::new(),
         preserve_existing: false,
     });

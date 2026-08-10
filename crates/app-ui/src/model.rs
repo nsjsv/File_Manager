@@ -64,7 +64,8 @@ mod trash;
 pub(crate) use trash::{TrashRefreshCompletionDecision, TrashRefreshState};
 mod selection;
 pub(crate) use selection::{
-    ColumnEntryBounds, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeSource,
+    ColumnEntryBounds, SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeScrollAnchor,
+    SelectionMarqueeSource,
 };
 mod icon_grid_expansion;
 #[cfg(test)]

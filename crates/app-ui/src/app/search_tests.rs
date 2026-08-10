@@ -1,8 +1,11 @@
+use std::collections::HashSet;
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+
+use iced::Point;
 
 use file_search::{MatchSource, SearchFileKind, SearchHit, SearchResultBatch, SearchScope};
 use tempfile::tempdir;
@@ -12,7 +15,8 @@ use crate::config;
 use crate::model::search::{SearchProvider, SEARCH_RESULT_WINDOW};
 use crate::model::{
     ContextMenuState, DirectoryFallbackOutcome, IndexedSearchOutcome, SearchEntryTypeMenuState,
-    SearchEntryTypePreset, SearchResultCompletion, SearchServiceDiagnosticKind,
+    SearchEntryTypePreset, SearchResultCompletion, SearchServiceDiagnosticKind, SelectionMarquee,
+    SelectionMarqueePhase, SelectionMarqueeScrollAnchor, SelectionMarqueeSource,
 };
 
 fn browser_for_search_tests(root: PathBuf) -> FileBrowser {
@@ -69,6 +73,32 @@ fn stabilize_search_input(browser: &mut FileBrowser, value: &str) {
         .unwrap()
         .replace_input(value.to_owned());
     drop(browser.accept_search_input_stabilization(request));
+}
+
+#[test]
+fn opening_search_workspace_clears_file_view_pointer_interactions() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    let pane_id = browser.active_pane_id();
+    browser.selection_marquee = Some(SelectionMarquee {
+        gesture_origin: Point::new(10.0, 10.0),
+        start: Point::new(10.0, 10.0),
+        current: Point::new(40.0, 40.0),
+        source: SelectionMarqueeSource::PaneBlank,
+        phase: SelectionMarqueePhase::Selecting,
+        scroll_anchor: SelectionMarqueeScrollAnchor::List {
+            pane_id,
+            offset_y: 0.0,
+        },
+        base_selection: HashSet::new(),
+        preserve_existing: false,
+    });
+    browser.drag_selection_anchor = Some(browser.current_dir.join("anchor.txt"));
+
+    drop(browser.submit_search());
+
+    assert!(browser.search_workspace.is_some());
+    assert!(browser.selection_marquee.is_none());
+    assert!(browser.drag_selection_anchor.is_none());
 }
 
 #[test]

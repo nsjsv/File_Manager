@@ -8,9 +8,10 @@ use crate::{
     app::FileBrowser,
     config,
     model::{
-        AddressEditingSession, AddressEditingSessionId, BrowserPaneId, ColumnEntryBounds,
-        ContextMenuState, FileDropTarget as FileDragTarget, SelectionMarquee,
-        SelectionMarqueePhase, SelectionMarqueeSource,
+        AddressEditingSession, AddressEditingSessionId, BrowserPaneId, BrowserViewMode,
+        ColumnEntryBounds, ContextMenuState, FileDropTarget as FileDragTarget, ScrollbarRegion,
+        SelectionMarquee, SelectionMarqueePhase, SelectionMarqueeScrollAnchor,
+        SelectionMarqueeSource,
     },
 };
 
@@ -35,10 +36,15 @@ fn active_selection_marquee(
     preserve_existing: bool,
 ) -> SelectionMarquee {
     SelectionMarquee {
+        gesture_origin: Point::new(0.0, 0.0),
         start: Point::new(0.0, 0.0),
         current,
         source: SelectionMarqueeSource::PaneBlank,
         phase: SelectionMarqueePhase::Selecting,
+        scroll_anchor: crate::model::SelectionMarqueeScrollAnchor::List {
+            pane_id: BrowserPaneId::PRIMARY,
+            offset_y: 0.0,
+        },
         base_selection,
         preserve_existing,
     }
@@ -58,6 +64,274 @@ fn entry_bounds(path: PathBuf, x: f32, y: f32, width: f32, height: f32) -> Colum
 }
 
 #[test]
+fn marquee_scroll_anchor_tracks_matching_absolute_offsets_without_drift() {
+    let pane_id = BrowserPaneId::PRIMARY;
+    let mut marquee = active_selection_marquee(Point::new(40.0, 60.0), HashSet::new(), false);
+    marquee.start = Point::new(20.0, 30.0);
+    marquee.scroll_anchor = SelectionMarqueeScrollAnchor::List {
+        pane_id,
+        offset_y: 10.0,
+    };
+
+    assert!(marquee.sync_scroll_offset(&ScrollbarRegion::PaneList(pane_id), 25.0));
+    assert_eq!(marquee.start, Point::new(20.0, 15.0));
+    assert!(!marquee.sync_scroll_offset(&ScrollbarRegion::PaneList(pane_id), 25.0));
+    assert_eq!(marquee.start, Point::new(20.0, 15.0));
+    assert!(marquee.sync_scroll_offset(&ScrollbarRegion::PaneList(pane_id), 5.0));
+    assert_eq!(marquee.start, Point::new(20.0, 35.0));
+    assert_eq!(marquee.current, Point::new(40.0, 60.0));
+    assert!(marquee.sync_scroll_offset(&ScrollbarRegion::PaneList(pane_id), -5.0));
+    assert_eq!(marquee.start, Point::new(20.0, 40.0));
+    assert!(!marquee.sync_scroll_offset(&ScrollbarRegion::PaneList(pane_id), -10.0));
+    assert_eq!(marquee.start, Point::new(20.0, 40.0));
+    assert!(!marquee.sync_scroll_offset(&ScrollbarRegion::PaneList(pane_id), f32::NAN));
+    assert_eq!(marquee.start, Point::new(20.0, 40.0));
+}
+
+#[test]
+fn column_marquee_tracks_outer_and_source_column_scroll_only() {
+    let pane_id = BrowserPaneId::PRIMARY;
+    let directory = PathBuf::from("/workspace/project");
+    let mut marquee = active_selection_marquee(Point::new(80.0, 90.0), HashSet::new(), false);
+    marquee.start = Point::new(40.0, 50.0);
+    marquee.scroll_anchor = SelectionMarqueeScrollAnchor::Column {
+        pane_id,
+        directory: directory.clone(),
+        browser_offset_x: 10.0,
+        directory_offset_y: 20.0,
+    };
+
+    assert!(marquee.sync_scroll_offset(&ScrollbarRegion::ColumnBrowser(pane_id), 35.0));
+    assert_eq!(marquee.start, Point::new(15.0, 50.0));
+    assert!(marquee.sync_scroll_offset(
+        &ScrollbarRegion::Column {
+            pane_id,
+            directory: directory.clone(),
+        },
+        45.0,
+    ));
+    assert_eq!(marquee.start, Point::new(15.0, 25.0));
+    assert!(!marquee.sync_scroll_offset(
+        &ScrollbarRegion::Column {
+            pane_id,
+            directory: PathBuf::from("/workspace/other"),
+        },
+        100.0,
+    ));
+    assert!(!marquee.sync_scroll_offset(
+        &ScrollbarRegion::Column {
+            pane_id: BrowserPaneId(99),
+            directory,
+        },
+        100.0,
+    ));
+    assert_eq!(marquee.start, Point::new(15.0, 25.0));
+}
+
+#[test]
+fn selection_marquee_captures_view_specific_scroll_anchor() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let current_dir = PathBuf::from("/workspace");
+    browser.current_dir = current_dir.clone();
+    browser.cursor_position = Point::new(30.0, 40.0);
+    browser.view_mode = BrowserViewMode::List;
+    browser.column_viewports.insert(
+        current_dir.clone(),
+        crate::thumbnail_cache::ColumnViewport {
+            offset_y: 70.0,
+            height: 400.0,
+        },
+    );
+
+    drop(browser.start_selection_marquee());
+
+    assert!(matches!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .map(|marquee| &marquee.scroll_anchor),
+        Some(SelectionMarqueeScrollAnchor::List {
+            pane_id: BrowserPaneId::PRIMARY,
+            offset_y,
+        }) if *offset_y == 70.0
+    ));
+
+    browser.selection_marquee = None;
+    browser.view_mode = BrowserViewMode::Columns;
+    browser.column_browser_viewport.offset_x = 55.0;
+    browser.column_viewports.insert(
+        current_dir.clone(),
+        crate::thumbnail_cache::ColumnViewport {
+            offset_y: 90.0,
+            height: 400.0,
+        },
+    );
+    drop(browser.start_column_blank_selection_marquee(current_dir.clone()));
+
+    assert!(matches!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .map(|marquee| &marquee.scroll_anchor),
+        Some(SelectionMarqueeScrollAnchor::Column {
+            pane_id: BrowserPaneId::PRIMARY,
+            directory,
+            browser_offset_x,
+            directory_offset_y,
+        }) if directory == &current_dir
+            && *browser_offset_x == 55.0
+            && *directory_offset_y == 90.0
+    ));
+
+    browser.selection_marquee = None;
+    browser.view_mode = BrowserViewMode::Icons;
+    drop(browser.handle_icon_grid_scrolled(BrowserPaneId::PRIMARY, 120.0, 600.0, 400.0));
+    drop(browser.start_selection_marquee());
+
+    assert!(matches!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .map(|marquee| &marquee.scroll_anchor),
+        Some(SelectionMarqueeScrollAnchor::Icons {
+            pane_id: BrowserPaneId::PRIMARY,
+            offset_y,
+        }) if *offset_y == 120.0
+    ));
+}
+
+#[test]
+fn scroll_motion_preserves_waiting_marquee_phase() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let pane_id = BrowserPaneId::PRIMARY;
+    browser.selection_marquee = Some(SelectionMarquee {
+        gesture_origin: Point::new(20.0, 30.0),
+        start: Point::new(20.0, 30.0),
+        current: Point::new(20.0, 30.0),
+        source: SelectionMarqueeSource::PaneBlank,
+        phase: SelectionMarqueePhase::WaitingForMovement,
+        scroll_anchor: SelectionMarqueeScrollAnchor::List {
+            pane_id,
+            offset_y: 0.0,
+        },
+        base_selection: HashSet::new(),
+        preserve_existing: false,
+    });
+
+    drop(browser.update(crate::model::Message::ListScrolled(pane_id, 10.0, 400.0)));
+
+    let marquee = browser
+        .selection_marquee
+        .as_ref()
+        .expect("selection marquee");
+    assert_eq!(marquee.phase, SelectionMarqueePhase::WaitingForMovement);
+    assert_eq!(marquee.gesture_origin, Point::new(20.0, 30.0));
+    assert_eq!(marquee.start, Point::new(20.0, 20.0));
+    assert_eq!(marquee.current, Point::new(20.0, 30.0));
+
+    assert!(!browser.update_selection_marquee(Point::new(21.0, 30.0)));
+    assert_eq!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .expect("selection marquee")
+            .phase,
+        SelectionMarqueePhase::WaitingForMovement
+    );
+    assert!(browser.update_selection_marquee(Point::new(30.0, 30.0)));
+}
+
+#[test]
+fn file_view_scroll_messages_move_the_active_marquee_anchor() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let pane_id = BrowserPaneId::PRIMARY;
+    let directory = PathBuf::from("/workspace/project");
+    browser.selection_marquee = Some(active_selection_marquee(
+        Point::new(80.0, 90.0),
+        HashSet::new(),
+        false,
+    ));
+    browser
+        .selection_marquee
+        .as_mut()
+        .expect("selection marquee")
+        .start = Point::new(40.0, 50.0);
+
+    drop(browser.update(crate::model::Message::ListScrolled(pane_id, 15.0, 400.0)));
+    assert_eq!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .expect("selection marquee")
+            .start,
+        Point::new(40.0, 35.0)
+    );
+
+    browser
+        .selection_marquee
+        .as_mut()
+        .expect("selection marquee")
+        .scroll_anchor = SelectionMarqueeScrollAnchor::Icons {
+        pane_id,
+        offset_y: 5.0,
+    };
+    drop(browser.update(crate::model::Message::IconGridScrolled(
+        pane_id, 25.0, 600.0, 400.0,
+    )));
+    assert_eq!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .expect("selection marquee")
+            .start,
+        Point::new(40.0, 15.0)
+    );
+
+    browser
+        .selection_marquee
+        .as_mut()
+        .expect("selection marquee")
+        .scroll_anchor = SelectionMarqueeScrollAnchor::Column {
+        pane_id,
+        directory: directory.clone(),
+        browser_offset_x: 10.0,
+        directory_offset_y: 20.0,
+    };
+    drop(browser.update(crate::model::Message::ColumnBrowserScrolled(
+        pane_id, 30.0, 600.0,
+    )));
+    drop(browser.update(crate::model::Message::ColumnScrolled(
+        pane_id,
+        directory.clone(),
+        45.0,
+        400.0,
+    )));
+    assert_eq!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .expect("selection marquee")
+            .start,
+        Point::new(20.0, -10.0)
+    );
+
+    drop(browser.update(crate::model::Message::ColumnScrolled(
+        pane_id,
+        PathBuf::from("/workspace/other"),
+        100.0,
+        400.0,
+    )));
+    assert_eq!(
+        browser
+            .selection_marquee
+            .as_ref()
+            .expect("selection marquee")
+            .start,
+        Point::new(20.0, -10.0)
+    );
+}
+
+#[test]
 fn rectangles_intersect_only_when_areas_overlap() {
     let first = Rectangle {
         x: 0.0,
@@ -66,7 +340,7 @@ fn rectangles_intersect_only_when_areas_overlap() {
         height: 20.0,
     };
 
-    assert!(super::rectangles_intersect(
+    assert!(super::marquee::rectangles_intersect(
         first,
         Rectangle {
             x: 10.0,
@@ -75,7 +349,7 @@ fn rectangles_intersect_only_when_areas_overlap() {
             height: 20.0,
         }
     ));
-    assert!(!super::rectangles_intersect(
+    assert!(!super::marquee::rectangles_intersect(
         first,
         Rectangle {
             x: 20.0,

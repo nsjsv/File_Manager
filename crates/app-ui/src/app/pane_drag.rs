@@ -228,7 +228,7 @@ impl FileBrowser {
                 phase: match marquee.phase {
                     SelectionMarqueePhase::WaitingForMovement => {
                         FileDragPhase::WaitingForMovement {
-                            origin: marquee.start,
+                            origin: marquee.gesture_origin,
                         }
                     }
                     SelectionMarqueePhase::Selecting => FileDragPhase::Dragging,
@@ -621,10 +621,15 @@ mod tests {
         browser.cursor_position = Point::new(190.0, 50.0);
         browser.drag_selection_anchor = Some(anchor);
         browser.selection_marquee = Some(SelectionMarquee {
+            gesture_origin: Point::new(10.0, 10.0),
             start: Point::new(10.0, 10.0),
             current: browser.cursor_position,
             source: SelectionMarqueeSource::PaneBlank,
             phase: SelectionMarqueePhase::Selecting,
+            scroll_anchor: crate::model::SelectionMarqueeScrollAnchor::List {
+                pane_id: BrowserPaneId::PRIMARY,
+                offset_y: 0.0,
+            },
             base_selection: HashSet::new(),
             preserve_existing: false,
         });

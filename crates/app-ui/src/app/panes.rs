@@ -269,7 +269,11 @@ impl FileBrowser {
         }
     }
 
-    fn icon_grid_viewport_for(&self, pane_id: BrowserPaneId, directory: &Path) -> IconGridViewport {
+    pub(super) fn icon_grid_viewport_for(
+        &self,
+        pane_id: BrowserPaneId,
+        directory: &Path,
+    ) -> IconGridViewport {
         let mut viewport = self
             .icon_grid_viewports
             .get(&pane_id)

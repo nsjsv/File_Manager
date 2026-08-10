@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use iced::{Point, Rectangle};
 
-use super::BrowserPaneId;
+use super::{BrowserPaneId, ScrollbarRegion};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnEntryBounds {
@@ -14,12 +14,36 @@ pub(crate) struct ColumnEntryBounds {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SelectionMarquee {
+    pub(crate) gesture_origin: Point,
     pub(crate) start: Point,
     pub(crate) current: Point,
     pub(crate) source: SelectionMarqueeSource,
     pub(crate) phase: SelectionMarqueePhase,
+    pub(crate) scroll_anchor: SelectionMarqueeScrollAnchor,
     pub(crate) base_selection: HashSet<PathBuf>,
     pub(crate) preserve_existing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SelectionMarqueeScrollAnchor {
+    List {
+        pane_id: BrowserPaneId,
+        offset_y: f32,
+    },
+    Icons {
+        pane_id: BrowserPaneId,
+        offset_y: f32,
+    },
+    ColumnBrowser {
+        pane_id: BrowserPaneId,
+        offset_x: f32,
+    },
+    Column {
+        pane_id: BrowserPaneId,
+        directory: PathBuf,
+        browser_offset_x: f32,
+        directory_offset_y: f32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -63,5 +87,60 @@ impl SelectionMarquee {
 
     pub(crate) fn is_selecting(&self) -> bool {
         self.phase == SelectionMarqueePhase::Selecting
+    }
+
+    pub(crate) fn sync_scroll_offset(&mut self, region: &ScrollbarRegion, offset: f32) -> bool {
+        if !offset.is_finite() {
+            return false;
+        }
+        let offset = offset.max(0.0);
+
+        let previous_offset = match (&mut self.scroll_anchor, region) {
+            (
+                SelectionMarqueeScrollAnchor::List { pane_id, offset_y },
+                ScrollbarRegion::PaneList(scrolled_pane_id),
+            ) if pane_id == scrolled_pane_id => offset_y,
+            (
+                SelectionMarqueeScrollAnchor::Icons { pane_id, offset_y },
+                ScrollbarRegion::PaneIcons(scrolled_pane_id),
+            ) if pane_id == scrolled_pane_id => offset_y,
+            (
+                SelectionMarqueeScrollAnchor::ColumnBrowser { pane_id, offset_x },
+                ScrollbarRegion::ColumnBrowser(scrolled_pane_id),
+            ) if pane_id == scrolled_pane_id => offset_x,
+            (
+                SelectionMarqueeScrollAnchor::Column {
+                    pane_id,
+                    browser_offset_x,
+                    ..
+                },
+                ScrollbarRegion::ColumnBrowser(scrolled_pane_id),
+            ) if pane_id == scrolled_pane_id => browser_offset_x,
+            (
+                SelectionMarqueeScrollAnchor::Column {
+                    pane_id,
+                    directory,
+                    directory_offset_y,
+                    ..
+                },
+                ScrollbarRegion::Column {
+                    pane_id: scrolled_pane_id,
+                    directory: scrolled_directory,
+                },
+            ) if pane_id == scrolled_pane_id && directory == scrolled_directory => {
+                directory_offset_y
+            }
+            _ => return false,
+        };
+        let delta = offset - *previous_offset;
+        *previous_offset = offset;
+        match region {
+            ScrollbarRegion::ColumnBrowser(_) => self.start.x -= delta,
+            ScrollbarRegion::PaneList(_)
+            | ScrollbarRegion::PaneIcons(_)
+            | ScrollbarRegion::Column { .. } => self.start.y -= delta,
+            _ => return false,
+        }
+        delta.abs() > f32::EPSILON
     }
 }
