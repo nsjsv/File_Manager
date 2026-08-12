@@ -9,7 +9,7 @@ use file_core::{FileOperationVerification, SortDirection, SortField};
 use file_operation_store::{StoredNetworkConnection, StoredWindowControlPlacement, TaskQueueStore};
 
 use crate::model::{
-    BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode, MainWindowChromeLayout,
+    BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode, WindowChromeLayout,
     WindowControlKind, WindowControlSide, WindowControlVisibility,
 };
 use crate::network_connections::SavedNetworkConnection;
@@ -203,7 +203,7 @@ fn user_preferences_round_trip_through_sqlite() {
     config.browser_view_mode = BrowserViewMode::List;
     config
         .window_controls
-        .select_main_layout(MainWindowChromeLayout::SeparateTitleBar);
+        .select_layout(WindowChromeLayout::SeparateTitleBar);
     config
         .window_controls
         .set_visibility(WindowControlKind::Minimize, WindowControlVisibility::Hidden);
@@ -345,8 +345,8 @@ fn stored_window_controls_are_normalized_at_config_boundary() {
     let preferences = UserPreferences::from_stored(stored, &default);
 
     assert_eq!(
-        preferences.window_controls.main_layout(),
-        MainWindowChromeLayout::IntegratedNavigation
+        preferences.window_controls.layout(),
+        WindowChromeLayout::IntegratedNavigation
     );
     assert_eq!(preferences.window_controls.placements().len(), 3);
     let close = preferences

@@ -22,7 +22,7 @@ use super::{
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
     ListColumnConfig, ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences,
-    MainWindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
+    WindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
     WindowControlVisibility, WindowControlsConfig,
 };
 use crate::network_connections::SavedNetworkConnection;
@@ -116,7 +116,7 @@ impl UserPreferences {
             file_operation_verification_config_value(self.file_operation_verification).to_owned();
         stored.browser_view_mode =
             browser_view_mode_config_value(self.browser_view_mode).to_owned();
-        stored.window_chrome_layout = self.window_controls.main_layout().config_value().to_owned();
+        stored.window_chrome_layout = self.window_controls.layout().config_value().to_owned();
         stored.window_controls = stored_window_controls(&self.window_controls);
         stored.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
         stored.list_view_columns = stored_list_view_columns(&self.list_view_preferences);
@@ -338,8 +338,8 @@ fn window_controls_from_stored(
     stored: &StoredUserPreferences,
     default: &UserPreferences,
 ) -> WindowControlsConfig {
-    let main_layout = MainWindowChromeLayout::from_config_value(&stored.window_chrome_layout)
-        .unwrap_or(default.window_controls.main_layout());
+    let layout = WindowChromeLayout::from_config_value(&stored.window_chrome_layout)
+        .unwrap_or(default.window_controls.layout());
     let placements = stored
         .window_controls
         .iter()
@@ -354,7 +354,7 @@ fn window_controls_from_stored(
             ))
         })
         .collect();
-    WindowControlsConfig::from_partial_placements(main_layout, placements)
+    WindowControlsConfig::from_partial_placements(layout, placements)
 }
 
 fn stored_window_controls(

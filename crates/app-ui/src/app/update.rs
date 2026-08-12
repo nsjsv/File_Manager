@@ -609,9 +609,7 @@ impl FileBrowser {
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::SettingsOpened => self.open_settings(),
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
-            Message::MainWindowChromeLayoutSelected(layout) => {
-                self.select_main_window_chrome_layout(layout)
-            }
+            Message::WindowChromeLayoutSelected(layout) => self.select_window_chrome_layout(layout),
             Message::WindowControlVisibilityToggled(kind) => {
                 self.toggle_window_control_visibility(kind)
             }

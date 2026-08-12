@@ -137,7 +137,7 @@ use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
 use crate::view::{
-    separate_window_content, view_browser, view_properties_window, view_settings_window,
+    auxiliary_window_content, view_browser, view_properties_window, view_settings_window,
     window_resize_frame,
 };
 
@@ -791,13 +791,15 @@ impl FileBrowser {
         self.theme.clone()
     }
 
-    fn view_with_separate_window_chrome<'a>(
+    fn view_with_window_chrome<'a>(
         &'a self,
         window: window::Id,
+        integrated_title: &'static str,
         content: Element<'a, Message>,
     ) -> Element<'a, Message> {
         let frame_state = self.window_frame_state(window);
-        let content = separate_window_content(
+        let content = auxiliary_window_content(
+            integrated_title,
             self.window_title(window),
             content,
             &self.user_config.window_controls,
@@ -809,15 +811,15 @@ impl FileBrowser {
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.settings_window == Some(window) {
-            self.view_with_separate_window_chrome(window, view_settings_window(self))
+            self.view_with_window_chrome(window, "Settings", view_settings_window(self))
         } else if self.properties_window == Some(window) {
             let content = view_properties_window(
                 self.properties.as_ref(),
                 self.scrollbar_visibility_for(&ScrollbarRegion::Properties),
             );
-            self.view_with_separate_window_chrome(window, content)
+            self.view_with_window_chrome(window, "Properties", content)
         } else if self.preview_window == Some(window) {
-            self.view_with_separate_window_chrome(window, self.preview_window_content())
+            self.view_with_window_chrome(window, "Preview", self.preview_window_content())
         } else if window == self.main_window {
             startup_trace::mark_once("first_main_window_view");
             if !self.directory_collection_phase.is_discovering()

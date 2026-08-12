@@ -116,8 +116,9 @@ mod settings;
 pub(crate) use settings::SettingsCategory;
 mod window_controls;
 pub(crate) use window_controls::{
-    MainWindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
+    WindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
     WindowControlVisibility, WindowControlsConfig, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
+    WINDOW_TOP_BAR_HEIGHT,
 };
 mod application_logs;
 pub(crate) use application_logs::{
@@ -469,7 +470,7 @@ pub(crate) enum Message {
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
-    MainWindowChromeLayoutSelected(MainWindowChromeLayout),
+    WindowChromeLayoutSelected(WindowChromeLayout),
     WindowControlVisibilityToggled(WindowControlKind),
     WindowControlSideSelected(WindowControlKind, WindowControlSide),
     WindowControlReorderStarted(WindowControlKind),

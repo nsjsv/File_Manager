@@ -32,8 +32,8 @@ mod window_control_settings;
 mod window_drag_region;
 
 pub(crate) use window_chrome::{
-    main_pane_window_chrome_role, separate_window_content, window_resize_frame,
-    MainPaneWindowChromeRole,
+    auxiliary_window_content, main_pane_window_chrome_role, separate_window_content,
+    window_resize_frame, MainPaneWindowChromeRole,
 };
 
 pub(crate) use address_bar::address_input_id;
@@ -67,8 +67,8 @@ use crate::icon_grid_view::icon_grid_view;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::list_view::list_browser_view;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, MainWindowChromeLayout, Message,
-    ScrollbarRegion, SplitAxis, WindowControlSide, TRASH_LOCATION_LABEL,
+    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, Message, ScrollbarRegion, SplitAxis,
+    WindowChromeLayout, WindowControlSide, TRASH_LOCATION_LABEL,
 };
 use crate::operation_queue_view::{
     operation_queue_indicator, operation_queue_panel, OPERATION_QUEUE_INDICATOR_BOTTOM,
@@ -353,9 +353,9 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     };
     let main_window = browser.main_window_id();
     let frame_state = browser.window_frame_state(main_window);
-    let window_content = match browser.user_config().window_controls.main_layout() {
-        MainWindowChromeLayout::IntegratedNavigation => browser_surface,
-        MainWindowChromeLayout::SeparateTitleBar => separate_window_content(
+    let window_content = match browser.user_config().window_controls.layout() {
+        WindowChromeLayout::IntegratedNavigation => browser_surface,
+        WindowChromeLayout::SeparateTitleBar => separate_window_content(
             browser.window_title(main_window),
             browser_surface,
             &browser.user_config().window_controls,
@@ -397,11 +397,11 @@ fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Messa
     let Some(pane) = browser.pane_view(pane_id) else {
         return Space::new().width(Length::Fill).height(Length::Fill).into();
     };
-    let chrome_role = match browser.user_config().window_controls.main_layout() {
-        MainWindowChromeLayout::IntegratedNavigation => {
+    let chrome_role = match browser.user_config().window_controls.layout() {
+        WindowChromeLayout::IntegratedNavigation => {
             main_pane_window_chrome_role(browser.pane_layout, pane_id)
         }
-        MainWindowChromeLayout::SeparateTitleBar => MainPaneWindowChromeRole::NoChrome,
+        WindowChromeLayout::SeparateTitleBar => MainPaneWindowChromeRole::NoChrome,
     };
     let main_window = browser.main_window_id();
     let navigation_content = pane_navigation_content(browser, pane, chrome_role);

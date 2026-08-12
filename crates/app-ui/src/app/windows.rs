@@ -4,7 +4,7 @@ use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
 use crate::model::{
-    Message, PreviewSize, PreviewWindowProfile, SettingsCategory, WINDOW_TITLE_BAR_HEIGHT,
+    Message, PreviewSize, PreviewWindowProfile, SettingsCategory, WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::view::{address_input_id, rename_input_id};
 
@@ -60,11 +60,11 @@ fn settings_window_settings() -> window::Settings {
     let mut settings = window::Settings {
         size: Size::new(
             DEFAULT_SETTINGS_WIDTH,
-            DEFAULT_SETTINGS_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+            DEFAULT_SETTINGS_HEIGHT + WINDOW_TOP_BAR_HEIGHT,
         ),
         min_size: Some(Size::new(
             MIN_SETTINGS_WIDTH,
-            MIN_SETTINGS_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+            MIN_SETTINGS_HEIGHT + WINDOW_TOP_BAR_HEIGHT,
         )),
         decorations: false,
         exit_on_close_request: true,
@@ -78,11 +78,11 @@ fn properties_window_settings() -> window::Settings {
     let mut settings = window::Settings {
         size: Size::new(
             DEFAULT_PROPERTIES_WIDTH,
-            DEFAULT_PROPERTIES_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+            DEFAULT_PROPERTIES_HEIGHT + WINDOW_TOP_BAR_HEIGHT,
         ),
         min_size: Some(Size::new(
             MIN_PROPERTIES_WIDTH,
-            MIN_PROPERTIES_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
+            MIN_PROPERTIES_HEIGHT + WINDOW_TOP_BAR_HEIGHT,
         )),
         decorations: false,
         exit_on_close_request: true,
@@ -112,7 +112,7 @@ fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> 
 fn preview_window_size_for_content(content_size: PreviewSize) -> Size {
     Size::new(
         content_size.width,
-        content_size.height + WINDOW_TITLE_BAR_HEIGHT,
+        content_size.height + WINDOW_TOP_BAR_HEIGHT,
     )
 }
 
@@ -125,7 +125,7 @@ fn preview_content_size_from_window(
         profile,
         PreviewSize {
             width,
-            height: (height - WINDOW_TITLE_BAR_HEIGHT).max(1.0),
+            height: (height - WINDOW_TOP_BAR_HEIGHT).max(1.0),
         },
     )
 }

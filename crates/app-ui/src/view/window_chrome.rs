@@ -4,12 +4,13 @@ use iced::{mouse, window, Element, Length};
 
 use crate::appearance::{
     context_menu_style, window_close_button_style, window_control_button_style,
-    window_title_bar_style,
+    window_title_bar_style, window_top_bar_style,
 };
 use crate::icons::IconSymbol;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, Message, SplitAxis, WindowControlKind, WindowControlSide,
-    WindowControlsConfig, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
+    BrowserPaneId, BrowserPaneLayout, Message, SplitAxis, WindowChromeLayout, WindowControlKind,
+    WindowControlSide, WindowControlsConfig, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
+    WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::typography::{localized_text, readable_text};
 
@@ -185,12 +186,107 @@ fn window_control_button(
     .into()
 }
 
+pub(crate) fn auxiliary_window_content<'a>(
+    integrated_title: &'static str,
+    separate_title: String,
+    content: Element<'a, Message>,
+    config: &WindowControlsConfig,
+    window: window::Id,
+    frame_state: WindowFrameState,
+) -> Element<'a, Message> {
+    match config.layout() {
+        WindowChromeLayout::IntegratedNavigation => {
+            window_content_with_top_bar(integrated_title, content, config, window, frame_state)
+        }
+        WindowChromeLayout::SeparateTitleBar => separate_window_content_with_height(
+            separate_title,
+            content,
+            config,
+            window,
+            frame_state,
+            WINDOW_TOP_BAR_HEIGHT,
+        ),
+    }
+}
+
+fn window_content_with_top_bar<'a>(
+    title: &'static str,
+    content: Element<'a, Message>,
+    config: &WindowControlsConfig,
+    window: window::Id,
+    frame_state: WindowFrameState,
+) -> Element<'a, Message> {
+    Column::new()
+        .spacing(0)
+        .push(window_top_bar(title, config, window, frame_state))
+        .push(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn window_top_bar(
+    title: &'static str,
+    config: &WindowControlsConfig,
+    window: window::Id,
+    frame_state: WindowFrameState,
+) -> Element<'static, Message> {
+    let drag_surface = container(Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT))
+        .style(window_top_bar_style);
+    let drag_surface = window_drag_region(drag_surface.into(), window);
+    let content = Row::new()
+        .spacing(10)
+        .padding([8, 12])
+        .align_y(iced::Alignment::Center)
+        .push(window_control_group(
+            config,
+            WindowControlSide::Left,
+            window,
+            frame_state,
+        ))
+        .push(localized_text(title).size(16))
+        .push(Space::new().width(Length::Fill))
+        .push(window_control_group(
+            config,
+            WindowControlSide::Right,
+            window,
+            frame_state,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT));
+
+    Stack::with_children([drag_surface, content.into()])
+        .width(Length::Fill)
+        .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT))
+        .into()
+}
+
 pub(crate) fn separate_window_content<'a>(
     title: String,
     content: Element<'a, Message>,
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
+) -> Element<'a, Message> {
+    separate_window_content_with_height(
+        title,
+        content,
+        config,
+        window,
+        frame_state,
+        WINDOW_TITLE_BAR_HEIGHT,
+    )
+}
+
+fn separate_window_content_with_height<'a>(
+    title: String,
+    content: Element<'a, Message>,
+    config: &WindowControlsConfig,
+    window: window::Id,
+    frame_state: WindowFrameState,
+    height: f32,
 ) -> Element<'a, Message> {
     Column::new()
         .spacing(0)
@@ -199,6 +295,7 @@ pub(crate) fn separate_window_content<'a>(
             config,
             window,
             frame_state,
+            height,
         ))
         .push(content)
         .width(Length::Fill)
@@ -206,21 +303,22 @@ pub(crate) fn separate_window_content<'a>(
         .into()
 }
 
-pub(crate) fn separate_window_title_bar(
+fn separate_window_title_bar(
     title: String,
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
+    height: f32,
 ) -> Element<'static, Message> {
     let drag_surface = container(Space::new())
         .width(Length::Fill)
-        .height(Length::Fixed(WINDOW_TITLE_BAR_HEIGHT))
+        .height(Length::Fixed(height))
         .style(window_title_bar_style);
     let drag_surface = window_drag_region(drag_surface.into(), window);
     let title = container(localized_text(title).size(13))
         .padding([0, WINDOW_TITLE_SIDE_RESERVE])
         .center_x(Length::Fill)
-        .center_y(Length::Fixed(WINDOW_TITLE_BAR_HEIGHT))
+        .center_y(Length::Fixed(height))
         .clip(true);
     let controls = Row::new()
         .spacing(0)
@@ -240,11 +338,11 @@ pub(crate) fn separate_window_title_bar(
             frame_state,
         ))
         .width(Length::Fill)
-        .height(Length::Fixed(WINDOW_TITLE_BAR_HEIGHT));
+        .height(Length::Fixed(height));
 
     Stack::with_children([drag_surface, title.into(), controls.into()])
         .width(Length::Fill)
-        .height(Length::Fixed(WINDOW_TITLE_BAR_HEIGHT))
+        .height(Length::Fixed(height))
         .into()
 }
 

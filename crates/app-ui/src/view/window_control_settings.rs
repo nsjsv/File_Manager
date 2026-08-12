@@ -8,7 +8,7 @@ use crate::appearance::{
 };
 use crate::icons::IconSymbol;
 use crate::model::{
-    MainWindowChromeLayout, Message, WindowControlKind, WindowControlPlacement, WindowControlSide,
+    Message, WindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
 };
 use crate::typography::readable_text;
 
@@ -31,8 +31,8 @@ enum WindowControlVisibilityControl {
 pub(super) fn window_control_settings_row(browser: &FileBrowser) -> Element<'_, Message> {
     info_setting_row(
         column![
-            muted_setting_text("Main window layout", 12),
-            main_window_layout_selector(browser),
+            muted_setting_text("Window layout", 12),
+            window_layout_selector(browser),
             side_control_group(browser, WindowControlSide::Left),
             side_control_group(browser, WindowControlSide::Right),
             secondary_action_button("Restore defaults", Message::WindowControlsReset),
@@ -43,15 +43,15 @@ pub(super) fn window_control_settings_row(browser: &FileBrowser) -> Element<'_, 
     )
 }
 
-fn main_window_layout_selector(browser: &FileBrowser) -> Element<'static, Message> {
-    let selected = browser.user_config().window_controls.main_layout();
+fn window_layout_selector(browser: &FileBrowser) -> Element<'static, Message> {
+    let selected = browser.user_config().window_controls.layout();
     segmented_choice_row(
-        MainWindowChromeLayout::ALL
+        WindowChromeLayout::ALL
             .into_iter()
             .map(|layout| SegmentedChoice {
                 label: layout.label(),
                 selected: layout == selected,
-                message: Message::MainWindowChromeLayoutSelected(layout),
+                message: Message::WindowChromeLayoutSelected(layout),
             })
             .collect(),
     )

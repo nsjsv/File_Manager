@@ -104,19 +104,20 @@ pub(crate) enum WindowFrameState {
 }
 
 pub(crate) const WINDOW_TITLE_BAR_HEIGHT: f32 = 40.0;
+pub(crate) const WINDOW_TOP_BAR_HEIGHT: f32 = 48.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MainWindowChromeLayout {
+pub(crate) enum WindowChromeLayout {
     IntegratedNavigation,
     SeparateTitleBar,
 }
 
-impl MainWindowChromeLayout {
+impl WindowChromeLayout {
     pub(crate) const ALL: [Self; 2] = [Self::IntegratedNavigation, Self::SeparateTitleBar];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::IntegratedNavigation => "Integrated",
+            Self::IntegratedNavigation => "Integrated navigation",
             Self::SeparateTitleBar => "Separate title bar",
         }
     }
@@ -172,13 +173,13 @@ impl WindowControlPlacement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowControlsConfig {
-    main_layout: MainWindowChromeLayout,
+    layout: WindowChromeLayout,
     placements: Vec<WindowControlPlacement>,
 }
 
 impl WindowControlsConfig {
     pub(crate) fn from_partial_placements(
-        main_layout: MainWindowChromeLayout,
+        layout: WindowChromeLayout,
         placements: Vec<WindowControlPlacement>,
     ) -> Self {
         let mut seen = HashSet::with_capacity(WindowControlKind::ALL.len());
@@ -198,13 +199,13 @@ impl WindowControlsConfig {
             }
         }
         Self {
-            main_layout,
+            layout,
             placements: normalized,
         }
     }
 
-    pub(crate) fn main_layout(&self) -> MainWindowChromeLayout {
-        self.main_layout
+    pub(crate) fn layout(&self) -> WindowChromeLayout {
+        self.layout
     }
 
     pub(crate) fn placements(&self) -> &[WindowControlPlacement] {
@@ -229,11 +230,11 @@ impl WindowControlsConfig {
             .expect("normalized window controls contain every kind")
     }
 
-    pub(crate) fn select_main_layout(&mut self, layout: MainWindowChromeLayout) -> bool {
-        if self.main_layout == layout {
+    pub(crate) fn select_layout(&mut self, layout: WindowChromeLayout) -> bool {
+        if self.layout == layout {
             return false;
         }
-        self.main_layout = layout;
+        self.layout = layout;
         true
     }
 
@@ -319,7 +320,7 @@ impl WindowControlsConfig {
 impl Default for WindowControlsConfig {
     fn default() -> Self {
         Self {
-            main_layout: MainWindowChromeLayout::IntegratedNavigation,
+            layout: WindowChromeLayout::IntegratedNavigation,
             placements: WindowControlKind::ALL
                 .into_iter()
                 .map(default_placement)
@@ -362,10 +363,7 @@ mod tests {
     fn default_uses_integrated_right_standard_order() {
         let config = WindowControlsConfig::default();
 
-        assert_eq!(
-            config.main_layout(),
-            MainWindowChromeLayout::IntegratedNavigation
-        );
+        assert_eq!(config.layout(), WindowChromeLayout::IntegratedNavigation);
         assert!(kinds_on(&config, WindowControlSide::Left).is_empty());
         assert_eq!(
             kinds_on(&config, WindowControlSide::Right),
@@ -380,7 +378,7 @@ mod tests {
     #[test]
     fn partial_placements_drop_duplicates_fill_missing_and_keep_close_visible() {
         let config = WindowControlsConfig::from_partial_placements(
-            MainWindowChromeLayout::SeparateTitleBar,
+            WindowChromeLayout::SeparateTitleBar,
             vec![
                 WindowControlPlacement::new(
                     WindowControlKind::Close,

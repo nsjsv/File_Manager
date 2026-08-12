@@ -1,7 +1,7 @@
 use iced::Task;
 
 use super::FileBrowser;
-use crate::model::{MainWindowChromeLayout, Message, WindowControlKind, WindowControlSide};
+use crate::model::{Message, WindowChromeLayout, WindowControlKind, WindowControlSide};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct WindowControlReorderDrag {
@@ -11,12 +11,12 @@ pub(super) struct WindowControlReorderDrag {
 }
 
 impl FileBrowser {
-    pub(super) fn select_main_window_chrome_layout(
+    pub(super) fn select_window_chrome_layout(
         &mut self,
-        layout: MainWindowChromeLayout,
+        layout: WindowChromeLayout,
     ) -> Task<Message> {
         self.window_control_reorder_drag = None;
-        if self.user_config.window_controls.select_main_layout(layout) {
+        if self.user_config.window_controls.select_layout(layout) {
             self.persist_user_preferences_command()
         } else {
             Task::none()
@@ -156,17 +156,21 @@ mod tests {
     }
 
     #[test]
-    fn visibility_and_side_changes_persist_only_real_updates() {
+    fn layout_visibility_and_side_changes_persist_only_real_updates() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
 
         assert!(into_stream(
-            browser.select_main_window_chrome_layout(MainWindowChromeLayout::SeparateTitleBar,)
+            browser.select_window_chrome_layout(WindowChromeLayout::SeparateTitleBar)
         )
         .is_some());
         assert!(into_stream(
-            browser.select_main_window_chrome_layout(MainWindowChromeLayout::SeparateTitleBar,)
+            browser.select_window_chrome_layout(WindowChromeLayout::SeparateTitleBar)
         )
         .is_none());
+        assert_eq!(
+            browser.user_config().window_controls.layout(),
+            WindowChromeLayout::SeparateTitleBar
+        );
         assert!(
             into_stream(browser.toggle_window_control_visibility(WindowControlKind::Minimize))
                 .is_some()
@@ -269,7 +273,7 @@ mod tests {
     #[test]
     fn reset_restores_confirmed_default() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        drop(browser.select_main_window_chrome_layout(MainWindowChromeLayout::SeparateTitleBar));
+        drop(browser.select_window_chrome_layout(WindowChromeLayout::SeparateTitleBar));
         drop(browser.select_window_control_side(WindowControlKind::Close, WindowControlSide::Left));
 
         assert!(into_stream(browser.reset_window_controls()).is_some());

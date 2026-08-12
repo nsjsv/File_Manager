@@ -6,13 +6,17 @@ use super::{
     subtle_border_color,
 };
 
+pub(crate) fn window_top_bar_style(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(window_chrome_background(theme))),
+        text_color: Some(base_text_color(theme)),
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn window_title_bar_style(theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(18, 24, 34)
-        } else {
-            Color::from_rgb8(250, 252, 255)
-        })),
+        background: Some(Background::Color(window_chrome_background(theme))),
         text_color: Some(base_text_color(theme)),
         border: Border {
             color: subtle_border_color(theme),
@@ -20,6 +24,14 @@ pub(crate) fn window_title_bar_style(theme: &Theme) -> container::Style {
             ..Border::default()
         },
         ..container::Style::default()
+    }
+}
+
+fn window_chrome_background(theme: &Theme) -> Color {
+    if is_dark_theme(theme) {
+        Color::from_rgb8(18, 24, 34)
+    } else {
+        Color::from_rgb8(250, 252, 255)
     }
 }
 
@@ -64,6 +76,19 @@ pub(crate) fn window_close_button_style(theme: &Theme, status: button::Status) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_and_integrated_top_bars_share_the_window_surface() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let title_bar = window_title_bar_style(&theme);
+            let top_bar = window_top_bar_style(&theme);
+
+            assert_eq!(title_bar.background, top_bar.background);
+            assert_eq!(title_bar.text_color, top_bar.text_color);
+            assert_eq!(top_bar.border.width, 0.0);
+            assert_eq!(title_bar.border.width, 1.0);
+        }
+    }
 
     #[test]
     fn close_button_uses_danger_feedback_only_while_interacting() {

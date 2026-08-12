@@ -10,7 +10,7 @@ use super::*;
 use crate::config;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, BrowserViewMode, LoadedOperationStore, Message, SplitAxis,
-    WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
+    WindowChromeLayout, WindowFrameState, WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::operation_history::FileOperationCompletion;
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
@@ -152,25 +152,30 @@ fn every_application_window_disables_native_decorations() {
 }
 
 #[test]
-fn auxiliary_windows_reserve_custom_title_bar_height_outside_content_size() {
-    let settings = settings_window_settings();
-    assert_close(
-        settings.size.height,
-        DEFAULT_SETTINGS_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
-    );
-    let properties = properties_window_settings();
-    assert_close(
-        properties.size.height,
-        DEFAULT_PROPERTIES_HEIGHT + WINDOW_TITLE_BAR_HEIGHT,
-    );
+fn auxiliary_windows_keep_one_content_size_across_global_chrome_layouts() {
+    for layout in WindowChromeLayout::ALL {
+        let mut config = config::default_user_config();
+        let _ = config.window_controls.select_layout(layout);
+        assert_eq!(config.window_controls.layout(), layout);
+        let settings = settings_window_settings();
+        assert_close(
+            settings.size.height,
+            DEFAULT_SETTINGS_HEIGHT + WINDOW_TOP_BAR_HEIGHT,
+        );
+        let properties = properties_window_settings();
+        assert_close(
+            properties.size.height,
+            DEFAULT_PROPERTIES_HEIGHT + WINDOW_TOP_BAR_HEIGHT,
+        );
 
-    let content_size = default_preview_size(PreviewWindowProfile::Regular);
-    let preview = preview_window_settings(PreviewWindowProfile::Regular, content_size);
-    assert_close(preview.size.width, content_size.width);
-    assert_close(
-        preview.size.height,
-        content_size.height + WINDOW_TITLE_BAR_HEIGHT,
-    );
+        let content_size = default_preview_size(PreviewWindowProfile::Regular);
+        let preview = preview_window_settings(PreviewWindowProfile::Regular, content_size);
+        assert_close(preview.size.width, content_size.width);
+        assert_close(
+            preview.size.height,
+            content_size.height + WINDOW_TOP_BAR_HEIGHT,
+        );
+    }
 }
 
 #[test]
