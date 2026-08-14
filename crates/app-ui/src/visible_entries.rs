@@ -4,12 +4,210 @@ use std::path::{Path, PathBuf};
 use file_core::DirectoryEntry;
 
 use crate::model::{ExpandedDirectory, ExpandedDirectoryStatus};
+use crate::virtual_range::VirtualRange;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VisibleEntry<'a> {
     pub(crate) entry: &'a DirectoryEntry,
     pub(crate) depth: usize,
     pub(crate) animation_progress: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisibleEntryStatusRow {
+    Error,
+    Empty,
+}
+
+pub(crate) fn visible_entry_status_row(
+    expanded: &ExpandedDirectory,
+) -> Option<VisibleEntryStatusRow> {
+    if !expanded.is_expanded && !expanded.is_collapsing {
+        return None;
+    }
+    match &expanded.status {
+        ExpandedDirectoryStatus::Loading => None,
+        ExpandedDirectoryStatus::Error => Some(VisibleEntryStatusRow::Error),
+        ExpandedDirectoryStatus::Loaded if expanded.entries.is_empty() => {
+            Some(VisibleEntryStatusRow::Empty)
+        }
+        ExpandedDirectoryStatus::Loaded => None,
+    }
+}
+
+pub(crate) fn visible_entry_status_row_height(
+    expanded: &ExpandedDirectory,
+    row_height: f32,
+) -> f32 {
+    if visible_entry_status_row(expanded).is_some() {
+        row_height * expanded.animation_progress.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+pub(crate) fn list_entry_range_for_viewport(
+    entries: &[DirectoryEntry],
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+    row_height: f32,
+    header_height: f32,
+    viewport_offset: f32,
+    viewport_height: f32,
+    overscan_rows: usize,
+) -> VirtualRange {
+    if row_height <= f32::EPSILON || viewport_height <= f32::EPSILON {
+        return VirtualRange::empty();
+    }
+    let viewport_top = viewport_offset.max(0.0);
+    let overscan_height = overscan_rows as f32 * row_height;
+    list_entry_height_range(
+        entries,
+        expanded_directories,
+        row_height,
+        ListEntryRangeLimit::Viewport {
+            top: (viewport_top - header_height - overscan_height).max(0.0),
+            bottom: (viewport_top + viewport_height - header_height).max(0.0) + overscan_height,
+        },
+    )
+}
+
+pub(crate) fn initial_list_entry_range(
+    entries: &[DirectoryEntry],
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+    row_height: f32,
+    initial_rows: usize,
+) -> VirtualRange {
+    if row_height <= f32::EPSILON || initial_rows == 0 {
+        return VirtualRange::empty();
+    }
+    list_entry_height_range(
+        entries,
+        expanded_directories,
+        row_height,
+        ListEntryRangeLimit::InitialRows(initial_rows),
+    )
+}
+
+pub(crate) fn list_entry_vertical_bounds(
+    entries: &[DirectoryEntry],
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+    path: &Path,
+    row_height: f32,
+    header_height: f32,
+) -> Option<(f32, f32)> {
+    let mut offset = header_height;
+    let mut target = None;
+    for_each_visible_entry(entries, expanded_directories, &mut |visible_entry| {
+        let item_height = row_height * visible_entry.animation_progress.clamp(0.0, 1.0);
+        if target.is_none() && visible_entry.entry.path == path {
+            target = Some((offset, item_height));
+        }
+        offset += item_height;
+        if let Some(expanded) = expanded_directories.get(&visible_entry.entry.path) {
+            offset += visible_entry_status_row_height(expanded, row_height);
+        }
+    });
+    target
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ListEntryRangeLimit {
+    Viewport { top: f32, bottom: f32 },
+    InitialRows(usize),
+}
+
+fn list_entry_height_range(
+    entries: &[DirectoryEntry],
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+    row_height: f32,
+    limit: ListEntryRangeLimit,
+) -> VirtualRange {
+    let mut entry_count = 0;
+    let mut total_height = 0.0;
+    let mut start = None;
+    let mut end = 0;
+    let mut before_height = 0.0;
+    let mut rendered_end_height = 0.0;
+
+    for_each_visible_entry(entries, expanded_directories, &mut |visible_entry| {
+        let index = entry_count;
+        entry_count += 1;
+        let block_top = total_height;
+        total_height += row_height * visible_entry.animation_progress.clamp(0.0, 1.0);
+        if let Some(expanded) = expanded_directories.get(&visible_entry.entry.path) {
+            total_height += visible_entry_status_row_height(expanded, row_height);
+        }
+
+        let include = match limit {
+            ListEntryRangeLimit::Viewport { top, bottom } => {
+                total_height > top && block_top < bottom
+            }
+            ListEntryRangeLimit::InitialRows(rows) => index < rows,
+        };
+        if include {
+            if start.is_none() {
+                start = Some(index);
+                before_height = block_top;
+            }
+            end = index + 1;
+            rendered_end_height = total_height;
+        }
+    });
+
+    let start = start.unwrap_or(entry_count);
+    if start == entry_count {
+        before_height = total_height;
+        rendered_end_height = total_height;
+        end = entry_count;
+    }
+    VirtualRange {
+        start,
+        end,
+        before_height,
+        after_height: (total_height - rendered_end_height).max(0.0),
+    }
+}
+
+fn for_each_visible_entry<'a>(
+    entries: &'a [DirectoryEntry],
+    expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
+    visit: &mut impl FnMut(VisibleEntry<'a>),
+) {
+    for entry in entries {
+        visit_visible_entry(entry, 0, 1.0, expanded_directories, visit);
+    }
+}
+
+fn visit_visible_entry<'a>(
+    entry: &'a DirectoryEntry,
+    depth: usize,
+    animation_progress: f32,
+    expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
+    visit: &mut impl FnMut(VisibleEntry<'a>),
+) {
+    visit(VisibleEntry {
+        entry,
+        depth,
+        animation_progress,
+    });
+    let Some(expanded) = expanded_directories
+        .get(&entry.path)
+        .filter(|expanded| expanded.is_expanded || expanded.is_collapsing)
+    else {
+        return;
+    };
+    if matches!(expanded.status, ExpandedDirectoryStatus::Loaded) {
+        let child_progress = animation_progress * expanded.animation_progress.clamp(0.0, 1.0);
+        for child in &expanded.entries {
+            visit_visible_entry(
+                child,
+                depth + 1,
+                child_progress,
+                expanded_directories,
+                visit,
+            );
+        }
+    }
 }
 
 pub(crate) fn visible_entries<'a>(
@@ -42,16 +240,6 @@ pub(crate) fn visible_entries_in_range<'a>(
         }
     }
     cursor.rows
-}
-
-pub(crate) fn visible_entry_count(
-    entries: &[DirectoryEntry],
-    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
-) -> usize {
-    entries
-        .iter()
-        .map(|entry| visible_entry_subtree_count(entry, expanded_directories))
-        .sum()
 }
 
 pub(crate) fn visible_entry_paths(
@@ -148,27 +336,6 @@ fn push_visible_entry_in_range<'a>(
     }
 }
 
-fn visible_entry_subtree_count(
-    entry: &DirectoryEntry,
-    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
-) -> usize {
-    let Some(expanded) = expanded_directories
-        .get(&entry.path)
-        .filter(|expanded| expanded.is_expanded || expanded.is_collapsing)
-    else {
-        return 1;
-    };
-    if matches!(expanded.status, ExpandedDirectoryStatus::Loaded) {
-        1 + expanded
-            .entries
-            .iter()
-            .map(|child| visible_entry_subtree_count(child, expanded_directories))
-            .sum::<usize>()
-    } else {
-        1
-    }
-}
-
 fn visible_subtree_contains(
     path: &Path,
     entry: &DirectoryEntry,
@@ -261,6 +428,69 @@ mod tests {
         let paths = visible_entry_paths(&entries, &HashMap::new());
 
         assert_eq!(paths, vec![first.path, second.path]);
+    }
+
+    #[test]
+    fn list_layout_range_counts_status_and_animation_heights() {
+        let root = PathBuf::from("/workspace");
+        let directory = test_entry(root.join("directory"), FileKind::Directory);
+        let sibling = test_entry(root.join("sibling.txt"), FileKind::File);
+        let entries = vec![directory.clone(), sibling.clone()];
+        let expanded_directories =
+            HashMap::from([(directory.path.clone(), expanded(Vec::new(), true))]);
+
+        let range = list_entry_range_for_viewport(
+            &entries,
+            &expanded_directories,
+            46.0,
+            32.0,
+            124.0,
+            46.0,
+            0,
+        );
+        assert_eq!(range.start, 1);
+        assert_eq!(range.end, 2);
+        assert_eq!(range.before_height, 92.0);
+        assert_eq!(range.after_height, 0.0);
+
+        let mut failed = expanded(Vec::new(), true);
+        failed.status = ExpandedDirectoryStatus::Error;
+        assert_eq!(
+            visible_entry_status_row(&failed),
+            Some(VisibleEntryStatusRow::Error)
+        );
+        assert_eq!(visible_entry_status_row_height(&failed, 46.0), 46.0);
+
+        assert_eq!(
+            initial_list_entry_range(&entries, &expanded_directories, 46.0, 1),
+            VirtualRange {
+                start: 0,
+                end: 1,
+                before_height: 0.0,
+                after_height: 46.0,
+            }
+        );
+
+        let child = test_entry(directory.path.join("child.txt"), FileKind::File);
+        let mut animated = expanded(vec![child], true);
+        animated.animation_progress = 0.5;
+        let expanded_directories = HashMap::from([(directory.path.clone(), animated)]);
+        let range = list_entry_range_for_viewport(
+            &entries,
+            &expanded_directories,
+            46.0,
+            32.0,
+            101.0,
+            46.0,
+            0,
+        );
+        assert_eq!(range.start, 2);
+        assert_eq!(range.end, 3);
+        assert_eq!(range.before_height, 69.0);
+        assert_eq!(
+            list_entry_vertical_bounds(&entries, &expanded_directories, &sibling.path, 46.0, 32.0,),
+            Some((101.0, 46.0))
+        );
     }
 
     #[test]

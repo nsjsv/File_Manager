@@ -11,6 +11,7 @@ use crate::icon_grid_geometry::{
 use crate::model::{
     ExpandedDirectoryStatus, IconGridExpandedDirectory, IconGridExpansionState, IconGridViewport,
 };
+use crate::virtual_range::vertical_scroll_delta_to_reveal;
 
 const ICON_GRID_INITIAL_ROWS: usize = ICON_GRID_OVERSCAN_ROWS * 2 + 1;
 pub(crate) const ICON_GRID_STATUS_HEIGHT: f32 = 48.0;
@@ -273,21 +274,15 @@ impl<'a> IconGridLayout<'a> {
     }
 
     pub(crate) fn scroll_delta_to_reveal(&self, viewport: IconGridViewport, path: &Path) -> f32 {
-        if viewport.height <= f32::EPSILON {
-            return 0.0;
-        }
         let Some(entry) = find_interactive_entry(&self.root, 0.0, 0.0, self.icon_edge, path) else {
             return 0.0;
         };
-        let viewport_top = viewport.offset_y.max(0.0);
-        let viewport_bottom = viewport_top + viewport.height;
-        if entry.top < viewport_top {
-            entry.top - viewport_top
-        } else if entry.bottom > viewport_bottom {
-            entry.bottom - viewport_bottom
-        } else {
-            0.0
-        }
+        vertical_scroll_delta_to_reveal(
+            viewport.offset_y,
+            viewport.height,
+            entry.top,
+            entry.bottom - entry.top,
+        )
     }
 
     fn interactive_entry_geometry(&self) -> Vec<IconGridEntryGeometry<'a>> {

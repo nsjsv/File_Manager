@@ -67,7 +67,7 @@ fn columns_search_uses_last_pointer_clicked_column_instead_of_keyboard_focus() {
     browser.deepest_open_column_directory = Some(project.clone());
 
     drop(browser.handle_column_entry_clicked(root_file));
-    browser.select_path_from_keyboard(child_file);
+    drop(browser.select_path_from_keyboard(child_file));
     drop(browser.handle_blank_area_right_clicked(project.clone()));
     drop(browser.submit_search());
     assert_eq!(

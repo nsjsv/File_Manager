@@ -28,7 +28,7 @@ use crate::model::{
 };
 use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id, translated_with_width_overflow};
-use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
+use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport, VirtualRange};
 
 pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 4;
 pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 5.0;
@@ -36,6 +36,8 @@ const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 const CHEVRON_ICON_SIZE: f32 = 11.0;
 const COLUMN_CONTENT_SPACING: u32 = 2;
 const COLUMN_PADDING: [u16; 2] = [5, 5];
+pub(crate) const COLUMN_ENTRIES_TOP_PADDING: f32 =
+    COLUMN_PADDING[0] as f32 + COLUMN_CONTENT_SPACING as f32;
 const COLUMN_ENTRY_TEXT_SIZE: u32 = 13;
 pub(crate) const COLUMN_ENTRY_HEIGHT: f32 = 24.0;
 pub(crate) const COLUMN_ENTRY_SCROLL_HEIGHT: f32 =
@@ -44,6 +46,25 @@ const COLUMN_OVERSCAN_ROWS: usize = 16;
 const COLUMN_INITIAL_ROWS: usize = COLUMN_OVERSCAN_ROWS * 2 + 1;
 const COLUMN_ENTRY_SPACING: u32 = 4;
 const COLUMN_ENTRY_PADDING: [u16; 2] = [1, 4];
+
+pub(crate) fn column_virtual_range_for_viewport(
+    total_rows: usize,
+    viewport_offset: f32,
+    viewport_height: f32,
+    overscan_rows: usize,
+) -> VirtualRange {
+    let viewport_top = viewport_offset.max(0.0);
+    let entry_viewport_top = (viewport_top - COLUMN_ENTRIES_TOP_PADDING).max(0.0);
+    let entry_viewport_bottom =
+        (viewport_top + viewport_height - COLUMN_ENTRIES_TOP_PADDING).max(0.0);
+    virtual_range_for_viewport(
+        total_rows,
+        COLUMN_ENTRY_SCROLL_HEIGHT,
+        entry_viewport_top,
+        entry_viewport_bottom - entry_viewport_top,
+        overscan_rows,
+    )
+}
 
 pub(crate) fn column_browser_view<'a>(
     browser: &'a FileBrowser,
@@ -189,9 +210,8 @@ fn directory_column<'a>(
                 .column_viewports
                 .get(directory)
                 .map(|viewport| {
-                    virtual_range_for_viewport(
+                    column_virtual_range_for_viewport(
                         entries.len(),
-                        COLUMN_ENTRY_SCROLL_HEIGHT,
                         viewport.offset_y,
                         viewport.height,
                         COLUMN_OVERSCAN_ROWS,
@@ -636,6 +656,27 @@ mod tests {
             file_drag: None,
             tab_bar_reveal_fraction: 0.0,
         }
+    }
+
+    #[test]
+    fn column_virtual_range_uses_padding_and_top_spacer_gap() {
+        assert_eq!(COLUMN_ENTRIES_TOP_PADDING, 7.0);
+
+        let first = column_virtual_range_for_viewport(
+            10,
+            COLUMN_ENTRIES_TOP_PADDING,
+            COLUMN_ENTRY_HEIGHT,
+            0,
+        );
+        assert_eq!((first.start, first.end), (0, 1));
+
+        let second = column_virtual_range_for_viewport(
+            10,
+            COLUMN_ENTRIES_TOP_PADDING + COLUMN_ENTRY_SCROLL_HEIGHT,
+            COLUMN_ENTRY_HEIGHT,
+            0,
+        );
+        assert_eq!((second.start, second.end), (1, 2));
     }
 
     #[test]

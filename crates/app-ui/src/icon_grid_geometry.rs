@@ -4,7 +4,9 @@ use crate::config::{
 #[cfg(test)]
 use crate::model::IconGridViewport;
 #[cfg(test)]
-use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
+use crate::virtual_range::{
+    initial_virtual_range, vertical_scroll_delta_to_reveal, virtual_range_for_viewport,
+};
 
 pub(crate) const ICON_GRID_CONTENT_PADDING: f32 = 12.0;
 pub(crate) const ICON_GRID_GAP: f32 = 12.0;
@@ -137,22 +139,12 @@ pub(crate) fn scroll_delta_to_reveal_row(
     target_row: usize,
     icon_edge: u32,
 ) -> f32 {
-    if viewport.height <= f32::EPSILON {
-        return 0.0;
-    }
-
-    let row_top = ICON_GRID_CONTENT_PADDING + target_row as f32 * row_height(icon_edge);
-    let row_bottom = row_top + tile_visual_height(icon_edge);
-    let viewport_top = viewport.offset_y.max(0.0);
-    let viewport_bottom = viewport_top + viewport.height;
-
-    if row_top < viewport_top {
-        row_top - viewport_top
-    } else if row_bottom > viewport_bottom {
-        row_bottom - viewport_bottom
-    } else {
-        0.0
-    }
+    vertical_scroll_delta_to_reveal(
+        viewport.offset_y,
+        viewport.height,
+        ICON_GRID_CONTENT_PADDING + target_row as f32 * row_height(icon_edge),
+        tile_visual_height(icon_edge),
+    )
 }
 
 pub(crate) fn stepped_icon_grid_size(current: u32, zoom: IconGridZoom) -> u32 {

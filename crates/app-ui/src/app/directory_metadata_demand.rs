@@ -14,7 +14,6 @@ use crate::model::{
     DirectoryMetadataLoadRequest, ExpandedDirectoryStatus, ListColumnKind, Message,
 };
 use crate::thumbnail_cache::ColumnViewport;
-use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 struct DirectoryMetadataDemandSource {
     context: DirectoryMetadataLoadContext,
@@ -73,24 +72,23 @@ impl FileBrowser {
                     visible_targets: Vec::new(),
                 },
             )]);
-            let total_rows = crate::visible_entries::visible_entry_count(
-                pane.entries,
-                pane.expanded_directories,
-            );
             let range = viewport_override
                 .or_else(|| pane.column_viewports.get(pane.current_dir).copied())
                 .map(|viewport| {
-                    virtual_range_for_viewport(
-                        total_rows,
+                    crate::visible_entries::list_entry_range_for_viewport(
+                        pane.entries,
+                        pane.expanded_directories,
                         crate::list_view::LIST_ROW_HEIGHT,
+                        crate::list_view::LIST_HEADER_HEIGHT,
                         viewport.offset_y,
                         viewport.height,
                         crate::list_view::LIST_OVERSCAN_ROWS,
                     )
                 })
                 .unwrap_or_else(|| {
-                    initial_virtual_range(
-                        total_rows,
+                    crate::visible_entries::initial_list_entry_range(
+                        pane.entries,
+                        pane.expanded_directories,
                         crate::list_view::LIST_ROW_HEIGHT,
                         crate::list_view::LIST_INITIAL_ROWS,
                     )

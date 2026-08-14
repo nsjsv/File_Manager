@@ -14,11 +14,14 @@ use crate::commands::{
 };
 use crate::document_preview::document_preview_format_for_path;
 use crate::formatting::format_file_size;
+use crate::list_view::{LIST_HEADER_HEIGHT, LIST_ROW_HEIGHT};
 use crate::model::{
     AudioPreviewPlayback, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
     ExpandedDirectoryStatus, Message, NavigationMode, PreviewState, PreviewWindowProfile,
+    ScrollbarRegion,
 };
 use crate::shortcuts::FileSelectionDirection;
+use crate::virtual_range::vertical_scroll_delta_to_reveal;
 
 #[derive(Debug, Clone, Copy)]
 enum SelectionStep {
@@ -84,37 +87,18 @@ impl FileBrowser {
             FileSelectionDirection::Left => crate::icon_grid_geometry::IconGridDirection::Left,
             FileSelectionDirection::Right => crate::icon_grid_geometry::IconGridDirection::Right,
         };
-        let Some((target, target_directory, scroll_delta)) =
-            self.pane_view(pane_id).and_then(|pane| {
-                let viewport = pane.icon_grid_viewport;
-                let layout = self.icon_grid_layout_for_pane(pane);
-                let target = layout.keyboard_target(self.selected.as_deref(), direction)?;
-                let target_path = target.entry.path.clone();
-                let target_directory = target.directory.to_path_buf();
-                let scroll_delta = layout.scroll_delta_to_reveal(viewport, &target_path);
-                Some((target_path, target_directory, scroll_delta))
-            })
-        else {
+        let Some((target, target_directory)) = self.pane_view(pane_id).and_then(|pane| {
+            let layout = self.icon_grid_layout_for_pane(pane);
+            let target = layout.keyboard_target(self.selected.as_deref(), direction)?;
+            Some((target.entry.path.clone(), target.directory.to_path_buf()))
+        }) else {
             return Task::none();
         };
 
         if let Some(state) = self.icon_grid_expansion.as_mut() {
             state.set_selection_directory(&target_directory);
         }
-        self.select_path_from_keyboard(target);
-        let scroll_task = if scroll_delta.abs() > f32::EPSILON {
-            iced::widget::operation::scroll_by(
-                crate::app::smooth_scroll::smooth_scroll_id(
-                    &crate::model::ScrollbarRegion::PaneIcons(pane_id),
-                ),
-                iced::widget::scrollable::AbsoluteOffset {
-                    x: 0.0,
-                    y: scroll_delta,
-                },
-            )
-        } else {
-            Task::none()
-        };
+        let scroll_task = self.select_path_from_keyboard(target);
 
         Task::batch([scroll_task, self.schedule_thumbnail_refresh()])
     }
@@ -125,8 +109,8 @@ impl FileBrowser {
             return Task::none();
         };
 
-        self.select_path_from_keyboard(target);
-        self.schedule_thumbnail_refresh()
+        let scroll_task = self.select_path_from_keyboard(target);
+        Task::batch([scroll_task, self.schedule_thumbnail_refresh()])
     }
 
     fn move_file_selection_vertically(&mut self, step: SelectionStep) -> Task<Message> {
@@ -143,8 +127,8 @@ impl FileBrowser {
             return Task::none();
         };
 
-        self.select_path_from_keyboard(target.clone());
-        self.open_column_for_keyboard_selection(target)
+        let scroll_task = self.select_path_from_keyboard(target.clone());
+        Task::batch([scroll_task, self.open_column_for_keyboard_selection(target)])
     }
 
     fn move_file_selection_to_parent_column(&mut self) -> Task<Message> {
@@ -160,8 +144,8 @@ impl FileBrowser {
 
         self.column_return_targets
             .insert(parent.clone(), selected.clone());
-        self.select_path_from_keyboard(parent.clone());
-        self.focus_column_containing_path(&parent)
+        let scroll_task = self.select_path_from_keyboard(parent.clone());
+        Task::batch([scroll_task, self.focus_column_containing_path(&parent)])
     }
 
     fn move_file_selection_to_child_column(&mut self) -> Task<Message> {
@@ -177,8 +161,12 @@ impl FileBrowser {
         if let Some(path) = self.keyboard_child_focus_target(&selected, preferred_child.as_deref())
         {
             self.pending_keyboard_column_focus = None;
-            self.select_path_from_keyboard(path.clone());
-            return Task::batch([open_command, self.open_column_for_keyboard_selection(path)]);
+            let scroll_task = self.select_path_from_keyboard(path.clone());
+            return Task::batch([
+                open_command,
+                scroll_task,
+                self.open_column_for_keyboard_selection(path),
+            ]);
         }
 
         if self.directory_children_are_loading(&selected) {
@@ -215,8 +203,8 @@ impl FileBrowser {
             return Task::none();
         };
 
-        self.select_path_from_keyboard(path.clone());
-        self.open_column_for_keyboard_selection(path)
+        let scroll_task = self.select_path_from_keyboard(path.clone());
+        Task::batch([scroll_task, self.open_column_for_keyboard_selection(path)])
     }
 
     fn keyboard_child_focus_target(
@@ -248,16 +236,92 @@ impl FileBrowser {
         }
     }
 
-    pub(crate) fn select_path_from_keyboard(&mut self, path: PathBuf) {
+    pub(crate) fn select_path_from_keyboard(&mut self, path: PathBuf) -> Task<Message> {
         if self.view_mode == BrowserViewMode::Columns {
             self.focused_column_directory = Some(self.entry_parent_directory(&path));
         }
         self.select_path(path.clone());
-        self.selection_anchor = Some(path);
+        self.selection_anchor = Some(path.clone());
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.cancel_file_drag_interaction();
         self.pending_keyboard_column_focus = None;
+        self.reveal_keyboard_selection(&path)
+    }
+
+    fn reveal_keyboard_selection(&self, path: &Path) -> Task<Message> {
+        let Some((region, scroll_delta)) = self.keyboard_selection_scroll(path) else {
+            return Task::none();
+        };
+        if scroll_delta.abs() <= f32::EPSILON {
+            return Task::none();
+        }
+        iced::widget::operation::scroll_by(
+            crate::app::smooth_scroll::smooth_scroll_id(&region),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: scroll_delta,
+            },
+        )
+    }
+
+    fn keyboard_selection_scroll(&self, path: &Path) -> Option<(ScrollbarRegion, f32)> {
+        let pane_id = self.active_pane_id();
+        Some(match self.view_mode {
+            BrowserViewMode::Icons => {
+                let pane = self.pane_view(pane_id)?;
+                let viewport = pane.icon_grid_viewport;
+                let layout = self.icon_grid_layout_for_pane(pane);
+                (
+                    ScrollbarRegion::PaneIcons(pane_id),
+                    layout.scroll_delta_to_reveal(viewport, path),
+                )
+            }
+            BrowserViewMode::List => {
+                let viewport = self.column_viewports.get(&self.current_dir)?;
+                let (item_offset, item_height) =
+                    crate::visible_entries::list_entry_vertical_bounds(
+                        &self.entries,
+                        &self.expanded_directories,
+                        path,
+                        LIST_ROW_HEIGHT,
+                        LIST_HEADER_HEIGHT,
+                    )?;
+                (
+                    ScrollbarRegion::PaneList(pane_id),
+                    vertical_scroll_delta_to_reveal(
+                        viewport.offset_y,
+                        viewport.height,
+                        item_offset,
+                        item_height,
+                    ),
+                )
+            }
+            BrowserViewMode::Columns => {
+                let directory = self.entry_parent_directory(path);
+                let viewport = self.column_viewports.get(&directory)?;
+                let entries = if directory == self.current_dir {
+                    self.entries.as_ref()
+                } else {
+                    self.expanded_directories
+                        .get(&directory)?
+                        .entries
+                        .as_slice()
+                };
+                let row_index = entries.iter().position(|entry| entry.path == path)?;
+                (
+                    ScrollbarRegion::Column { pane_id, directory },
+                    vertical_scroll_delta_to_reveal(
+                        viewport.offset_y,
+                        viewport.height,
+                        crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
+                            + row_index as f32
+                                * crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
+                        crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+                    ),
+                )
+            }
+        })
     }
 
     pub(crate) fn request_preview(&mut self) -> Task<Message> {
@@ -511,9 +575,25 @@ fn stepped_selection_target(
 #[cfg(test)]
 mod tests {
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
+    use iced::futures::StreamExt;
+    use iced_runtime::Action;
 
     use super::*;
     use crate::config;
+    use crate::thumbnail_cache::ColumnViewport;
+
+    async fn widget_action_count(task: Task<Message>) -> usize {
+        let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+            return 0;
+        };
+        let mut count = 0;
+        while let Some(action) = stream.next().await {
+            if matches!(action, Action::Widget(_)) {
+                count += 1;
+            }
+        }
+        count
+    }
 
     fn entry(index: usize) -> DirectoryEntry {
         DirectoryEntry::new(
@@ -524,6 +604,165 @@ mod tests {
             false,
             false,
         )
+    }
+
+    fn expanded_directory(
+        entries: Vec<DirectoryEntry>,
+        animation_progress: f32,
+    ) -> ExpandedDirectory {
+        ExpandedDirectory {
+            entries,
+            directory_discovery: None,
+            status: ExpandedDirectoryStatus::Loaded,
+            is_expanded: true,
+            is_collapsing: false,
+            animation_progress,
+            load_generation: 0,
+            load_context: None,
+            load_cancel: None,
+            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
+                field: file_core::SortField::Name,
+                direction: file_core::SortDirection::Ascending,
+            },
+        }
+    }
+
+    fn browser_for_vertical_keyboard_navigation(
+        view_mode: BrowserViewMode,
+        viewport_height: f32,
+    ) -> FileBrowser {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        browser.current_dir = PathBuf::from("/workspace");
+        browser.view_mode = view_mode;
+        browser.entries = (0..3).map(entry).collect::<Vec<_>>().into();
+        browser.column_viewports.insert(
+            browser.current_dir.clone(),
+            ColumnViewport {
+                offset_y: 0.0,
+                height: viewport_height,
+            },
+        );
+        browser.select_path(browser.entries[0].path.clone());
+        browser
+    }
+
+    #[test]
+    fn keyboard_reveal_uses_scroll_content_offsets() {
+        for (view_mode, viewport_height, expected_delta) in [
+            (
+                BrowserViewMode::List,
+                LIST_HEADER_HEIGHT + LIST_ROW_HEIGHT,
+                LIST_ROW_HEIGHT,
+            ),
+            (
+                BrowserViewMode::Columns,
+                crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
+                    + crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+                crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
+            ),
+        ] {
+            let browser = browser_for_vertical_keyboard_navigation(view_mode, viewport_height);
+            let (_, scroll_delta) = browser
+                .keyboard_selection_scroll(&browser.entries[1].path)
+                .expect("second row has a scroll target");
+
+            assert_eq!(scroll_delta, expected_delta, "wrong delta in {view_mode:?}");
+        }
+    }
+
+    #[test]
+    fn list_keyboard_reveal_counts_status_and_animation_rows() {
+        let mut browser = browser_for_vertical_keyboard_navigation(BrowserViewMode::List, 500.0);
+        let directory = DirectoryEntry::new(
+            browser.current_dir.join("directory"),
+            FileKind::Directory,
+            EntryMetadata::default(),
+            false,
+            false,
+            false,
+        );
+        let sibling = entry(1);
+        browser.entries = vec![directory.clone(), sibling.clone()].into();
+        browser
+            .expanded_directories
+            .insert(directory.path.clone(), expanded_directory(Vec::new(), 1.0));
+
+        assert_eq!(
+            crate::visible_entries::list_entry_vertical_bounds(
+                &browser.entries,
+                &browser.expanded_directories,
+                &sibling.path,
+                LIST_ROW_HEIGHT,
+                LIST_HEADER_HEIGHT,
+            ),
+            Some((LIST_HEADER_HEIGHT + LIST_ROW_HEIGHT * 2.0, LIST_ROW_HEIGHT))
+        );
+
+        let child = DirectoryEntry::new(
+            directory.path.join("child.txt"),
+            FileKind::File,
+            EntryMetadata::default(),
+            false,
+            false,
+            false,
+        );
+        browser
+            .expanded_directories
+            .insert(directory.path.clone(), expanded_directory(vec![child], 0.5));
+
+        assert_eq!(
+            crate::visible_entries::list_entry_vertical_bounds(
+                &browser.entries,
+                &browser.expanded_directories,
+                &sibling.path,
+                LIST_ROW_HEIGHT,
+                LIST_HEADER_HEIGHT,
+            ),
+            Some((LIST_HEADER_HEIGHT + LIST_ROW_HEIGHT * 1.5, LIST_ROW_HEIGHT,))
+        );
+    }
+
+    #[tokio::test]
+    async fn list_keyboard_navigation_reveals_offscreen_selection() {
+        let mut browser = browser_for_vertical_keyboard_navigation(
+            BrowserViewMode::List,
+            LIST_HEADER_HEIGHT + LIST_ROW_HEIGHT,
+        );
+
+        let widget_actions =
+            widget_action_count(browser.move_file_selection(FileSelectionDirection::Down)).await;
+
+        assert_eq!(browser.selected, Some(browser.entries[1].path.clone()));
+        assert_eq!(widget_actions, 1);
+    }
+
+    #[tokio::test]
+    async fn column_keyboard_navigation_reveals_offscreen_selection() {
+        let mut browser = browser_for_vertical_keyboard_navigation(
+            BrowserViewMode::Columns,
+            crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
+                + crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+        );
+
+        let widget_actions =
+            widget_action_count(browser.move_file_selection(FileSelectionDirection::Down)).await;
+
+        assert_eq!(browser.selected, Some(browser.entries[1].path.clone()));
+        assert_eq!(widget_actions, 1);
+    }
+
+    #[tokio::test]
+    async fn visible_keyboard_selection_does_not_scroll() {
+        for view_mode in [BrowserViewMode::List, BrowserViewMode::Columns] {
+            let mut browser = browser_for_vertical_keyboard_navigation(view_mode, 500.0);
+
+            let widget_actions =
+                widget_action_count(browser.move_file_selection(FileSelectionDirection::Down))
+                    .await;
+
+            assert_eq!(browser.selected, Some(browser.entries[1].path.clone()));
+            assert_eq!(widget_actions, 0, "unexpected scroll in {view_mode:?}");
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ use crate::thumbnail_cache::{
     ThumbnailPurpose, ThumbnailScope, COLUMN_THUMBNAIL_EDGE, LIST_THUMBNAIL_EDGE,
     PREVIEW_THUMBNAIL_MAX_EDGE, TRANSFER_CONFLICT_THUMBNAIL_EDGE,
 };
-use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
+use crate::virtual_range::initial_virtual_range;
 
 const OVERSCAN_ROWS: usize = 28;
 const INITIAL_THUMBNAIL_ROWS: usize = OVERSCAN_ROWS * 2 + 1;
@@ -436,15 +436,31 @@ impl FileBrowser {
             return;
         };
         let directory = pane.current_dir.clone();
-        let total_rows =
-            crate::visible_entries::visible_entry_count(pane.entries, pane.expanded_directories);
-        let (start, end) =
-            thumbnail_range_for_row_height(viewport, total_rows, crate::list_view::LIST_ROW_HEIGHT);
+        let range = viewport
+            .map(|viewport| {
+                crate::visible_entries::list_entry_range_for_viewport(
+                    pane.entries,
+                    pane.expanded_directories,
+                    crate::list_view::LIST_ROW_HEIGHT,
+                    crate::list_view::LIST_HEADER_HEIGHT,
+                    viewport.offset_y,
+                    viewport.height,
+                    OVERSCAN_ROWS,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::visible_entries::initial_list_entry_range(
+                    pane.entries,
+                    pane.expanded_directories,
+                    crate::list_view::LIST_ROW_HEIGHT,
+                    INITIAL_THUMBNAIL_ROWS,
+                )
+            });
         let entries = crate::visible_entries::visible_entries_in_range(
             pane.entries,
             pane.expanded_directories,
-            start,
-            end,
+            range.start,
+            range.end,
         );
         let scope = thumbnail_scope_for_pane_directory(pane_id, &directory);
         let requests = entries
@@ -635,11 +651,24 @@ impl FileBrowser {
         directory: &Path,
         len: usize,
     ) -> (usize, usize) {
-        thumbnail_range_for_row_height(
-            self.column_viewport_for_pane_directory(pane_id, directory),
-            len,
-            crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
-        )
+        let range = self
+            .column_viewport_for_pane_directory(pane_id, directory)
+            .map(|viewport| {
+                crate::three_column_view::column_virtual_range_for_viewport(
+                    len,
+                    viewport.offset_y,
+                    viewport.height,
+                    OVERSCAN_ROWS,
+                )
+            })
+            .unwrap_or_else(|| {
+                initial_virtual_range(
+                    len,
+                    crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
+                    INITIAL_THUMBNAIL_ROWS,
+                )
+            });
+        (range.start, range.end)
     }
 
     fn column_viewport_for_pane_directory(
@@ -755,25 +784,6 @@ fn thumbnail_request_matches_transfer_conflict_path(
 ) -> bool {
     request_for_transfer_conflict_path(path, metadata, request.max_edge)
         .is_some_and(|current| current.key() == request.key())
-}
-
-fn thumbnail_range_for_row_height(
-    viewport: Option<ColumnViewport>,
-    len: usize,
-    row_height: f32,
-) -> (usize, usize) {
-    let range = viewport
-        .map(|viewport| {
-            virtual_range_for_viewport(
-                len,
-                row_height,
-                viewport.offset_y,
-                viewport.height,
-                OVERSCAN_ROWS,
-            )
-        })
-        .unwrap_or_else(|| initial_virtual_range(len, row_height, INITIAL_THUMBNAIL_ROWS));
-    (range.start, range.end)
 }
 
 fn thumbnail_scope_for_pane_directory(pane_id: BrowserPaneId, directory: &Path) -> ThumbnailScope {

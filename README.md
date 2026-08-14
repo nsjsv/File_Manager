@@ -6,15 +6,11 @@
 
 **项目仍处于早期阶段，功能与体验可能继续调整。**
 
-[演示](#showcase) · [概览](#overview) · [功能](#features) · [安装](#install) · [使用](#usage) · [依赖](#dependencies) · [构建](#build) · [平台](#platform) · [参与](#contributing)
-
 [Releases](https://github.com/nsjsv/File_Manager/releases) · [AUR](https://aur.archlinux.org/packages/file-manager-bin) · [Issues](https://github.com/nsjsv/File_Manager/issues) · [Pull Requests](https://github.com/nsjsv/File_Manager/pulls)
 
 ## 项目概览
 
 File Manager 专注于 Linux 日常文件操作中最常见、最需要信任感的部分：路径浏览、搜索、预览、复制移动、回收站、外部设备和键盘操作。它的目标不是成为“大而全”的跨平台文件管理器，而是把这些基础工作流做扎实。
-
-**技术栈：** Rust · Iced · Tokio · notify · SQLite / rusqlite · UDisks2 · Rodio · pulldown-cmark
 
 ## 功能
 
@@ -33,11 +29,9 @@ File Manager 专注于 Linux 日常文件操作中最常见、最需要信任感
 
 ### Arch Linux（AUR）
 
-Arch Linux 用户可以从 AUR 安装预编译包 `[file-manager-bin](https://aur.archlinux.org/packages/file-manager-bin)`：
+Arch Linux 用户可以从 AUR 安装预编译包：
 
 ```bash
-yay -S file-manager-bin
-# 或
 paru -S file-manager-bin
 ```
 

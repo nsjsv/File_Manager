@@ -21,39 +21,49 @@ use crate::network_connections::NetworkConnectionState;
 use crate::operation_queue::QueuedTransfer;
 
 #[test]
-fn missing_viewport_schedules_initial_thumbnail_rows() {
-    let range = thumbnail_range_for_row_height(None, 100, crate::list_view::LIST_ROW_HEIGHT);
-
-    assert_eq!(range, (0, INITIAL_THUMBNAIL_ROWS));
-}
-
-#[test]
-fn measured_viewport_schedules_visible_rows_with_overscan() {
-    let viewport = ColumnViewport {
-        offset_y: crate::list_view::LIST_ROW_HEIGHT * 40.0,
-        height: crate::list_view::LIST_ROW_HEIGHT * 3.0,
-    };
-
-    let range =
-        thumbnail_range_for_row_height(Some(viewport), 120, crate::list_view::LIST_ROW_HEIGHT);
-
-    assert_eq!(range, (12, 71));
-}
-
-#[test]
-fn column_thumbnail_range_uses_column_scroll_height() {
-    let viewport = ColumnViewport {
-        offset_y: crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 40.0,
-        height: crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 3.0,
-    };
-
-    let range = thumbnail_range_for_row_height(
-        Some(viewport),
-        120,
-        crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
+fn missing_viewport_schedules_initial_list_thumbnail_rows() {
+    let entries = (0..100)
+        .map(|index| image_entry(&format!("/workspace/{index}.png")))
+        .collect::<Vec<_>>();
+    let range = crate::visible_entries::initial_list_entry_range(
+        &entries,
+        &HashMap::new(),
+        crate::list_view::LIST_ROW_HEIGHT,
+        INITIAL_THUMBNAIL_ROWS,
     );
 
-    assert_eq!(range, (12, 71));
+    assert_eq!((range.start, range.end), (0, INITIAL_THUMBNAIL_ROWS));
+}
+
+#[test]
+fn measured_viewport_schedules_list_rows_from_shared_geometry() {
+    let entries = (0..120)
+        .map(|index| image_entry(&format!("/workspace/{index}.png")))
+        .collect::<Vec<_>>();
+    let range = crate::visible_entries::list_entry_range_for_viewport(
+        &entries,
+        &HashMap::new(),
+        crate::list_view::LIST_ROW_HEIGHT,
+        crate::list_view::LIST_HEADER_HEIGHT,
+        crate::list_view::LIST_HEADER_HEIGHT + crate::list_view::LIST_ROW_HEIGHT * 40.0,
+        crate::list_view::LIST_ROW_HEIGHT * 3.0,
+        OVERSCAN_ROWS,
+    );
+
+    assert_eq!((range.start, range.end), (12, 71));
+}
+
+#[test]
+fn column_thumbnail_range_uses_shared_column_geometry() {
+    let range = crate::three_column_view::column_virtual_range_for_viewport(
+        120,
+        crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
+            + crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 40.0,
+        crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 3.0,
+        OVERSCAN_ROWS,
+    );
+
+    assert_eq!((range.start, range.end), (12, 71));
 }
 
 #[test]

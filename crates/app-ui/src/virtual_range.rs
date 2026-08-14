@@ -40,6 +40,30 @@ pub(crate) fn virtual_range_for_viewport(
     heights_for_range(total_rows, row_height, start, end)
 }
 
+pub(crate) fn vertical_scroll_delta_to_reveal(
+    viewport_offset: f32,
+    viewport_height: f32,
+    item_offset: f32,
+    item_height: f32,
+) -> f32 {
+    if viewport_height <= f32::EPSILON || item_height <= f32::EPSILON {
+        return 0.0;
+    }
+
+    let viewport_top = viewport_offset.max(0.0);
+    let viewport_bottom = viewport_top + viewport_height;
+    let item_top = item_offset.max(0.0);
+    let item_bottom = item_top + item_height;
+
+    if item_top < viewport_top {
+        item_top - viewport_top
+    } else if item_bottom > viewport_bottom {
+        item_bottom - viewport_bottom
+    } else {
+        0.0
+    }
+}
+
 pub(crate) fn initial_virtual_range(
     total_rows: usize,
     row_height: f32,
@@ -105,6 +129,19 @@ mod tests {
         assert_eq!(
             rendered_height_with_spacer_gaps(first_range, row_height, row_gap),
             rendered_height_with_spacer_gaps(second_range, row_height, row_gap)
+        );
+    }
+
+    #[test]
+    fn reveal_delta_handles_above_visible_and_below_items() {
+        assert_eq!(
+            vertical_scroll_delta_to_reveal(30.0, 40.0, 10.0, 10.0),
+            -20.0
+        );
+        assert_eq!(vertical_scroll_delta_to_reveal(30.0, 40.0, 45.0, 10.0), 0.0);
+        assert_eq!(
+            vertical_scroll_delta_to_reveal(30.0, 40.0, 75.0, 10.0),
+            15.0
         );
     }
 

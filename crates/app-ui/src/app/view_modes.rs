@@ -472,7 +472,7 @@ impl FileBrowser {
             .is_some_and(|expanded| expanded.is_expanded && !expanded.is_collapsing)
         {
             if let Some(child) = self.first_visible_child_path(&selected) {
-                self.select_path_from_keyboard(child);
+                return self.select_path_from_keyboard(child);
             }
             return Task::none();
         }
@@ -508,9 +508,9 @@ impl FileBrowser {
             return Task::none();
         }
 
-        self.select_path_from_keyboard(parent);
+        let scroll_task = self.select_path_from_keyboard(parent);
         self.sync_active_tab_state();
-        self.schedule_thumbnail_refresh()
+        Task::batch([scroll_task, self.schedule_thumbnail_refresh()])
     }
 
     fn toggle_list_directory_for_path(&mut self, path: PathBuf) -> Task<Message> {

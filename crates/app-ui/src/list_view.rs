@@ -22,12 +22,11 @@ use crate::formatting::format_system_time;
 use crate::icons::rotated_chevron_right_view;
 use crate::measured_middle_ellipsized_text::measured_middle_ellipsized_text;
 use crate::model::{
-    BrowserPaneId, DirectoryLoadingPlaceholderEntry, ExpandedDirectoryStatus,
-    FilePropertiesPermissions, ListColumnConfig, ListColumnKind, Message, ScrollbarRegion,
+    BrowserPaneId, DirectoryLoadingPlaceholderEntry, FilePropertiesPermissions, ListColumnConfig,
+    ListColumnKind, Message, ScrollbarRegion,
 };
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
-use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 const LIST_ROW_TEXT_SIZE: u32 = 15;
 const LIST_HEADER_TEXT_SIZE: u32 = 12;
@@ -48,6 +47,8 @@ const LIST_INDENT_WIDTH: f32 = 18.0;
 const LIST_TOGGLE_WIDTH: f32 = 18.0;
 const LIST_TOGGLE_ICON_SIZE: f32 = 14.0;
 const LIST_HEADER_CELL_HEIGHT: f32 = 24.0;
+pub(crate) const LIST_HEADER_HEIGHT: f32 =
+    LIST_HEADER_CELL_HEIGHT + LIST_HEADER_PADDING[0] as f32 * 2.0;
 const LIST_HEADER_DROP_INDICATOR_WIDTH: f32 = 3.0;
 const LIST_COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 5.0;
 
@@ -76,22 +77,27 @@ pub(crate) fn list_browser_view<'a>(
             "No items"
         }));
     } else {
-        let total_rows =
-            crate::visible_entries::visible_entry_count(pane.entries, pane.expanded_directories);
         let range = pane
             .column_viewports
             .get(pane.current_dir)
             .map(|viewport| {
-                virtual_range_for_viewport(
-                    total_rows,
+                crate::visible_entries::list_entry_range_for_viewport(
+                    pane.entries,
+                    pane.expanded_directories,
                     LIST_ROW_HEIGHT,
+                    LIST_HEADER_HEIGHT,
                     viewport.offset_y,
                     viewport.height,
                     LIST_OVERSCAN_ROWS,
                 )
             })
             .unwrap_or_else(|| {
-                initial_virtual_range(total_rows, LIST_ROW_HEIGHT, LIST_INITIAL_ROWS)
+                crate::visible_entries::initial_list_entry_range(
+                    pane.entries,
+                    pane.expanded_directories,
+                    LIST_ROW_HEIGHT,
+                    LIST_INITIAL_ROWS,
+                )
             });
         rows = rows.push(vertical_spacer(range.before_height));
 
@@ -204,25 +210,17 @@ fn list_directory_status_for_entry<'a>(
     depth: usize,
     parent_row_index: usize,
 ) -> Option<Element<'static, Message>> {
-    let expanded = pane
-        .expanded_directories
-        .get(&entry.path)
-        .filter(|expanded| expanded.is_expanded || expanded.is_collapsing)?;
-
-    let animation_height = LIST_ROW_HEIGHT * expanded.animation_progress.clamp(0.0, 1.0);
-    match &expanded.status {
-        ExpandedDirectoryStatus::Loading => None,
-        ExpandedDirectoryStatus::Error => Some(list_directory_status_row(
-            "Could not load",
-            depth,
-            parent_row_index,
-            animation_height,
-        )),
-        ExpandedDirectoryStatus::Loaded if expanded.entries.is_empty() => Some(
-            list_directory_status_row("No items", depth, parent_row_index, animation_height),
-        ),
-        ExpandedDirectoryStatus::Loaded => None,
-    }
+    let expanded = pane.expanded_directories.get(&entry.path)?;
+    let message = match crate::visible_entries::visible_entry_status_row(expanded)? {
+        crate::visible_entries::VisibleEntryStatusRow::Error => "Could not load",
+        crate::visible_entries::VisibleEntryStatusRow::Empty => "No items",
+    };
+    Some(list_directory_status_row(
+        message,
+        depth,
+        parent_row_index,
+        crate::visible_entries::visible_entry_status_row_height(expanded, LIST_ROW_HEIGHT),
+    ))
 }
 
 fn list_header<'a>(browser: &'a FileBrowser, pane_id: BrowserPaneId) -> Element<'a, Message> {
