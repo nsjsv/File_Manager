@@ -89,6 +89,19 @@ async fn observed_window_actions(task: Task<Message>) -> Vec<ObservedWindowActio
     actions
 }
 
+async fn widget_action_count(task: Task<Message>) -> usize {
+    let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+        return 0;
+    };
+    let mut count = 0;
+    while let Some(action) = stream.next().await {
+        if matches!(action, Action::Widget(_)) {
+            count += 1;
+        }
+    }
+    count
+}
+
 fn clamped_image_size(width: u32, height: u32) -> PreviewSize {
     clamp_preview_size_to_minimum(
         PreviewWindowProfile::Image,
@@ -410,6 +423,49 @@ async fn close_command_completion_is_a_bounded_missing_event_fallback() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn shutdown_waits_for_old_preferences_save_then_commits_latest_search_history() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let store =
+        TaskQueueStore::new(temp_dir.path().join("state.sqlite")).expect("create state store");
+    let mut old_preferences = config::default_user_config().user_preferences().to_stored();
+    old_preferences.search_history = vec!["old".to_owned()];
+    store
+        .replace_user_preferences(&old_preferences)
+        .expect("store old preferences");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    drop(browser.accept_operation_store(Ok(LoadedOperationStore {
+        task_queue_store: store.clone(),
+        column_width_overrides: HashMap::new(),
+        classified_startup_session: None,
+    })));
+    browser.user_preferences_save_in_flight = true;
+    browser
+        .user_config
+        .search_history
+        .record_submission("latest");
+
+    drop(browser.close_auxiliary_window(browser.main_window));
+    assert!(shutdown_actions(
+        browser.update(Message::ApplicationWindowClosed(browser.main_window)),
+    )
+    .await
+    .is_empty());
+
+    assert_eq!(
+        shutdown_actions(browser.update(Message::UserPreferencesSaved(Ok(())))).await,
+        vec![ShutdownAction::PersistenceFinished]
+    );
+    assert_eq!(
+        store
+            .read_user_preferences()
+            .unwrap()
+            .unwrap()
+            .search_history,
+        ["latest"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn final_shutdown_session_waits_for_an_older_save_outcome() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let store =
@@ -620,6 +676,47 @@ fn system_window_focus_ignores_late_unfocus_from_an_older_window() {
 
     drop(browser.handle_window_unfocused(settings_window));
     assert_eq!(browser.system_focused_window, None);
+}
+
+#[tokio::test]
+async fn main_window_refocus_rechecks_search_input_focus() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let main_window = browser.main_window;
+
+    assert_eq!(
+        widget_action_count(browser.handle_window_focused(main_window)).await,
+        1
+    );
+    assert_eq!(
+        widget_action_count(browser.handle_window_focused(window::Id::unique())).await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn only_tab_key_rechecks_search_input_focus() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+    let enter = browser.update(Message::KeyboardKeyPressed {
+        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+        modifiers: iced::keyboard::Modifiers::default(),
+        status: iced::event::Status::Captured,
+    });
+    assert_eq!(widget_action_count(enter).await, 0);
+
+    for (modifiers, expected_actions) in [
+        (iced::keyboard::Modifiers::default(), 1),
+        (iced::keyboard::Modifiers::SHIFT, 1),
+        (iced::keyboard::Modifiers::CTRL, 0),
+        (iced::keyboard::Modifiers::ALT, 0),
+    ] {
+        let tab = browser.update(Message::KeyboardKeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+            modifiers,
+            status: iced::event::Status::Captured,
+        });
+        assert_eq!(widget_action_count(tab).await, expected_actions);
+    }
 }
 
 #[test]

@@ -163,6 +163,7 @@ mod tests {
             browser.select_window_chrome_layout(WindowChromeLayout::SeparateTitleBar)
         )
         .is_some());
+        drop(browser.accept_user_preferences_saved(Ok(())));
         assert!(into_stream(
             browser.select_window_chrome_layout(WindowChromeLayout::SeparateTitleBar)
         )
@@ -175,6 +176,7 @@ mod tests {
             into_stream(browser.toggle_window_control_visibility(WindowControlKind::Minimize))
                 .is_some()
         );
+        drop(browser.accept_user_preferences_saved(Ok(())));
         assert_eq!(
             browser
                 .user_config()
@@ -187,6 +189,7 @@ mod tests {
             browser.select_window_control_side(WindowControlKind::Close, WindowControlSide::Left)
         )
         .is_some());
+        drop(browser.accept_user_preferences_saved(Ok(())));
         assert!(into_stream(
             browser.select_window_control_side(WindowControlKind::Close, WindowControlSide::Left)
         )
@@ -213,6 +216,7 @@ mod tests {
     fn reorder_commits_once_on_release_and_rejects_cross_side_target() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         drop(browser.select_window_control_side(WindowControlKind::Close, WindowControlSide::Left));
+        drop(browser.accept_user_preferences_saved(Ok(())));
         drop(browser.start_window_control_reorder(WindowControlKind::Minimize));
         drop(browser.enter_window_control_reorder_target(WindowControlKind::Close));
         assert_eq!(browser.window_control_reorder_target(), None);
@@ -222,6 +226,7 @@ mod tests {
             browser
                 .select_window_control_side(WindowControlKind::Minimize, WindowControlSide::Left),
         );
+        drop(browser.accept_user_preferences_saved(Ok(())));
         drop(browser.start_window_control_reorder(WindowControlKind::Minimize));
         drop(browser.enter_window_control_reorder_target(WindowControlKind::Close));
         assert_eq!(
@@ -229,6 +234,7 @@ mod tests {
             Some(WindowControlKind::Close)
         );
         assert!(into_stream(browser.finish_window_control_reorder()).is_some());
+        drop(browser.accept_user_preferences_saved(Ok(())));
         assert_eq!(
             kinds_on(&browser, WindowControlSide::Left),
             vec![WindowControlKind::Minimize, WindowControlKind::Close]
@@ -275,6 +281,8 @@ mod tests {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         drop(browser.select_window_chrome_layout(WindowChromeLayout::SeparateTitleBar));
         drop(browser.select_window_control_side(WindowControlKind::Close, WindowControlSide::Left));
+        drop(browser.accept_user_preferences_saved(Ok(())));
+        drop(browser.accept_user_preferences_saved(Ok(())));
 
         assert!(into_stream(browser.reset_window_controls()).is_some());
         assert_eq!(

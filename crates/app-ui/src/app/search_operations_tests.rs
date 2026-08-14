@@ -45,6 +45,7 @@ fn browser_with_search_selection() -> (FileBrowser, Vec<PathBuf>) {
     browser
         .selected_paths
         .insert(PathBuf::from("/underlying-browser-selection"));
+    drop(browser.update_search_input("selection".to_owned()));
     drop(browser.submit_search());
     let request = browser
         .search_workspace
@@ -131,6 +132,7 @@ fn navigation_behind_workspace_keeps_the_frozen_root_until_explicit_close() {
     drop(browser.navigate_to(second_directory.clone(), NavigationMode::RecordHistory));
     assert!(browser.search_workspace.is_some());
     drop(browser.update_search_input("after navigation".to_owned()));
+    drop(browser.submit_search());
     let query = browser
         .search_workspace
         .as_ref()
@@ -188,6 +190,7 @@ fn trash_and_permanent_delete_reuse_queue_and_confirmation_boundaries() {
 fn right_click_targets_search_selection_without_mutating_underlying_selection() {
     let (mut browser, expected_paths) = browser_with_search_selection();
     let third = browser.current_dir.join("third.txt");
+    drop(browser.update_search_input("third".to_owned()));
     drop(browser.submit_search());
     let request = browser
         .search_workspace

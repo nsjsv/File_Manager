@@ -285,6 +285,10 @@ fn application_shutdown_commits_session_recovery_and_transient_cleanup_atomicall
     store
         .commit_application_shutdown(StoredApplicationShutdown {
             browser_session: StoredBrowserSessionShutdown::Persist(session.clone()),
+            user_preferences: Some(StoredUserPreferences {
+                search_history: vec!["report".to_owned()],
+                ..StoredUserPreferences::default()
+            }),
             interrupted_recoverable_tasks: vec![StoredInterruptedRecoverableTask {
                 task_id: recoverable_task_id,
                 status: StoredTaskStatus::RecoveryPending,
@@ -296,6 +300,14 @@ fn application_shutdown_commits_session_recovery_and_transient_cleanup_atomicall
         .unwrap();
 
     assert_eq!(store.read_browser_session().unwrap(), Some(session));
+    assert_eq!(
+        store
+            .read_user_preferences()
+            .unwrap()
+            .unwrap()
+            .search_history,
+        ["report"]
+    );
     assert_eq!(
         store
             .read_task(recoverable_task_id)
@@ -329,6 +341,7 @@ fn application_shutdown_rejects_transient_id_with_recovery_and_rolls_back() {
             browser_session: StoredBrowserSessionShutdown::Persist(stored_browser_session(
                 Path::new("/tmp/new-session"),
             )),
+            user_preferences: None,
             interrupted_recoverable_tasks: Vec::new(),
             transient_task_ids: vec![recoverable_task_id],
         })
@@ -377,6 +390,10 @@ fn application_shutdown_rolls_back_prior_task_writes_when_session_write_fails() 
             browser_session: StoredBrowserSessionShutdown::Persist(stored_browser_session(
                 Path::new("/tmp/new-session"),
             )),
+            user_preferences: Some(StoredUserPreferences {
+                search_history: vec!["report".to_owned()],
+                ..StoredUserPreferences::default()
+            }),
             interrupted_recoverable_tasks: vec![StoredInterruptedRecoverableTask {
                 task_id: recoverable_task_id,
                 status: StoredTaskStatus::RecoveryPending,
@@ -398,6 +415,7 @@ fn application_shutdown_rolls_back_prior_task_writes_when_session_write_fails() 
     );
     assert!(store.read_task(transient_task_id).unwrap().is_some());
     assert!(store.read_browser_session().unwrap().is_none());
+    assert!(store.read_user_preferences().unwrap().is_none());
     assert!(!store
         .read_transfer_recovery(recoverable_task_id)
         .unwrap()
@@ -536,6 +554,7 @@ fn user_preferences_roundtrip_replace() {
                 visible: true,
             },
         ],
+        search_history: vec!["report".to_owned(), "images".to_owned()],
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -590,6 +609,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("icon_grid_size");
     object.remove("window_chrome_layout");
     object.remove("window_controls");
+    object.remove("search_history");
     let payload_json = serde_json::to_string(&payload).unwrap();
     let connection = Connection::open(store.db_path()).unwrap();
     connection
@@ -622,6 +642,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert!(preferences.window_controls[0].visible);
     assert_eq!(preferences.window_controls[2].kind, "close");
     assert!(preferences.window_controls[2].visible);
+    assert!(preferences.search_history.is_empty());
     let _ = fs::remove_dir_all(root);
 }
 

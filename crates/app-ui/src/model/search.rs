@@ -8,6 +8,8 @@ mod filters;
 pub(crate) use filters::{
     SearchDateField, SearchDatePreset, SearchEntryTypePreset, SearchFilterPresetState,
 };
+mod history;
+pub(crate) use history::SearchHistory;
 
 pub(crate) const SEARCH_RESULT_WINDOW: usize = 100;
 
@@ -19,6 +21,106 @@ pub(crate) struct SearchInputStabilizationRequest {
     workspace_session_id: SearchWorkspaceSessionId,
     input_revision: u64,
     input: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchInputFocus {
+    Focused,
+    Unfocused,
+}
+
+impl From<bool> for SearchInputFocus {
+    fn from(is_focused: bool) -> Self {
+        if is_focused {
+            Self::Focused
+        } else {
+            Self::Unfocused
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchInputFocusCheckOrigin {
+    Pointer,
+    KeyboardTraversal,
+    MainWindowFocused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SearchInputFocusCheckRequest {
+    generation: u64,
+    origin: SearchInputFocusCheckOrigin,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SearchHistoryInteraction {
+    focus_check_generation: u64,
+    input_is_focused: bool,
+    pointer_is_over_popup: bool,
+    popup_is_dismissed: bool,
+}
+
+impl SearchHistoryInteraction {
+    pub(crate) fn begin_input_focus_check(
+        &mut self,
+        origin: SearchInputFocusCheckOrigin,
+    ) -> SearchInputFocusCheckRequest {
+        self.focus_check_generation = self.focus_check_generation.wrapping_add(1);
+        SearchInputFocusCheckRequest {
+            generation: self.focus_check_generation,
+            origin,
+        }
+    }
+
+    pub(crate) fn accept_input_focus_check(
+        &mut self,
+        request: SearchInputFocusCheckRequest,
+        focus: SearchInputFocus,
+    ) {
+        if request.generation == self.focus_check_generation {
+            self.input_is_focused = focus == SearchInputFocus::Focused;
+            if !matches!(
+                (request.origin, focus),
+                (
+                    SearchInputFocusCheckOrigin::Pointer,
+                    SearchInputFocus::Unfocused
+                )
+            ) {
+                self.popup_is_dismissed = false;
+            }
+        }
+    }
+
+    pub(crate) fn enter_popup(&mut self) {
+        self.pointer_is_over_popup = true;
+    }
+
+    pub(crate) fn pointer_is_over_popup(&self) -> bool {
+        self.pointer_is_over_popup
+    }
+
+    pub(crate) fn exit_popup(&mut self) {
+        self.pointer_is_over_popup = false;
+    }
+
+    pub(crate) fn popup_is_visible(&self, history: &SearchHistory) -> bool {
+        !self.popup_is_dismissed
+            && !history.entries().is_empty()
+            && (self.input_is_focused || self.pointer_is_over_popup)
+    }
+
+    pub(crate) fn dismiss_popup(&mut self) {
+        self.focus_check_generation = self.focus_check_generation.wrapping_add(1);
+        self.pointer_is_over_popup = false;
+        self.popup_is_dismissed = true;
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.focus_check_generation = self.focus_check_generation.wrapping_add(1);
+        self.input_is_focused = false;
+        self.pointer_is_over_popup = false;
+        self.popup_is_dismissed = false;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,18 +153,73 @@ pub(crate) enum SearchResultCompletion {
     Partial { inspected_entries: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchDirectoryScope {
+    CurrentFolder,
+    Home,
+}
+
+impl SearchDirectoryScope {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::CurrentFolder => "Current folder",
+            Self::Home => "Home",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SearchRootSnapshot {
-    path: PathBuf,
+    current_folder: PathBuf,
+    home: PathBuf,
+    selected_scope: SearchDirectoryScope,
 }
 
 impl SearchRootSnapshot {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
+    pub(crate) fn new(current_folder: PathBuf, home: PathBuf) -> Self {
+        let selected_scope = if current_folder == home {
+            SearchDirectoryScope::Home
+        } else {
+            SearchDirectoryScope::CurrentFolder
+        };
+        Self {
+            current_folder,
+            home,
+            selected_scope,
+        }
     }
 
     pub(crate) fn path(&self) -> &Path {
-        &self.path
+        match self.selected_scope {
+            SearchDirectoryScope::CurrentFolder => &self.current_folder,
+            SearchDirectoryScope::Home => &self.home,
+        }
+    }
+
+    pub(crate) fn selected_scope(&self) -> SearchDirectoryScope {
+        self.selected_scope
+    }
+
+    pub(crate) fn available_scopes(&self) -> &'static [SearchDirectoryScope] {
+        const BOTH: &[SearchDirectoryScope] = &[
+            SearchDirectoryScope::CurrentFolder,
+            SearchDirectoryScope::Home,
+        ];
+        const HOME_ONLY: &[SearchDirectoryScope] = &[SearchDirectoryScope::Home];
+
+        if self.current_folder == self.home {
+            HOME_ONLY
+        } else {
+            BOTH
+        }
+    }
+
+    pub(crate) fn select_scope(&mut self, scope: SearchDirectoryScope) -> bool {
+        if self.selected_scope == scope || !self.available_scopes().contains(&scope) {
+            return false;
+        }
+        self.selected_scope = scope;
+        true
     }
 }
 
@@ -304,11 +461,15 @@ pub(crate) struct SearchWorkspaceState {
 }
 
 impl SearchWorkspaceState {
-    pub(crate) fn new(root: PathBuf, session_id: SearchWorkspaceSessionId) -> Self {
+    pub(crate) fn new(
+        current_folder: PathBuf,
+        home: PathBuf,
+        session_id: SearchWorkspaceSessionId,
+    ) -> Self {
         Self {
             session_id,
             input_revision: 0,
-            root: SearchRootSnapshot::new(root),
+            root: SearchRootSnapshot::new(current_folder, home),
             input: String::new(),
             filters: SearchFilterPresetState::default(),
             run: SearchRunState::new(),
@@ -329,6 +490,11 @@ impl SearchWorkspaceState {
             input_revision: self.input_revision,
             input: self.input.clone(),
         }
+    }
+
+    pub(crate) fn replace_input_immediately(&mut self, input: String) {
+        self.input = input;
+        self.invalidate_input_stabilization();
     }
 
     pub(crate) fn accepts_input_stabilization(
@@ -498,7 +664,7 @@ impl SearchWorkspaceState {
         self.selection.reconcile(&self.window.hits);
     }
 
-    pub(crate) fn reject_query(&mut self, message: String) {
+    pub(crate) fn clear_query(&mut self) {
         self.run.cancel();
         self.run.generation = self.run.generation.saturating_add(1);
         self.run.active_query = None;
@@ -507,9 +673,16 @@ impl SearchWorkspaceState {
         self.run.pending_indexed_request = None;
         self.window.hits.clear();
         self.window.is_loading = false;
-        self.window.failure = Some(message);
+        self.window.failure = None;
         self.window.completion = None;
+        self.window.viewport_offset_y = 0.0;
+        self.window.viewport_height = 0.0;
         self.selection.clear();
+    }
+
+    pub(crate) fn reject_query(&mut self, message: String) {
+        self.clear_query();
+        self.window.failure = Some(message);
     }
 
     pub(crate) fn selected_paths_in_result_order(&self) -> Vec<PathBuf> {

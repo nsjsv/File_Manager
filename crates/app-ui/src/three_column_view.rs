@@ -267,7 +267,7 @@ fn directory_column<'a>(
             .on_exit(Message::DropTargetHoverCleared(pane.id, directory.clone()))
             .on_press(Message::ColumnBlankClicked(pane.id, directory.clone()))
             .on_release(Message::DropTargetReleased(pane.id, directory.clone()))
-            .on_right_press(Message::BlankAreaRightClicked(pane.id, directory.clone())),
+            .on_right_press(Message::ColumnBlankRightClicked(pane.id, directory.clone())),
         FileDragHitTestMarker::DirectoryTarget {
             pane_id: pane.id,
             directory,

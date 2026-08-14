@@ -804,6 +804,7 @@ fn finished_tasks_stay_until_queue_is_cleared() {
     store
         .commit_application_shutdown(file_operation_store::StoredApplicationShutdown {
             browser_session: file_operation_store::StoredBrowserSessionShutdown::Skip,
+            user_preferences: None,
             interrupted_recoverable_tasks: disposition.interrupted_recoverable_tasks,
             transient_task_ids: disposition.transient_task_ids,
         })

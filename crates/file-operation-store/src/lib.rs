@@ -423,6 +423,7 @@ pub enum StoredBrowserSessionShutdown {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredApplicationShutdown {
     pub browser_session: StoredBrowserSessionShutdown,
+    pub user_preferences: Option<StoredUserPreferences>,
     pub interrupted_recoverable_tasks: Vec<StoredInterruptedRecoverableTask>,
     pub transient_task_ids: Vec<u64>,
 }
@@ -665,6 +666,7 @@ impl TaskQueueStore {
     ) -> StoreResult<()> {
         let StoredApplicationShutdown {
             browser_session,
+            user_preferences,
             interrupted_recoverable_tasks,
             transient_task_ids,
         } = shutdown;
@@ -672,6 +674,10 @@ impl TaskQueueStore {
             StoredBrowserSessionShutdown::Skip => None,
             StoredBrowserSessionShutdown::Persist(session) => Some(serde_json::to_string(session)?),
         };
+        let user_preferences_json = user_preferences
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -713,6 +719,20 @@ impl TaskQueueStore {
             transaction.execute("DELETE FROM task_queue WHERE id = ?1", params![task_id])?;
         }
 
+        if let Some(payload_json) = user_preferences_json {
+            transaction.execute(
+                "INSERT INTO user_preferences (preference_key, payload_json, updated_at_ms)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(preference_key) DO UPDATE SET
+                     payload_json = excluded.payload_json,
+                     updated_at_ms = excluded.updated_at_ms",
+                params![
+                    user_preferences::USER_PREFERENCES_KEY,
+                    payload_json,
+                    current_time_ms()
+                ],
+            )?;
+        }
         if let Some(payload_json) = browser_session_json {
             transaction.execute(
                 "INSERT INTO browser_session (session_key, payload_json, updated_at_ms)

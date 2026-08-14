@@ -261,4 +261,26 @@ where
             .as_widget()
             .draw(self.state, renderer, theme, style, layout, cursor, &bounds);
     }
+
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.popup
+            .as_widget_mut()
+            .operate(self.state, layout, renderer, operation);
+    }
+
+    fn overlay<'c>(
+        &'c mut self,
+        layout: Layout<'c>,
+        renderer: &Renderer,
+    ) -> Option<overlay::Element<'c, Message, Theme, Renderer>> {
+        let bounds = layout.bounds();
+        self.popup
+            .as_widget_mut()
+            .overlay(self.state, layout, renderer, &bounds, Vector::ZERO)
+    }
 }

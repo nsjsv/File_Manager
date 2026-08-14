@@ -12,11 +12,11 @@ use crate::commands::{
 };
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
-    ContextMenuState, DestructiveActionConfirmation, DirectoryFallbackOutcome,
+    BrowserViewMode, ContextMenuState, DestructiveActionConfirmation, DirectoryFallbackOutcome,
     IndexedSearchOutcome, IndexedSearchRequest, LastActivationClick, Message, NavigationMode,
-    SearchContextMenuState, SearchDateField, SearchDatePreset, SearchEntryTypeMenuState,
-    SearchEntryTypePreset, SearchInputStabilizationRequest, SearchKeyboardSelection,
-    SearchSelectionGesture, SearchSelectionStep, SearchServiceDiagnostic,
+    SearchContextMenuState, SearchDateField, SearchDatePreset, SearchDirectoryScope,
+    SearchEntryTypeMenuState, SearchEntryTypePreset, SearchInputStabilizationRequest,
+    SearchKeyboardSelection, SearchSelectionGesture, SearchSelectionStep, SearchServiceDiagnostic,
     SearchServiceDiagnosticKind, SearchServiceRecoveryAction, SearchServiceStatusRequest,
     SearchWorkspaceSessionId, SearchWorkspaceState,
 };
@@ -42,6 +42,14 @@ impl FileBrowser {
             ShortcutAction::Refresh => self.submit_search(),
             ShortcutAction::Undo => self.undo_file_operation(),
             ShortcutAction::Redo => self.redo_file_operation(),
+            ShortcutAction::Escape
+                if self
+                    .search_history_interaction
+                    .popup_is_visible(&self.user_config.search_history) =>
+            {
+                self.search_history_interaction.dismiss_popup();
+                Task::none()
+            }
             ShortcutAction::Escape if !self.file_browser_content_shortcuts_enabled() => {
                 self.handle_focused_window_escape_pressed()
             }
@@ -83,12 +91,72 @@ impl FileBrowser {
         self.restart_search_workspace()
     }
 
+    pub(super) fn submit_search_input(&mut self) -> Task<Message> {
+        if let Err(message) = self.ensure_search_workspace() {
+            self.show_global_error(message);
+            return Task::none();
+        }
+        let keyword = self
+            .search_workspace
+            .as_ref()
+            .map(|workspace| workspace.input.clone())
+            .unwrap_or_default();
+        let persist = if self.user_config.search_history.record_submission(&keyword) {
+            self.persist_user_preferences_command()
+        } else {
+            Task::none()
+        };
+        self.search_history_interaction.dismiss_popup();
+        Task::batch([persist, self.restart_search_workspace()])
+    }
+
     pub(super) fn submit_search(&mut self) -> Task<Message> {
         if let Err(message) = self.ensure_search_workspace() {
             self.show_global_error(message);
             return Task::none();
         }
         self.restart_search_workspace()
+    }
+
+    pub(super) fn select_search_history_keyword(&mut self, keyword: String) -> Task<Message> {
+        if !self.user_config.search_history.contains(&keyword) {
+            return Task::none();
+        }
+        if let Err(message) = self.ensure_search_workspace() {
+            self.show_global_error(message);
+            return Task::none();
+        }
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.replace_input_immediately(keyword.clone());
+        self.search_history_interaction.reset();
+        let persist = if self.user_config.search_history.record_submission(&keyword) {
+            self.persist_user_preferences_command()
+        } else {
+            Task::none()
+        };
+        Task::batch([persist, self.restart_search_workspace()])
+    }
+
+    pub(super) fn remove_search_history_keyword(&mut self, keyword: &str) -> Task<Message> {
+        if self.user_config.search_history.remove(keyword) {
+            if self.user_config.search_history.entries().is_empty() {
+                self.search_history_interaction.dismiss_popup();
+            }
+            self.persist_user_preferences_command()
+        } else {
+            Task::none()
+        }
+    }
+
+    pub(super) fn clear_search_history(&mut self) -> Task<Message> {
+        if self.user_config.search_history.clear() {
+            self.search_history_interaction.dismiss_popup();
+            self.persist_user_preferences_command()
+        } else {
+            Task::none()
+        }
     }
 
     pub(super) fn clear_search_keyword(&mut self) -> Task<Message> {
@@ -119,6 +187,19 @@ impl FileBrowser {
             return Task::none();
         };
         workspace.filters.toggle_entry_type(entry_type);
+        self.restart_search_workspace()
+    }
+
+    pub(super) fn select_search_directory_scope(
+        &mut self,
+        scope: SearchDirectoryScope,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        if !workspace.root.select_scope(scope) {
+            return Task::none();
+        }
         self.restart_search_workspace()
     }
 
@@ -170,6 +251,7 @@ impl FileBrowser {
 
     pub(super) fn discard_search_workspace(&mut self) {
         self.search_workspace = None;
+        self.search_history_interaction.reset();
         self.last_activation_click = None;
         if matches!(
             self.context_menu,
@@ -193,8 +275,9 @@ impl FileBrowser {
         let session_id = SearchWorkspaceSessionId(self.next_search_workspace_session_id);
         self.next_search_workspace_session_id =
             self.next_search_workspace_session_id.wrapping_add(1);
+        let home = self.home_dir.clone();
         self.clear_pointer_driven_interaction_state();
-        self.search_workspace = Some(SearchWorkspaceState::new(root, session_id));
+        self.search_workspace = Some(SearchWorkspaceState::new(root, home, session_id));
         Ok(())
     }
 
@@ -205,6 +288,12 @@ impl FileBrowser {
         let Some(workspace) = self.search_workspace.as_ref() else {
             return Task::none();
         };
+        if workspace.input.trim().is_empty() {
+            if let Some(workspace) = self.search_workspace.as_mut() {
+                workspace.clear_query();
+            }
+            return Task::none();
+        }
         let generation = workspace.next_generation();
         let root = workspace.root.path().to_path_buf();
         if !std::fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
@@ -633,6 +722,11 @@ impl FileBrowser {
     }
 
     fn current_search_directory(&self) -> PathBuf {
+        if self.view_mode == BrowserViewMode::Columns {
+            if let Some(directory) = self.last_pointer_clicked_rendered_column_directory() {
+                return directory;
+            }
+        }
         self.pane_by_id(self.active_pane_id())
             .map(|pane| pane.current_dir.clone())
             .unwrap_or_else(|| self.current_dir.clone())

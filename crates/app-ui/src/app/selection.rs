@@ -49,7 +49,8 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_column_entry_clicked(&mut self, path: PathBuf) -> Task<Message> {
-        self.focused_column_directory = Some(self.entry_parent_directory(&path));
+        let directory = self.entry_parent_directory(&path);
+        self.focus_column_from_pointer_click(directory);
         let column_directories_snapshot = crate::three_column_view::column_directories(self);
         self.handle_file_entry_clicked(
             path,
@@ -272,7 +273,7 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_column_blank_clicked(&mut self, directory: PathBuf) -> Task<Message> {
-        self.focused_column_directory = Some(directory.clone());
+        self.focus_column_from_pointer_click(directory.clone());
         let rename_command = self.commit_rename_if_active();
         self.clear_preview();
         self.context_menu = None;
@@ -297,6 +298,9 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_entry_right_clicked(&mut self, path: PathBuf) -> Task<Message> {
+        if self.view_mode == BrowserViewMode::Columns {
+            self.record_pointer_clicked_column(self.entry_parent_directory(&path));
+        }
         let expansion_command = self.prepare_icon_grid_entry_interaction(&path);
         let rename_command = self.commit_rename_if_active();
         self.select_context_menu_target(path.clone());
@@ -314,6 +318,14 @@ impl FileBrowser {
             expansion: FileContextMenuExpansion::None,
         }));
         Task::batch([expansion_command, rename_command])
+    }
+
+    pub(super) fn handle_column_blank_right_clicked(
+        &mut self,
+        directory: PathBuf,
+    ) -> Task<Message> {
+        self.record_pointer_clicked_column(directory.clone());
+        self.handle_blank_area_right_clicked(directory)
     }
 
     pub(super) fn handle_blank_area_right_clicked(&mut self, directory: PathBuf) -> Task<Message> {
@@ -461,6 +473,27 @@ impl FileBrowser {
         crate::three_column_view::column_directories(self)
             .into_iter()
             .find(|rendered_directory| rendered_directory == directory)
+    }
+
+    pub(super) fn last_pointer_clicked_rendered_column_directory(&self) -> Option<PathBuf> {
+        let directory = self.last_pointer_clicked_column_directory.as_ref()?;
+        crate::three_column_view::column_directories(self)
+            .into_iter()
+            .find(|rendered_directory| rendered_directory == directory)
+    }
+
+    pub(in crate::app) fn clear_column_interaction_context(&mut self) {
+        self.focused_column_directory = None;
+        self.last_pointer_clicked_column_directory = None;
+    }
+
+    pub(in crate::app) fn focus_column_from_pointer_click(&mut self, directory: PathBuf) {
+        self.focused_column_directory = Some(directory.clone());
+        self.record_pointer_clicked_column(directory);
+    }
+
+    fn record_pointer_clicked_column(&mut self, directory: PathBuf) {
+        self.last_pointer_clicked_column_directory = Some(directory);
     }
 
     fn hovered_column_directory(&self) -> Option<PathBuf> {

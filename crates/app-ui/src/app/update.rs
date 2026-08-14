@@ -11,6 +11,9 @@ impl FileBrowser {
                 Message::BrowserSessionSaved(outcome) => {
                     self.accept_application_shutdown_browser_session_saved(outcome)
                 }
+                Message::UserPreferencesSaved(outcome) => {
+                    self.accept_application_shutdown_user_preferences_saved(outcome)
+                }
                 Message::ApplicationWindowClosed(window) => {
                     self.accept_application_window_closed(window)
                 }
@@ -399,6 +402,10 @@ impl FileBrowser {
                 }
                 self.start_selection_marquee()
             }
+            Message::ColumnBlankRightClicked(pane_id, directory) => {
+                self.activate_pane(pane_id);
+                self.handle_column_blank_right_clicked(directory)
+            }
             Message::BlankAreaRightClicked(pane_id, directory) => {
                 self.activate_pane(pane_id);
                 self.handle_blank_area_right_clicked(directory)
@@ -466,7 +473,25 @@ impl FileBrowser {
                 key,
                 modifiers,
                 status,
-            } => self.handle_keyboard_key_pressed(key, modifiers, status),
+            } => {
+                let traverses_focus = matches!(
+                    key.as_ref(),
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab)
+                ) && !modifiers.alt()
+                    && !modifiers.control()
+                    && !modifiers.command();
+                let keyboard_command = self.handle_keyboard_key_pressed(key, modifiers, status);
+                if traverses_focus {
+                    Task::batch([
+                        keyboard_command,
+                        self.request_search_input_focus_check(
+                            crate::model::SearchInputFocusCheckOrigin::KeyboardTraversal,
+                        ),
+                    ])
+                } else {
+                    keyboard_command
+                }
+            }
             Message::FileContentShortcutRouted(action) => self.invoke_shortcut(action),
             Message::ShortcutCaptureStarted(binding_id) => self.start_shortcut_capture(binding_id),
             Message::ShortcutCaptureCanceled => self.cancel_shortcut_capture(),
@@ -527,10 +552,33 @@ impl FileBrowser {
             Message::SearchInputStabilized(request) => {
                 self.accept_search_input_stabilization(request)
             }
-            Message::SearchSubmitted => self.submit_search(),
+            Message::SearchSubmitted => self.submit_search_input(),
+            Message::SearchHistoryKeywordSelected(keyword) => {
+                self.select_search_history_keyword(keyword)
+            }
+            Message::SearchHistoryKeywordRemoved(keyword) => {
+                self.remove_search_history_keyword(&keyword)
+            }
+            Message::SearchHistoryCleared => self.clear_search_history(),
+            Message::SearchInputFocusChecked(request, focus) => {
+                self.search_history_interaction
+                    .accept_input_focus_check(request, focus);
+                Task::none()
+            }
+            Message::SearchHistoryPopupPointerEntered => {
+                self.search_history_interaction.enter_popup();
+                Task::none()
+            }
+            Message::SearchHistoryPopupPointerExited => {
+                self.search_history_interaction.exit_popup();
+                Task::none()
+            }
             Message::SearchEntryTypesMenuOpened => self.open_search_entry_types_menu(),
             Message::SearchEntryTypeToggled(entry_type) => {
                 self.toggle_search_entry_type(entry_type)
+            }
+            Message::SearchDirectoryScopeSelected(scope) => {
+                self.select_search_directory_scope(scope)
             }
             Message::SearchTextScopeSelected(text_scope) => {
                 self.select_search_text_scope(text_scope)
@@ -693,6 +741,9 @@ impl FileBrowser {
             }
             Message::BatchRenamePreviewScrolled => {
                 self.show_scrollbars_temporarily(Region::BatchRenamePreview)
+            }
+            Message::SearchHistoryScrolled => {
+                self.show_scrollbars_temporarily(Region::SearchHistory)
             }
             Message::PreviewDirectoryScrolled => {
                 self.show_scrollbars_temporarily(Region::PreviewDirectory)

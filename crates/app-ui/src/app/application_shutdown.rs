@@ -62,6 +62,11 @@ impl FileBrowser {
             StoredBrowserSessionShutdown::Skip
         };
         let store = self.operation_queue.task_queue_store().cloned();
+        let user_preferences_need_final_commit = store.is_some()
+            || self.user_preferences_save_in_flight
+            || self.pending_user_preferences_save.is_some();
+        let user_preferences = user_preferences_need_final_commit
+            .then(|| self.user_config.user_preferences().to_stored());
         let disposition = self.operation_queue.begin_application_shutdown();
         startup_trace::record_application_shutdown_plan(
             disposition.waiting_for_operation_ids.len(),
@@ -73,6 +78,7 @@ impl FileBrowser {
         startup_trace::mark("shutdown_state_captured");
 
         self.cancel_work_for_application_shutdown();
+        self.pending_user_preferences_save = None;
         self.pending_browser_session_save = false;
         let mut close_commands = Vec::with_capacity(4);
         let mut pending_window_ids = HashSet::with_capacity(4);
@@ -105,6 +111,7 @@ impl FileBrowser {
                 store,
                 commit: Some(StoredApplicationShutdown {
                     browser_session,
+                    user_preferences,
                     interrupted_recoverable_tasks: disposition.interrupted_recoverable_tasks,
                     transient_task_ids: disposition.transient_task_ids,
                 }),
@@ -151,6 +158,21 @@ impl FileBrowser {
             return Task::none();
         }
         startup_trace::mark("window_close_commands_completed");
+        self.start_application_shutdown_persistence()
+    }
+
+    pub(super) fn accept_application_shutdown_user_preferences_saved(
+        &mut self,
+        outcome: Result<(), String>,
+    ) -> Task<Message> {
+        self.user_preferences_save_in_flight = false;
+        if let Err(error) = outcome {
+            tracing::warn!(
+                target: "app_ui::shutdown",
+                error = %error,
+                "an in-flight user preferences save failed before final shutdown persistence"
+            );
+        }
         self.start_application_shutdown_persistence()
     }
 
@@ -262,6 +284,7 @@ impl FileBrowser {
         if drain.persistence_started
             || !drain.pending_window_ids.is_empty()
             || !drain.waiting_for_operation_ids.is_empty()
+            || self.user_preferences_save_in_flight
             || self.browser_session_saves_in_flight > 0
         {
             return Task::none();

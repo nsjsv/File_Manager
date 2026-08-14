@@ -48,6 +48,7 @@ pub(crate) struct UserPreferences {
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
     pub(crate) shortcuts: ShortcutConfig,
+    pub(crate) search_history: crate::model::SearchHistory,
 }
 
 impl UserPreferences {
@@ -72,6 +73,7 @@ impl UserPreferences {
             startup_custom_directory: config.startup_custom_directory.clone(),
             save_view_state: config.startup_location_policy.saves_view_state(),
             shortcuts: config.shortcuts.clone(),
+            search_history: config.search_history.clone(),
         }
     }
 
@@ -95,6 +97,7 @@ impl UserPreferences {
         config.startup_custom_directory = self.startup_custom_directory.clone();
         config.save_view_state = self.startup_location_policy.saves_view_state();
         config.shortcuts = self.shortcuts.clone();
+        config.search_history = self.search_history.clone();
     }
 
     pub(crate) fn to_stored(&self) -> StoredUserPreferences {
@@ -131,6 +134,7 @@ impl UserPreferences {
         stored.startup_custom_directory = StoredPath::from_path(&self.startup_custom_directory);
         stored.save_view_state = self.startup_location_policy.saves_view_state();
         stored.shortcuts = stored_shortcuts(&self.shortcuts);
+        stored.search_history = self.search_history.entries().to_vec();
         stored
     }
 
@@ -173,6 +177,7 @@ impl UserPreferences {
             startup_custom_directory: stored.startup_custom_directory.to_path_buf(),
             save_view_state: startup_location_policy.saves_view_state(),
             shortcuts: shortcut_config_from_stored(&stored.shortcuts),
+            search_history: crate::model::SearchHistory::from_persisted(stored.search_history),
         }
     }
 }

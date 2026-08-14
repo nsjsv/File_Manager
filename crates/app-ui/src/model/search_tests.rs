@@ -35,19 +35,77 @@ fn hit(index: usize) -> SearchHit {
     }
 }
 
+fn assert_query_is_idle(workspace: &SearchWorkspaceState, generation: u64) {
+    assert_eq!(workspace.run.generation, generation);
+    assert!(workspace.run.active_query.is_none());
+    assert!(workspace.run.provider.is_none());
+    assert!(workspace.run.next_cursor.is_none());
+    assert!(workspace.run.pending_indexed_request.is_none());
+    assert!(workspace.run.cancellation.is_none());
+    assert!(workspace.window.hits.is_empty());
+    assert!(!workspace.window.is_loading);
+    assert!(workspace.window.failure.is_none());
+    assert!(workspace.window.completion.is_none());
+    assert_eq!(workspace.window.viewport_offset_y, 0.0);
+    assert_eq!(workspace.window.viewport_height, 0.0);
+    assert!(workspace.selected_paths_in_result_order().is_empty());
+}
+
+fn search_workspace_for_tests(current_folder: &str, session_id: u64) -> SearchWorkspaceState {
+    SearchWorkspaceState::new(
+        PathBuf::from(current_folder),
+        PathBuf::from("/home/test"),
+        SearchWorkspaceSessionId(session_id),
+    )
+}
+
 #[test]
 fn workspace_root_is_frozen_while_empty_input_is_a_valid_state() {
-    let workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace-a"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace-a", 1);
 
     assert_eq!(workspace.root.path(), Path::new("/workspace-a"));
+    assert_eq!(
+        workspace.root.selected_scope(),
+        SearchDirectoryScope::CurrentFolder
+    );
+    assert_eq!(
+        workspace.root.available_scopes(),
+        [
+            SearchDirectoryScope::CurrentFolder,
+            SearchDirectoryScope::Home,
+        ]
+    );
+    assert!(workspace.root.select_scope(SearchDirectoryScope::Home));
+    assert_eq!(workspace.root.path(), Path::new("/home/test"));
+    assert!(!workspace.root.select_scope(SearchDirectoryScope::Home));
+    workspace.clear_query();
+    assert_eq!(workspace.root.path(), Path::new("/home/test"));
     assert!(workspace.input.is_empty());
 }
 
 #[test]
+fn home_root_normalizes_to_one_home_scope() {
+    let mut workspace = SearchWorkspaceState::new(
+        PathBuf::from("/home/test"),
+        PathBuf::from("/home/test"),
+        SearchWorkspaceSessionId(1),
+    );
+
+    assert_eq!(workspace.root.path(), Path::new("/home/test"));
+    assert_eq!(workspace.root.selected_scope(), SearchDirectoryScope::Home);
+    assert_eq!(
+        workspace.root.available_scopes(),
+        [SearchDirectoryScope::Home]
+    );
+    assert!(!workspace
+        .root
+        .select_scope(SearchDirectoryScope::CurrentFolder));
+    assert_eq!(workspace.root.path(), Path::new("/home/test"));
+}
+
+#[test]
 fn replacing_or_dropping_workspace_cancels_inflight_work() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let (_, first) = workspace.begin_indexed_query(directory_query(1, "first"));
     let (_, second) = workspace.begin_indexed_query(directory_query(2, "second"));
 
@@ -58,9 +116,61 @@ fn replacing_or_dropping_workspace_cancels_inflight_work() {
 }
 
 #[test]
+fn clearing_indexed_query_cancels_pending_page_and_restores_idle_state() {
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
+    let (first_request, _) = workspace.begin_indexed_query(directory_query(1, "report"));
+    workspace.apply_indexed_batch(
+        first_request,
+        SearchResultBatch {
+            query_id: 1,
+            hits: vec![hit(1)],
+            next_cursor: Some(SearchCursor { offset: 1 }),
+            finished: false,
+        },
+    );
+    let selected_path = workspace.window.hits[0].path.clone();
+    workspace.selection.select(
+        &workspace.window.hits,
+        &selected_path,
+        SearchSelectionGesture::Plain,
+    );
+    workspace.update_viewport(24.0, 48.0);
+    let (stale_request, _, cancellation) = workspace
+        .begin_next_indexed_page()
+        .expect("pending indexed page");
+
+    workspace.clear_query();
+
+    assert!(cancellation.is_cancelled());
+    assert_query_is_idle(&workspace, 2);
+    assert!(!workspace.accepts_indexed_outcome(stale_request));
+}
+
+#[test]
+fn clearing_directory_fallback_cancels_scan_and_restores_idle_state() {
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
+    let (_, indexed_cancellation) = workspace.begin_indexed_query(directory_query(7, "report"));
+    let fallback_cancellation = workspace.begin_directory_fallback();
+    workspace.apply_directory_batch(vec![hit(1)]);
+    let selected_path = workspace.window.hits[0].path.clone();
+    workspace.selection.select(
+        &workspace.window.hits,
+        &selected_path,
+        SearchSelectionGesture::Plain,
+    );
+    workspace.update_viewport(24.0, 48.0);
+
+    workspace.clear_query();
+
+    assert!(indexed_cancellation.is_cancelled());
+    assert!(fallback_cancellation.is_cancelled());
+    assert_query_is_idle(&workspace, 8);
+    assert!(!workspace.accepts_directory_fallback(7));
+}
+
+#[test]
 fn input_stabilization_accepts_only_the_current_revision() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let stale = workspace.replace_input("rep".to_owned());
     let current = workspace.replace_input("report".to_owned());
 
@@ -73,20 +183,68 @@ fn input_stabilization_accepts_only_the_current_revision() {
 
 #[test]
 fn input_stabilization_cannot_cross_workspace_sessions() {
-    let mut first =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut first = search_workspace_for_tests("/workspace", 1);
     let stale = first.replace_input("report".to_owned());
-    let mut reopened =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(2));
+    let mut reopened = search_workspace_for_tests("/workspace", 2);
     let _ = reopened.replace_input("report".to_owned());
 
     assert!(!reopened.accepts_input_stabilization(&stale));
 }
 
 #[test]
+fn search_history_popup_visibility_uses_current_focus_and_pointer_facts() {
+    let history = SearchHistory::from_persisted(vec!["report".to_owned()]);
+    let empty_history = SearchHistory::default();
+    let mut interaction = SearchHistoryInteraction::default();
+    let first = interaction.begin_input_focus_check(SearchInputFocusCheckOrigin::KeyboardTraversal);
+    interaction.accept_input_focus_check(first, SearchInputFocus::Focused);
+    assert!(interaction.popup_is_visible(&history));
+    assert!(!interaction.popup_is_visible(&empty_history));
+
+    let second =
+        interaction.begin_input_focus_check(SearchInputFocusCheckOrigin::KeyboardTraversal);
+    interaction.enter_popup();
+    interaction.accept_input_focus_check(second, SearchInputFocus::Unfocused);
+    assert!(interaction.popup_is_visible(&history));
+
+    interaction.exit_popup();
+    assert!(!interaction.popup_is_visible(&history));
+}
+
+#[test]
+fn dismissing_popup_rejects_late_focus_but_a_new_interaction_can_reopen_it() {
+    let history = SearchHistory::from_persisted(vec!["report".to_owned()]);
+    let mut interaction = SearchHistoryInteraction::default();
+    let initial =
+        interaction.begin_input_focus_check(SearchInputFocusCheckOrigin::KeyboardTraversal);
+    interaction.accept_input_focus_check(initial, SearchInputFocus::Focused);
+    let stale = interaction.begin_input_focus_check(SearchInputFocusCheckOrigin::Pointer);
+
+    interaction.dismiss_popup();
+    interaction.accept_input_focus_check(stale, SearchInputFocus::Focused);
+    assert!(!interaction.popup_is_visible(&history));
+
+    let next_interaction =
+        interaction.begin_input_focus_check(SearchInputFocusCheckOrigin::KeyboardTraversal);
+    interaction.accept_input_focus_check(next_interaction, SearchInputFocus::Focused);
+    assert!(interaction.popup_is_visible(&history));
+}
+
+#[test]
+fn resetting_history_interaction_rejects_late_focus_results() {
+    let history = SearchHistory::from_persisted(vec!["report".to_owned()]);
+    let mut interaction = SearchHistoryInteraction::default();
+    let stale = interaction.begin_input_focus_check(SearchInputFocusCheckOrigin::Pointer);
+
+    interaction.reset();
+    interaction.accept_input_focus_check(stale, SearchInputFocus::Focused);
+
+    assert!(!interaction.popup_is_visible(&history));
+}
+
+#[test]
 fn content_degradation_is_derived_from_provider_and_active_text_scope() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let _ = workspace.begin_indexed_query(directory_query(1, "report"));
     workspace.begin_directory_fallback();
     assert!(workspace.content_search_is_degraded());
@@ -100,8 +258,7 @@ fn content_degradation_is_derived_from_provider_and_active_text_scope() {
 
 #[test]
 fn indexed_completion_distinguishes_exact_window_from_real_overflow() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let (first_request, _) = workspace.begin_indexed_query(directory_query(1, ""));
     workspace.apply_indexed_batch(
         first_request,
@@ -137,8 +294,7 @@ fn indexed_completion_distinguishes_exact_window_from_real_overflow() {
 
 #[test]
 fn indexed_pages_append_once_and_advance_the_cursor() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let (first_request, _) = workspace.begin_indexed_query(directory_query(1, ""));
     workspace.apply_indexed_batch(
         first_request,
@@ -183,8 +339,7 @@ fn indexed_pages_append_once_and_advance_the_cursor() {
 
 #[test]
 fn fallback_keeps_hits_beyond_the_indexed_page_size() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let _ = workspace.begin_indexed_query(directory_query(1, ""));
     let cancellation = workspace.begin_directory_fallback();
     workspace.apply_directory_batch((0..=SEARCH_RESULT_WINDOW).map(hit).collect());
@@ -196,8 +351,7 @@ fn fallback_keeps_hits_beyond_the_indexed_page_size() {
 
 #[test]
 fn fallback_budget_completion_preserves_hits_as_partial_results() {
-    let mut workspace =
-        SearchWorkspaceState::new(PathBuf::from("/workspace"), SearchWorkspaceSessionId(1));
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
     let _ = workspace.begin_indexed_query(directory_query(1, "rare"));
     workspace.begin_directory_fallback();
     workspace.apply_directory_batch(vec![hit(1)]);

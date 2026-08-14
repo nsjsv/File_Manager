@@ -23,7 +23,7 @@ impl FileBrowser {
         &mut self,
         directory: PathBuf,
     ) -> Task<Message> {
-        self.focused_column_directory = Some(directory.clone());
+        self.focus_column_from_pointer_click(directory.clone());
         if self.renaming.is_some() {
             return self.handle_column_blank_clicked(directory);
         }

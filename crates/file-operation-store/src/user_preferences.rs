@@ -37,6 +37,8 @@ pub struct StoredUserPreferences {
     pub window_chrome_layout: String,
     #[serde(default = "default_stored_window_controls")]
     pub window_controls: Vec<StoredWindowControlPlacement>,
+    #[serde(default)]
+    pub search_history: Vec<String>,
 }
 
 impl Default for StoredUserPreferences {
@@ -63,6 +65,7 @@ impl Default for StoredUserPreferences {
             list_directory_size_display_mode: default_list_directory_size_display_mode(),
             window_chrome_layout: default_window_chrome_layout(),
             window_controls: default_stored_window_controls(),
+            search_history: Vec::new(),
         }
     }
 }

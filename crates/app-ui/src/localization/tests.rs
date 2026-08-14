@@ -39,6 +39,8 @@ fn translates_known_static_text() {
         "Past year",
         "Name & content",
         "Name only",
+        "Current folder",
+        "Home",
         "Reset filters",
         "Content indexing is unavailable; matching file names only.",
         "Past 30 days",

@@ -421,7 +421,7 @@ impl FileBrowser {
         self.tab_animations.clear();
         self.hovered_entry = None;
         self.cursor_paste_directory = None;
-        self.focused_column_directory = None;
+        self.clear_column_interaction_context();
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
         self.column_resize_drag = None;

@@ -9,6 +9,14 @@ pub(crate) fn commit_application_shutdown_command(
 ) -> Task<Message> {
     Task::perform(
         async move {
+            let store = match store {
+                Some(store) => Some(store),
+                None if shutdown.user_preferences.is_some() => Some(
+                    TaskQueueStore::new(crate::config::default_state_database_path())
+                        .map_err(|error| error.to_string())?,
+                ),
+                None => None,
+            };
             let Some(store) = store else {
                 if shutdown.interrupted_recoverable_tasks.is_empty()
                     && shutdown.transient_task_ids.is_empty()

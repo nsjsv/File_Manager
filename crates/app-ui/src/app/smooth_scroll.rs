@@ -398,6 +398,7 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
         ScrollbarRegion::OpenWithApplications => iced::widget::Id::new("open-with-applications"),
         ScrollbarRegion::OperationQueue => iced::widget::Id::new("operation-queue"),
         ScrollbarRegion::BatchRenamePreview => iced::widget::Id::new("batch-rename-preview"),
+        ScrollbarRegion::SearchHistory => iced::widget::Id::new("search-history"),
         ScrollbarRegion::SearchResults => iced::widget::Id::new("search-results"),
         ScrollbarRegion::PreviewDirectory => iced::widget::Id::new("preview-directory"),
         ScrollbarRegion::PreviewArchive => iced::widget::Id::new("preview-archive"),

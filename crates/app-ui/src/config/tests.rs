@@ -237,6 +237,8 @@ fn user_preferences_round_trip_through_sqlite() {
     config.file_operation_verification = FileOperationVerification::Strong;
     config.network_list_thumbnail_downloads_enabled = true;
     config.max_preview_file_bytes = 8 * 1024 * 1024;
+    config.search_history.record_submission("report");
+    config.search_history.record_submission("images");
     let mut shortcut_table = toml::Table::new();
     shortcut_table.insert(
         "focus_path_input".to_owned(),
@@ -305,6 +307,7 @@ fn user_preferences_round_trip_through_sqlite() {
     );
     assert!(loaded.network_list_thumbnail_downloads_enabled);
     assert_eq!(loaded.max_preview_file_bytes, 8 * 1024 * 1024);
+    assert_eq!(loaded.search_history.entries(), ["images", "report"]);
     assert_eq!(
         loaded
             .shortcuts

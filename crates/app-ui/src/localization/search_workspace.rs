@@ -27,11 +27,15 @@ pub(super) fn translate(text: &str) -> Option<String> {
         "This year" => Some("今年"),
         "Name & content" => Some("文件名与内容"),
         "Name only" => Some("仅文件名"),
+        "Current folder" => Some("当前文件夹"),
         "Reset filters" => Some("重置筛选"),
         "Content indexing is unavailable; matching file names only." => {
             Some("内容索引暂不可用，当前仅匹配文件名。")
         }
         "Clear search text" => Some("清空搜索文字"),
+        "Recent searches" => Some("最近搜索"),
+        "Clear search history" => Some("清空搜索历史"),
+        "Remove from search history" => Some("从搜索历史移除"),
         "Close search" => Some("关闭搜索"),
         "Open folder" | "Open Containing Folder" => Some("打开所在目录"),
         "Scroll to load more results" => Some("滚动以加载更多结果"),

@@ -154,6 +154,7 @@ pub(super) fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize
 enum TextInputFocusCheckResult {
     Address(crate::model::BrowserPaneId),
     Rename,
+    Search(crate::model::SearchInputFocusCheckRequest),
 }
 
 struct TextInputFocusCheck {
@@ -194,6 +195,9 @@ impl Operation<Message> for TextInputFocusCheck {
                 Message::AddressInputFocusChecked(pane_id, self.is_focused)
             }
             TextInputFocusCheckResult::Rename => Message::RenameInputFocusChecked(self.is_focused),
+            TextInputFocusCheckResult::Search(request) => {
+                Message::SearchInputFocusChecked(request, self.is_focused.into())
+            }
         };
         Outcome::Some(message)
     }
@@ -210,6 +214,15 @@ fn address_input_focus_check_command(pane_id: crate::model::BrowserPaneId) -> Ta
     advanced_widget::operate(TextInputFocusCheck::new(
         address_input_id(pane_id),
         TextInputFocusCheckResult::Address(pane_id),
+    ))
+}
+
+fn search_input_focus_check_command(
+    request: crate::model::SearchInputFocusCheckRequest,
+) -> Task<Message> {
+    advanced_widget::operate(TextInputFocusCheck::new(
+        crate::view::search_input_id(),
+        TextInputFocusCheckResult::Search(request),
     ))
 }
 
@@ -279,6 +292,16 @@ fn preview_size_matches(actual: PreviewSize, expected: PreviewSize) -> bool {
 }
 
 impl FileBrowser {
+    pub(super) fn request_search_input_focus_check(
+        &mut self,
+        origin: crate::model::SearchInputFocusCheckOrigin,
+    ) -> Task<Message> {
+        let request = self
+            .search_history_interaction
+            .begin_input_focus_check(origin);
+        search_input_focus_check_command(request)
+    }
+
     pub(crate) fn window_title(&self, window: window::Id) -> String {
         if self.settings_window == Some(window) {
             crate::localization::translate_current("Settings - File Manager")
@@ -492,12 +515,21 @@ impl FileBrowser {
     pub(super) fn handle_window_focused(&mut self, window: window::Id) -> Task<Message> {
         self.focused_window = window;
         self.system_focused_window = Some(window);
-        Task::none()
+        if window == self.main_window {
+            self.request_search_input_focus_check(
+                crate::model::SearchInputFocusCheckOrigin::MainWindowFocused,
+            )
+        } else {
+            Task::none()
+        }
     }
 
     pub(super) fn handle_window_unfocused(&mut self, window: window::Id) -> Task<Message> {
         if self.system_focused_window == Some(window) {
             self.system_focused_window = None;
+        }
+        if window == self.main_window {
+            self.search_history_interaction.reset();
         }
         if self.preview_window == Some(window) {
             self.close_preview_window()
@@ -548,17 +580,36 @@ impl FileBrowser {
         }
 
         let pointer_command = match (button, status) {
-            (mouse::Button::Left | mouse::Button::Right, event::Status::Captured) => {
-                let mut input_focus_checks = Vec::with_capacity(2);
+            (
+                mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle,
+                event::Status::Captured,
+            ) => {
+                let mut input_focus_checks = Vec::with_capacity(3);
                 if self.renaming.is_some() {
                     input_focus_checks.push(rename_input_focus_check_command());
                 }
                 if let Some(session) = &self.address_editing {
                     input_focus_checks.push(address_input_focus_check_command(session.pane_id));
                 }
-                Task::batch(input_focus_checks)
+                if self.search_history_interaction.pointer_is_over_popup() {
+                    Task::batch(input_focus_checks)
+                } else {
+                    input_focus_checks.push(self.request_search_input_focus_check(
+                        crate::model::SearchInputFocusCheckOrigin::Pointer,
+                    ));
+                    Task::batch(input_focus_checks)
+                }
             }
-            (mouse::Button::Left, event::Status::Ignored) => self.dismiss_floating(),
+            (mouse::Button::Left, event::Status::Ignored) => {
+                let focus_check = self.request_search_input_focus_check(
+                    crate::model::SearchInputFocusCheckOrigin::Pointer,
+                );
+                Task::batch([self.dismiss_floating(), focus_check])
+            }
+            (mouse::Button::Right | mouse::Button::Middle, event::Status::Ignored) => self
+                .request_search_input_focus_check(
+                    crate::model::SearchInputFocusCheckOrigin::Pointer,
+                ),
             _ => Task::none(),
         };
 
@@ -607,6 +658,14 @@ impl FileBrowser {
 
         if self.open_with.is_some() {
             self.open_with = None;
+            return Task::none();
+        }
+
+        if self
+            .search_history_interaction
+            .popup_is_visible(&self.user_config.search_history)
+        {
+            self.search_history_interaction.dismiss_popup();
             return Task::none();
         }
 

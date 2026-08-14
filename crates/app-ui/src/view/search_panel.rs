@@ -7,20 +7,22 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
+use crate::anchored_popup::anchored_popup;
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_style,
     list_panel_style, list_row_style, navigation_icon_button_style, navigation_text_input_style,
-    selected_row_style,
+    path_suggestion_item_style, path_suggestions_style, selected_row_style,
+    transparent_button_style,
 };
 use crate::file_entry_view::{file_entry_symbol_icon, FileEntryIconTone, FileEntryVisualState};
 use crate::formatting::{format_file_size, format_middle_ellipsized_text};
 use crate::icons::IconSymbol;
 use crate::model::search::SearchFilterPresetState;
 use crate::model::{
-    Message, ScrollbarRegion, SearchDateField, SearchDatePreset, SearchEntryTypePreset,
-    SearchResultCompletion,
+    Message, ScrollbarRegion, SearchDateField, SearchDatePreset, SearchDirectoryScope,
+    SearchEntryTypePreset, SearchResultCompletion,
 };
 use crate::typography::{localized_text, readable_text};
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
@@ -37,6 +39,8 @@ const SEARCH_DATE_FIELD_WIDTH: f32 = 122.0;
 const SEARCH_DATE_PRESET_WIDTH: f32 = 138.0;
 const SEARCH_TEXT_SCOPE_WIDTH: f32 = 274.0;
 const SEARCH_FILTER_BUTTON_HEIGHT: f32 = 30.0;
+const SEARCH_HISTORY_PANEL_MAX_HEIGHT: f32 = 320.0;
+const SEARCH_HISTORY_KEYWORD_MAX_CHARS: usize = 28;
 pub(crate) const SEARCH_RESULT_ROW_HEIGHT: f32 = 78.0;
 const SEARCH_RESULT_OVERSCAN_ROWS: usize = 12;
 const SEARCH_RESULT_INITIAL_ROWS: usize = SEARCH_RESULT_OVERSCAN_ROWS * 2 + 1;
@@ -90,6 +94,10 @@ fn search_input_width() -> Length {
     Length::Fixed(SEARCH_INPUT_WIDTH)
 }
 
+pub(crate) fn search_input_id() -> iced::widget::Id {
+    iced::widget::Id::from("search-input")
+}
+
 pub(super) fn search_input_panel(browser: &FileBrowser) -> Element<'_, Message> {
     let input_value = browser
         .search_workspace
@@ -100,6 +108,7 @@ pub(super) fn search_input_panel(browser: &FileBrowser) -> Element<'_, Message> 
         &crate::localization::translate_current("Search"),
         input_value,
     )
+    .id(search_input_id())
     .on_input(Message::SearchInputChanged)
     .on_submit(Message::SearchSubmitted)
     .padding([8, 10])
@@ -123,9 +132,89 @@ pub(super) fn search_input_panel(browser: &FileBrowser) -> Element<'_, Message> 
         .spacing(4)
         .align_y(Alignment::Center)
     };
-    container(content.width(Length::Fill))
-        .width(search_input_width())
-        .into()
+    let anchor = container(content.width(Length::Fill)).width(search_input_width());
+    let popup = browser
+        .search_history_interaction
+        .popup_is_visible(&browser.user_config().search_history)
+        .then(|| search_history_panel(browser));
+    anchored_popup(anchor, popup)
+}
+
+fn search_history_panel(browser: &FileBrowser) -> Element<'_, Message> {
+    let mut history = Column::new()
+        .push(
+            container(localized_text("Recent searches").size(12))
+                .padding([6, 8])
+                .width(Length::Fill),
+        )
+        .spacing(3)
+        .padding(4)
+        .width(Length::Fill);
+    for keyword in browser.user_config().search_history.entries() {
+        history = history.push(search_history_row(keyword));
+    }
+    history = history.push(
+        button(
+            readable_text(crate::localization::translate_current(
+                "Clear search history",
+            ))
+            .size(12),
+        )
+        .on_press(Message::SearchHistoryCleared)
+        .padding([6, 8])
+        .width(Length::Fill)
+        .style(transparent_button_style()),
+    );
+
+    let region = ScrollbarRegion::SearchHistory;
+    let visibility = browser.scrollbar_visibility_for(&region);
+    let history = scrollable(smooth_scroll_content(history, region.clone()))
+        .id(smooth_scroll_id(&region))
+        .direction(auto_hide_vertical_scrollbar_direction(visibility, 6.0))
+        .style(auto_hide_scrollbar_style(visibility))
+        .on_scroll(|_| Message::SearchHistoryScrolled)
+        .height(Length::Shrink);
+
+    mouse_area(
+        container(history)
+            .width(Length::Fill)
+            .max_height(SEARCH_HISTORY_PANEL_MAX_HEIGHT)
+            .style(path_suggestions_style),
+    )
+    .on_enter(Message::SearchHistoryPopupPointerEntered)
+    .on_exit(Message::SearchHistoryPopupPointerExited)
+    .into()
+}
+
+fn search_history_row(keyword: &str) -> Element<'static, Message> {
+    let displayed_keyword =
+        format_middle_ellipsized_text(keyword, SEARCH_HISTORY_KEYWORD_MAX_CHARS);
+    let select_keyword = button(
+        readable_text(displayed_keyword)
+            .size(13)
+            .width(Length::Fill),
+    )
+    .on_press(Message::SearchHistoryKeywordSelected(keyword.to_owned()))
+    .padding([6, 8])
+    .width(Length::Fill)
+    .style(transparent_button_style());
+    let remove_keyword = tooltip(
+        button(themed_icon(IconSymbol::Close, IconTone::Normal, 11.0))
+            .on_press(Message::SearchHistoryKeywordRemoved(keyword.to_owned()))
+            .padding([6, 7])
+            .style(navigation_icon_button_style()),
+        tooltip_label("Remove from search history"),
+        tooltip::Position::Bottom,
+    );
+
+    container(
+        row![select_keyword, remove_keyword]
+            .spacing(3)
+            .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .style(path_suggestion_item_style)
+    .into()
 }
 
 pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message> {
@@ -221,11 +310,15 @@ fn search_workspace_toolbar(browser: &FileBrowser) -> Element<'_, Message> {
         format_middle_ellipsized_text(&workspace.root.path().to_string_lossy(), 72)
     );
     let filters = workspace.filters.clone();
+    let available_directory_scopes = workspace.root.available_scopes();
+    let selected_directory_scope = workspace.root.selected_scope();
     let selected = browser.active_search_selection().unwrap_or_default();
 
     responsive(move |viewport_size| {
         search_workspace_toolbar_layout(
             root_label.clone(),
+            available_directory_scopes,
+            selected_directory_scope,
             filters.clone(),
             selected.clone(),
             SearchToolbarDensity::for_width(viewport_size.width),
@@ -238,6 +331,8 @@ fn search_workspace_toolbar(browser: &FileBrowser) -> Element<'_, Message> {
 
 fn search_workspace_toolbar_layout(
     root_label: String,
+    available_directory_scopes: &[SearchDirectoryScope],
+    selected_directory_scope: SearchDirectoryScope,
     filters: SearchFilterPresetState,
     selected: Vec<std::path::PathBuf>,
     density: SearchToolbarDensity,
@@ -258,9 +353,12 @@ fn search_workspace_toolbar_layout(
     .align_y(Alignment::Center);
 
     let entry_types = search_entry_type_grid(&filters, density.entry_type_columns());
+    let directory_scope =
+        search_directory_scope_filter(available_directory_scopes, selected_directory_scope);
     let controls = search_filter_controls(&filters, density);
     let mut toolbar = Column::new()
         .push(header)
+        .push(directory_scope)
         .push(entry_types)
         .push(controls)
         .spacing(6);
@@ -382,6 +480,28 @@ fn search_filter_controls(
             .spacing(5)
             .into(),
     }
+}
+
+fn search_directory_scope_filter(
+    available_scopes: &[SearchDirectoryScope],
+    selected: SearchDirectoryScope,
+) -> Element<'static, Message> {
+    segmented_choice_row(search_directory_scope_choices(available_scopes, selected))
+}
+
+fn search_directory_scope_choices(
+    available_scopes: &[SearchDirectoryScope],
+    selected: SearchDirectoryScope,
+) -> Vec<SegmentedChoice> {
+    available_scopes
+        .iter()
+        .copied()
+        .map(|scope| SegmentedChoice {
+            label: scope.label(),
+            selected: scope == selected,
+            message: Message::SearchDirectoryScopeSelected(scope),
+        })
+        .collect()
 }
 
 fn search_text_scope_filter(selected: SearchTextScope) -> Element<'static, Message> {
@@ -634,6 +754,30 @@ mod tests {
             panic!("navigation search input must not participate in Fill layout");
         };
         assert_eq!(width, 140.0);
+    }
+
+    #[test]
+    fn directory_scope_choices_follow_model_availability() {
+        let both = search_directory_scope_choices(
+            &[
+                SearchDirectoryScope::CurrentFolder,
+                SearchDirectoryScope::Home,
+            ],
+            SearchDirectoryScope::CurrentFolder,
+        );
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[0].label, "Current folder");
+        assert!(both[0].selected);
+        assert_eq!(both[1].label, "Home");
+        assert!(!both[1].selected);
+
+        let home_only = search_directory_scope_choices(
+            &[SearchDirectoryScope::Home],
+            SearchDirectoryScope::Home,
+        );
+        assert_eq!(home_only.len(), 1);
+        assert_eq!(home_only[0].label, "Home");
+        assert!(home_only[0].selected);
     }
 
     #[test]

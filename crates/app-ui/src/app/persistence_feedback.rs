@@ -8,7 +8,8 @@ impl FileBrowser {
         &mut self,
         result: Result<(), String>,
     ) -> Task<Message> {
-        self.accept_persistence_result(result, "Failed to save user preferences")
+        let feedback = self.accept_persistence_result(result, "Failed to save user preferences");
+        Task::batch([feedback, self.continue_user_preferences_save()])
     }
 
     pub(super) fn accept_app_config_saved(&mut self, result: Result<(), String>) -> Task<Message> {
