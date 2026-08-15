@@ -195,7 +195,9 @@ impl DaemonWatchIngressBootstrap {
         directory_snapshot_epoch: Arc<AtomicU64>,
     ) -> SearchResult<Self> {
         let (event_sender, event_receiver) = mpsc::sync_channel(WATCH_EVENT_CHANNEL_CAPACITY);
-        let overflow_state = Arc::new(WatchOverflowState::new(config.roots.clone()));
+        let overflow_state = Arc::new(WatchOverflowState::new(
+            config.available_roots().cloned().collect(),
+        ));
         let mut coverage = RecommendedWatchCoverage::create(
             config,
             database_path,

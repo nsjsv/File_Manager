@@ -12,10 +12,14 @@ mod model;
 mod path_encoding;
 mod protocol;
 mod runtime_identity;
+mod search_path_store;
 mod service_runtime;
 mod writer;
 
-pub use config::{SearchExcludeRules, SearchIndexConfig};
+pub use config::{
+    SearchExcludeRules, SearchIndexConfig, SearchPathDecision, SearchPathPolicy,
+    SearchPathPreferences, VersionedSearchPathPreferences,
+};
 pub use crawler::{IndexMaintenanceProgress, RebuildStats, SearchIndexer};
 pub use daemon::SearchDaemonCore;
 pub use database::{
@@ -32,12 +36,14 @@ pub use fallback::{
 pub use model::{
     daemon_build_id, ExtractorCapability, IndexHealth, IndexPhase, IndexStatus,
     IndexedQueryAvailability, MatchSource, MimePattern, SearchCursor, SearchEntryTypeRule,
-    SearchFileKind, SearchFilters, SearchHit, SearchProviderFailure, SearchQuery,
-    SearchResultBatch, SearchScope, SearchServiceEvent, SearchServicePhase, SearchServiceRequest,
-    SearchServiceStatus, SearchTextScope, TimeRange, PROTOCOL_VERSION,
+    SearchFileKind, SearchFilters, SearchHit, SearchPathConfigurationPhase,
+    SearchPathConfigurationStatus, SearchProviderFailure, SearchQuery, SearchResultBatch,
+    SearchRootAvailability, SearchRootStatus, SearchScope, SearchServiceEvent, SearchServicePhase,
+    SearchServiceRequest, SearchServiceStatus, SearchTextScope, TimeRange, PROTOCOL_VERSION,
 };
 pub use protocol::{
-    default_socket_path, read_service_event, read_service_request, search_via_socket,
+    configure_path_preferences_via_socket, default_socket_path, path_configuration_via_socket,
+    read_service_event, read_service_request, search_via_socket,
     search_via_socket_with_cancellation, serve_bound_search_socket, serve_search_socket,
     serve_search_socket_with_core, serve_search_socket_with_status, shutdown_connected_service,
     shutdown_via_socket, status_via_socket, version_via_socket, write_service_event,

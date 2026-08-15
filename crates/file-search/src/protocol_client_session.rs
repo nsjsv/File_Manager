@@ -7,9 +7,10 @@ use tokio::task::JoinHandle;
 use crate::database::SearchDatabase;
 use crate::error::{SearchError, SearchResult};
 use crate::model::{
-    daemon_build_id, SearchProviderFailure, SearchQuery, SearchResultBatch, SearchServiceEvent,
-    SearchServiceRequest, PROTOCOL_VERSION,
+    daemon_build_id, SearchPathConfigurationStatus, SearchProviderFailure, SearchQuery,
+    SearchResultBatch, SearchServiceEvent, SearchServiceRequest, PROTOCOL_VERSION,
 };
+use crate::{SearchPathPreferences, VersionedSearchPathPreferences};
 
 use super::{
     read_service_request, read_service_request_before, search_provider_failure_from_error,
@@ -81,6 +82,37 @@ pub(super) async fn handle_client(
                 )
                 .await?;
             }
+            SearchServiceRequest::GetPathConfiguration => {
+                write_path_configuration_outcome(
+                    &mut stream,
+                    backend_path_configuration(&backend),
+                    None,
+                )
+                .await?;
+            }
+            SearchServiceRequest::ConfigurePathPreferences {
+                expected_revision,
+                preferences,
+            } => {
+                let configuration_backend = backend.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    backend_configure_path_preferences(
+                        &configuration_backend,
+                        expected_revision,
+                        preferences,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    SearchError::WorkerFailed(format!(
+                        "search path configuration worker failed: {error}"
+                    ))
+                })?;
+                let failure_status = backend_path_configuration(&backend)
+                    .ok()
+                    .map(|(_, status)| status);
+                write_path_configuration_outcome(&mut stream, outcome, failure_status).await?;
+            }
             SearchServiceRequest::Search(query) => {
                 let query_id = query.query_id;
                 if let Err(message) = validate_wire_query(&query) {
@@ -144,6 +176,29 @@ pub(super) async fn handle_client(
                                     write_service_event(
                                         &mut stream,
                                         &SearchServiceEvent::Status(service_status(&backend)),
+                                    )
+                                    .await?;
+                                }
+                                SearchServiceRequest::GetPathConfiguration => {
+                                    write_path_configuration_outcome(
+                                        &mut stream,
+                                        backend_path_configuration(&backend),
+                                        None,
+                                    )
+                                    .await?;
+                                }
+                                SearchServiceRequest::ConfigurePathPreferences { .. } => {
+                                    write_service_event(
+                                        &mut stream,
+                                        &SearchServiceEvent::PathConfigurationFailed {
+                                            failure: SearchProviderFailure::Unavailable {
+                                                message: "cancel the active search before changing indexed paths"
+                                                    .to_owned(),
+                                            },
+                                            status: backend_path_configuration(&backend)
+                                                .ok()
+                                                .map(|(_, status)| status),
+                                        },
                                     )
                                     .await?;
                                 }
@@ -213,6 +268,81 @@ pub(super) async fn handle_client(
             }
         }
     }
+}
+
+fn backend_path_configuration(
+    backend: &SearchServiceBackend,
+) -> Result<
+    (
+        VersionedSearchPathPreferences,
+        SearchPathConfigurationStatus,
+    ),
+    SearchProviderFailure,
+> {
+    match backend {
+        SearchServiceBackend::DirectDatabase { .. } => Err(SearchProviderFailure::Unavailable {
+            message: "search path configuration requires the daemon core".to_owned(),
+        }),
+        SearchServiceBackend::DaemonCore(daemon_core) => Ok((
+            daemon_core.current_path_preferences(),
+            daemon_core.current_status().path_configuration,
+        )),
+        SearchServiceBackend::Runtime(service) => service.path_configuration(),
+    }
+}
+
+fn backend_configure_path_preferences(
+    backend: &SearchServiceBackend,
+    expected_revision: u64,
+    preferences: SearchPathPreferences,
+) -> Result<
+    (
+        VersionedSearchPathPreferences,
+        SearchPathConfigurationStatus,
+    ),
+    SearchProviderFailure,
+> {
+    match backend {
+        SearchServiceBackend::DirectDatabase { .. } => Err(SearchProviderFailure::Unavailable {
+            message: "search path configuration requires the daemon core".to_owned(),
+        }),
+        SearchServiceBackend::DaemonCore(daemon_core) => daemon_core
+            .configure_search_paths(expected_revision, preferences)
+            .map(|configuration| {
+                (
+                    configuration,
+                    daemon_core.current_status().path_configuration,
+                )
+            })
+            .map_err(search_provider_failure_from_error),
+        SearchServiceBackend::Runtime(service) => {
+            service.configure_path_preferences(expected_revision, preferences)
+        }
+    }
+}
+
+async fn write_path_configuration_outcome(
+    stream: &mut UnixStream,
+    outcome: Result<
+        (
+            VersionedSearchPathPreferences,
+            SearchPathConfigurationStatus,
+        ),
+        SearchProviderFailure,
+    >,
+    failure_status: Option<SearchPathConfigurationStatus>,
+) -> SearchResult<()> {
+    let event = match outcome {
+        Ok((configuration, status)) => SearchServiceEvent::PathConfiguration {
+            configuration,
+            status,
+        },
+        Err(failure) => SearchServiceEvent::PathConfigurationFailed {
+            failure,
+            status: failure_status,
+        },
+    };
+    write_service_event(stream, &event).await
 }
 
 fn open_query_reader(

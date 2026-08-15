@@ -10,9 +10,11 @@ use crate::database::{EntryStageProgress, IndexedEntryStageState, IndexedFile, S
 use crate::extractor::ExtractionStatus;
 use crate::model::{
     IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, MatchSource, SearchFileKind,
-    SearchHit, SearchQuery, SearchResultBatch, SearchScope, SearchServiceEvent, SearchServicePhase,
-    SearchServiceRequest, SearchServiceStatus, SearchTextScope,
+    SearchHit, SearchPathConfigurationPhase, SearchPathConfigurationStatus, SearchQuery,
+    SearchResultBatch, SearchRootAvailability, SearchRootStatus, SearchScope, SearchServiceEvent,
+    SearchServicePhase, SearchServiceRequest, SearchServiceStatus, SearchTextScope,
 };
+use crate::{SearchPathPreferences, VersionedSearchPathPreferences};
 
 use super::{
     read_service_event, read_service_request, search_via_socket, serve_search_socket,
@@ -49,6 +51,7 @@ fn ready_status(visible_indexed_files: u64) -> IndexStatus {
         visible_indexed_files,
         health: IndexHealth::Healthy,
         capabilities: Vec::new(),
+        path_configuration: Default::default(),
     }
 }
 
@@ -104,6 +107,7 @@ async fn non_utf8_scope_hit_and_phase_round_trip_through_protocol_frames() {
             visible_indexed_files: 3,
             health: IndexHealth::Healthy,
             capabilities: Vec::new(),
+            path_configuration: Default::default(),
         }),
     });
     let (mut request_writer, mut request_reader) = duplex(2048);
@@ -130,6 +134,55 @@ async fn non_utf8_scope_hit_and_phase_round_trip_through_protocol_frames() {
     assert_eq!(
         read_service_event(&mut event_reader).await.unwrap(),
         status_event
+    );
+}
+
+#[tokio::test]
+async fn non_utf8_path_configuration_round_trips_in_desired_effective_and_status_fields() {
+    let custom_root = PathBuf::from(OsString::from_vec(b"/media/\x80".to_vec()));
+    let exclusion = PathBuf::from(OsString::from_vec(b"/media/\x80/private-\x81".to_vec()));
+    let desired = VersionedSearchPathPreferences {
+        revision: 8,
+        preferences: SearchPathPreferences {
+            custom_roots: vec![custom_root.clone()],
+            exclusions: vec![exclusion.clone()],
+        },
+    };
+    let event = SearchServiceEvent::PathConfiguration {
+        configuration: desired.clone(),
+        status: SearchPathConfigurationStatus {
+            desired_revision: 8,
+            effective_revision: 7,
+            effective_preferences: desired.preferences.clone(),
+            phase: SearchPathConfigurationPhase::Applying,
+            roots: vec![SearchRootStatus {
+                path: custom_root,
+                availability: SearchRootAvailability::Available,
+            }],
+        },
+    };
+    let request = SearchServiceRequest::ConfigurePathPreferences {
+        expected_revision: 7,
+        preferences: desired.preferences,
+    };
+    let (mut request_writer, mut request_reader) = duplex(4096);
+    let (mut event_writer, mut event_reader) = duplex(4096);
+
+    write_service_request(&mut request_writer, &request)
+        .await
+        .unwrap();
+    write_service_event(&mut event_writer, &event)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        read_service_request(&mut request_reader).await.unwrap(),
+        request
+    );
+    assert_eq!(read_service_event(&mut event_reader).await.unwrap(), event);
+    assert_eq!(
+        exclusion.as_os_str().as_bytes(),
+        b"/media/\x80/private-\x81"
     );
 }
 

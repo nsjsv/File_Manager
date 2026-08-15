@@ -89,6 +89,24 @@ fn stabilize_search_input(browser: &mut FileBrowser, value: &str) {
     drop(browser.accept_search_input_stabilization(request));
 }
 
+fn start_default_directory_fallback(
+    browser: &mut FileBrowser,
+    generation: u64,
+    unavailable_message: &str,
+) {
+    drop(browser.start_verified_directory_fallback(
+        generation,
+        unavailable_message.to_owned(),
+        Ok((
+            file_search::VersionedSearchPathPreferences {
+                revision: 0,
+                preferences: file_search::SearchPathPreferences::default(),
+            },
+            file_search::SearchPathConfigurationStatus::default(),
+        )),
+    ));
+}
+
 #[test]
 fn explicit_search_submission_records_history_but_internal_restart_does_not() {
     let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
@@ -274,6 +292,7 @@ fn clearing_search_rejects_old_indexed_and_fallback_messages() {
         stale_request,
         IndexedSearchOutcome::ProviderUnavailable("index is starting".to_owned()),
     ));
+    start_default_directory_fallback(&mut browser, stale_generation, "index is starting");
 
     let stale_path = PathBuf::from("/workspace/stale.txt");
     drop(browser.accept_directory_search_batch(
@@ -422,6 +441,7 @@ fn unavailable_before_first_batch_switches_to_directory_fallback() {
         request,
         IndexedSearchOutcome::ProviderUnavailable("index is starting".to_owned()),
     ));
+    start_default_directory_fallback(&mut browser, request.generation, "index is starting");
 
     let workspace = browser.search_workspace.as_ref().unwrap();
     assert_eq!(
@@ -485,6 +505,7 @@ fn fallback_budget_and_overflow_have_distinct_truthful_states() {
         request,
         IndexedSearchOutcome::ProviderUnavailable("not ready".to_owned()),
     ));
+    start_default_directory_fallback(&mut browser, generation, "not ready");
     drop(browser.accept_directory_search_batch(
         generation,
         vec![search_hit(
@@ -514,6 +535,7 @@ fn fallback_budget_and_overflow_have_distinct_truthful_states() {
         request,
         IndexedSearchOutcome::ProviderUnavailable("not ready".to_owned()),
     ));
+    start_default_directory_fallback(&mut browser, generation, "not ready");
     let hits = (0..=SEARCH_RESULT_WINDOW)
         .map(|index| {
             search_hit(

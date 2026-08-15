@@ -44,6 +44,18 @@ pub(super) const BASE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS files (
         name TEXT PRIMARY KEY
     ) WITHOUT ROWID;";
 
+pub(super) const PATH_CONFIGURATION_SCHEMA: &str =
+    "CREATE TABLE IF NOT EXISTS search_path_configuration (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        revision INTEGER NOT NULL CHECK (revision >= 0),
+        preferences BLOB NOT NULL
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS search_root_mounts (
+        root_path BLOB PRIMARY KEY,
+        mount_point BLOB NOT NULL,
+        device INTEGER NOT NULL CHECK(device >= 0)
+    ) WITHOUT ROWID;";
+
 pub(super) const CONTENTLESS_SEARCH_SCHEMA: &str = "CREATE VIRTUAL TABLE file_search_fts
         USING fts5(
             name,
@@ -87,6 +99,7 @@ impl SearchDatabase {
         if stored_schema_version == 0 && !has_existing_search_schema {
             let transaction = self.connection.unchecked_transaction()?;
             transaction.execute_batch(BASE_SCHEMA)?;
+            transaction.execute_batch(PATH_CONFIGURATION_SCHEMA)?;
             transaction.execute_batch(CONTENTLESS_SEARCH_SCHEMA)?;
             transaction.execute_batch(QUERY_INDEXES)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -165,6 +178,18 @@ pub(super) fn verify_search_storage_schema(connection: &Connection) -> SearchRes
         [],
         |row| row.get::<_, i64>(0),
     )?;
+    let path_configuration_columns = connection.query_row(
+        "SELECT COALESCE(group_concat(name, ','), '')
+         FROM (SELECT name FROM pragma_table_info('search_path_configuration') ORDER BY cid)",
+        [],
+        |row| row.get::<_, String>(0),
+    )?;
+    let search_root_mount_columns = connection.query_row(
+        "SELECT COALESCE(group_concat(name, ','), '')
+         FROM (SELECT name FROM pragma_table_info('search_root_mounts') ORDER BY cid)",
+        [],
+        |row| row.get::<_, String>(0),
+    )?;
     let required_index_count = connection.query_row(
         "SELECT COUNT(*) FROM sqlite_schema
          WHERE type = 'index'
@@ -193,11 +218,13 @@ pub(super) fn verify_search_storage_schema(connection: &Connection) -> SearchRes
         || snippet_columns != "file_rowid,preview"
         || !normalized_snippet_schema.contains("check(length(preview)<=1024)")
         || required_table_count != 6
+        || path_configuration_columns != "singleton,revision,preferences"
+        || search_root_mount_columns != "root_path,mount_point,device"
         || required_index_count != 5
         || raw_fts_content_table_exists
     {
         return Err(SearchError::InvalidDatabaseSchema {
-            message: "schema 9 requires contentless full-detail FTS and bounded snippets"
+            message: "schema 10 requires an exact durable path snapshot, root mount identities, contentless full-detail FTS, and bounded snippets"
                 .to_owned(),
         });
     }

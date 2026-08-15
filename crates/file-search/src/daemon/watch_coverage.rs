@@ -258,7 +258,8 @@ struct DirectoryWatchCoverage<Backend> {
 impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
     fn new(backend: Backend, config: SearchIndexConfig) -> Self {
         Self {
-            rules: SearchExcludeRules::new(config.excluded_paths.clone()),
+            rules: SearchExcludeRules::from_index_config(&config)
+                .expect("search index configuration must be validated before watch setup"),
             backend,
             config,
             registered_directories: BoundedPathSet::new(
@@ -288,7 +289,7 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
 
     fn register_roots(&mut self) {
         self.backend_failure = None;
-        let roots = self.config.roots.clone();
+        let roots = self.config.available_roots().cloned().collect::<Vec<_>>();
         for root in roots {
             self.refresh_path(&root);
         }
@@ -296,7 +297,9 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
 
     fn register_snapshot_directories(&mut self, directories: Vec<PathBuf>) {
         for directory in directories {
-            self.register_directory(&directory);
+            if self.config.path_is_available(&directory) {
+                self.register_directory(&directory);
+            }
         }
     }
 
@@ -337,16 +340,13 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
     }
 
     fn refresh_path(&mut self, path: &Path) {
-        let Some(root) = self
-            .config
-            .roots
-            .iter()
-            .filter(|root| path == root.as_path() || path.starts_with(root))
-            .max_by_key(|root| root.components().count())
-            .cloned()
-        else {
+        let Some(root) = self.config.owning_root(path).map(Path::to_path_buf) else {
             return;
         };
+        if !self.config.path_is_available(path) {
+            self.prune_scope(&root);
+            return;
+        }
 
         let boundary = match LocalFilesystemBoundary::observe(&root, &self.rules) {
             Ok(FilesystemObservation::Complete(boundary)) => boundary,
@@ -359,7 +359,8 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
                 self.record_gap(scope, "search root is missing");
                 return;
             }
-            Ok(FilesystemObservation::PolicyExcluded { scope }) => {
+            Ok(FilesystemObservation::PolicyExcluded { scope })
+            | Ok(FilesystemObservation::DelegatedToNestedRoot { scope }) => {
                 self.prune_scope(&scope);
                 return;
             }
@@ -382,7 +383,8 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
                 self.record_gap(scope, "directory is inaccessible");
             }
             Ok(FilesystemObservation::Missing { scope })
-            | Ok(FilesystemObservation::PolicyExcluded { scope }) => {
+            | Ok(FilesystemObservation::PolicyExcluded { scope })
+            | Ok(FilesystemObservation::DelegatedToNestedRoot { scope }) => {
                 self.prune_scope(&scope);
             }
             Err(error) => self.record_gap(path.to_path_buf(), error.to_string()),
@@ -499,17 +501,15 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
             self.gap_budget_exceeded_roots.insert(root);
         } else {
             self.gap_budget_exceeded_roots
-                .extend(self.config.roots.iter().cloned());
+                .extend(self.config.available_roots().cloned());
         }
     }
 
     fn containing_root(&self, path: &Path) -> Option<PathBuf> {
         self.config
-            .roots
-            .iter()
-            .filter(|root| path == root.as_path() || path.starts_with(root))
-            .max_by_key(|root| root.components().count())
-            .cloned()
+            .path_is_available(path)
+            .then(|| self.config.owning_root(path).map(Path::to_path_buf))
+            .flatten()
     }
 }
 
@@ -575,6 +575,7 @@ mod tests {
         SearchIndexConfig {
             roots: vec![root.to_path_buf()],
             excluded_paths: Vec::new(),
+            unavailable_roots: Vec::new(),
             content_indexing_enabled: true,
             max_extract_bytes: 1024,
         }

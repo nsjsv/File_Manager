@@ -4,6 +4,7 @@ pub mod archive_listing;
 pub mod directory_metadata;
 pub mod entry;
 pub mod media;
+pub mod mount_table;
 pub mod ops;
 pub mod scan;
 pub mod sort;

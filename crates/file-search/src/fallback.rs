@@ -52,7 +52,8 @@ pub fn search_directory_fallback(
                 source: std::io::Error::from(std::io::ErrorKind::NotFound),
             })
         }
-        FilesystemObservation::PolicyExcluded { scope } => {
+        FilesystemObservation::PolicyExcluded { scope }
+        | FilesystemObservation::DelegatedToNestedRoot { scope } => {
             return Err(SearchError::Io {
                 path: scope,
                 source: std::io::Error::new(
@@ -81,7 +82,8 @@ pub fn search_directory_fallback(
                 source: std::io::Error::from(std::io::ErrorKind::NotFound),
             })
         }
-        FilesystemObservation::PolicyExcluded { scope } => {
+        FilesystemObservation::PolicyExcluded { scope }
+        | FilesystemObservation::DelegatedToNestedRoot { scope } => {
             return Err(SearchError::Io {
                 path: scope,
                 source: std::io::Error::new(

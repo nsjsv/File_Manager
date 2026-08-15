@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::config::SearchExcludeRules;
+use crate::config::{SearchExcludeRules, SearchTraversalDecision};
 use crate::error::{SearchError, SearchResult};
 use crate::model::SearchFileKind;
 
@@ -29,6 +29,7 @@ pub(crate) enum FilesystemObservation<T> {
     Inaccessible { scope: PathBuf },
     Missing { scope: PathBuf },
     PolicyExcluded { scope: PathBuf },
+    DelegatedToNestedRoot { scope: PathBuf },
 }
 
 #[derive(Debug)]
@@ -76,6 +77,13 @@ impl LocalFilesystemBoundary {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "search root is excluded by filesystem policy",
+                ),
+            )),
+            FilesystemObservation::DelegatedToNestedRoot { scope } => Err(io_error(
+                &scope,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "search root is owned by another configured root",
                 ),
             )),
         }
@@ -144,11 +152,20 @@ impl LocalFilesystemBoundary {
             };
             let kind = entry_kind(&metadata);
             let is_target = index + 1 == component_count;
+            let traversal_decision = self.entry_traversal_decision(&current_path, kind);
             if is_target {
-                if self.should_skip_entry(&current_path, kind) {
-                    return Ok(FilesystemObservation::PolicyExcluded {
-                        scope: current_path,
-                    });
+                match traversal_decision {
+                    SearchTraversalDecision::Excluded => {
+                        return Ok(FilesystemObservation::PolicyExcluded {
+                            scope: current_path,
+                        })
+                    }
+                    SearchTraversalDecision::DelegatedToNestedRoot => {
+                        return Ok(FilesystemObservation::DelegatedToNestedRoot {
+                            scope: current_path,
+                        })
+                    }
+                    SearchTraversalDecision::Included => {}
                 }
                 if kind != SearchFileKind::File && kind != SearchFileKind::Directory {
                     return Ok(FilesystemObservation::PolicyExcluded {
@@ -162,13 +179,28 @@ impl LocalFilesystemBoundary {
                 }));
             }
 
-            if kind != SearchFileKind::Directory
-                || metadata.dev() != self.root_device
-                || self.rules.should_skip_directory(&current_path)
-            {
+            if kind != SearchFileKind::Directory {
                 return Ok(FilesystemObservation::PolicyExcluded {
                     scope: current_path,
                 });
+            }
+            match traversal_decision {
+                SearchTraversalDecision::Excluded => {
+                    return Ok(FilesystemObservation::PolicyExcluded {
+                        scope: current_path,
+                    })
+                }
+                SearchTraversalDecision::DelegatedToNestedRoot => {
+                    return Ok(FilesystemObservation::DelegatedToNestedRoot {
+                        scope: current_path,
+                    })
+                }
+                SearchTraversalDecision::Included if metadata.dev() != self.root_device => {
+                    return Ok(FilesystemObservation::PolicyExcluded {
+                        scope: current_path,
+                    })
+                }
+                SearchTraversalDecision::Included => {}
             }
         }
 
@@ -221,6 +253,9 @@ impl LocalFilesystemBoundary {
             FilesystemObservation::PolicyExcluded { scope } => {
                 return Ok(FilesystemObservation::PolicyExcluded { scope })
             }
+            FilesystemObservation::DelegatedToNestedRoot { scope } => {
+                return Ok(FilesystemObservation::DelegatedToNestedRoot { scope })
+            }
         };
         if entry.kind != SearchFileKind::Directory || entry.metadata.dev() != self.root_device {
             return Ok(FilesystemObservation::PolicyExcluded {
@@ -244,11 +279,15 @@ impl LocalFilesystemBoundary {
         )))
     }
 
-    fn should_skip_entry(&self, path: &Path, kind: SearchFileKind) -> bool {
+    fn entry_traversal_decision(
+        &self,
+        path: &Path,
+        kind: SearchFileKind,
+    ) -> SearchTraversalDecision {
         if kind == SearchFileKind::Directory {
-            self.rules.should_skip_directory(path)
+            self.rules.directory_traversal_decision(&self.root, path)
         } else {
-            self.rules.should_skip_path(path)
+            self.rules.traversal_decision(&self.root, path)
         }
     }
 }
@@ -343,10 +382,18 @@ impl LocalTreeWalker {
                 }
             };
             let kind = entry_kind(&metadata);
-            if self.boundary.should_skip_entry(&path, kind) {
-                return Ok(Some(TraversalEvent::Observation(
-                    FilesystemObservation::PolicyExcluded { scope: path },
-                )));
+            match self.boundary.entry_traversal_decision(&path, kind) {
+                SearchTraversalDecision::Excluded => {
+                    return Ok(Some(TraversalEvent::Observation(
+                        FilesystemObservation::PolicyExcluded { scope: path },
+                    )))
+                }
+                SearchTraversalDecision::DelegatedToNestedRoot => {
+                    return Ok(Some(TraversalEvent::Observation(
+                        FilesystemObservation::DelegatedToNestedRoot { scope: path },
+                    )))
+                }
+                SearchTraversalDecision::Included => {}
             }
 
             if can_descend(kind, metadata.dev(), self.boundary.root_device, self.depth) {
@@ -526,7 +573,7 @@ mod tests {
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
-    use crate::config::SearchExcludeRules;
+    use crate::config::{SearchExcludeRules, SearchIndexConfig};
     use crate::error::SearchError;
     use crate::model::SearchFileKind;
 
@@ -717,6 +764,59 @@ mod tests {
             boundary.inspect_path(&path).unwrap(),
             FilesystemObservation::PolicyExcluded { .. }
         ));
+    }
+
+    #[test]
+    fn nested_root_is_delegated_without_deleting_or_duplicate_traversal() {
+        let content = tempdir().unwrap();
+        let nested_root = content.path().join("nested-root");
+        let nested_file = nested_root.join("owned-by-nested-root.txt");
+        fs::create_dir(&nested_root).unwrap();
+        fs::write(&nested_file, "nested").unwrap();
+
+        let config = SearchIndexConfig {
+            roots: vec![content.path().to_path_buf(), nested_root.clone()],
+            ..SearchIndexConfig::default()
+        };
+        let rules = SearchExcludeRules::from_index_config(&config).unwrap();
+        let home_boundary = LocalFilesystemBoundary::open(content.path(), &rules).unwrap();
+        let FilesystemObservation::Complete(mut home_walker) = home_boundary
+            .walk_root(TraversalDepth::Recursive, &CancellationToken::new())
+            .unwrap()
+        else {
+            panic!("temporary directory root must be observable");
+        };
+        let mut delegated = false;
+        let mut home_saw_nested_file = false;
+        while let Some(event) = home_walker.next_event().unwrap() {
+            match event {
+                super::TraversalEvent::Observation(
+                    FilesystemObservation::DelegatedToNestedRoot { scope },
+                ) if scope == nested_root => delegated = true,
+                super::TraversalEvent::Entry(entry) if entry.path() == nested_file => {
+                    home_saw_nested_file = true
+                }
+                _ => {}
+            }
+        }
+
+        let nested_boundary = LocalFilesystemBoundary::open(&nested_root, &rules).unwrap();
+        let FilesystemObservation::Complete(mut nested_walker) = nested_boundary
+            .walk_root(TraversalDepth::Recursive, &CancellationToken::new())
+            .unwrap()
+        else {
+            panic!("nested temporary directory root must be observable");
+        };
+        let mut nested_saw_file = false;
+        while let Some(event) = nested_walker.next_event().unwrap() {
+            if let super::TraversalEvent::Entry(entry) = event {
+                nested_saw_file |= entry.path() == nested_file;
+            }
+        }
+
+        assert!(delegated);
+        assert!(!home_saw_nested_file);
+        assert!(nested_saw_file);
     }
 
     #[test]

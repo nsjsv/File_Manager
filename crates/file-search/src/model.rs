@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{SearchPathPreferences, VersionedSearchPathPreferences};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub query_id: u64,
@@ -137,6 +139,49 @@ pub struct IndexStatus {
     pub visible_indexed_files: u64,
     pub health: IndexHealth,
     pub capabilities: Vec<ExtractorCapability>,
+    pub path_configuration: SearchPathConfigurationStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchPathConfigurationStatus {
+    pub desired_revision: u64,
+    pub effective_revision: u64,
+    pub effective_preferences: SearchPathPreferences,
+    pub phase: SearchPathConfigurationPhase,
+    pub roots: Vec<SearchRootStatus>,
+}
+
+impl Default for SearchPathConfigurationStatus {
+    fn default() -> Self {
+        Self {
+            desired_revision: 0,
+            effective_revision: 0,
+            effective_preferences: SearchPathPreferences::default(),
+            phase: SearchPathConfigurationPhase::Ready,
+            roots: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchPathConfigurationPhase {
+    Ready,
+    Applying,
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchRootStatus {
+    #[serde(with = "crate::path_encoding::serde_path")]
+    pub path: PathBuf,
+    pub availability: SearchRootAvailability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchRootAvailability {
+    Available,
+    Unavailable { message: String },
+    MountChanged { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,7 +254,7 @@ pub enum SearchProviderFailure {
 }
 
 /// 协议 payload 含义变化时提升版本，让新客户端能退休仍在运行的旧 daemon。
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// app 更新后用构建标识识别遗留 daemon；本任务保留现有包版本策略。
 pub fn daemon_build_id() -> String {
@@ -219,6 +264,11 @@ pub fn daemon_build_id() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchServiceRequest {
     Status,
+    GetPathConfiguration,
+    ConfigurePathPreferences {
+        expected_revision: u64,
+        preferences: SearchPathPreferences,
+    },
     Search(SearchQuery),
     Cancel {
         query_id: u64,
@@ -232,6 +282,14 @@ pub enum SearchServiceRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SearchServiceEvent {
     Status(SearchServiceStatus),
+    PathConfiguration {
+        configuration: VersionedSearchPathPreferences,
+        status: SearchPathConfigurationStatus,
+    },
+    PathConfigurationFailed {
+        failure: SearchProviderFailure,
+        status: Option<SearchPathConfigurationStatus>,
+    },
     Results(SearchResultBatch),
     SearchFailed {
         query_id: u64,
@@ -271,6 +329,7 @@ mod tests {
                     message: "watcher unavailable".to_owned(),
                 },
                 capabilities: Vec::new(),
+                path_configuration: Default::default(),
             }),
         });
 

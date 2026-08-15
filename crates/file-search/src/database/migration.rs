@@ -94,6 +94,17 @@ impl SearchDatabase {
         if current < 9 {
             self.migrate_fulltext_storage()?;
         }
+        if current < 10 {
+            self.migrate_path_configuration()?;
+        }
+        Ok(())
+    }
+
+    fn migrate_path_configuration(&self) -> SearchResult<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute_batch(super::schema::PATH_CONFIGURATION_SCHEMA)?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -174,7 +185,7 @@ impl SearchDatabase {
              ALTER TABLE file_search_fts_v9 RENAME TO file_search_fts;
              ALTER TABLE file_search_snippets_v9 RENAME TO file_search_snippets;",
         )?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.pragma_update(None, "user_version", 9)?;
         transaction.commit()?;
         Ok(())
     }

@@ -42,6 +42,7 @@ mod rendering_settings;
 mod runtime;
 mod scrollbar;
 mod search;
+mod search_paths;
 mod selection;
 mod session_persistence;
 mod session_restore;

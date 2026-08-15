@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 dirs.workspace = true
+file-core = { path = "../file-core" }
 libc = "0.2"
 notify.workspace = true
 rusqlite = { version = "0.32.1", features = ["bundled"] }

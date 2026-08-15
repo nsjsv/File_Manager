@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use file_search::{SearchCursor, SearchHit, SearchQuery, SearchResultBatch, SearchTextScope};
+use file_search::{
+    SearchCursor, SearchHit, SearchQuery, SearchResultBatch, SearchScope, SearchTextScope,
+};
 use tokio_util::sync::CancellationToken;
 
 mod filters;
@@ -157,6 +159,7 @@ pub(crate) enum SearchResultCompletion {
 pub(crate) enum SearchDirectoryScope {
     CurrentFolder,
     Home,
+    AllIndexedLocations,
 }
 
 impl SearchDirectoryScope {
@@ -164,6 +167,7 @@ impl SearchDirectoryScope {
         match self {
             Self::CurrentFolder => "Current folder",
             Self::Home => "Home",
+            Self::AllIndexedLocations => "All indexed locations",
         }
     }
 }
@@ -192,7 +196,17 @@ impl SearchRootSnapshot {
     pub(crate) fn path(&self) -> &Path {
         match self.selected_scope {
             SearchDirectoryScope::CurrentFolder => &self.current_folder,
-            SearchDirectoryScope::Home => &self.home,
+            SearchDirectoryScope::Home | SearchDirectoryScope::AllIndexedLocations => &self.home,
+        }
+    }
+
+    pub(crate) fn query_scope(&self) -> SearchScope {
+        match self.selected_scope {
+            SearchDirectoryScope::CurrentFolder => {
+                SearchScope::Directory(self.current_folder.clone())
+            }
+            SearchDirectoryScope::Home => SearchScope::Directory(self.home.clone()),
+            SearchDirectoryScope::AllIndexedLocations => SearchScope::Global,
         }
     }
 
@@ -204,8 +218,12 @@ impl SearchRootSnapshot {
         const BOTH: &[SearchDirectoryScope] = &[
             SearchDirectoryScope::CurrentFolder,
             SearchDirectoryScope::Home,
+            SearchDirectoryScope::AllIndexedLocations,
         ];
-        const HOME_ONLY: &[SearchDirectoryScope] = &[SearchDirectoryScope::Home];
+        const HOME_ONLY: &[SearchDirectoryScope] = &[
+            SearchDirectoryScope::Home,
+            SearchDirectoryScope::AllIndexedLocations,
+        ];
 
         if self.current_folder == self.home {
             HOME_ONLY

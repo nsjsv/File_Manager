@@ -13,6 +13,8 @@ use crate::path_encoding::{path_from_storage, storage_bytes};
 mod known_entry;
 #[path = "database/migration.rs"]
 mod migration;
+#[path = "database/path_configuration.rs"]
+mod path_configuration;
 #[path = "database/scan.rs"]
 mod scan;
 #[path = "database/schema.rs"]
@@ -29,13 +31,14 @@ pub(crate) use known_entry::{
     DirectorySignature, DirectorySnapshot, EntryObservationState, KnownDirectChild, KnownFileEntry,
 };
 pub use known_entry::{FileSignature, KnownEntryState};
+pub(crate) use path_configuration::SearchRootMount;
 pub(crate) use scan::{
     validate_classification_batch, FileClassification, ObservedFile,
     MAX_CLASSIFICATION_BATCH_BYTES, MAX_CLASSIFICATION_BATCH_ENTRIES, MAX_KNOWN_ENTRY_PAGE_ENTRIES,
 };
 
 /// Bumped whenever the on-disk schema changes in a way that requires a migration.
-pub(crate) const SCHEMA_VERSION: i64 = 9;
+pub(crate) const SCHEMA_VERSION: i64 = 10;
 pub(super) const SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT: usize = 1_024;
 
 const WRITER_PAGE_CACHE_KIB: i64 = 2_048;

@@ -16,8 +16,8 @@ use crate::model::SearchFileKind;
 use crate::writer::{scan_file_mutation_bytes, MAX_WRITER_FILE_PAYLOAD_BYTES};
 
 use super::{
-    collapse_affected_prefixes, directory_signature, extraction_plan_reads_content,
-    observed_file_signature, report_checking_if_needed, report_crawling, report_crawling_if_needed,
+    directory_signature, extraction_plan_reads_content, observed_file_signature,
+    report_checking_if_needed, report_crawling, report_crawling_if_needed,
     ChangedFilePipelineOutcome, IndexMaintenanceProgress, PendingClassificationBatch, RebuildStats,
     SearchIndexer,
 };
@@ -30,7 +30,7 @@ impl SearchIndexer {
         cancellation: &CancellationToken,
         on_progress: &mut impl FnMut(IndexMaintenanceProgress),
     ) -> SearchResult<()> {
-        for scope in collapse_affected_prefixes(scopes) {
+        for scope in self.collapse_paths_by_owning_root(scopes) {
             ensure_not_cancelled(cancellation)?;
             if self.writer.directory_snapshot(scope.clone())?.is_some() {
                 self.warm_check_scope(&scope, stats, cancellation, on_progress)
@@ -107,6 +107,7 @@ impl SearchIndexer {
                     | FilesystemObservation::PolicyExcluded { scope } => {
                         self.delete_scope(&scope, true, stats, on_progress)?;
                     }
+                    FilesystemObservation::DelegatedToNestedRoot { .. } => {}
                 }
                 report_checking_if_needed(stats, on_progress);
             }
@@ -145,12 +146,7 @@ impl SearchIndexer {
             changed_entries: stats.changed,
         });
         ensure_not_cancelled(cancellation)?;
-        let changed_paths = collapse_affected_prefixes(
-            changed_paths
-                .into_iter()
-                .filter(|path| self.path_belongs_to_index_roots(path))
-                .collect(),
-        );
+        let changed_paths = self.collapse_paths_by_owning_root(changed_paths);
         for changed_path in changed_paths {
             ensure_not_cancelled(cancellation)?;
             match self.observe_index_path(&changed_path)? {
@@ -199,6 +195,7 @@ impl SearchIndexer {
                         self.writer.directory_snapshot(scope.clone())?.is_some();
                     self.delete_scope(&scope, directory_changed, stats, on_progress)?;
                 }
+                FilesystemObservation::DelegatedToNestedRoot { .. } => {}
             }
         }
         Ok(())
@@ -247,6 +244,7 @@ impl SearchIndexer {
             | FilesystemObservation::PolicyExcluded { scope } => {
                 self.delete_scope(&scope, false, stats, on_progress)?;
             }
+            FilesystemObservation::DelegatedToNestedRoot { .. } => {}
         }
         report_checking_if_needed(stats, on_progress);
         Ok(())
@@ -281,6 +279,7 @@ impl SearchIndexer {
             | FilesystemObservation::PolicyExcluded { scope } => {
                 self.delete_scope(&scope, true, stats, on_progress)
             }
+            FilesystemObservation::DelegatedToNestedRoot { .. } => Ok(()),
         }
     }
 
@@ -305,6 +304,7 @@ impl SearchIndexer {
                     self.delete_scope(&scope, true, stats, on_progress)?;
                     return Ok(());
                 }
+                FilesystemObservation::DelegatedToNestedRoot { .. } => return Ok(()),
             };
         let mut pending_batch = PendingClassificationBatch::new();
 
@@ -351,6 +351,9 @@ impl SearchIndexer {
                 | TraversalEvent::Observation(FilesystemObservation::PolicyExcluded { scope }) => {
                     self.delete_scope(&scope, true, stats, on_progress)?;
                 }
+                TraversalEvent::Observation(FilesystemObservation::DelegatedToNestedRoot {
+                    ..
+                }) => {}
             }
         }
 
@@ -389,6 +392,7 @@ impl SearchIndexer {
                 self.delete_scope(&scope, true, stats, on_progress)?;
                 return Ok(());
             }
+            FilesystemObservation::DelegatedToNestedRoot { .. } => return Ok(()),
         };
         let mut pending_batch = PendingClassificationBatch::new();
 
@@ -452,6 +456,9 @@ impl SearchIndexer {
                 | TraversalEvent::Observation(FilesystemObservation::PolicyExcluded { scope }) => {
                     self.delete_scope(&scope, true, stats, on_progress)?;
                 }
+                TraversalEvent::Observation(FilesystemObservation::DelegatedToNestedRoot {
+                    ..
+                }) => {}
             }
         }
 
@@ -510,6 +517,7 @@ impl SearchIndexer {
                             on_progress,
                         )?;
                     }
+                    FilesystemObservation::DelegatedToNestedRoot { .. } => {}
                 }
             }
         }
@@ -700,23 +708,38 @@ impl SearchIndexer {
         &self,
         path: &Path,
     ) -> SearchResult<FilesystemObservation<FilesystemEntry>> {
-        let Some((root, root_device)) = self
-            .root_devices
-            .iter()
-            .filter(|(root, _)| path.starts_with(root))
-            .max_by_key(|(root, _)| root.components().count())
-        else {
+        let Some(root) = self.config.owning_root(path) else {
             return Ok(FilesystemObservation::PolicyExcluded {
                 scope: path.to_path_buf(),
             });
         };
-        let Some(root_device) = root_device else {
-            return observe_path(path);
+        if !self.config.path_is_available(path) {
+            return Ok(FilesystemObservation::Inaccessible {
+                scope: root.to_path_buf(),
+            });
+        }
+        let Some(root_device) = self
+            .root_devices
+            .iter()
+            .find_map(|(candidate, device)| (candidate == root).then_some(*device))
+        else {
+            return Ok(FilesystemObservation::Inaccessible {
+                scope: root.to_path_buf(),
+            });
         };
+        let root_matches_device = std::fs::symlink_metadata(root)
+            .ok()
+            .filter(|metadata| metadata.is_dir())
+            .is_some_and(|metadata| metadata.dev() == root_device);
+        if !root_matches_device {
+            return Ok(FilesystemObservation::Inaccessible {
+                scope: root.to_path_buf(),
+            });
+        }
         match observe_path(path)? {
             FilesystemObservation::Complete(entry) => {
-                let policy_excluded = entry.metadata().dev() != *root_device
-                    || (path != root.as_path()
+                let policy_excluded = entry.metadata().dev() != root_device
+                    || (path != root
                         && match entry.kind() {
                             SearchFileKind::Directory => self.rules.should_skip_directory(path),
                             SearchFileKind::File => self.rules.should_skip_path(path),
@@ -738,16 +761,27 @@ impl SearchIndexer {
         &self,
         path: &Path,
     ) -> SearchResult<Option<(PathBuf, LocalFilesystemBoundary)>> {
-        let Some(root) = self
-            .config
-            .roots
-            .iter()
-            .filter(|root| path.starts_with(root))
-            .max_by_key(|root| root.components().count())
-            .cloned()
-        else {
+        let Some(root) = self.config.owning_root(path).map(Path::to_path_buf) else {
             return Ok(None);
         };
+        if !self.config.path_is_available(path) {
+            self.writer.mark_scope_inaccessible(root)?;
+            return Ok(None);
+        }
+        let expected_device = self
+            .root_devices
+            .iter()
+            .find_map(|(candidate, device)| (candidate == &root).then_some(*device));
+        let root_matches_device = expected_device.is_some_and(|expected| {
+            std::fs::symlink_metadata(&root)
+                .ok()
+                .filter(|metadata| metadata.is_dir())
+                .is_some_and(|metadata| metadata.dev() == expected)
+        });
+        if !root_matches_device {
+            self.writer.mark_scope_inaccessible(root)?;
+            return Ok(None);
+        }
         match LocalFilesystemBoundary::observe(&root, &self.rules)? {
             FilesystemObservation::Complete(boundary) => Ok(Some((root, boundary))),
             FilesystemObservation::Inaccessible { scope } => {
@@ -759,6 +793,7 @@ impl SearchIndexer {
                 self.writer.delete_scope(scope)?;
                 Ok(None)
             }
+            FilesystemObservation::DelegatedToNestedRoot { .. } => Ok(None),
         }
     }
 }

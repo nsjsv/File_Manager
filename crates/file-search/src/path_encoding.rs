@@ -13,6 +13,43 @@ enum WirePath {
     EncodedBytes { bytes: Vec<u8> },
 }
 
+fn wire_path(path: &Path) -> WirePath {
+    #[cfg(unix)]
+    {
+        WirePath::UnixBytes {
+            bytes: storage_bytes(path),
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        WirePath::WindowsWide {
+            units: path.as_os_str().encode_wide().collect(),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        WirePath::EncodedBytes {
+            bytes: storage_bytes(path),
+        }
+    }
+}
+
+fn path_from_wire(encoded: WirePath) -> PathBuf {
+    match encoded {
+        #[cfg(unix)]
+        WirePath::UnixBytes { bytes } => path_from_storage(bytes),
+        #[cfg(windows)]
+        WirePath::WindowsWide { units } => {
+            use std::ffi::OsString;
+            use std::os::windows::ffi::OsStringExt;
+            PathBuf::from(OsString::from_wide(&units))
+        }
+        #[cfg(not(any(unix, windows)))]
+        WirePath::EncodedBytes { bytes } => path_from_storage(bytes),
+    }
+}
+
 pub(crate) fn storage_bytes(path: &Path) -> Vec<u8> {
     #[cfg(unix)]
     {
@@ -70,39 +107,66 @@ pub(crate) mod serde_path {
     where
         S: Serializer,
     {
-        #[cfg(unix)]
-        let encoded = WirePath::UnixBytes {
-            bytes: storage_bytes(path),
-        };
-        #[cfg(windows)]
-        let encoded = {
-            use std::os::windows::ffi::OsStrExt;
-            WirePath::WindowsWide {
-                units: path.as_os_str().encode_wide().collect(),
-            }
-        };
-        #[cfg(not(any(unix, windows)))]
-        let encoded = WirePath::EncodedBytes {
-            bytes: storage_bytes(path),
-        };
-        encoded.serialize(serializer)
+        wire_path(path).serialize(serializer)
     }
 
     pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
     where
         D: Deserializer<'de>,
     {
-        match WirePath::deserialize(deserializer)? {
-            #[cfg(unix)]
-            WirePath::UnixBytes { bytes } => Ok(path_from_storage(bytes)),
-            #[cfg(windows)]
-            WirePath::WindowsWide { units } => {
-                use std::ffi::OsString;
-                use std::os::windows::ffi::OsStringExt;
-                Ok(PathBuf::from(OsString::from_wide(&units)))
-            }
-            #[cfg(not(any(unix, windows)))]
-            WirePath::EncodedBytes { bytes } => Ok(path_from_storage(bytes)),
-        }
+        Ok(path_from_wire(WirePath::deserialize(deserializer)?))
+    }
+}
+
+pub(crate) mod serde_path_vec {
+    use super::*;
+
+    pub(crate) fn serialize<S>(paths: &[PathBuf], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        paths
+            .iter()
+            .map(|path| wire_path(path))
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<PathBuf>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Vec::<WirePath>::deserialize(deserializer)?
+            .into_iter()
+            .map(path_from_wire)
+            .collect())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct PathList {
+        #[serde(with = "serde_path_vec")]
+        paths: Vec<PathBuf>,
+    }
+
+    #[test]
+    fn path_vector_wire_format_preserves_non_utf8_bytes() {
+        let original = PathList {
+            paths: vec![PathBuf::from(OsString::from_vec(
+                b"/tmp/root-\x80".to_vec(),
+            ))],
+        };
+
+        let encoded = serde_json::to_vec(&original).unwrap();
+        let decoded = serde_json::from_slice::<PathList>(&encoded).unwrap();
+
+        assert_eq!(decoded, original);
     }
 }

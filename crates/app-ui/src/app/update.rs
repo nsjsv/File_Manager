@@ -621,6 +621,29 @@ impl FileBrowser {
             Message::SearchServiceStatusLoaded(request, outcome) => {
                 self.accept_search_service_status(request, outcome)
             }
+            Message::SearchPathConfigurationLoaded(outcome) => {
+                self.accept_search_path_configuration(outcome)
+            }
+            Message::SearchPathConfigurationApplied(outcome) => {
+                self.accept_search_path_configuration_applied(outcome)
+            }
+            Message::SearchDirectoryFallbackConfigurationLoaded(
+                generation,
+                unavailable_message,
+                outcome,
+            ) => self.start_verified_directory_fallback(generation, unavailable_message, outcome),
+            Message::SearchPathInputChanged(kind, value) => {
+                self.update_search_path_input(kind, value)
+            }
+            Message::SearchPathInputCommitted(kind) => self.commit_search_path_input(kind),
+            Message::SearchPathDirectoryChooserPressed(kind) => {
+                self.open_search_path_directory_chooser(kind)
+            }
+            Message::SearchPathDirectoryChosen(kind, outcome) => {
+                self.accept_search_path_directory(kind, outcome)
+            }
+            Message::SearchPathEntryRemoved(kind, path) => self.remove_search_path(kind, path),
+            Message::SearchPathConfigurationRetryPressed => self.retry_search_path_configuration(),
             Message::SearchServiceRestartRequested => self.restart_search_service(),
             Message::SearchServiceForceRestartPressed => self.press_force_restart_search_service(),
             Message::SearchServiceRecoveryFinished(action, outcome) => {

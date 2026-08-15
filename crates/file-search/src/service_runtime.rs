@@ -8,11 +8,13 @@ use crate::daemon::SearchDaemonCore;
 use crate::error::{SearchError, SearchResult};
 use crate::logging::bounded_search_log_detail;
 use crate::model::{
-    IndexedQueryAvailability, SearchProviderFailure, SearchServicePhase, SearchServiceStatus,
+    IndexedQueryAvailability, SearchPathConfigurationStatus, SearchProviderFailure,
+    SearchServicePhase, SearchServiceStatus,
 };
 use crate::protocol::SearchSocketService;
-use crate::SearchDatabase;
-use crate::SearchIndexConfig;
+use crate::{
+    SearchDatabase, SearchIndexConfig, SearchPathPreferences, VersionedSearchPathPreferences,
+};
 
 struct SearchServiceRuntimeState {
     phase: SearchServicePhase,
@@ -247,6 +249,71 @@ impl SearchSocketService for SearchServiceRuntime {
         };
 
         query_core.open_query_reader().map_err(provider_failure)
+    }
+
+    fn path_configuration(
+        &self,
+    ) -> Result<
+        (
+            VersionedSearchPathPreferences,
+            SearchPathConfigurationStatus,
+        ),
+        SearchProviderFailure,
+    > {
+        let state = self
+            .state
+            .lock()
+            .expect("search service state mutex poisoned");
+        let query_core =
+            state
+                .query_core
+                .as_ref()
+                .ok_or_else(|| SearchProviderFailure::Unavailable {
+                    message: unavailable_message(&state.phase),
+                })?;
+        Ok((
+            query_core.current_path_preferences(),
+            query_core.current_status().path_configuration,
+        ))
+    }
+
+    fn configure_path_preferences(
+        &self,
+        expected_revision: u64,
+        preferences: SearchPathPreferences,
+    ) -> Result<
+        (
+            VersionedSearchPathPreferences,
+            SearchPathConfigurationStatus,
+        ),
+        SearchProviderFailure,
+    > {
+        let query_core = {
+            let state = self
+                .state
+                .lock()
+                .expect("search service state mutex poisoned");
+            if matches!(state.phase, SearchServicePhase::ShuttingDown) {
+                return Err(SearchProviderFailure::Unavailable {
+                    message: "search service is shutting down".to_owned(),
+                });
+            }
+            state
+                .query_core
+                .clone()
+                .ok_or_else(|| SearchProviderFailure::Unavailable {
+                    message: unavailable_message(&state.phase),
+                })?
+        };
+        query_core
+            .configure_search_paths(expected_revision, preferences)
+            .map(|configuration| {
+                (
+                    configuration,
+                    query_core.current_status().path_configuration,
+                )
+            })
+            .map_err(provider_failure)
     }
 }
 

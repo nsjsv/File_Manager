@@ -122,6 +122,7 @@ fn switching_directory_scope_restarts_with_frozen_roots_and_rejects_stale_result
         stale_current_request,
         IndexedSearchOutcome::ProviderUnavailable("index is starting".to_owned()),
     ));
+    start_default_directory_fallback(&mut browser, stale_current_generation, "index is starting");
     let old_current_hit = current_folder.join("old-current.txt");
     drop(browser.accept_directory_search_batch(
         stale_current_generation,
@@ -210,6 +211,39 @@ fn switching_directory_scope_restarts_with_frozen_roots_and_rejects_stale_result
 }
 
 #[test]
+fn all_indexed_locations_uses_global_query_without_directory_fallback() {
+    let roots = tempdir().unwrap();
+    let current_folder = roots.path().join("current");
+    let home = roots.path().join("home");
+    std::fs::create_dir(&current_folder).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    let mut browser = browser_for_search_tests(current_folder);
+    browser.home_dir = home;
+
+    stabilize_search_input(&mut browser, "report");
+    let stale_request = pending_indexed_request(&browser);
+    drop(browser.select_search_directory_scope(SearchDirectoryScope::AllIndexedLocations));
+    let global_request = pending_indexed_request(&browser);
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert!(global_request.generation > stale_request.generation);
+    assert_eq!(
+        workspace.root.selected_scope(),
+        SearchDirectoryScope::AllIndexedLocations
+    );
+    assert!(matches!(
+        workspace.run.active_query.as_ref().unwrap().scope,
+        SearchScope::Global
+    ));
+
+    drop(browser.accept_search_results(
+        global_request,
+        IndexedSearchOutcome::ProviderUnavailable("index unavailable".to_owned()),
+    ));
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert!(workspace.window.failure.is_some());
+}
+
+#[test]
 fn empty_input_scope_selection_is_used_later_and_unavailable_home_fails_closed() {
     let roots = tempdir().unwrap();
     let current_folder = roots.path().join("current");
@@ -274,7 +308,7 @@ fn empty_input_scope_selection_is_used_later_and_unavailable_home_fails_closed()
 }
 
 #[test]
-fn opening_search_from_home_exposes_only_home_scope() {
+fn opening_search_from_home_exposes_home_and_global_scopes() {
     let home = tempdir().unwrap().keep();
     let mut browser = browser_for_search_tests(home.clone());
     browser.home_dir = home.clone();
@@ -287,7 +321,10 @@ fn opening_search_from_home_exposes_only_home_scope() {
     assert_eq!(workspace.root.selected_scope(), SearchDirectoryScope::Home);
     assert_eq!(
         workspace.root.available_scopes(),
-        [SearchDirectoryScope::Home]
+        [
+            SearchDirectoryScope::Home,
+            SearchDirectoryScope::AllIndexedLocations,
+        ]
     );
     assert_eq!(workspace.run.generation, generation);
     assert!(matches!(

@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use file_search::{
-    IndexHealth, IndexPhase, IndexedQueryAvailability, SearchServicePhase, SearchServiceStatus,
+    IndexHealth, IndexPhase, IndexedQueryAvailability, SearchPathPreferences, SearchServicePhase,
+    SearchServiceStatus, VersionedSearchPathPreferences,
 };
 
 use super::sanitized_application_log_detail;
@@ -141,6 +142,148 @@ pub(crate) struct SearchServiceIncident {
     pub(crate) technical_detail_expanded: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchPathEntryKind {
+    CustomRoot,
+    Exclusion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchPathConfigureRequest {
+    pub(crate) expected_revision: u64,
+    pub(crate) preferences: SearchPathPreferences,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SearchPathSettingsState {
+    pub(crate) confirmed: Option<VersionedSearchPathPreferences>,
+    pub(crate) draft: SearchPathPreferences,
+    pub(crate) apply_in_flight: bool,
+    pub(crate) failure: Option<String>,
+    pub(crate) custom_root_input: String,
+    pub(crate) exclusion_input: String,
+    pub(crate) picker_in_flight: Option<SearchPathEntryKind>,
+    pub(crate) picker_failure: Option<(SearchPathEntryKind, String)>,
+    pending: Option<SearchPathPreferences>,
+    retry_after_refresh: bool,
+}
+
+impl SearchPathSettingsState {
+    fn new() -> Self {
+        Self {
+            confirmed: None,
+            draft: SearchPathPreferences::default(),
+            apply_in_flight: false,
+            failure: None,
+            custom_root_input: String::new(),
+            exclusion_input: String::new(),
+            picker_in_flight: None,
+            picker_failure: None,
+            pending: None,
+            retry_after_refresh: false,
+        }
+    }
+
+    pub(crate) fn is_stale_revision(&self, revision: u64) -> bool {
+        self.confirmed
+            .as_ref()
+            .is_some_and(|confirmed| revision < confirmed.revision)
+    }
+
+    pub(crate) fn accept_snapshot(
+        &mut self,
+        snapshot: VersionedSearchPathPreferences,
+    ) -> Option<SearchPathConfigureRequest> {
+        if self.is_stale_revision(snapshot.revision) {
+            return None;
+        }
+        let retry_current = std::mem::take(&mut self.retry_after_refresh);
+        self.confirmed = Some(snapshot.clone());
+        self.failure = None;
+        if retry_current && self.pending.is_none() {
+            self.pending = Some(snapshot.preferences.clone());
+        }
+        if self.pending.is_none() && !self.apply_in_flight {
+            self.draft = snapshot.preferences;
+        }
+        self.begin_pending(retry_current)
+    }
+
+    pub(crate) fn queue(
+        &mut self,
+        preferences: SearchPathPreferences,
+    ) -> Option<SearchPathConfigureRequest> {
+        self.draft = preferences.clone();
+        self.pending = Some(preferences);
+        self.failure = None;
+        self.begin_pending(false)
+    }
+
+    pub(crate) fn accept_applied(
+        &mut self,
+        snapshot: VersionedSearchPathPreferences,
+    ) -> Option<SearchPathConfigureRequest> {
+        self.apply_in_flight = false;
+        if self.is_stale_revision(snapshot.revision) {
+            self.failure = None;
+            if self.pending.is_none() {
+                self.draft = self
+                    .confirmed
+                    .as_ref()
+                    .expect("stale revision requires a newer confirmed snapshot")
+                    .preferences
+                    .clone();
+            }
+            return self.begin_pending(false);
+        }
+        self.confirmed = Some(snapshot.clone());
+        self.failure = None;
+        if self.pending.is_none() {
+            self.draft = snapshot.preferences;
+        }
+        self.begin_pending(false)
+    }
+
+    pub(crate) fn request_retry_after_refresh(&mut self) -> bool {
+        if self.apply_in_flight || self.retry_after_refresh {
+            return false;
+        }
+        self.retry_after_refresh = true;
+        true
+    }
+
+    pub(crate) fn accept_refresh_failure(&mut self, message: String) {
+        self.retry_after_refresh = false;
+        self.failure = Some(message);
+    }
+
+    pub(crate) fn accept_apply_failure(&mut self, message: String) {
+        self.apply_in_flight = false;
+        self.failure = Some(message);
+        self.pending = Some(self.draft.clone());
+    }
+
+    fn begin_pending(
+        &mut self,
+        allow_confirmed_preferences: bool,
+    ) -> Option<SearchPathConfigureRequest> {
+        if self.apply_in_flight {
+            return None;
+        }
+        let confirmed = self.confirmed.as_ref()?;
+        let preferences = self.pending.take()?;
+        if preferences == confirmed.preferences && !allow_confirmed_preferences {
+            self.draft = confirmed.preferences.clone();
+            return None;
+        }
+        self.apply_in_flight = true;
+        Some(SearchPathConfigureRequest {
+            expected_revision: confirmed.revision,
+            preferences,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SearchServiceState {
     pub(crate) endpoint: SearchEndpointState,
@@ -148,6 +291,7 @@ pub(crate) struct SearchServiceState {
     pub(crate) last_confirmed_at: Option<SystemTime>,
     pub(crate) recovery: SearchServiceRecoveryState,
     pub(crate) incidents: Vec<SearchServiceIncident>,
+    pub(crate) path_settings: SearchPathSettingsState,
     pending_status_request: Option<SearchServiceStatusRequest>,
     next_status_generation: u64,
     consecutive_temporary_failures: u8,
@@ -161,6 +305,7 @@ impl SearchServiceState {
             last_confirmed_at: None,
             recovery: SearchServiceRecoveryState::Idle,
             incidents: Vec::new(),
+            path_settings: SearchPathSettingsState::new(),
             pending_status_request: None,
             next_status_generation: 0,
             consecutive_temporary_failures: 0,
@@ -510,9 +655,13 @@ fn diagnostics_from_status(status: &SearchServiceStatus) -> Vec<SearchServiceDia
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
 
-    use file_search::{IndexedQueryAvailability, SearchServicePhase, SearchServiceStatus};
+    use file_search::{
+        IndexedQueryAvailability, SearchPathPreferences, SearchServicePhase, SearchServiceStatus,
+        VersionedSearchPathPreferences,
+    };
 
     use super::*;
 
@@ -529,6 +678,182 @@ mod tests {
             SearchServiceDiagnosticKind::EndpointTimedOut,
             "endpoint timed out",
         )
+    }
+
+    #[test]
+    fn path_configuration_ignores_older_read_snapshots() {
+        let mut state = SearchPathSettingsState::new();
+        let current = VersionedSearchPathPreferences {
+            revision: 7,
+            preferences: SearchPathPreferences {
+                custom_roots: vec![PathBuf::from("/mnt/current")],
+                exclusions: Vec::new(),
+            },
+        };
+        state.accept_snapshot(current.clone());
+
+        assert!(state
+            .accept_snapshot(VersionedSearchPathPreferences {
+                revision: 6,
+                preferences: SearchPathPreferences::default(),
+            })
+            .is_none());
+        assert_eq!(state.confirmed.as_ref(), Some(&current));
+        assert_eq!(state.draft, current.preferences);
+    }
+
+    #[test]
+    fn path_configuration_stale_read_preserves_the_active_retry() {
+        let mut state = SearchPathSettingsState::new();
+        let current = VersionedSearchPathPreferences {
+            revision: 7,
+            preferences: SearchPathPreferences::default(),
+        };
+        state.accept_snapshot(current.clone());
+        state.accept_apply_failure("transition failed".to_owned());
+        assert!(state.request_retry_after_refresh());
+
+        assert!(state
+            .accept_snapshot(VersionedSearchPathPreferences {
+                revision: 6,
+                preferences: SearchPathPreferences::default(),
+            })
+            .is_none());
+
+        assert_eq!(state.confirmed.as_ref(), Some(&current));
+        assert!(!state.request_retry_after_refresh());
+        let retry = state
+            .accept_snapshot(current)
+            .expect("the retry response must still replay the failed configuration");
+        assert_eq!(retry.expected_revision, 7);
+        assert_eq!(retry.preferences, SearchPathPreferences::default());
+    }
+
+    #[test]
+    fn path_configuration_stale_apply_rebases_pending_on_the_newer_snapshot() {
+        let mut state = SearchPathSettingsState::new();
+        state.accept_snapshot(VersionedSearchPathPreferences {
+            revision: 4,
+            preferences: SearchPathPreferences::default(),
+        });
+        let first = SearchPathPreferences {
+            custom_roots: vec![PathBuf::from("/mnt/first")],
+            exclusions: Vec::new(),
+        };
+        let pending = SearchPathPreferences {
+            custom_roots: vec![PathBuf::from("/mnt/pending")],
+            exclusions: Vec::new(),
+        };
+        let newer = VersionedSearchPathPreferences {
+            revision: 6,
+            preferences: SearchPathPreferences {
+                custom_roots: vec![PathBuf::from("/mnt/peer")],
+                exclusions: Vec::new(),
+            },
+        };
+        state.queue(first.clone()).unwrap();
+        assert!(state.queue(pending.clone()).is_none());
+        assert!(state.accept_snapshot(newer.clone()).is_none());
+
+        let follow_up = state
+            .accept_applied(VersionedSearchPathPreferences {
+                revision: 5,
+                preferences: first,
+            })
+            .expect("pending draft must rebase on the newer snapshot");
+
+        assert_eq!(state.confirmed.as_ref(), Some(&newer));
+        assert_eq!(follow_up.expected_revision, 6);
+        assert_eq!(follow_up.preferences, pending);
+    }
+
+    #[test]
+    fn path_configuration_coalesces_to_one_follow_up_write() {
+        let mut state = SearchPathSettingsState::new();
+        state.accept_snapshot(VersionedSearchPathPreferences {
+            revision: 4,
+            preferences: SearchPathPreferences::default(),
+        });
+        let first_preferences = SearchPathPreferences {
+            custom_roots: vec![PathBuf::from("/media/first")],
+            exclusions: Vec::new(),
+        };
+        let second_preferences = SearchPathPreferences {
+            custom_roots: vec![PathBuf::from("/media/second")],
+            exclusions: vec![PathBuf::from("/media/second/private")],
+        };
+
+        let first = state
+            .queue(first_preferences.clone())
+            .expect("first write must start");
+        assert_eq!(first.expected_revision, 4);
+        assert!(state.queue(second_preferences.clone()).is_none());
+        let follow_up = state
+            .accept_applied(VersionedSearchPathPreferences {
+                revision: 5,
+                preferences: first_preferences,
+            })
+            .expect("latest pending snapshot must follow the first write");
+
+        assert_eq!(follow_up.expected_revision, 5);
+        assert_eq!(follow_up.preferences, second_preferences);
+        assert!(state.apply_in_flight);
+    }
+
+    #[test]
+    fn path_configuration_failure_rebases_pending_draft_before_retry() {
+        let mut state = SearchPathSettingsState::new();
+        state.accept_snapshot(VersionedSearchPathPreferences {
+            revision: 2,
+            preferences: SearchPathPreferences::default(),
+        });
+        let draft = SearchPathPreferences {
+            custom_roots: vec![PathBuf::from("/mnt/archive")],
+            exclusions: Vec::new(),
+        };
+        state.queue(draft.clone()).unwrap();
+        state.accept_apply_failure("stale revision".to_owned());
+
+        let retry = state
+            .accept_snapshot(VersionedSearchPathPreferences {
+                revision: 9,
+                preferences: SearchPathPreferences {
+                    custom_roots: vec![PathBuf::from("/mnt/peer")],
+                    exclusions: Vec::new(),
+                },
+            })
+            .expect("fresh snapshot must rebase the pending draft");
+
+        assert_eq!(retry.expected_revision, 9);
+        assert_eq!(retry.preferences, draft);
+        assert!(state.failure.is_none());
+    }
+
+    #[test]
+    fn path_configuration_retry_replays_the_failed_desired_revision() {
+        let mut state = SearchPathSettingsState::new();
+        let desired = SearchPathPreferences {
+            custom_roots: vec![PathBuf::from("/mnt/archive")],
+            exclusions: Vec::new(),
+        };
+        state.accept_snapshot(VersionedSearchPathPreferences {
+            revision: 2,
+            preferences: SearchPathPreferences::default(),
+        });
+        state.queue(desired.clone()).unwrap();
+        state.accept_apply_failure("transition failed".to_owned());
+
+        assert!(state.request_retry_after_refresh());
+        let retry = state
+            .accept_snapshot(VersionedSearchPathPreferences {
+                revision: 3,
+                preferences: desired.clone(),
+            })
+            .expect("explicit retry must replay the desired snapshot");
+
+        assert_eq!(retry.expected_revision, 3);
+        assert_eq!(retry.preferences, desired);
+        assert!(state.apply_in_flight);
     }
 
     #[test]

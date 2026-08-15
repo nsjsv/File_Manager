@@ -55,6 +55,7 @@ fn complete_index_status(visible_indexed_files: u64) -> IndexStatus {
         visible_indexed_files,
         health: IndexHealth::Healthy,
         capabilities: Vec::new(),
+        path_configuration: Default::default(),
     }
 }
 

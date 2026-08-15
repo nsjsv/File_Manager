@@ -73,11 +73,16 @@ fn workspace_root_is_frozen_while_empty_input_is_a_valid_state() {
         [
             SearchDirectoryScope::CurrentFolder,
             SearchDirectoryScope::Home,
+            SearchDirectoryScope::AllIndexedLocations,
         ]
     );
     assert!(workspace.root.select_scope(SearchDirectoryScope::Home));
     assert_eq!(workspace.root.path(), Path::new("/home/test"));
-    assert!(!workspace.root.select_scope(SearchDirectoryScope::Home));
+    assert!(workspace
+        .root
+        .select_scope(SearchDirectoryScope::AllIndexedLocations));
+    assert_eq!(workspace.root.query_scope(), SearchScope::Global);
+    assert_eq!(workspace.root.path(), Path::new("/home/test"));
     workspace.clear_query();
     assert_eq!(workspace.root.path(), Path::new("/home/test"));
     assert!(workspace.input.is_empty());
@@ -95,7 +100,10 @@ fn home_root_normalizes_to_one_home_scope() {
     assert_eq!(workspace.root.selected_scope(), SearchDirectoryScope::Home);
     assert_eq!(
         workspace.root.available_scopes(),
-        [SearchDirectoryScope::Home]
+        [
+            SearchDirectoryScope::Home,
+            SearchDirectoryScope::AllIndexedLocations,
+        ]
     );
     assert!(!workspace
         .root

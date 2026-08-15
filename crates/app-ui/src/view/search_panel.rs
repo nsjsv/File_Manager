@@ -305,10 +305,15 @@ fn search_workspace_toolbar(browser: &FileBrowser) -> Element<'_, Message> {
         .search_workspace
         .as_ref()
         .expect("search toolbar requires an active workspace");
-    let root_label = format!(
-        "Search in {}",
-        format_middle_ellipsized_text(&workspace.root.path().to_string_lossy(), 72)
-    );
+    let root_label = if workspace.root.selected_scope() == SearchDirectoryScope::AllIndexedLocations
+    {
+        "Search in all indexed locations".to_owned()
+    } else {
+        format!(
+            "Search in {}",
+            format_middle_ellipsized_text(&workspace.root.path().to_string_lossy(), 72)
+        )
+    };
     let filters = workspace.filters.clone();
     let available_directory_scopes = workspace.root.available_scopes();
     let selected_directory_scope = workspace.root.selected_scope();

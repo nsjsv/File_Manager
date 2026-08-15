@@ -1,14 +1,18 @@
 use file_search::{
-    IndexHealth, IndexPhase, IndexedQueryAvailability, SearchServicePhase, SearchServiceStatus,
+    IndexHealth, IndexPhase, IndexedQueryAvailability, SearchPathConfigurationPhase,
+    SearchRootAvailability, SearchServicePhase, SearchServiceStatus,
 };
-use iced::widget::{button, column, container, Column};
-use iced::{Element, Length};
+use iced::widget::{button, column, container, row, text_input, tooltip, Column};
+use iced::{Alignment, Element, Length};
 
 use crate::app::FileBrowser;
-use crate::appearance::context_menu_button_style;
-use crate::formatting::{format_file_size, format_system_time};
+use crate::appearance::{
+    context_menu_button_style, navigation_icon_button_style, navigation_text_input_style,
+};
+use crate::formatting::{format_file_size, format_middle_ellipsized_text, format_system_time};
+use crate::icons::IconSymbol;
 use crate::model::{
-    Message, ScrollbarRegion, ScrollbarVisibility, SearchEndpointState,
+    Message, ScrollbarRegion, ScrollbarVisibility, SearchEndpointState, SearchPathEntryKind,
     SearchServiceDiagnosticKind, SearchServiceIncident, SearchServiceIncidentState,
     SearchServiceRecoveryAction, SearchServiceRecoveryState,
 };
@@ -20,12 +24,15 @@ use super::settings_group::{
     action_setting_row, info_setting_row, labeled_setting_row, settings_group, toggle_setting_row,
     SETTINGS_GROUP_SPACING,
 };
+use super::{themed_icon, IconTone};
 
 pub(super) fn search_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
 ) -> Element<'_, Message> {
     let content = column![
+        settings_group("Indexed locations", indexed_location_rows(browser)),
+        settings_group("Excluded locations", excluded_location_rows(browser)),
         settings_group("Content indexing", content_indexing_rows(browser)),
         settings_group("Status overview", status_overview_rows(browser)),
         settings_group("Index progress", index_progress_rows(browser)),
@@ -41,6 +48,225 @@ pub(super) fn search_settings_detail(
         scrollbar_visibility,
         Message::SettingsScrolled,
     )
+}
+
+fn indexed_location_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
+    let settings = &browser.search_service.path_settings;
+    if settings.confirmed.is_none() {
+        return vec![status_notice("Loading indexed locations...")];
+    }
+
+    let mut rows = path_configuration_state_rows(browser);
+    if settings.draft.custom_roots.is_empty() {
+        rows.push(status_notice(
+            "Home is indexed by default. Add another location here.",
+        ));
+    } else {
+        rows.extend(settings.draft.custom_roots.iter().map(|path| {
+            search_path_row(
+                path,
+                SearchPathEntryKind::CustomRoot,
+                configured_root_status(browser, path),
+            )
+        }));
+    }
+    rows.push(search_path_input_row(
+        SearchPathEntryKind::CustomRoot,
+        &settings.custom_root_input,
+        settings.picker_in_flight.is_some(),
+    ));
+    if let Some(notice) = path_picker_failure_notice(browser, SearchPathEntryKind::CustomRoot) {
+        rows.push(notice);
+    }
+    rows
+}
+
+fn excluded_location_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
+    let settings = &browser.search_service.path_settings;
+    if settings.confirmed.is_none() {
+        return vec![status_notice("Loading excluded locations...")];
+    }
+
+    let mut rows = Vec::new();
+    if settings.draft.exclusions.is_empty() {
+        rows.push(status_notice("No additional locations are excluded."));
+    } else {
+        rows.extend(settings.draft.exclusions.iter().map(|path| {
+            search_path_row(path, SearchPathEntryKind::Exclusion, "Excluded".to_owned())
+        }));
+    }
+    rows.push(search_path_input_row(
+        SearchPathEntryKind::Exclusion,
+        &settings.exclusion_input,
+        settings.picker_in_flight.is_some(),
+    ));
+    if let Some(notice) = path_picker_failure_notice(browser, SearchPathEntryKind::Exclusion) {
+        rows.push(notice);
+    }
+    rows
+}
+
+fn path_picker_failure_notice(
+    browser: &FileBrowser,
+    kind: SearchPathEntryKind,
+) -> Option<Element<'static, Message>> {
+    browser
+        .search_service
+        .path_settings
+        .picker_failure
+        .as_ref()
+        .filter(|(failed_kind, _)| *failed_kind == kind)
+        .map(|(_, message)| status_notice(message.clone()))
+}
+
+fn path_configuration_state_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {
+    let settings = &browser.search_service.path_settings;
+    if settings.apply_in_flight {
+        return vec![status_notice("Applying search location changes...")];
+    }
+    if let Some(message) = settings.failure.as_ref() {
+        return vec![path_configuration_failure_row(message)];
+    }
+    let Some(status) = browser
+        .search_service
+        .confirmed_status
+        .as_ref()
+        .and_then(|service| service.index_status.as_ref())
+        .map(|index| &index.path_configuration)
+    else {
+        return Vec::new();
+    };
+    match &status.phase {
+        SearchPathConfigurationPhase::Ready => Vec::new(),
+        SearchPathConfigurationPhase::Applying => {
+            vec![status_notice("Applying search location changes...")]
+        }
+        SearchPathConfigurationPhase::Failed { message } => {
+            vec![path_configuration_failure_row(message)]
+        }
+    }
+}
+
+fn path_configuration_failure_row(message: &str) -> Element<'_, Message> {
+    info_setting_row(
+        row![
+            localized_text(message.to_owned())
+                .size(11)
+                .width(Length::Fill),
+            button(readable_text("Retry").size(11))
+                .on_press(Message::SearchPathConfigurationRetryPressed)
+                .padding([5, 9])
+                .style(context_menu_button_style()),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .width(Length::Fill)
+        .into(),
+    )
+}
+
+fn configured_root_status(browser: &FileBrowser, path: &std::path::Path) -> String {
+    let Some(root) = browser
+        .search_service
+        .confirmed_status
+        .as_ref()
+        .and_then(|service| service.index_status.as_ref())
+        .and_then(|index| {
+            index
+                .path_configuration
+                .roots
+                .iter()
+                .find(|root| root.path == path)
+        })
+    else {
+        return "Waiting for status".to_owned();
+    };
+    match &root.availability {
+        SearchRootAvailability::Available => "Available".to_owned(),
+        SearchRootAvailability::Unavailable { message } => {
+            format!("Unavailable: {message}")
+        }
+        SearchRootAvailability::MountChanged { message } => {
+            format!("Storage changed: {message}")
+        }
+    }
+}
+
+fn search_path_row<'a>(
+    path: &'a std::path::Path,
+    kind: SearchPathEntryKind,
+    status: String,
+) -> Element<'a, Message> {
+    let remove_path = path.to_path_buf();
+    info_setting_row(
+        row![
+            column![
+                localized_text(format_middle_ellipsized_text(&path.to_string_lossy(), 72,))
+                    .size(12)
+                    .width(Length::Fill),
+                localized_text(status).size(10).width(Length::Fill),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            tooltip(
+                button(themed_icon(IconSymbol::Trash, IconTone::Normal, 12.0))
+                    .on_press(Message::SearchPathEntryRemoved(kind, remove_path))
+                    .padding([7, 8])
+                    .style(navigation_icon_button_style()),
+                path_tooltip("Remove location"),
+                tooltip::Position::Left,
+            ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .width(Length::Fill)
+        .into(),
+    )
+}
+
+fn search_path_input_row(
+    kind: SearchPathEntryKind,
+    value: &str,
+    picker_in_flight: bool,
+) -> Element<'_, Message> {
+    let input = text_input(
+        &crate::localization::translate_current("Absolute path"),
+        value,
+    )
+    .on_input(move |value| Message::SearchPathInputChanged(kind, value))
+    .on_submit(Message::SearchPathInputCommitted(kind))
+    .padding([7, 9])
+    .size(12)
+    .style(navigation_text_input_style)
+    .width(Length::Fill);
+    let chooser = button(themed_icon(IconSymbol::FolderOpen, IconTone::Normal, 13.0))
+        .padding([8, 9])
+        .style(navigation_icon_button_style());
+    let chooser = if picker_in_flight {
+        chooser
+    } else {
+        chooser.on_press(Message::SearchPathDirectoryChooserPressed(kind))
+    };
+    info_setting_row(
+        row![
+            input,
+            tooltip(
+                chooser,
+                path_tooltip("Choose directory"),
+                tooltip::Position::Left,
+            ),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .width(Length::Fill)
+        .into(),
+    )
+}
+
+fn path_tooltip(label: &'static str) -> Element<'static, Message> {
+    container(readable_text(label).size(11))
+        .padding([4, 6])
+        .into()
 }
 
 fn content_indexing_rows(browser: &FileBrowser) -> Vec<Element<'_, Message>> {

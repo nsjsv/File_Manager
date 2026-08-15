@@ -5,8 +5,8 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 
 use file_core::{
-    delete_trash_entry, empty_trash, restore_trash_entry, scan_trash,
-    trash_path_with_restore_entry, ScanOptions, TransferConflictStrategy, TrashCommitOutcome,
+    delete_trash_entry, restore_trash_entry, scan_trash, trash_path_with_restore_entry,
+    ScanOptions, TransferConflictStrategy, TrashCommitOutcome,
 };
 use tempfile::tempdir;
 
@@ -174,16 +174,17 @@ async fn home_trash_round_trips_non_utf8_file_and_directory_names() {
 
     let final_path = fixture.path().join("empty-trash-check");
     std::fs::write(&final_path, b"final").unwrap();
-    match trash_path_with_restore_entry(&final_path).await.unwrap() {
-        TrashCommitOutcome::Tracked(_) => {}
+    let final_entry = match trash_path_with_restore_entry(&final_path).await.unwrap() {
+        TrashCommitOutcome::Tracked(entry) => entry,
         TrashCommitOutcome::CommittedWithoutRestoreEntry(warning) => {
             panic!("final Trash entry was not tracked: {}", warning.message)
         }
-    }
-    empty_trash().await.unwrap();
-    assert!(scan_trash(ScanOptions::default())
+    };
+    delete_trash_entry(*final_entry).await.unwrap();
+    assert!(!scan_trash(ScanOptions::default())
         .await
         .unwrap()
         .entries
-        .is_empty());
+        .iter()
+        .any(|entry| entry.original_path == final_path));
 }

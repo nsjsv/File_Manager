@@ -4,9 +4,12 @@ use rusqlite::{params, Connection};
 use tempfile::tempdir;
 
 use crate::extractor::ExtractionStatus;
-use crate::model::SearchQuery;
+use crate::model::{SearchFileKind, SearchQuery};
 
-use super::{path_to_storage, SearchDatabase, SCHEMA_VERSION};
+use super::{
+    path_to_storage, EntryStageProgress, IndexedEntryStageState, IndexedFile, SearchDatabase,
+    SCHEMA_VERSION,
+};
 
 #[test]
 fn path_migration_failure_rolls_back_every_rebuilt_table() {
@@ -242,6 +245,65 @@ fn schema_eight_fulltext_migration_preserves_hits_and_builds_bounded_preview() {
         .hits;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, Path::new("/tmp/legacy.txt"));
+}
+
+#[test]
+fn schema_ten_migration_adds_path_configuration_without_losing_search_rows() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    database
+        .upsert_file(&IndexedFile {
+            path: Path::new("/tmp/preserved.txt").to_path_buf(),
+            parent_path: Path::new("/tmp").to_path_buf(),
+            display_name: "preserved.txt".to_owned(),
+            kind: SearchFileKind::File,
+            size: 9,
+            modified_ms: None,
+            accessed_ms: None,
+            created_ms: None,
+            mime_type: Some("text/plain".to_owned()),
+            stage_state: IndexedEntryStageState {
+                metadata: EntryStageProgress::Complete,
+                content: EntryStageProgress::Complete,
+            },
+            content: Some("schema ten needle".to_owned()),
+            extraction_status: ExtractionStatus::Indexed,
+            device: Some(1),
+            inode: Some(2),
+            mtime_ns: Some(3),
+            ctime_ns: Some(4),
+        })
+        .unwrap();
+    database
+        .connection
+        .execute_batch(
+            "DROP TABLE search_root_mounts;
+             DROP TABLE search_path_configuration;
+             PRAGMA user_version = 9;",
+        )
+        .unwrap();
+    drop(database);
+
+    let database = SearchDatabase::open(&database_path).unwrap();
+
+    assert_eq!(
+        database
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        SCHEMA_VERSION
+    );
+    assert_eq!(
+        database
+            .search(&SearchQuery::global(1, "needle"))
+            .unwrap()
+            .hits
+            .len(),
+        1
+    );
+    assert!(database.read_search_path_configuration().unwrap().is_none());
+    assert!(database.read_search_root_mounts().unwrap().is_empty());
 }
 
 #[test]

@@ -330,7 +330,10 @@ impl FileBrowser {
         self.selection_marquee = None;
         let _ = self.cancel_address_editing();
         let refresh_selected_category = match self.selected_settings_category {
-            SettingsCategory::Search => self.refresh_search_service_status(),
+            SettingsCategory::Search => Task::batch([
+                self.refresh_search_service_status(),
+                self.refresh_search_path_configuration(),
+            ]),
             SettingsCategory::Logs => self.refresh_application_logs(),
             SettingsCategory::General
             | SettingsCategory::Appearance
@@ -353,7 +356,10 @@ impl FileBrowser {
         }
         self.selected_settings_category = category;
         match category {
-            SettingsCategory::Search => self.refresh_search_service_status(),
+            SettingsCategory::Search => Task::batch([
+                self.refresh_search_service_status(),
+                self.refresh_search_path_configuration(),
+            ]),
             SettingsCategory::Logs => self.refresh_application_logs(),
             SettingsCategory::General
             | SettingsCategory::Appearance

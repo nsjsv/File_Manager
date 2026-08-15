@@ -14,7 +14,8 @@ use crate::error::{SearchError, SearchResult};
 
 #[cfg(unix)]
 use super::schema::{
-    verify_search_storage_schema, BASE_SCHEMA, CONTENTLESS_SEARCH_SCHEMA, QUERY_INDEXES,
+    verify_search_storage_schema, BASE_SCHEMA, CONTENTLESS_SEARCH_SCHEMA,
+    PATH_CONFIGURATION_SCHEMA, QUERY_INDEXES,
 };
 #[cfg(unix)]
 use super::storage_workspace::{
@@ -118,7 +119,7 @@ fn rebuild_schema_eight_database_with_operations(
         tracing::warn!(
             database_path = ?database_path,
             error = %error,
-            "schema 9 已提交，但迁移 workspace 清理将在下次启动重试"
+            "schema 10 已提交，但迁移 workspace 清理将在下次启动重试"
         );
     }
     Ok(committed_connection)
@@ -173,6 +174,7 @@ fn build_replacement_database(
 
     let target_transaction = target.unchecked_transaction()?;
     target_transaction.execute_batch(BASE_SCHEMA)?;
+    target_transaction.execute_batch(PATH_CONFIGURATION_SCHEMA)?;
     target_transaction.execute_batch(CONTENTLESS_SEARCH_SCHEMA)?;
 
     copy_files(source, &target_transaction)?;

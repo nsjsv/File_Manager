@@ -21,6 +21,7 @@ fn config_for(root: &std::path::Path) -> SearchIndexConfig {
     SearchIndexConfig {
         roots: vec![root.to_path_buf()],
         excluded_paths: Vec::new(),
+        unavailable_roots: Vec::new(),
         content_indexing_enabled: true,
         max_extract_bytes: 1024,
     }
@@ -48,6 +49,32 @@ fn affected_prefix_collapse_respects_path_component_boundaries() {
         vec![
             PathBuf::from("/workspace/project"),
             PathBuf::from("/workspace/project-old"),
+        ]
+    );
+}
+
+#[test]
+fn changed_path_collapse_preserves_nested_root_ownership() {
+    let content = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let nested_root = content.path().join("nested-root");
+    fs::create_dir(&nested_root).unwrap();
+
+    let writer = writer_in(&db_dir);
+    let config = SearchIndexConfig {
+        roots: vec![content.path().to_path_buf(), nested_root.clone()],
+        ..config_for(content.path())
+    };
+    let indexer = SearchIndexer::new(writer, config);
+
+    assert_eq!(
+        indexer.collapse_paths_by_owning_root(vec![
+            nested_root.join("changed.txt"),
+            content.path().to_path_buf(),
+        ]),
+        vec![
+            content.path().to_path_buf(),
+            nested_root.join("changed.txt"),
         ]
     );
 }
@@ -170,6 +197,34 @@ async fn indexes_text_and_skips_hidden_directories() {
     let batch = reader.search(&SearchQuery::global(1, "needle")).unwrap();
     assert_eq!(batch.hits.len(), 1);
     assert_eq!(batch.hits[0].display_name, "visible.txt");
+}
+
+#[tokio::test]
+async fn nested_root_has_one_owner_across_cold_and_warm_rebuilds() {
+    let content = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let nested_root = content.path().join("nested-root");
+    fs::create_dir(&nested_root).unwrap();
+    fs::write(nested_root.join("owned.txt"), "nested needle").unwrap();
+
+    let writer = writer_in(&db_dir);
+    let config = SearchIndexConfig {
+        roots: vec![content.path().to_path_buf(), nested_root],
+        ..config_for(content.path())
+    };
+    let indexer = SearchIndexer::new(Arc::clone(&writer), config);
+    indexer.rebuild().await.unwrap();
+    let database_path = db_dir.path().join("search.sqlite");
+    let reader = SearchDatabase::open_read_only(&database_path).unwrap();
+    let cold_batch = reader.search(&SearchQuery::global(1, "needle")).unwrap();
+    assert_eq!(cold_batch.hits.len(), 1);
+    drop(reader);
+
+    indexer.rebuild().await.unwrap();
+    let reader = SearchDatabase::open_read_only(&database_path).unwrap();
+    let batch = reader.search(&SearchQuery::global(1, "needle")).unwrap();
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].display_name, "owned.txt");
 }
 
 #[tokio::test]

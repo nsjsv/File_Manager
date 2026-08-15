@@ -1,13 +1,15 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
-use crate::model::{IndexHealth, IndexPhase, IndexStatus};
+use crate::model::{IndexHealth, IndexPhase, IndexStatus, SearchQuery};
 use crate::SearchIndexConfig;
 
 use super::*;
@@ -20,6 +22,438 @@ fn snapshot_for(phase: DaemonLifecyclePhase) -> DaemonLifecycleSnapshot {
         watch_coverage_health: WatchCoverageHealth::Healthy,
         visible_indexed_files: 41,
         capabilities: Vec::new(),
+        path_configuration: Default::default(),
+    }
+}
+
+#[test]
+fn semantic_sidecar_failure_keeps_the_last_effective_configuration() {
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    let effective = VersionedSearchPathPreferences {
+        revision: 3,
+        preferences: SearchPathPreferences::default(),
+    };
+    database
+        .initialize_search_path_configuration(&effective)
+        .unwrap();
+    let path_store = SearchPathStore::at(directory.path().join("search-paths.json"));
+    path_store
+        .replace(&VersionedSearchPathPreferences {
+            revision: 4,
+            preferences: SearchPathPreferences {
+                custom_roots: vec![PathBuf::from("relative")],
+                exclusions: Vec::new(),
+            },
+        })
+        .unwrap();
+    let base_config = SearchIndexConfig {
+        roots: vec![home.clone()],
+        ..SearchIndexConfig::default()
+    };
+
+    let runtime =
+        initialize_path_configuration(&database, &base_config, Some(&home), Some(&path_store))
+            .unwrap();
+
+    assert_eq!(runtime.desired.revision, 4);
+    assert_eq!(runtime.effective, effective);
+    assert!(matches!(
+        runtime.phase,
+        SearchPathConfigurationPhase::Failed { .. }
+    ));
+    assert_eq!(
+        runtime.policy.unwrap().preferences(),
+        &effective.preferences
+    );
+}
+
+#[test]
+fn startup_repairs_an_older_sidecar_from_the_newer_effective_snapshot() {
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    let effective = VersionedSearchPathPreferences {
+        revision: 5,
+        preferences: SearchPathPreferences {
+            custom_roots: Vec::new(),
+            exclusions: vec![home.join("private")],
+        },
+    };
+    database
+        .initialize_search_path_configuration(&effective)
+        .unwrap();
+    let store = SearchPathStore::at(database_path.with_file_name("search-paths.json"));
+    store
+        .replace(&VersionedSearchPathPreferences {
+            revision: 4,
+            preferences: SearchPathPreferences::default(),
+        })
+        .unwrap();
+
+    let runtime = initialize_path_configuration(
+        &database,
+        &SearchIndexConfig::default(),
+        Some(&home),
+        Some(&store),
+    )
+    .unwrap();
+
+    assert_eq!(runtime.desired, effective);
+    assert_eq!(runtime.effective, effective);
+    assert_eq!(store.load().unwrap(), Some(effective));
+}
+
+#[test]
+fn retry_repairs_a_damaged_sidecar_without_advancing_the_revision() {
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    let effective = VersionedSearchPathPreferences {
+        revision: 3,
+        preferences: SearchPathPreferences::default(),
+    };
+    database
+        .initialize_search_path_configuration(&effective)
+        .unwrap();
+    drop(database);
+    let sidecar = database_path.with_file_name("search-paths.json");
+    fs::write(&sidecar, b"not-json").unwrap();
+    let core = SearchDaemonCore::new(
+        database_path,
+        SearchIndexConfig {
+            roots: vec![home],
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+
+    let applied = core
+        .configure_search_paths(3, SearchPathPreferences::default())
+        .unwrap();
+
+    assert_eq!(applied.revision, 3);
+    assert_eq!(
+        SearchPathStore::at(sidecar).load().unwrap(),
+        Some(effective)
+    );
+    core.shutdown().unwrap();
+}
+
+#[test]
+fn failed_transition_retries_the_same_desired_revision() {
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    let archive = directory.path().join("archive");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&archive).unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let core = SearchDaemonCore::new(
+        database_path.clone(),
+        SearchIndexConfig {
+            roots: vec![home],
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+    let preferences = SearchPathPreferences {
+        custom_roots: vec![archive],
+        exclusions: Vec::new(),
+    };
+    let schema_connection = Connection::open(&database_path).unwrap();
+    schema_connection
+        .execute_batch("ALTER TABLE files RENAME TO files_unavailable")
+        .unwrap();
+
+    assert!(core.configure_search_paths(0, preferences.clone()).is_err());
+    assert_eq!(core.current_path_preferences().revision, 1);
+    assert!(matches!(
+        core.current_status().path_configuration.phase,
+        SearchPathConfigurationPhase::Failed { .. }
+    ));
+
+    schema_connection
+        .execute_batch("ALTER TABLE files_unavailable RENAME TO files")
+        .unwrap();
+    let applied = core.configure_search_paths(1, preferences).unwrap();
+
+    assert_eq!(applied.revision, 1);
+    assert_eq!(
+        core.current_status().path_configuration.effective_revision,
+        1
+    );
+    core.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_root_is_reported_unavailable_at_the_status_boundary() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("target");
+    let root = directory.path().join("root-link");
+    fs::create_dir(&target).unwrap();
+    symlink(&target, &root).unwrap();
+
+    let statuses = root_statuses(std::slice::from_ref(&root), &[]);
+
+    assert!(matches!(
+        statuses.as_slice(),
+        [SearchRootStatus {
+            availability: SearchRootAvailability::Unavailable { .. },
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn missing_root_is_saved_and_a_status_poll_activates_it_after_creation() {
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    let missing = directory.path().join("later");
+    fs::create_dir(&home).unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let core = SearchDaemonCore::new(
+        database_path.clone(),
+        SearchIndexConfig {
+            roots: vec![home],
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+
+    core.configure_search_paths(
+        0,
+        SearchPathPreferences {
+            custom_roots: vec![missing.clone()],
+            exclusions: Vec::new(),
+        },
+    )
+    .unwrap();
+    core.start_index_maintenance().unwrap();
+    assert!(matches!(
+        core.current_status().path_configuration.roots[0].availability,
+        SearchRootAvailability::Unavailable { .. }
+    ));
+
+    fs::create_dir(&missing).unwrap();
+    fs::write(missing.join("later-root-note.txt"), "later").unwrap();
+    assert!(matches!(
+        core.current_status().path_configuration.roots[0].availability,
+        SearchRootAvailability::Available
+    ));
+    wait_for_global_hit_count(&database_path, "later-root-note", 1);
+
+    core.shutdown().unwrap();
+}
+
+#[test]
+fn mount_observation_failure_reports_all_roots_unavailable() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+
+    let statuses = root_statuses_from_mount_observation(
+        std::slice::from_ref(&root),
+        &[],
+        Err(SearchError::InvalidConfiguration(
+            "mountinfo unreadable".to_owned(),
+        )),
+    );
+
+    assert!(matches!(
+        statuses.as_slice(),
+        [SearchRootStatus {
+            availability: SearchRootAvailability::Unavailable { message },
+            ..
+        }] if message.contains("could not be verified")
+    ));
+}
+
+#[test]
+fn mount_replacement_hides_retains_recrawls_and_explicit_removal_purges() {
+    if std::env::var_os("FILE_MANAGER_RUN_MOUNT_TESTS").as_deref()
+        != Some(std::ffi::OsStr::new("1"))
+    {
+        return;
+    }
+
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    let mount_root = directory.path().join("mounted");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir(&mount_root).unwrap();
+    run_mount_command(&[
+        "-t",
+        "tmpfs",
+        "-o",
+        "size=4m,nosuid,nodev,noexec",
+        "tmpfs",
+        mount_root.to_str().unwrap(),
+    ]);
+    fs::write(mount_root.join("first-volume-note.txt"), "first").unwrap();
+
+    let database_path = directory.path().join("search.sqlite");
+    let core = SearchDaemonCore::new(
+        database_path.clone(),
+        SearchIndexConfig {
+            roots: vec![home],
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+    core.configure_search_paths(
+        0,
+        SearchPathPreferences {
+            custom_roots: vec![mount_root.clone()],
+            exclusions: Vec::new(),
+        },
+    )
+    .unwrap();
+    core.start_index_maintenance().unwrap();
+    wait_for_global_hit_count(&database_path, "first-volume-note", 1);
+
+    run_unmount_command(&mount_root);
+    fs::write(
+        mount_root.join("underlying-decoy.txt"),
+        "must stay outside index",
+    )
+    .unwrap();
+    core.reconcile_root_mounts().unwrap();
+    wait_for_global_hit_count(&database_path, "first-volume-note", 0);
+    wait_for_global_hit_count(&database_path, "underlying-decoy", 0);
+    assert_eq!(
+        stored_path_count(&database_path, &mount_root.join("first-volume-note.txt")),
+        1
+    );
+    assert!(matches!(
+        core.current_status().path_configuration.roots[0].availability,
+        SearchRootAvailability::MountChanged { .. }
+    ));
+
+    run_mount_command(&[
+        "-t",
+        "tmpfs",
+        "-o",
+        "size=4m,nosuid,nodev,noexec",
+        "tmpfs",
+        mount_root.to_str().unwrap(),
+    ]);
+    fs::write(
+        mount_root.join("replacement-volume-note.txt"),
+        "replacement",
+    )
+    .unwrap();
+    core.reconcile_root_mounts().unwrap();
+    wait_for_global_hit_count(&database_path, "replacement-volume-note", 1);
+    wait_for_global_hit_count(&database_path, "first-volume-note", 0);
+    assert_eq!(
+        stored_path_count(&database_path, &mount_root.join("first-volume-note.txt")),
+        0
+    );
+
+    core.configure_search_paths(1, SearchPathPreferences::default())
+        .unwrap();
+    wait_for_global_hit_count(&database_path, "replacement-volume-note", 0);
+    assert_eq!(
+        stored_path_count(
+            &database_path,
+            &mount_root.join("replacement-volume-note.txt")
+        ),
+        0
+    );
+    core.shutdown().unwrap();
+    run_unmount_command(&mount_root);
+}
+
+fn run_mount_command(arguments: &[&str]) {
+    let output = Command::new("mount").args(arguments).output().unwrap();
+    assert!(
+        output.status.success(),
+        "mount failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_unmount_command(path: &Path) {
+    let output = Command::new("umount").arg(path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "unmount failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn stored_path_count(database_path: &Path, path: &Path) -> i64 {
+    Connection::open(database_path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = ?1",
+            [crate::path_encoding::storage_bytes(path)],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn removing_an_exclusion_explicitly_recrawls_the_newly_included_frontier() {
+    let directory = tempdir().unwrap();
+    let home = directory.path().join("home");
+    let private = home.join("private");
+    let note = private.join("frontier-note.txt");
+    fs::create_dir_all(&private).unwrap();
+    fs::write(&note, "needle").unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let core = SearchDaemonCore::new(
+        database_path.clone(),
+        SearchIndexConfig {
+            roots: vec![home.clone()],
+            ..SearchIndexConfig::default()
+        },
+    )
+    .unwrap();
+    core.start_index_maintenance().unwrap();
+    wait_for_global_hit_count(&database_path, "frontier-note", 1);
+
+    core.configure_search_paths(
+        0,
+        SearchPathPreferences {
+            custom_roots: Vec::new(),
+            exclusions: vec![private.clone()],
+        },
+    )
+    .unwrap();
+    wait_for_global_hit_count(&database_path, "frontier-note", 0);
+
+    core.configure_search_paths(1, SearchPathPreferences::default())
+        .unwrap();
+    wait_for_global_hit_count(&database_path, "frontier-note", 1);
+    core.shutdown().unwrap();
+}
+
+fn wait_for_global_hit_count(database_path: &Path, terms: &str, expected: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let database = SearchDatabase::open_read_only(database_path).unwrap();
+        let mut query = SearchQuery::global(1, terms);
+        query.limit = 10;
+        let actual = database.search(&query).unwrap().hits.len();
+        if actual == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "search hit count did not converge: expected {expected}, got {actual}"
+        );
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -96,6 +530,7 @@ fn watch_degradation_does_not_replace_active_phase() {
                 message: "one watch unavailable".to_owned(),
             },
             capabilities: Vec::new(),
+            path_configuration: Default::default(),
         }
     );
 }

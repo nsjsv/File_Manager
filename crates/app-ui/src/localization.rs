@@ -7,6 +7,7 @@ mod document_preview;
 mod file_operation_notifications;
 mod index_status;
 mod properties;
+mod search_paths;
 mod search_service_recovery;
 mod search_service_status;
 mod search_workspace;
@@ -40,6 +41,10 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
     }
 
     if let Some(translated) = properties::translate(text) {
+        return Cow::Owned(translated);
+    }
+
+    if let Some(translated) = search_paths::translate(text) {
         return Cow::Owned(translated);
     }
 

@@ -14,7 +14,10 @@ use file_core::{
     TrashRestoreEntry, TrashScan,
 };
 use file_operation_store::TaskQueueStore;
-use file_search::{SearchHit, SearchServiceStatus, SearchTextScope};
+use file_search::{
+    SearchHit, SearchPathConfigurationStatus, SearchServiceStatus, SearchTextScope,
+    VersionedSearchPathPreferences,
+};
 use iced::keyboard;
 use iced::widget::text_editor;
 use iced::{event, mouse, window, Point, Theme};
@@ -137,9 +140,10 @@ pub(crate) use search::{
 };
 mod search_service;
 pub(crate) use search_service::{
-    SearchEndpointState, SearchServiceDiagnostic, SearchServiceDiagnosticKind,
-    SearchServiceIncident, SearchServiceIncidentState, SearchServiceRecoveryAction,
-    SearchServiceRecoveryState, SearchServiceState, SearchServiceStatusRequest,
+    SearchEndpointState, SearchPathConfigureRequest, SearchPathEntryKind, SearchServiceDiagnostic,
+    SearchServiceDiagnosticKind, SearchServiceIncident, SearchServiceIncidentState,
+    SearchServiceRecoveryAction, SearchServiceRecoveryState, SearchServiceState,
+    SearchServiceStatusRequest,
 };
 mod session;
 pub(crate) use session::{
@@ -461,6 +465,41 @@ pub(crate) enum Message {
         SearchServiceStatusRequest,
         Result<SearchServiceStatus, SearchServiceDiagnostic>,
     ),
+    SearchPathConfigurationLoaded(
+        Result<
+            (
+                VersionedSearchPathPreferences,
+                SearchPathConfigurationStatus,
+            ),
+            SearchServiceDiagnostic,
+        >,
+    ),
+    SearchPathConfigurationApplied(
+        Result<
+            (
+                VersionedSearchPathPreferences,
+                SearchPathConfigurationStatus,
+            ),
+            SearchServiceDiagnostic,
+        >,
+    ),
+    SearchDirectoryFallbackConfigurationLoaded(
+        u64,
+        String,
+        Result<
+            (
+                VersionedSearchPathPreferences,
+                SearchPathConfigurationStatus,
+            ),
+            SearchServiceDiagnostic,
+        >,
+    ),
+    SearchPathInputChanged(SearchPathEntryKind, String),
+    SearchPathInputCommitted(SearchPathEntryKind),
+    SearchPathDirectoryChooserPressed(SearchPathEntryKind),
+    SearchPathDirectoryChosen(SearchPathEntryKind, Result<Option<PathBuf>, String>),
+    SearchPathEntryRemoved(SearchPathEntryKind, PathBuf),
+    SearchPathConfigurationRetryPressed,
     SearchServiceRestartRequested,
     SearchServiceForceRestartPressed,
     SearchServiceRecoveryFinished(

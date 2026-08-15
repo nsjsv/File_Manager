@@ -7,8 +7,8 @@ use iced::Task;
 
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
-    directory_fallback_search_command, open_file_command, search_command,
-    search_service_recovery_command, search_service_status_command,
+    directory_fallback_search_command, open_file_command, read_search_path_configuration,
+    search_command, search_service_recovery_command, search_service_status_command,
 };
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
@@ -281,7 +281,7 @@ impl FileBrowser {
         Ok(())
     }
 
-    fn restart_search_workspace(&mut self) -> Task<Message> {
+    pub(super) fn restart_search_workspace(&mut self) -> Task<Message> {
         if let Some(workspace) = self.search_workspace.as_mut() {
             workspace.invalidate_input_stabilization();
         }
@@ -295,12 +295,15 @@ impl FileBrowser {
             return Task::none();
         }
         let generation = workspace.next_generation();
-        let root = workspace.root.path().to_path_buf();
-        if !std::fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
-            if let Some(workspace) = self.search_workspace.as_mut() {
-                workspace.reject_query(format!("Search root is unavailable: {}", root.display()));
+        let scope = workspace.root.query_scope();
+        if let SearchScope::Directory(root) = &scope {
+            if !std::fs::metadata(root).is_ok_and(|metadata| metadata.is_dir()) {
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace
+                        .reject_query(format!("Search root is unavailable: {}", root.display()));
+                }
+                return Task::none();
             }
-            return Task::none();
         }
         let filters = match workspace.filters.query_filters_at(Local::now()) {
             Ok(filters) => filters,
@@ -315,7 +318,7 @@ impl FileBrowser {
             query_id: generation,
             terms: workspace.input.trim().to_owned(),
             text_scope: workspace.filters.text_scope,
-            scope: SearchScope::Directory(root),
+            scope,
             recursive: true,
             filters,
             limit: SEARCH_RESULT_WINDOW,
@@ -691,7 +694,7 @@ impl FileBrowser {
         let Some(workspace) = self.search_workspace.as_ref() else {
             return Task::none();
         };
-        let Some(query) = workspace.run.active_query.clone() else {
+        let Some(query) = workspace.run.active_query.as_ref() else {
             self.fail_search_workspace(unavailable_message);
             return Task::none();
         };
@@ -709,16 +712,72 @@ impl FileBrowser {
         }
 
         let generation = workspace.run.generation;
+        Task::perform(read_search_path_configuration(), move |outcome| {
+            Message::SearchDirectoryFallbackConfigurationLoaded(
+                generation,
+                unavailable_message,
+                outcome,
+            )
+        })
+    }
+
+    pub(super) fn start_verified_directory_fallback(
+        &mut self,
+        generation: u64,
+        unavailable_message: String,
+        outcome: Result<
+            (
+                file_search::VersionedSearchPathPreferences,
+                file_search::SearchPathConfigurationStatus,
+            ),
+            SearchServiceDiagnostic,
+        >,
+    ) -> Task<Message> {
+        let (_, status) = match outcome {
+            Ok(snapshot) => snapshot,
+            Err(diagnostic) => {
+                self.fail_search_workspace(format!(
+                    "{unavailable_message}; could not verify search exclusions: {}",
+                    diagnostic.technical_detail
+                ));
+                return Task::none();
+            }
+        };
+        let rules = match SearchExcludeRules::for_directory_fallback(
+            self.home_dir.clone(),
+            status.effective_preferences.clone(),
+        ) {
+            Ok(rules) => rules,
+            Err(message) => {
+                self.fail_search_workspace(format!(
+                    "{unavailable_message}; effective search path rules are invalid: {message}"
+                ));
+                return Task::none();
+            }
+        };
+        self.update_search_path_configuration_status(status);
+
+        let Some(workspace) = self.search_workspace.as_ref() else {
+            return Task::none();
+        };
+        if workspace.run.generation != generation {
+            return Task::none();
+        }
+        let Some(query) = workspace.run.active_query.clone() else {
+            return Task::none();
+        };
+        let SearchScope::Directory(directory) = &query.scope else {
+            return Task::none();
+        };
+        if !query.recursive || query.cursor.is_some() || self.path_is_remote_mount(directory) {
+            return Task::none();
+        }
+
         let Some(workspace) = self.search_workspace.as_mut() else {
             return Task::none();
         };
         let cancellation = workspace.begin_directory_fallback();
-        directory_fallback_search_command(
-            generation,
-            query,
-            SearchExcludeRules::new(Vec::new()),
-            cancellation,
-        )
+        directory_fallback_search_command(generation, query, rules, cancellation)
     }
 
     fn current_search_directory(&self) -> PathBuf {

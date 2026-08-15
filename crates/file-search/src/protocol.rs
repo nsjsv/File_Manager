@@ -20,9 +20,11 @@ use crate::daemon::SearchDaemonCore;
 use crate::database::SearchDatabase;
 use crate::error::{SearchError, SearchResult};
 use crate::model::{
-    IndexStatus, IndexedQueryAvailability, SearchProviderFailure, SearchQuery, SearchResultBatch,
-    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus,
+    IndexStatus, IndexedQueryAvailability, SearchPathConfigurationStatus, SearchProviderFailure,
+    SearchQuery, SearchResultBatch, SearchServiceEvent, SearchServicePhase, SearchServiceRequest,
+    SearchServiceStatus,
 };
+use crate::{SearchPathPreferences, VersionedSearchPathPreferences};
 
 const MAX_REQUEST_FRAME_BYTES: u32 = 64 * 1024;
 const MAX_EVENT_FRAME_BYTES: u32 = 2_500_000;
@@ -254,6 +256,36 @@ pub trait SearchSocketService: Send + Sync + 'static {
     fn status(&self) -> SearchServiceStatus;
 
     fn open_query_reader(&self) -> Result<SearchDatabase, SearchProviderFailure>;
+
+    fn path_configuration(
+        &self,
+    ) -> Result<
+        (
+            VersionedSearchPathPreferences,
+            SearchPathConfigurationStatus,
+        ),
+        SearchProviderFailure,
+    > {
+        Err(SearchProviderFailure::Unavailable {
+            message: "search path configuration is unavailable".to_owned(),
+        })
+    }
+
+    fn configure_path_preferences(
+        &self,
+        _expected_revision: u64,
+        _preferences: SearchPathPreferences,
+    ) -> Result<
+        (
+            VersionedSearchPathPreferences,
+            SearchPathConfigurationStatus,
+        ),
+        SearchProviderFailure,
+    > {
+        Err(SearchProviderFailure::Unavailable {
+            message: "search path configuration is unavailable".to_owned(),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -343,6 +375,59 @@ pub async fn status_via_socket(socket_path: &Path) -> SearchResult<SearchService
     loop {
         if let SearchServiceEvent::Status(status) = read_service_event(&mut stream).await? {
             return Ok(status);
+        }
+    }
+}
+
+pub async fn path_configuration_via_socket(
+    socket_path: &Path,
+) -> SearchResult<(
+    VersionedSearchPathPreferences,
+    SearchPathConfigurationStatus,
+)> {
+    let mut stream = UnixStream::connect(socket_path).await?;
+    write_service_request(&mut stream, &SearchServiceRequest::GetPathConfiguration).await?;
+    loop {
+        match read_service_event(&mut stream).await? {
+            SearchServiceEvent::PathConfiguration {
+                configuration,
+                status,
+            } => return Ok((configuration, status)),
+            SearchServiceEvent::PathConfigurationFailed { failure, status: _ } => {
+                return Err(SearchError::InvalidConfiguration(failure.to_string()));
+            }
+            _ => {}
+        }
+    }
+}
+
+pub async fn configure_path_preferences_via_socket(
+    socket_path: &Path,
+    expected_revision: u64,
+    preferences: SearchPathPreferences,
+) -> SearchResult<(
+    VersionedSearchPathPreferences,
+    SearchPathConfigurationStatus,
+)> {
+    let mut stream = UnixStream::connect(socket_path).await?;
+    write_service_request(
+        &mut stream,
+        &SearchServiceRequest::ConfigurePathPreferences {
+            expected_revision,
+            preferences,
+        },
+    )
+    .await?;
+    loop {
+        match read_service_event(&mut stream).await? {
+            SearchServiceEvent::PathConfiguration {
+                configuration,
+                status,
+            } => return Ok((configuration, status)),
+            SearchServiceEvent::PathConfigurationFailed { failure, status: _ } => {
+                return Err(SearchError::InvalidConfiguration(failure.to_string()));
+            }
+            _ => {}
         }
     }
 }

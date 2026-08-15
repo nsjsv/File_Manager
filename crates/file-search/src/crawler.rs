@@ -100,7 +100,7 @@ pub struct SearchIndexer {
     writer: Arc<IndexWriter>,
     config: SearchIndexConfig,
     rules: SearchExcludeRules,
-    root_devices: Vec<(PathBuf, Option<u64>)>,
+    root_devices: Vec<(PathBuf, u64)>,
 }
 
 impl SearchIndexer {
@@ -108,16 +108,15 @@ impl SearchIndexer {
     /// single database writer. The crawler never opens its own writable
     /// connection, so it cannot race the writer for the lock.
     pub fn new(writer: Arc<IndexWriter>, config: SearchIndexConfig) -> Self {
-        let rules = SearchExcludeRules::new(config.excluded_paths.clone());
+        let rules = SearchExcludeRules::from_index_config(&config)
+            .expect("search index configuration must be validated before indexing");
         let root_devices = config
-            .roots
-            .iter()
-            .map(|root| {
-                let device = std::fs::symlink_metadata(root)
+            .available_roots()
+            .filter_map(|root| {
+                std::fs::symlink_metadata(root)
                     .ok()
                     .filter(|metadata| metadata.is_dir())
-                    .map(|metadata| metadata.dev());
-                (root.clone(), device)
+                    .map(|metadata| (root.clone(), metadata.dev()))
             })
             .collect();
         Self {
@@ -160,7 +159,7 @@ impl SearchIndexer {
         on_progress: impl FnMut(IndexMaintenanceProgress),
     ) -> SearchResult<RebuildStats> {
         self.recover_dirty_roots_with_progress_cancelled(
-            self.config.roots.clone(),
+            self.config.available_roots().cloned().collect(),
             cancellation,
             on_progress,
         )
@@ -241,8 +240,23 @@ impl SearchIndexer {
         Ok(stats)
     }
 
-    fn path_belongs_to_index_roots(&self, path: &Path) -> bool {
-        self.config.roots.iter().any(|root| path.starts_with(root))
+    fn collapse_paths_by_owning_root(&self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
+        self.config
+            .available_roots()
+            .flat_map(|root| {
+                collapse_affected_prefixes(
+                    paths
+                        .iter()
+                        .filter(|path| self.owning_root_for_path(path) == Some(root.as_path()))
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn owning_root_for_path(&self, path: &Path) -> Option<&Path> {
+        self.config.owning_root(path)
     }
 
     fn plan_changed_file_pipeline(
