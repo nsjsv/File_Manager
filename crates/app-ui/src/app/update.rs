@@ -28,7 +28,7 @@ impl FileBrowser {
         }
         match message {
             Message::StartupEnvironmentLoaded(startup_environment) => {
-                self.accept_startup_environment(startup_environment)
+                self.accept_startup_environment(*startup_environment)
             }
             Message::SidebarLocationsLoaded(sidebar_locations) => {
                 self.accept_sidebar_locations(sidebar_locations)
@@ -671,21 +671,14 @@ impl FileBrowser {
                 );
                 Task::none()
             }
-            Message::ThemeModeSelected(theme_mode) => {
-                if self.user_config.color_scheme == crate::matugen_theme::ColorSchemePreset::Matugen
-                    || self.user_config.theme_mode == theme_mode
-                {
-                    return Task::none();
-                }
-                self.user_config.theme_mode = theme_mode;
-                self.persist_user_preferences_command()
-            }
+            Message::ThemeModeSelected(theme_mode) => self.select_theme_mode(theme_mode),
+            Message::ColorSchemeFamilySelected(family) => self.select_color_scheme_family(family),
             Message::ColorSchemePresetSelected(color_scheme) => {
-                if self.user_config.color_scheme == color_scheme {
-                    return Task::none();
-                }
-                self.user_config.color_scheme = color_scheme;
-                self.persist_user_preferences_command()
+                self.select_color_scheme_preset(color_scheme)
+            }
+            Message::CustomColorSchemeImportPressed => self.import_custom_color_scheme(),
+            Message::CustomColorSchemeImportCompleted(outcome) => {
+                self.accept_custom_color_scheme_import(outcome)
             }
             Message::UserPreferencesSaved(result) => self.accept_user_preferences_saved(result),
             Message::AppConfigSaved(result) => self.accept_app_config_saved(result),

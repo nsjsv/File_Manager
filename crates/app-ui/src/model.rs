@@ -28,7 +28,7 @@ use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UiLanguage, UiLanguageSetting, UserConfig};
 use crate::document_preview::DocumentPreviewMessage;
-use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
+use crate::matugen_theme::{ColorSchemeFamily, ColorSchemePreset, ThemeMode};
 use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
@@ -244,7 +244,7 @@ pub(crate) struct LoadedOperationStore {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
-    StartupEnvironmentLoaded(StartupEnvironment),
+    StartupEnvironmentLoaded(Box<StartupEnvironment>),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
     SidebarDevicesLoaded(StorageDeviceSnapshot),
     SidebarDevicesRefreshRequested,
@@ -523,7 +523,10 @@ pub(crate) enum Message {
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
     ThemeModeSelected(ThemeMode),
+    ColorSchemeFamilySelected(ColorSchemeFamily),
     ColorSchemePresetSelected(ColorSchemePreset),
+    CustomColorSchemeImportPressed,
+    CustomColorSchemeImportCompleted(Result<Option<String>, String>),
     WindowChromeLayoutSelected(WindowChromeLayout),
     WindowControlVisibilityToggled(WindowControlKind),
     WindowControlSideSelected(WindowControlKind, WindowControlSide),

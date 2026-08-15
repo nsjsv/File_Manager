@@ -1,13 +1,16 @@
 use std::fmt;
 
 use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
-use iced::widget::{button, column, container, pick_list, row, text_input, Button, Column};
-use iced::{Alignment, Element, Length};
+use iced::widget::{
+    button, column, container, pick_list, row, svg, text, text_input, Button, Column, Space, Svg,
+};
+use iced::{Alignment, Element, Length, Theme};
 
 use crate::app::FileBrowser;
 use crate::appearance::context_menu_button_style;
 use crate::config::{StartupLocationPolicy, UiLanguageSetting};
-use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
+use crate::icons::{rotated_chevron_right_view, IconSymbol};
+use crate::matugen_theme::{ColorSchemeFamily, ColorSchemePreset, ContrastWarnings, ThemeMode};
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
 use crate::typography::{localized_text, readable_text};
 
@@ -17,6 +20,10 @@ use super::auxiliary_window_layout::{
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
 use super::network_settings::{max_preview_file_size_row, network_thumbnails_row};
+use super::option_controls::{
+    inactive_segmented_choice_row, segmented_choice_button_style, segmented_choice_row,
+    SegmentedChoice,
+};
 use super::rendering_settings::rendering_gpu_preference_row;
 use super::search_settings::search_settings_detail;
 use super::settings_group::{
@@ -25,26 +32,9 @@ use super::settings_group::{
 };
 use super::shortcut_settings::shortcut_settings_section;
 use super::window_control_settings::window_control_settings_row;
+use super::IconTone;
 
 const SETTINGS_DROPDOWN_WIDTH: f32 = 220.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ThemeModePickOption(ThemeMode);
-
-impl fmt::Display for ThemeModePickOption {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&crate::localization::translate_current(self.0.label()))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ColorSchemePickOption(ColorSchemePreset);
-
-impl fmt::Display for ColorSchemePickOption {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&crate::localization::translate_current(self.0.label()))
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerminalEmulatorPickOption(TerminalEmulator);
@@ -149,8 +139,9 @@ fn appearance_settings_detail(
             settings_group(
                 "Theme",
                 vec![
-                    labeled_setting_row("Mode", theme_mode_dropdown(browser)),
-                    labeled_setting_row("Color scheme", color_scheme_dropdown(browser)),
+                    labeled_setting_row("Mode", theme_mode_selector(browser)),
+                    color_scheme_setting_row(browser),
+                    custom_color_scheme_import_row(browser),
                 ],
             ),
             settings_group(
@@ -240,37 +231,262 @@ fn settings_detail_scroller<'a>(
     )
 }
 
-fn theme_mode_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
-    let selected = ThemeModePickOption(browser.user_config().theme_mode);
-    if browser.user_config().color_scheme == ColorSchemePreset::Matugen {
-        return button(readable_text(selected.to_string()).size(12))
-            .padding([5, 8])
-            .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
-            .style(context_menu_button_style())
-            .into();
-    }
+fn theme_mode_selector(browser: &FileBrowser) -> Element<'static, Message> {
+    let selected = browser.user_config().theme_mode;
+    let choices = ThemeMode::ALL
+        .into_iter()
+        .map(|mode| SegmentedChoice {
+            label: mode.label(),
+            selected: mode == selected,
+            message: Message::ThemeModeSelected(mode),
+        })
+        .collect();
 
-    pick_list(
-        ThemeMode::ALL.map(ThemeModePickOption),
-        Some(selected),
-        |selected| Message::ThemeModeSelected(selected.0),
+    if browser.user_config().color_scheme == ColorSchemePreset::Matugen {
+        inactive_segmented_choice_row(choices)
+    } else {
+        segmented_choice_row(choices)
+    }
+}
+
+fn color_scheme_setting_row(browser: &FileBrowser) -> Element<'_, Message> {
+    container(
+        column![
+            readable_text("Color scheme").size(12),
+            color_scheme_grid(browser),
+        ]
+        .spacing(8),
     )
-    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
-    .text_size(12)
-    .padding([5, 8])
+    .padding([8, 12])
+    .width(Length::Fill)
     .into()
 }
 
-fn color_scheme_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
-    pick_list(
-        ColorSchemePreset::ALL.map(ColorSchemePickOption),
-        Some(ColorSchemePickOption(browser.user_config().color_scheme)),
-        |selected| Message::ColorSchemePresetSelected(selected.0),
+fn custom_color_scheme_import_row(browser: &FileBrowser) -> Element<'_, Message> {
+    let import = button(
+        row![
+            super::themed_icon(IconSymbol::Download, IconTone::Normal, 14.0),
+            readable_text("Import JSON").size(12),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
     )
-    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
-    .text_size(12)
-    .padding([5, 8])
+    .on_press(Message::CustomColorSchemeImportPressed)
+    .padding([6, 10])
+    .style(context_menu_button_style());
+    let mut content = column![row![
+        readable_text("Custom color scheme")
+            .size(12)
+            .width(Length::Fill),
+        import,
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)]
+    .spacing(5);
+
+    if browser.user_config().color_scheme == ColorSchemePreset::Custom {
+        let warnings = browser
+            .user_config()
+            .custom_color_scheme
+            .contrast_warnings(browser.active_appearance_mode());
+        if !warnings.is_empty() {
+            content = content.push(custom_color_scheme_contrast_warning(warnings));
+        }
+    }
+    if let Some(error) = &browser.custom_color_scheme_import_error {
+        content = content.push(
+            row![
+                super::themed_icon(IconSymbol::TriangleAlert, IconTone::Warning, 13.0),
+                text(format!(
+                    "{}: {error}",
+                    crate::localization::translate_current("Import failed")
+                ))
+                .size(11),
+            ]
+            .spacing(5)
+            .align_y(Alignment::Center),
+        );
+    }
+
+    info_setting_row(content.into())
+}
+
+fn custom_color_scheme_contrast_warning(warnings: ContrastWarnings) -> Element<'static, Message> {
+    let label = match (warnings.background_text, warnings.surface_muted_text) {
+        (true, true) => "Custom colors have low text contrast",
+        (true, false) => "Background and text contrast is below 2.4:1",
+        (false, true) => "Surface and muted text contrast is below 2.4:1",
+        (false, false) => return Space::new().into(),
+    };
+    row![
+        super::themed_icon(IconSymbol::TriangleAlert, IconTone::Warning, 13.0),
+        localized_text(label).size(11),
+    ]
+    .spacing(5)
+    .align_y(Alignment::Center)
     .into()
+}
+
+fn color_scheme_grid(browser: &FileBrowser) -> Element<'_, Message> {
+    let mode = browser.active_appearance_mode();
+    let selected = browser.user_config().color_scheme.effective_for_mode(mode);
+    let expanded = browser.expanded_color_scheme_family;
+    let mut grid = Column::new().spacing(8).width(Length::Fill);
+
+    for families in ColorSchemeFamily::ALL.chunks(3) {
+        let mut family_row = row![].spacing(8).width(Length::Fill);
+        for family in families {
+            family_row =
+                family_row.push(color_scheme_family_card(browser, *family, mode, selected));
+        }
+        for _ in families.len()..3 {
+            family_row = family_row.push(
+                Space::new()
+                    .width(Length::FillPortion(1))
+                    .height(Length::Fixed(112.0)),
+            );
+        }
+        grid = grid.push(family_row);
+
+        if let Some(family) = expanded.filter(|family| families.contains(family)) {
+            grid = grid.push(color_scheme_style_row(browser, family, mode, selected));
+        }
+    }
+
+    grid.into()
+}
+
+fn color_scheme_family_card(
+    browser: &FileBrowser,
+    family: ColorSchemeFamily,
+    mode: crate::matugen_theme::AppearanceMode,
+    selected: ColorSchemePreset,
+) -> Button<'static, Message> {
+    let preview_preset = if selected.family() == family {
+        browser.user_config().color_scheme
+    } else {
+        family.default_preset()
+    };
+    let is_selected = selected.family() == family;
+    let has_styles = family.styles(mode).len() > 1;
+    let check: Element<'static, Message> = if is_selected {
+        super::themed_icon(IconSymbol::Check, IconTone::Selected, 13.0).into()
+    } else {
+        Space::new()
+            .width(Length::Fixed(13.0))
+            .height(Length::Fixed(13.0))
+            .into()
+    };
+    let disclosure: Element<'static, Message> = if has_styles {
+        rotated_chevron_right_view(
+            if browser.expanded_color_scheme_family == Some(family) {
+                90.0
+            } else {
+                0.0
+            },
+            13.0,
+        )
+        .style(super::icon_tone_style(IconTone::Normal))
+        .into()
+    } else {
+        Space::new()
+            .width(Length::Fixed(13.0))
+            .height(Length::Fixed(13.0))
+            .into()
+    };
+    let indicators = row![check, disclosure]
+        .spacing(5)
+        .height(Length::Fixed(14.0))
+        .align_y(Alignment::Center);
+
+    button(
+        column![
+            theme_preview(browser.theme_preview_colors(preview_preset), 48.0),
+            container(localized_text(family.label()).size(11))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            indicators,
+        ]
+        .spacing(6)
+        .align_x(Alignment::Center),
+    )
+    .on_press(Message::ColorSchemeFamilySelected(family))
+    .width(Length::FillPortion(1))
+    .height(Length::Fixed(112.0))
+    .padding(8)
+    .style(segmented_choice_button_style(is_selected))
+}
+
+fn color_scheme_style_row(
+    browser: &FileBrowser,
+    family: ColorSchemeFamily,
+    mode: crate::matugen_theme::AppearanceMode,
+    selected: ColorSchemePreset,
+) -> Element<'static, Message> {
+    let mut styles = row![].spacing(6).width(Length::Fill);
+    for preset in family.styles(mode) {
+        let is_selected = selected == *preset;
+        let check: Element<'static, Message> = if is_selected {
+            super::themed_icon(IconSymbol::Check, IconTone::Selected, 12.0).into()
+        } else {
+            Space::new()
+                .width(Length::Fixed(12.0))
+                .height(Length::Fixed(12.0))
+                .into()
+        };
+        styles = styles.push(
+            button(
+                column![
+                    theme_preview(browser.theme_preview_colors(*preset), 28.0),
+                    row![
+                        container(localized_text(preset.style_label(mode)).size(10))
+                            .width(Length::Fill)
+                            .center_x(Length::Fill),
+                        check,
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center)
+                    .width(Length::Fill),
+                ]
+                .spacing(4)
+                .align_x(Alignment::Center),
+            )
+            .on_press(Message::ColorSchemePresetSelected(*preset))
+            .width(Length::FillPortion(1))
+            .height(Length::Fixed(62.0))
+            .padding(5)
+            .style(segmented_choice_button_style(is_selected)),
+        );
+    }
+
+    styles.into()
+}
+
+fn theme_preview(colors: [iced::Color; 3], size: f32) -> Svg<'static, Theme> {
+    Svg::new(svg::Handle::from_memory(theme_preview_svg(colors)))
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+}
+
+fn theme_preview_svg(colors: [iced::Color; 3]) -> Vec<u8> {
+    let [background, primary, text] = colors;
+    let background = color_hex(background);
+    let primary = color_hex(primary);
+    let text = color_hex(text);
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\"><defs><clipPath id=\"circle\"><circle cx=\"24\" cy=\"24\" r=\"22\"/></clipPath></defs><g clip-path=\"url(#circle)\"><path fill=\"{background}\" d=\"M0 0h48L0 48z\"/><path fill=\"{primary}\" d=\"M48 0v48H0z\"/><path d=\"M0 48 48 0\" fill=\"none\" stroke=\"{text}\" stroke-width=\"3\"/></g><circle cx=\"24\" cy=\"24\" r=\"22\" fill=\"none\" stroke=\"{text}\" stroke-width=\"3\"/></svg>"
+    )
+    .into_bytes()
+}
+
+fn color_hex(color: iced::Color) -> String {
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(color.r),
+        channel(color.g),
+        channel(color.b)
+    )
 }
 
 fn language_setting_label(setting: UiLanguageSetting) -> &'static str {
@@ -380,4 +596,26 @@ fn startup_custom_directory_row(browser: &FileBrowser) -> Element<'_, Message> {
         content = content.push(localized_text(error).size(11).width(Length::Fill));
     }
     info_setting_row(content.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_preview_clips_both_fills_and_divider_to_the_circle() {
+        let svg = String::from_utf8(theme_preview_svg([
+            iced::Color::from_rgb8(1, 2, 3),
+            iced::Color::from_rgb8(4, 5, 6),
+            iced::Color::from_rgb8(7, 8, 9),
+        ]))
+        .expect("preview SVG is UTF-8");
+
+        assert!(svg.contains("fill=\"#010203\""));
+        assert!(svg.contains("fill=\"#040506\""));
+        assert!(svg.contains("stroke=\"#070809\""));
+        let divider = svg.find("M0 48 48 0").expect("diagonal divider");
+        let clipped_group_end = svg.find("</g>").expect("clipped preview group");
+        assert!(divider < clipped_group_end);
+    }
 }

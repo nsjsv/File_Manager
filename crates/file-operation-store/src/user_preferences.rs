@@ -43,6 +43,8 @@ pub struct StoredUserPreferences {
     pub theme_mode: String,
     #[serde(default = "default_color_scheme")]
     pub color_scheme: String,
+    #[serde(default)]
+    pub custom_color_scheme: Option<StoredCustomColorScheme>,
 }
 
 impl Default for StoredUserPreferences {
@@ -72,8 +74,37 @@ impl Default for StoredUserPreferences {
             search_history: Vec::new(),
             theme_mode: default_theme_mode(),
             color_scheme: default_color_scheme(),
+            custom_color_scheme: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredCustomColorScheme {
+    #[serde(default)]
+    pub light: Option<StoredCustomColorSet>,
+    #[serde(default)]
+    pub dark: Option<StoredCustomColorSet>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StoredCustomColorSet {
+    #[serde(default)]
+    pub background: String,
+    #[serde(default)]
+    pub surface: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub muted_text: String,
+    #[serde(default)]
+    pub primary: String,
+    #[serde(default)]
+    pub success: String,
+    #[serde(default)]
+    pub warning: String,
+    #[serde(default)]
+    pub danger: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

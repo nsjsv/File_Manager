@@ -196,6 +196,8 @@ fn maximized_observation_is_isolated_and_removed_when_window_closes() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let settings_window = window::Id::unique();
     browser.settings_window = Some(settings_window);
+    browser.expanded_color_scheme_family =
+        Some(crate::matugen_theme::ColorSchemeFamily::Everforest);
 
     drop(browser.accept_window_maximized_observation(settings_window, WindowFrameState::Maximized));
     assert!(browser.maximized_windows.contains(&settings_window));
@@ -203,6 +205,7 @@ fn maximized_observation_is_isolated_and_removed_when_window_closes() {
 
     drop(browser.close_settings_window());
     assert!(!browser.maximized_windows.contains(&settings_window));
+    assert_eq!(browser.expanded_color_scheme_family, None);
 
     drop(browser.accept_window_maximized_observation(settings_window, WindowFrameState::Maximized));
     assert!(!browser.maximized_windows.contains(&settings_window));

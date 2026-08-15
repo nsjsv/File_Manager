@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::{FileOperationVerification, SortDirection, SortField};
 
-use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
+use crate::matugen_theme::{
+    default_custom_color_scheme, ColorSchemePreset, CustomColorScheme, ThemeMode,
+};
 use crate::model::{BrowserViewMode, ListDirectorySizeDisplayMode, SearchHistory};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
@@ -251,6 +253,7 @@ pub(crate) struct UserConfig {
     pub(crate) search_history: SearchHistory,
     pub(crate) theme_mode: ThemeMode,
     pub(crate) color_scheme: ColorSchemePreset,
+    pub(crate) custom_color_scheme: CustomColorScheme,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) window_controls: crate::model::WindowControlsConfig,
@@ -298,6 +301,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         search_history: SearchHistory::default(),
         theme_mode: ThemeMode::Automatic,
         color_scheme: ColorSchemePreset::Default,
+        custom_color_scheme: default_custom_color_scheme(),
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         window_controls: crate::model::WindowControlsConfig::default(),
@@ -328,6 +332,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         search_history: SearchHistory::default(),
         theme_mode: ThemeMode::Automatic,
         color_scheme: ColorSchemePreset::Default,
+        custom_color_scheme: default_custom_color_scheme(),
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         window_controls: crate::model::WindowControlsConfig::default(),

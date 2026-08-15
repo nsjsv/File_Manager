@@ -19,7 +19,7 @@ use super::{
     sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
     SidebarFavoriteConfig, UiLanguageSetting, UserConfig,
 };
-use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
+use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
     ListColumnConfig, ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences,
@@ -52,6 +52,7 @@ pub(crate) struct UserPreferences {
     pub(crate) search_history: crate::model::SearchHistory,
     pub(crate) theme_mode: ThemeMode,
     pub(crate) color_scheme: ColorSchemePreset,
+    pub(crate) custom_color_scheme: CustomColorScheme,
 }
 
 impl UserPreferences {
@@ -79,6 +80,7 @@ impl UserPreferences {
             search_history: config.search_history.clone(),
             theme_mode: config.theme_mode,
             color_scheme: config.color_scheme,
+            custom_color_scheme: config.custom_color_scheme.clone(),
         }
     }
 
@@ -105,6 +107,7 @@ impl UserPreferences {
         config.search_history = self.search_history.clone();
         config.theme_mode = self.theme_mode;
         config.color_scheme = self.color_scheme;
+        config.custom_color_scheme = self.custom_color_scheme.clone();
     }
 
     pub(crate) fn to_stored(&self) -> StoredUserPreferences {
@@ -144,6 +147,7 @@ impl UserPreferences {
         stored.search_history = self.search_history.entries().to_vec();
         stored.theme_mode = self.theme_mode.config_value().to_owned();
         stored.color_scheme = self.color_scheme.config_value().to_owned();
+        stored.custom_color_scheme = Some(self.custom_color_scheme.to_stored());
         stored
     }
 
@@ -164,6 +168,10 @@ impl UserPreferences {
                 .unwrap_or(default_preferences.startup_location_policy);
         let list_view_preferences =
             list_view_preferences_from_stored(&stored, &default_preferences);
+        let custom_color_scheme = CustomColorScheme::from_stored(
+            stored.custom_color_scheme.as_ref(),
+            &default_preferences.custom_color_scheme,
+        );
         let window_controls = window_controls_from_stored(&stored, &default_preferences);
         Self {
             network_list_thumbnail_downloads_enabled: stored
@@ -199,6 +207,7 @@ impl UserPreferences {
             search_history: crate::model::SearchHistory::from_persisted(stored.search_history),
             theme_mode,
             color_scheme,
+            custom_color_scheme,
         }
     }
 }
@@ -430,17 +439,82 @@ fn shortcut_config_from_stored(shortcuts: &[StoredShortcutBinding]) -> ShortcutC
 mod tests {
     use super::*;
 
+    const CUSTOM_JSON: &str = r##"{
+        "version": 1,
+        "light": {
+            "background": "#ffffff",
+            "surface": "#f6f8fa",
+            "text": "#1f2328",
+            "muted_text": "#59636e",
+            "primary": "#0969da",
+            "success": "#1a7f37",
+            "warning": "#9a6700",
+            "danger": "#d1242f"
+        },
+        "dark": {
+            "background": "#0d1117",
+            "surface": "#151b23",
+            "text": "#f0f6fc",
+            "muted_text": "#9198a1",
+            "primary": "#4493f8",
+            "success": "#3fb950",
+            "warning": "#d29922",
+            "danger": "#f85149"
+        }
+    }"##;
+
     #[test]
-    fn theme_selection_roundtrips_through_stored_preferences() {
-        let mut config = default_user_config();
-        config.theme_mode = ThemeMode::Dark;
-        config.color_scheme = ColorSchemePreset::Claude;
+    fn custom_color_scheme_roundtrips_and_invalid_modes_fall_back_independently() {
+        let default = default_user_config();
+        let imported = CustomColorScheme::from_json(CUSTOM_JSON).expect("valid custom scheme");
+        let mut config = default.clone();
+        config.custom_color_scheme = imported.clone();
+        config.color_scheme = ColorSchemePreset::Custom;
 
         let stored = config.user_preferences().to_stored();
-        let restored = UserPreferences::from_stored(stored, &default_user_config());
+        let restored = UserPreferences::from_stored(stored, &default);
+        assert_eq!(restored.custom_color_scheme, imported);
+        assert_eq!(restored.color_scheme, ColorSchemePreset::Custom);
 
-        assert_eq!(restored.theme_mode, ThemeMode::Dark);
-        assert_eq!(restored.color_scheme, ColorSchemePreset::Claude);
+        let mut partially_invalid = config.user_preferences().to_stored();
+        let custom = partially_invalid
+            .custom_color_scheme
+            .as_mut()
+            .expect("stored custom scheme");
+        custom.dark.as_mut().expect("stored dark set").text = "bad".to_owned();
+        let restored = UserPreferences::from_stored(partially_invalid, &default);
+        assert_eq!(restored.custom_color_scheme.light, imported.light);
+        assert_eq!(
+            restored.custom_color_scheme.dark,
+            default.custom_color_scheme.dark
+        );
+    }
+
+    #[test]
+    fn missing_custom_snapshot_uses_default_without_affecting_old_selection() {
+        let mut stored = StoredUserPreferences::default();
+        stored.color_scheme = "custom".to_owned();
+        let restored = UserPreferences::from_stored(stored, &default_user_config());
+        assert_eq!(restored.color_scheme, ColorSchemePreset::Custom);
+        assert_eq!(
+            restored.custom_color_scheme,
+            default_user_config().custom_color_scheme
+        );
+    }
+
+    #[test]
+    fn theme_selection_roundtrips_through_stored_preferences() {
+        for color_scheme in ColorSchemePreset::ALL {
+            let mut config = default_user_config();
+            config.theme_mode = ThemeMode::Dark;
+            config.color_scheme = color_scheme;
+
+            let stored = config.user_preferences().to_stored();
+            let restored = UserPreferences::from_stored(stored, &default_user_config());
+
+            assert_eq!(restored.theme_mode, ThemeMode::Dark);
+            assert_eq!(restored.color_scheme, color_scheme);
+        }
     }
 
     #[test]

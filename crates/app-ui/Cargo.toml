@@ -24,6 +24,7 @@ regex = "1.12.3"
 resvg.workspace = true
 rodio = "0.22.2"
 rustix.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json.workspace = true
 thumbnails = { path = "../thumbnails" }
 time.workspace = true

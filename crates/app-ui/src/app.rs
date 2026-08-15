@@ -268,6 +268,8 @@ pub(crate) struct FileBrowser {
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) selected_settings_category: SettingsCategory,
+    pub(crate) expanded_color_scheme_family: Option<crate::matugen_theme::ColorSchemeFamily>,
+    pub(crate) custom_color_scheme_import_error: Option<String>,
     pub(crate) search_service: SearchServiceState,
     pub(crate) search_workspace: Option<SearchWorkspaceState>,
     pub(crate) search_history_interaction: crate::model::SearchHistoryInteraction,
@@ -345,6 +347,19 @@ impl FileBrowser {
         self.user_config
             .language_setting
             .resolve(self.system_language)
+    }
+
+    pub(crate) fn active_appearance_mode(&self) -> crate::matugen_theme::AppearanceMode {
+        self.application_theme
+            .effective_mode(self.user_config.theme_mode)
+    }
+
+    pub(crate) fn theme_preview_colors(
+        &self,
+        color_scheme: crate::matugen_theme::ColorSchemePreset,
+    ) -> [iced::Color; 3] {
+        self.application_theme
+            .preview_colors(self.user_config.theme_mode, color_scheme)
     }
 
     pub(crate) fn advance_window_animation_frame(&mut self) -> Task<Message> {
@@ -583,6 +598,8 @@ impl FileBrowser {
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             selected_settings_category: SettingsCategory::General,
+            expanded_color_scheme_family: None,
+            custom_color_scheme_import_error: None,
             search_service,
             search_workspace: None,
             search_history_interaction: crate::model::SearchHistoryInteraction::default(),
@@ -641,6 +658,9 @@ impl FileBrowser {
             application_theme: ApplicationTheme::new(fallback_theme(AppearanceMode::Light)),
             application_shutdown_phase: ApplicationShutdownPhase::Running,
         };
+        browser
+            .application_theme
+            .replace_custom_color_scheme(user_config.custom_color_scheme);
         browser.refresh_current_language();
         browser.refresh_column_width_reference_content_widths();
         startup_trace::mark_once("file_browser_new_ready");

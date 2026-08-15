@@ -30,6 +30,31 @@ pub(super) fn segmented_choice_row(choices: Vec<SegmentedChoice>) -> Element<'st
         .into()
 }
 
+pub(super) fn inactive_segmented_choice_row(
+    choices: Vec<SegmentedChoice>,
+) -> Element<'static, Message> {
+    let mut options = row![].spacing(0).align_y(Alignment::Center);
+    for choice in choices {
+        let label = container(readable_text(choice.label).size(12))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill);
+        options = options.push(
+            button(label)
+                .width(Length::FillPortion(1))
+                .height(Length::Fixed(SEGMENTED_CHOICE_HEIGHT))
+                .padding([4, 8])
+                .style(segmented_choice_button_style(choice.selected)),
+        );
+    }
+
+    container(options)
+        .padding(2)
+        .width(Length::Fill)
+        .style(segmented_choice_group_style)
+        .into()
+}
 pub(super) fn action_choice_row(
     title: &'static str,
     description: &'static str,

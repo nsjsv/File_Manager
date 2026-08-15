@@ -30,8 +30,9 @@ pub use recoverable_transfer::{
 };
 mod user_preferences;
 pub use user_preferences::{
-    StoredListViewColumn, StoredNetworkConnection, StoredShortcutBinding, StoredSidebarFavorite,
-    StoredUserPreferences, StoredWindowControlPlacement,
+    StoredCustomColorScheme, StoredCustomColorSet, StoredListViewColumn, StoredNetworkConnection,
+    StoredShortcutBinding, StoredSidebarFavorite, StoredUserPreferences,
+    StoredWindowControlPlacement,
 };
 
 #[cfg(test)]

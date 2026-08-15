@@ -45,6 +45,8 @@ mod bounded_child_output;
 mod browser_session;
 mod config_persistence;
 pub(crate) use config_persistence::{save_app_config_command, save_user_preferences_command};
+mod custom_color_scheme;
+pub(crate) use custom_color_scheme::custom_color_scheme_import_command;
 mod directory_loading;
 pub(crate) use directory_loading::{load_directory_command, load_expanded_directory_command};
 mod directory_metadata;
@@ -104,10 +106,9 @@ const PATH_SUGGESTION_LIMIT: usize = 6;
 const THUMBNAIL_REFRESH_DELAY: Duration = Duration::from_millis(400);
 
 pub(crate) fn startup_environment_command() -> Task<Message> {
-    Task::perform(
-        load_startup_environment(),
-        Message::StartupEnvironmentLoaded,
-    )
+    Task::perform(load_startup_environment(), |startup_environment| {
+        Message::StartupEnvironmentLoaded(Box::new(startup_environment))
+    })
 }
 
 pub(crate) fn sidebar_locations_command(

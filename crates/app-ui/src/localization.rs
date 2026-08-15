@@ -313,9 +313,28 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Theme" => Some("主题"),
         "Mode" => Some("模式"),
         "Color scheme" => Some("配色预设"),
+        "Custom color scheme" => Some("自定义配色"),
+        "Import custom color scheme" => Some("导入自定义配色"),
+        "Import JSON" => Some("导入 JSON"),
+        "Import" => Some("导入"),
+        "Import failed" => Some("导入失败"),
+        "Custom colors have low text contrast" => Some("自定义颜色的文字对比度较低"),
+        "Background and text contrast is below 2.4:1" => {
+            Some("背景与文字的对比度低于 2.4:1")
+        }
+        "Surface and muted text contrast is below 2.4:1" => {
+            Some("表面与弱化文字的对比度低于 2.4:1")
+        }
         "Light" => Some("浅色"),
         "Dark" => Some("深色"),
         "Default" => Some("默认"),
+        "Hard" => Some("硬"),
+        "Medium" => Some("中等"),
+        "Soft" => Some("柔和"),
+        "High contrast" => Some("高对比度"),
+        "Colorblind" => Some("色觉辅助"),
+        "Tritanopia" => Some("蓝黄色觉辅助"),
+        "Dimmed" => Some("柔暗"),
         "Files" => Some("文件"),
         "Startup location" => Some("启动位置"),
         "Logs" => Some("日志"),

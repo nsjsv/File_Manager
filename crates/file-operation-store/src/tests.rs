@@ -556,7 +556,29 @@ fn user_preferences_roundtrip_replace() {
         ],
         search_history: vec!["report".to_owned(), "images".to_owned()],
         theme_mode: "dark".to_owned(),
-        color_scheme: "claude".to_owned(),
+        color_scheme: "custom".to_owned(),
+        custom_color_scheme: Some(StoredCustomColorScheme {
+            light: Some(StoredCustomColorSet {
+                background: "#ffffff".to_owned(),
+                surface: "#f6f8fa".to_owned(),
+                text: "#1f2328".to_owned(),
+                muted_text: "#59636e".to_owned(),
+                primary: "#0969da".to_owned(),
+                success: "#1a7f37".to_owned(),
+                warning: "#9a6700".to_owned(),
+                danger: "#d1242f".to_owned(),
+            }),
+            dark: Some(StoredCustomColorSet {
+                background: "#0d1117".to_owned(),
+                surface: "#151b23".to_owned(),
+                text: "#f0f6fc".to_owned(),
+                muted_text: "#9198a1".to_owned(),
+                primary: "#4493f8".to_owned(),
+                success: "#3fb950".to_owned(),
+                warning: "#d29922".to_owned(),
+                danger: "#f85149".to_owned(),
+            }),
+        }),
     };
 
     store.replace_user_preferences(&first).unwrap();
