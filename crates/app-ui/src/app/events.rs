@@ -1,6 +1,7 @@
 use iced::keyboard;
 use iced::{event, mouse, window, Event, Theme};
 
+use crate::matugen_theme::{fallback_theme, AppearanceMode};
 use crate::model::{Message, X11DndMessage};
 
 pub(super) fn global_event_message(
@@ -98,10 +99,13 @@ fn pointer_pressed_message(
 }
 
 pub(super) fn system_theme() -> Theme {
-    match dark_light::detect() {
-        Ok(dark_light::Mode::Dark) => Theme::Dark,
-        Ok(dark_light::Mode::Light) | Ok(dark_light::Mode::Unspecified) | Err(_) => Theme::Light,
-    }
+    let mode = match dark_light::detect() {
+        Ok(dark_light::Mode::Dark) => AppearanceMode::Dark,
+        Ok(dark_light::Mode::Light) | Ok(dark_light::Mode::Unspecified) | Err(_) => {
+            AppearanceMode::Light
+        }
+    };
+    fallback_theme(mode)
 }
 
 #[cfg(test)]

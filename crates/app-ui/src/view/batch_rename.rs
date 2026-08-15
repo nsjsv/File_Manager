@@ -7,10 +7,11 @@ use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, base_text_color,
-    context_menu_style, dragged_row_style, is_dark_theme, muted_text_color,
-    path_suggestion_item_style, subtle_border_color,
+    context_menu_style, dragged_row_style, muted_text_color, path_suggestion_item_style,
+    subtle_border_color,
 };
 use crate::formatting::format_middle_ellipsized_text;
+use crate::matugen_theme::ui_colors;
 use crate::model::{
     BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode, BatchRenameMessage,
     BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass, BatchRenameRemoveMode,
@@ -103,21 +104,10 @@ fn rule_panel_tab_style(
     selected: bool,
 ) -> impl Fn(&Theme, button::Status) -> button::Style + Clone {
     move |theme, status| {
-        let accent = if is_dark_theme(theme) {
-            Color::from_rgb8(125, 179, 255)
-        } else {
-            Color::from_rgb8(74, 137, 220)
-        };
-        let hover = if is_dark_theme(theme) {
-            Color::from_rgb8(32, 43, 59)
-        } else {
-            Color::from_rgb8(239, 245, 255)
-        };
-        let surface = if is_dark_theme(theme) {
-            Color::from_rgb8(31, 40, 54)
-        } else {
-            Color::from_rgb8(244, 247, 252)
-        };
+        let colors = ui_colors(theme);
+        let accent = colors.primary;
+        let hover = colors.surface_container_high;
+        let surface = colors.surface_container;
 
         button::Style {
             background: Some(Background::Color(if selected {

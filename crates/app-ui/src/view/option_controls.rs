@@ -1,7 +1,10 @@
 use iced::widget::{button, container, row, Button, Column};
 use iced::{Alignment, Background, Border, Color, Element, Length, Shadow, Theme, Vector};
 
-use crate::appearance::{base_text_color, is_dark_theme, muted_text_color, subtle_border_color};
+use crate::appearance::{
+    base_text_color, elevation_shadow_color, muted_text_color, subtle_border_color,
+};
+use crate::matugen_theme::ui_colors;
 use crate::model::Message;
 use crate::typography::readable_text;
 
@@ -100,13 +103,10 @@ fn segmented_choice_button(choice: SegmentedChoice) -> Button<'static, Message> 
 }
 
 fn segmented_choice_group_style(theme: &Theme) -> container::Style {
+    let colors = ui_colors(theme);
     container::Style {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(18, 24, 34)
-        } else {
-            Color::from_rgb8(239, 243, 249)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_low)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -187,19 +187,26 @@ fn primary_action_button_style() -> fn(&Theme, button::Status) -> button::Style 
 }
 
 fn primary_action_button_appearance(theme: &Theme, status: button::Status) -> button::Style {
+    let colors = ui_colors(theme);
     let background = match status {
-        button::Status::Hovered => accent_hover_color(theme),
-        button::Status::Pressed => accent_pressed_color(theme),
-        button::Status::Disabled => disabled_action_background(theme),
-        button::Status::Active => accent_color(theme),
+        button::Status::Hovered => Color {
+            a: 0.9,
+            ..colors.primary
+        },
+        button::Status::Pressed => Color {
+            a: 0.8,
+            ..colors.primary
+        },
+        button::Status::Disabled => colors.surface_container_highest,
+        button::Status::Active => colors.primary,
     };
 
     button::Style {
         background: Some(Background::Color(background)),
         text_color: if matches!(status, button::Status::Disabled) {
-            muted_text_color(theme)
+            colors.on_surface_variant
         } else {
-            Color::WHITE
+            colors.on_primary
         },
         border: Border {
             color: Color::TRANSPARENT,
@@ -215,23 +222,26 @@ fn destructive_confirmation_button_appearance(
     theme: &Theme,
     status: button::Status,
 ) -> button::Style {
-    let background = match (is_dark_theme(theme), status) {
-        (true, button::Status::Hovered) => Color::from_rgb8(153, 45, 45),
-        (true, button::Status::Pressed) => Color::from_rgb8(105, 28, 28),
-        (true, button::Status::Disabled) => Color::from_rgb8(75, 48, 52),
-        (true, button::Status::Active) => Color::from_rgb8(127, 35, 40),
-        (false, button::Status::Hovered) => Color::from_rgb8(185, 28, 28),
-        (false, button::Status::Pressed) => Color::from_rgb8(153, 27, 27),
-        (false, button::Status::Disabled) => Color::from_rgb8(229, 183, 183),
-        (false, button::Status::Active) => Color::from_rgb8(169, 34, 40),
+    let colors = ui_colors(theme);
+    let background = match status {
+        button::Status::Hovered => Color {
+            a: 0.9,
+            ..colors.error
+        },
+        button::Status::Pressed => Color {
+            a: 0.8,
+            ..colors.error
+        },
+        button::Status::Disabled => colors.error_container,
+        button::Status::Active => colors.error,
     };
 
     button::Style {
         background: Some(Background::Color(background)),
         text_color: if matches!(status, button::Status::Disabled) {
-            muted_text_color(theme)
+            colors.on_error_container
         } else {
-            Color::WHITE
+            colors.on_error
         },
         border: Border {
             color: Color::TRANSPARENT,
@@ -281,92 +291,38 @@ fn segmented_choice_background(theme: &Theme, status: button::Status, selected: 
     }
 }
 
-fn accent_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(82, 126, 190)
-    } else {
-        Color::from_rgb8(74, 137, 220)
-    }
-}
-
-fn accent_hover_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(96, 144, 210)
-    } else {
-        Color::from_rgb8(59, 122, 203)
-    }
-}
-
-fn accent_pressed_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(70, 109, 169)
-    } else {
-        Color::from_rgb8(48, 104, 177)
-    }
-}
-
 fn accent_border_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(106, 153, 221)
-    } else {
-        Color::from_rgb8(134, 174, 232)
-    }
+    ui_colors(theme).primary
 }
 
 pub(super) fn selected_background_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(49, 70, 104)
-    } else {
-        Color::from_rgb8(224, 235, 255)
-    }
+    ui_colors(theme).primary_container
 }
 
 pub(super) fn selected_hover_background_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(56, 80, 118)
-    } else {
-        Color::from_rgb8(213, 229, 255)
+    Color {
+        a: 0.9,
+        ..ui_colors(theme).primary_container
     }
 }
 
 pub(super) fn selected_pressed_background_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(45, 64, 96)
-    } else {
-        Color::from_rgb8(202, 222, 255)
+    Color {
+        a: 0.8,
+        ..ui_colors(theme).primary_container
     }
 }
 
 pub(super) fn selected_text_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(236, 244, 255)
-    } else {
-        Color::from_rgb8(24, 42, 72)
-    }
+    ui_colors(theme).on_primary_container
 }
 
 pub(super) fn panel_background_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(31, 40, 54)
-    } else {
-        Color::from_rgb8(244, 247, 252)
-    }
+    ui_colors(theme).surface_container
 }
 
 pub(super) fn hover_background_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(35, 47, 65)
-    } else {
-        Color::from_rgb8(239, 245, 255)
-    }
-}
-
-fn disabled_action_background(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(54, 65, 82)
-    } else {
-        Color::from_rgb8(210, 218, 230)
-    }
+    ui_colors(theme).surface_container_high
 }
 
 fn action_button_shadow(theme: &Theme, status: button::Status) -> Shadow {
@@ -374,11 +330,7 @@ fn action_button_shadow(theme: &Theme, status: button::Status) -> Shadow {
         Shadow::default()
     } else {
         Shadow {
-            color: if is_dark_theme(theme) {
-                Color::from_rgba8(0, 0, 0, 0.18)
-            } else {
-                Color::from_rgba8(36, 48, 70, 0.12)
-            },
+            color: elevation_shadow_color(theme, 0.14),
             offset: Vector::new(0.0, 1.0),
             blur_radius: 3.0,
         }

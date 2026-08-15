@@ -33,6 +33,61 @@ fn desktop_and_brand_activation_files_expose_local_file_manager_contract() {
     let release_workflow = fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("read release workflow");
     assert!(release_workflow.contains("usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"));
+    assert!(release_workflow.contains("usr/share/${APP_NAME}/matugen/file-manager-colors.toml"));
+    assert!(release_workflow.contains("usr/share/doc/${APP_NAME}/matugen.md"));
+}
+
+#[test]
+fn packaged_matugen_template_exports_every_runtime_color_role() {
+    let root = repository_root();
+    let template = fs::read_to_string(root.join("packaging/matugen/file-manager-colors.toml"))
+        .expect("read Matugen template");
+    assert!(template.contains("mode = \"{{ mode }}\""));
+
+    for role in [
+        "background",
+        "on_background",
+        "surface",
+        "surface_dim",
+        "surface_bright",
+        "surface_container_lowest",
+        "surface_container_low",
+        "surface_container",
+        "surface_container_high",
+        "surface_container_highest",
+        "on_surface",
+        "on_surface_variant",
+        "outline",
+        "outline_variant",
+        "primary",
+        "on_primary",
+        "primary_container",
+        "on_primary_container",
+        "secondary",
+        "on_secondary",
+        "secondary_container",
+        "on_secondary_container",
+        "tertiary",
+        "on_tertiary",
+        "tertiary_container",
+        "on_tertiary_container",
+        "error",
+        "on_error",
+        "error_container",
+        "on_error_container",
+    ] {
+        assert!(
+            template.contains(&format!("{role} = \"{{{{ colors.{role}.default.hex }}}}\"")),
+            "missing Matugen role {role}"
+        );
+    }
+
+    let instructions = fs::read_to_string(root.join("packaging/matugen/README.md"))
+        .expect("read Matugen instructions");
+    assert!(instructions.contains("/usr/share/file-manager/matugen/file-manager-colors.toml"));
+    assert!(instructions.contains("~/.config/file-manager/matugen.toml"));
+    assert!(instructions.contains("-m dark"));
+    assert!(instructions.contains("-m light"));
 }
 
 #[test]

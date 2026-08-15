@@ -91,7 +91,7 @@ use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::runtime::{
-    desktop_activation_subscription, directory_watch_subscription,
+    desktop_activation_subscription, directory_watch_subscription, matugen_theme_subscription,
     sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
     x11_file_dnd_subscription,
 };
@@ -113,6 +113,7 @@ use crate::config;
 use crate::config::UiLanguage;
 use crate::document_preview::PendingDocumentPreview;
 use crate::localization;
+use crate::matugen_theme::{fallback_theme, AppearanceMode, ApplicationTheme};
 use crate::model::search::SearchWorkspaceState;
 use crate::model::{
     empty_directory_entry_snapshot, AddressBarTransition, AddressEditingSession,
@@ -318,7 +319,7 @@ pub(crate) struct FileBrowser {
     next_pane_id: u64,
     next_icon_grid_expansion_session_id: u64,
     next_list_expansion_follow_session_id: u64,
-    theme: Theme,
+    application_theme: ApplicationTheme,
     application_shutdown_phase: ApplicationShutdownPhase,
 }
 
@@ -637,7 +638,7 @@ impl FileBrowser {
             next_pane_id: 1,
             next_icon_grid_expansion_session_id: 1,
             next_list_expansion_follow_session_id: 1,
-            theme: Theme::Light,
+            application_theme: ApplicationTheme::new(fallback_theme(AppearanceMode::Light)),
             application_shutdown_phase: ApplicationShutdownPhase::Running,
         };
         browser.refresh_current_language();
@@ -675,6 +676,9 @@ impl FileBrowser {
 
         let mut subscriptions = vec![event::listen_with(global_event_message)];
         subscriptions.push(sidebar_device_refresh_subscription());
+        if let Some(path) = config::matugen_theme_file_path() {
+            subscriptions.push(matugen_theme_subscription(path));
+        }
         if let Some(runtime) = &self.file_manager_activation {
             subscriptions.push(desktop_activation_subscription(Arc::clone(runtime)));
         }
@@ -797,7 +801,7 @@ impl FileBrowser {
     }
 
     fn theme(&self, _window: window::Id) -> Theme {
-        self.theme.clone()
+        self.application_theme.active()
     }
 
     fn view_with_window_chrome<'a>(

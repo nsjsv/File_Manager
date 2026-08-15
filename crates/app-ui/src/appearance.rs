@@ -25,16 +25,14 @@ pub(crate) use list_header::{
 };
 
 use crate::file_entry_presentation::SelectionRunPosition;
+use crate::matugen_theme::{ui_colors, AppearanceMode};
 use crate::model::ScrollbarVisibility;
 
 pub(crate) fn app_content_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(18, 24, 34)
-        } else {
-            Color::from_rgb8(250, 252, 255)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.background)),
+        text_color: Some(colors.on_background),
         ..container::Appearance::default()
     }
 }
@@ -50,17 +48,10 @@ pub(crate) fn selected_row_style_for_run(
 }
 
 fn selected_row_appearance(theme: &Theme, position: SelectionRunPosition) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(54, 78, 116)
-        } else {
-            Color::from_rgb8(218, 232, 255)
-        })),
-        text_color: Some(if is_dark_theme(theme) {
-            Color::from_rgb8(236, 244, 255)
-        } else {
-            Color::from_rgb8(24, 42, 72)
-        }),
+        background: Some(Background::Color(colors.primary_container)),
+        text_color: Some(colors.on_primary_container),
         border: Border {
             radius: selected_run_radius(position),
             ..Border::default()
@@ -79,19 +70,12 @@ fn selected_run_radius(position: SelectionRunPosition) -> iced::border::Radius {
 }
 
 pub(crate) fn open_child_row_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(32, 43, 59)
-        } else {
-            Color::from_rgb8(235, 240, 248)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_high)),
+        text_color: Some(colors.on_surface),
         border: Border {
-            color: if is_dark_theme(theme) {
-                Color::from_rgb8(72, 94, 127)
-            } else {
-                Color::from_rgb8(201, 212, 229)
-            },
+            color: colors.outline,
             width: 1.0,
             radius: 8.0.into(),
         },
@@ -100,17 +84,10 @@ pub(crate) fn open_child_row_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn dragged_row_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(39, 44, 52)
-        } else {
-            Color::from_rgb8(229, 233, 238)
-        })),
-        text_color: Some(if is_dark_theme(theme) {
-            Color::from_rgb8(150, 159, 172)
-        } else {
-            Color::from_rgb8(119, 127, 139)
-        }),
+        background: Some(Background::Color(colors.surface_dim)),
+        text_color: Some(colors.on_surface_variant),
         border: Border {
             radius: 8.0.into(),
             ..Border::default()
@@ -120,11 +97,7 @@ pub(crate) fn dragged_row_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn selection_marquee_style(theme: &Theme) -> container::Appearance {
-    let accent = if is_dark_theme(theme) {
-        Color::from_rgb8(125, 179, 255)
-    } else {
-        Color::from_rgb8(74, 137, 220)
-    };
+    let accent = ui_colors(theme).primary;
     container::Appearance {
         background: Some(Background::Color(Color { a: 0.16, ..accent })),
         border: Border {
@@ -137,11 +110,7 @@ pub(crate) fn selection_marquee_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn tab_split_overlay_style(theme: &Theme) -> container::Appearance {
-    let accent = if is_dark_theme(theme) {
-        Color::from_rgb8(125, 179, 255)
-    } else {
-        Color::from_rgb8(74, 137, 220)
-    };
+    let accent = ui_colors(theme).primary;
     container::Appearance {
         background: Some(Background::Color(Color { a: 0.18, ..accent })),
         border: Border {
@@ -154,13 +123,10 @@ pub(crate) fn tab_split_overlay_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn hovered_row_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(35, 47, 65)
-        } else {
-            Color::from_rgb8(239, 245, 255)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_high)),
+        text_color: Some(colors.on_surface),
         border: Border {
             radius: 8.0.into(),
             ..Border::default()
@@ -222,13 +188,10 @@ fn auto_hide_scrollbar_properties(
 }
 
 pub(crate) fn path_suggestions_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(25, 32, 44)
-        } else {
-            Color::from_rgb8(250, 251, 253)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_low)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -239,13 +202,10 @@ pub(crate) fn path_suggestions_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn path_suggestion_item_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(31, 40, 54)
-        } else {
-            Color::from_rgb8(244, 247, 252)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container)),
+        text_color: Some(colors.on_surface),
         border: Border {
             radius: 6.0.into(),
             ..Border::default()
@@ -255,17 +215,10 @@ pub(crate) fn path_suggestion_item_style(theme: &Theme) -> container::Appearance
 }
 
 pub(crate) fn selected_path_suggestion_item_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(52, 75, 112)
-        } else {
-            Color::from_rgb8(219, 233, 255)
-        })),
-        text_color: Some(if is_dark_theme(theme) {
-            Color::from_rgb8(236, 244, 255)
-        } else {
-            Color::from_rgb8(24, 42, 72)
-        }),
+        background: Some(Background::Color(colors.primary_container)),
+        text_color: Some(colors.on_primary_container),
         border: Border {
             radius: 6.0.into(),
             ..Border::default()
@@ -275,13 +228,10 @@ pub(crate) fn selected_path_suggestion_item_style(theme: &Theme) -> container::A
 }
 
 pub(crate) fn preview_panel_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(24, 31, 43)
-        } else {
-            Color::from_rgb8(245, 247, 250)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_low)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -292,13 +242,10 @@ pub(crate) fn preview_panel_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn preview_window_panel_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(24, 31, 43)
-        } else {
-            Color::from_rgb8(245, 247, 250)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_low)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -309,19 +256,12 @@ pub(crate) fn preview_window_panel_style(theme: &Theme) -> container::Appearance
 }
 
 pub(crate) fn error_notification_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(55, 31, 34)
-        } else {
-            Color::from_rgb8(255, 247, 247)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.error_container)),
+        text_color: Some(colors.on_error_container),
         border: Border {
-            color: if is_dark_theme(theme) {
-                Color::from_rgb8(127, 55, 63)
-            } else {
-                Color::from_rgb8(252, 165, 165)
-            },
+            color: colors.error,
             width: 1.0,
             radius: 12.0.into(),
         },
@@ -355,17 +295,12 @@ pub(crate) fn list_row_style(
     row_index: usize,
 ) -> impl Fn(&Theme) -> container::Appearance + Clone {
     move |theme| {
+        let colors = ui_colors(theme);
         let is_alternate_row = row_index % 2 == 1;
-        let background = if is_dark_theme(theme) {
-            if is_alternate_row {
-                Color::from_rgb8(25, 33, 45)
-            } else {
-                Color::from_rgb8(18, 24, 34)
-            }
-        } else if is_alternate_row {
-            Color::from_rgb8(242, 246, 252)
+        let background = if is_alternate_row {
+            colors.surface_container_low
         } else {
-            Color::from_rgb8(250, 252, 255)
+            colors.background
         };
         container::Appearance {
             background: Some(Background::Color(background)),
@@ -387,28 +322,23 @@ pub(crate) fn column_resize_divider_style(theme: &Theme) -> container::Appearanc
 }
 
 pub(crate) fn sidebar_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(27, 34, 46, 0.92)
-        } else {
-            Color::from_rgba8(255, 255, 255, 0.90)
+        background: Some(Background::Color(Color {
+            a: 0.92,
+            ..colors.surface
         })),
-        text_color: Some(base_text_color(theme)),
+        text_color: Some(colors.on_surface),
         border: Border {
-            color: if is_dark_theme(theme) {
-                Color::from_rgba8(98, 112, 134, 0.38)
-            } else {
-                Color::from_rgba8(255, 255, 255, 0.72)
+            color: Color {
+                a: 0.55,
+                ..colors.outline_variant
             },
             width: 1.0,
             radius: 18.0.into(),
         },
         shadow: Shadow {
-            color: if is_dark_theme(theme) {
-                Color::from_rgba8(0, 0, 0, 0.34)
-            } else {
-                Color::from_rgba8(36, 48, 70, 0.16)
-            },
+            color: elevation_shadow_color(theme, 0.22),
             offset: Vector::new(0.0, 10.0),
             blur_radius: 22.0,
         },
@@ -417,13 +347,10 @@ pub(crate) fn sidebar_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn selected_sidebar_item_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(49, 70, 104)
-        } else {
-            Color::from_rgb8(224, 235, 255)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.primary_container)),
+        text_color: Some(colors.on_primary_container),
         border: Border {
             radius: 8.0.into(),
             ..Border::default()
@@ -433,13 +360,13 @@ pub(crate) fn selected_sidebar_item_style(theme: &Theme) -> container::Appearanc
 }
 
 pub(crate) fn tab_strip_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(27, 35, 48, 0.78)
-        } else {
-            Color::from_rgba8(239, 243, 249, 0.84)
+        background: Some(Background::Color(Color {
+            a: 0.84,
+            ..colors.surface_container
         })),
-        text_color: Some(base_text_color(theme)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -450,13 +377,13 @@ pub(crate) fn tab_strip_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn tab_item_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgba8(40, 49, 63, 0.72)
-        } else {
-            Color::from_rgba8(250, 252, 255, 0.74)
+        background: Some(Background::Color(Color {
+            a: 0.78,
+            ..colors.surface_container_high
         })),
-        text_color: Some(base_text_color(theme)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -467,19 +394,12 @@ pub(crate) fn tab_item_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn selected_tab_item_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(54, 78, 116)
-        } else {
-            Color::from_rgb8(255, 255, 255)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.primary_container)),
+        text_color: Some(colors.on_primary_container),
         border: Border {
-            color: if is_dark_theme(theme) {
-                Color::from_rgb8(90, 128, 184)
-            } else {
-                Color::from_rgb8(201, 213, 232)
-            },
+            color: colors.primary,
             width: 1.0,
             radius: 12.0.into(),
         },
@@ -488,13 +408,10 @@ pub(crate) fn selected_tab_item_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn hovered_sidebar_item_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(32, 41, 55)
-        } else {
-            Color::from_rgb8(245, 248, 253)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_high)),
+        text_color: Some(colors.on_surface),
         border: Border {
             radius: 8.0.into(),
             ..Border::default()
@@ -504,11 +421,7 @@ pub(crate) fn hovered_sidebar_item_style(theme: &Theme) -> container::Appearance
 }
 
 pub(crate) fn sidebar_bookmark_drop_slot_style(theme: &Theme) -> container::Appearance {
-    let accent = if is_dark_theme(theme) {
-        Color::from_rgb8(125, 179, 255)
-    } else {
-        Color::from_rgb8(74, 137, 220)
-    };
+    let accent = ui_colors(theme).primary;
     container::Appearance {
         background: Some(Background::Color(accent)),
         border: Border {
@@ -520,13 +433,10 @@ pub(crate) fn sidebar_bookmark_drop_slot_style(theme: &Theme) -> container::Appe
 }
 
 pub(crate) fn context_menu_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(24, 31, 43)
-        } else {
-            Color::from_rgb8(250, 251, 253)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_container_low)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -537,13 +447,10 @@ pub(crate) fn context_menu_style(theme: &Theme) -> container::Appearance {
 }
 
 pub(crate) fn drag_preview_style(theme: &Theme) -> container::Appearance {
+    let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(31, 38, 50)
-        } else {
-            Color::from_rgb8(255, 255, 255)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.surface_bright)),
+        text_color: Some(colors.on_surface),
         border: Border {
             color: subtle_border_color(theme),
             width: 1.0,
@@ -555,11 +462,7 @@ pub(crate) fn drag_preview_style(theme: &Theme) -> container::Appearance {
 
 pub(crate) fn switch_track_on_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(82, 126, 190)
-        } else {
-            Color::from_rgb8(74, 137, 220)
-        })),
+        background: Some(Background::Color(ui_colors(theme).primary)),
         border: Border {
             radius: 11.0.into(),
             ..Border::default()
@@ -570,11 +473,7 @@ pub(crate) fn switch_track_on_style(theme: &Theme) -> container::Appearance {
 
 pub(crate) fn switch_track_off_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(54, 65, 82)
-        } else {
-            Color::from_rgb8(210, 218, 230)
-        })),
+        background: Some(Background::Color(ui_colors(theme).outline_variant)),
         border: Border {
             radius: 11.0.into(),
             ..Border::default()
@@ -583,9 +482,20 @@ pub(crate) fn switch_track_off_style(theme: &Theme) -> container::Appearance {
     }
 }
 
-pub(crate) fn switch_thumb_style(_theme: &Theme) -> container::Appearance {
+pub(crate) fn switch_thumb_on_style(theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(Color::WHITE)),
+        background: Some(Background::Color(ui_colors(theme).on_primary)),
+        border: Border {
+            radius: 7.0.into(),
+            ..Border::default()
+        },
+        ..container::Appearance::default()
+    }
+}
+
+pub(crate) fn switch_thumb_off_style(theme: &Theme) -> container::Appearance {
+    container::Appearance {
+        background: Some(Background::Color(ui_colors(theme).on_surface)),
         border: Border {
             radius: 7.0.into(),
             ..Border::default()
@@ -612,37 +522,25 @@ pub(crate) fn warning_icon_svg_style() -> fn(&Theme, svg::Status) -> svg::Style 
 
 fn icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
     svg::Style {
-        color: Some(if is_dark_theme(theme) {
-            Color::from_rgb8(191, 203, 220)
-        } else {
-            Color::from_rgb8(68, 77, 90)
-        }),
+        color: Some(ui_colors(theme).on_surface),
     }
 }
 
 fn selected_icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
     svg::Style {
-        color: Some(if is_dark_theme(theme) {
-            Color::from_rgb8(236, 244, 255)
-        } else {
-            Color::from_rgb8(24, 42, 72)
-        }),
+        color: Some(ui_colors(theme).on_primary_container),
     }
 }
 
 fn muted_icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
     svg::Style {
-        color: Some(if is_dark_theme(theme) {
-            Color::from_rgb8(137, 146, 159)
-        } else {
-            Color::from_rgb8(119, 127, 139)
-        }),
+        color: Some(ui_colors(theme).on_surface_variant),
     }
 }
 
-fn warning_icon_svg_style_for_status(_theme: &Theme, _status: svg::Status) -> svg::Style {
+fn warning_icon_svg_style_for_status(theme: &Theme, _status: svg::Status) -> svg::Style {
     svg::Style {
-        color: Some(Color::from_rgb8(180, 83, 9)),
+        color: Some(ui_colors(theme).tertiary),
     }
 }
 
@@ -681,27 +579,15 @@ fn surface_button_style(theme: &Theme, status: button::Status) -> button::Style 
 }
 
 pub(crate) fn button_surface_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(31, 40, 54)
-    } else {
-        Color::from_rgb8(244, 247, 252)
-    }
+    ui_colors(theme).surface_container
 }
 
 pub(crate) fn button_hover_surface_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(35, 47, 65)
-    } else {
-        Color::from_rgb8(239, 245, 255)
-    }
+    ui_colors(theme).surface_container_high
 }
 
 pub(crate) fn button_pressed_surface_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(27, 36, 49)
-    } else {
-        Color::from_rgb8(229, 239, 253)
-    }
+    ui_colors(theme).surface_container_highest
 }
 
 fn mac_scrollbar_style(
@@ -757,39 +643,88 @@ fn mac_scrollbar_style(
 }
 
 fn mac_scrollbar_scroller_color(theme: &Theme, opacity: f32) -> Color {
-    let opacity = opacity.clamp(0.0, 1.0);
-    if is_dark_theme(theme) {
-        Color::from_rgba8(255, 255, 255, 0.42 * opacity)
-    } else {
-        Color::from_rgba8(20, 24, 31, 0.32 * opacity)
+    Color {
+        a: 0.42 * opacity.clamp(0.0, 1.0),
+        ..ui_colors(theme).on_surface
     }
 }
 
 pub(crate) fn base_text_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(226, 233, 242)
-    } else {
-        Color::from_rgb8(36, 43, 54)
-    }
+    ui_colors(theme).on_surface
 }
 
 pub(crate) fn muted_text_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(137, 146, 159)
-    } else {
-        Color::from_rgb8(119, 127, 139)
+    ui_colors(theme).on_surface_variant
+}
+
+pub(crate) fn elevation_shadow_color(theme: &Theme, alpha: f32) -> Color {
+    let colors = ui_colors(theme);
+    Color {
+        a: alpha,
+        ..match colors.mode {
+            AppearanceMode::Light => colors.on_background,
+            AppearanceMode::Dark => colors.background,
+        }
     }
 }
 
 pub(crate) fn subtle_border_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(54, 65, 82)
-    } else {
-        Color::from_rgb8(218, 225, 235)
-    }
+    ui_colors(theme).outline_variant
 }
 
-pub(crate) fn is_dark_theme(theme: &Theme) -> bool {
-    let background = theme.palette().background;
-    background.r * 0.299 + background.g * 0.587 + background.b * 0.114 < 0.5
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::matugen_theme::{parse_matugen_theme, ui_colors};
+
+    #[test]
+    fn generated_light_and_dark_roles_drive_representative_surfaces() {
+        for document in [
+            include_str!("../test-data/matugen-dark.toml"),
+            include_str!("../test-data/matugen-light.toml"),
+        ] {
+            let theme = parse_matugen_theme(document).expect("fixture must be valid");
+            let colors = ui_colors(&theme);
+
+            let app = app_content_style(&theme);
+            assert_eq!(app.background, Some(Background::Color(colors.background)));
+            assert_eq!(app.text_color, Some(colors.on_background));
+
+            let selected = selected_row_style(&theme);
+            assert_eq!(
+                selected.background,
+                Some(Background::Color(colors.primary_container))
+            );
+            assert_eq!(selected.text_color, Some(colors.on_primary_container));
+
+            let hovered = hovered_row_style(&theme);
+            assert_eq!(
+                hovered.background,
+                Some(Background::Color(colors.surface_container_high))
+            );
+
+            let error = error_notification_style(&theme);
+            assert_eq!(
+                error.background,
+                Some(Background::Color(colors.error_container))
+            );
+            assert_eq!(error.text_color, Some(colors.on_error_container));
+            assert_eq!(error.border.color, colors.error);
+
+            let close = window_close_button_style(&theme, button::Status::Hovered);
+            assert_eq!(close.background, Some(Background::Color(colors.error)));
+            assert_eq!(close.text_color, colors.on_error);
+
+            let switch_on = switch_thumb_on_style(&theme);
+            assert_eq!(
+                switch_on.background,
+                Some(Background::Color(colors.on_primary))
+            );
+            let switch_off = switch_thumb_off_style(&theme);
+            assert_eq!(
+                switch_off.background,
+                Some(Background::Color(colors.on_surface))
+            );
+        }
+    }
 }

@@ -19,6 +19,7 @@ pub(crate) use user_preferences::{
 
 const APP_DIR_NAME: &str = "file-manager";
 pub(super) const CONFIG_FILE_NAME: &str = "config.toml";
+const MATUGEN_THEME_FILE_NAME: &str = "matugen.toml";
 const STATE_DATABASE_FILE_NAME: &str = "state.sqlite";
 
 pub(crate) const DEFAULT_TERMINAL_EMULATOR: TerminalEmulator = TerminalEmulator::Automatic;
@@ -368,6 +369,10 @@ pub(crate) fn max_preview_file_bytes_from_mib(mib: u64) -> Option<u64> {
 
 pub(super) fn app_config_dir_path() -> Option<PathBuf> {
     dirs::config_dir().map(|path| path.join(APP_DIR_NAME))
+}
+
+pub(crate) fn matugen_theme_file_path() -> Option<PathBuf> {
+    app_config_dir_path().map(|path| path.join(MATUGEN_THEME_FILE_NAME))
 }
 
 pub(crate) fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'a str> {

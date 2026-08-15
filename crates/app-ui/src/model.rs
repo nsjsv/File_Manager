@@ -509,6 +509,7 @@ pub(crate) enum Message {
     SearchServiceIncidentDetailsToggled(SearchServiceDiagnosticKind),
     SearchServiceIncidentDetailsCopyRequested(SearchServiceDiagnosticKind),
     SystemThemeDetected(Theme),
+    MatugenThemeUpdated(Result<Option<Theme>, String>),
     UserPreferencesSaved(Result<(), String>),
     AppConfigSaved(Result<(), String>),
     ColumnWidthOverrideSaved(Result<(), String>),

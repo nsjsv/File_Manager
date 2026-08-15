@@ -2,9 +2,9 @@ use iced::widget::{button, container};
 use iced::{Background, Border, Color, Theme};
 
 use super::{
-    base_text_color, button_hover_surface_color, button_pressed_surface_color, is_dark_theme,
-    subtle_border_color,
+    base_text_color, button_hover_surface_color, button_pressed_surface_color, subtle_border_color,
 };
+use crate::matugen_theme::ui_colors;
 
 pub(crate) fn window_top_bar_style(theme: &Theme) -> container::Style {
     container::Style {
@@ -28,11 +28,7 @@ pub(crate) fn window_title_bar_style(theme: &Theme) -> container::Style {
 }
 
 fn window_chrome_background(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(18, 24, 34)
-    } else {
-        Color::from_rgb8(250, 252, 255)
-    }
+    ui_colors(theme).background
 }
 
 pub(crate) fn window_control_button_style(theme: &Theme, status: button::Status) -> button::Style {
@@ -53,18 +49,15 @@ pub(crate) fn window_control_button_style(theme: &Theme, status: button::Status)
 }
 
 pub(crate) fn window_close_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Hovered => Some(Color::from_rgb8(196, 43, 28)),
-        button::Status::Pressed => Some(Color::from_rgb8(157, 34, 23)),
-        button::Status::Active | button::Status::Disabled => None,
+    let colors = ui_colors(theme);
+    let (background, text_color) = match status {
+        button::Status::Hovered => (Some(colors.error), colors.on_error),
+        button::Status::Pressed => (Some(colors.error_container), colors.on_error_container),
+        button::Status::Active | button::Status::Disabled => (None, colors.on_surface),
     };
     button::Style {
         background: background.map(Background::Color),
-        text_color: if background.is_some() {
-            Color::WHITE
-        } else {
-            base_text_color(theme)
-        },
+        text_color,
         border: Border {
             radius: 4.0.into(),
             ..Border::default()
@@ -100,7 +93,7 @@ mod tests {
             assert!(active.background.is_none());
             assert!(hovered.background.is_some());
             assert!(pressed.background.is_some());
-            assert_eq!(hovered.text_color, Color::WHITE);
+            assert_eq!(hovered.text_color, ui_colors(&theme).on_error);
         }
     }
 

@@ -656,7 +656,19 @@ impl FileBrowser {
                 self.copy_search_service_incident_details(kind)
             }
             Message::SystemThemeDetected(theme) => {
-                self.theme = theme;
+                self.application_theme.replace_system_fallback(theme);
+                Task::none()
+            }
+            Message::MatugenThemeUpdated(Ok(theme)) => {
+                self.application_theme.replace_matugen_override(theme);
+                Task::none()
+            }
+            Message::MatugenThemeUpdated(Err(error)) => {
+                tracing::warn!(
+                    target: "app_ui::matugen_theme",
+                    error = %error,
+                    "matugen theme update was ignored"
+                );
                 Task::none()
             }
             Message::UserPreferencesSaved(result) => self.accept_user_preferences_saved(result),

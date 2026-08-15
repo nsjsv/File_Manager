@@ -1,26 +1,22 @@
-use iced::{Background, Color, Theme};
+use iced::{Background, Theme};
 
-use super::{base_text_color, container, is_dark_theme};
+use super::container;
+use crate::matugen_theme::ui_colors;
 
 pub(crate) fn icon_grid_expansion_panel_style(
     depth: usize,
 ) -> impl Fn(&Theme) -> container::Appearance + Clone {
     move |theme| {
+        let colors = ui_colors(theme);
         let alternate = depth % 2 == 1;
-        let background = if is_dark_theme(theme) {
-            if alternate {
-                Color::from_rgb8(29, 39, 47)
-            } else {
-                Color::from_rgb8(25, 35, 43)
-            }
-        } else if alternate {
-            Color::from_rgb8(234, 241, 244)
+        let background = if alternate {
+            colors.surface_container_low
         } else {
-            Color::from_rgb8(239, 245, 242)
+            colors.surface_container
         };
         container::Appearance {
             background: Some(Background::Color(background)),
-            text_color: Some(base_text_color(theme)),
+            text_color: Some(colors.on_surface),
             ..container::Appearance::default()
         }
     }
@@ -39,7 +35,7 @@ mod tests {
             assert_eq!(first.border.width, 0.0);
             assert_eq!(second.border.width, 0.0);
             assert_ne!(first.background, second.background);
-            assert_eq!(first.text_color, Some(base_text_color(&theme)));
+            assert_eq!(first.text_color, Some(ui_colors(&theme).on_surface));
         }
     }
 }

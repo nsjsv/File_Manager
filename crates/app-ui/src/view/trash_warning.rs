@@ -1,11 +1,12 @@
 use iced::widget::{button, column, container, row};
-use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Background, Border, Element, Length, Theme};
 
 use crate::app::FileBrowser;
-use crate::appearance::{base_text_color, is_dark_theme, transparent_button_style};
+use crate::appearance::transparent_button_style;
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::localization;
+use crate::matugen_theme::ui_colors;
 use crate::model::Message;
 use crate::typography::{localized_text, readable_text};
 
@@ -15,19 +16,12 @@ const MAX_VISIBLE_WARNING_DETAILS: usize = 50;
 const WARNING_DETAIL_MAX_CHARS: usize = 140;
 
 fn trash_warning_style(theme: &Theme) -> container::Style {
+    let colors = ui_colors(theme);
     container::Style {
-        background: Some(Background::Color(if is_dark_theme(theme) {
-            Color::from_rgb8(53, 43, 24)
-        } else {
-            Color::from_rgb8(255, 250, 235)
-        })),
-        text_color: Some(base_text_color(theme)),
+        background: Some(Background::Color(colors.tertiary_container)),
+        text_color: Some(colors.on_tertiary_container),
         border: Border {
-            color: if is_dark_theme(theme) {
-                Color::from_rgb8(133, 98, 43)
-            } else {
-                Color::from_rgb8(217, 167, 74)
-            },
+            color: colors.tertiary,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -101,4 +95,29 @@ pub(super) fn trash_warning_panel(browser: &FileBrowser) -> Option<Element<'_, M
             .width(Length::Fill)
             .into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::matugen_theme::{parse_matugen_theme, ui_colors};
+
+    #[test]
+    fn trash_warning_uses_tertiary_roles_in_both_modes() {
+        for document in [
+            include_str!("../../test-data/matugen-dark.toml"),
+            include_str!("../../test-data/matugen-light.toml"),
+        ] {
+            let theme = parse_matugen_theme(document).expect("fixture must be valid");
+            let colors = ui_colors(&theme);
+            let style = trash_warning_style(&theme);
+
+            assert_eq!(
+                style.background,
+                Some(Background::Color(colors.tertiary_container))
+            );
+            assert_eq!(style.text_color, Some(colors.on_tertiary_container));
+            assert_eq!(style.border.color, colors.tertiary);
+        }
+    }
 }

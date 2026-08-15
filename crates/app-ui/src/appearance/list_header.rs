@@ -1,6 +1,7 @@
 use iced::{Background, Border, Color, Theme};
 
-use super::{base_text_color, button_hover_surface_color, container, is_dark_theme};
+use super::{base_text_color, button_hover_surface_color, container};
+use crate::matugen_theme::ui_colors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ListHeaderCellVisualState {
@@ -44,14 +45,16 @@ fn active_list_header_cell_style(
     theme: &Theme,
     state: ListHeaderCellVisualState,
 ) -> container::Appearance {
-    let accent = list_header_reorder_accent_color(theme);
+    let colors = ui_colors(theme);
+    let accent = colors.primary;
     let is_drop_target = state == ListHeaderCellVisualState::DropTarget;
     let background = if is_drop_target {
         Background::Color(Color { a: 0.18, ..accent })
-    } else if is_dark_theme(theme) {
-        Background::Color(Color::from_rgba8(61, 76, 98, 0.42))
     } else {
-        Background::Color(Color::from_rgba8(217, 229, 247, 0.82))
+        Background::Color(Color {
+            a: 0.72,
+            ..colors.primary_container
+        })
     };
     let border = Border {
         color: if is_drop_target {
@@ -83,11 +86,7 @@ pub(crate) fn list_header_reorder_indicator_style(theme: &Theme) -> container::A
 }
 
 fn list_header_reorder_accent_color(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(125, 179, 255)
-    } else {
-        Color::from_rgb8(74, 137, 220)
-    }
+    ui_colors(theme).primary
 }
 
 #[cfg(test)]

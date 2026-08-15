@@ -9,11 +9,12 @@ use desktop_linux::{
 };
 use file_core::watch_directory;
 use iced::futures::SinkExt;
-use iced::{Subscription, Task, Theme};
+use iced::{Subscription, Task};
 
 use super::events::system_theme;
 use super::FileBrowser;
 use crate::command_line::ApplicationLaunchRequest;
+use crate::matugen_theme::{fallback_theme, read_matugen_theme_file, AppearanceMode};
 use crate::model::{Message, X11DndMessage};
 use crate::startup_trace;
 
@@ -107,6 +108,10 @@ pub(super) fn directory_watch_subscription(path: PathBuf) -> Subscription<Messag
     Subscription::run_with(path, directory_watch_stream)
 }
 
+pub(super) fn matugen_theme_subscription(path: PathBuf) -> Subscription<Message> {
+    Subscription::run_with(path, matugen_theme_stream)
+}
+
 pub(super) fn sidebar_device_refresh_subscription() -> Subscription<Message> {
     iced::time::every(SIDEBAR_DEVICE_REFRESH_INTERVAL)
         .map(|_| Message::SidebarDevicesRefreshRequested)
@@ -150,6 +155,63 @@ fn directory_watch_stream(path: &PathBuf) -> impl iced::futures::Stream<Item = M
                 {
                     break;
                 }
+            }
+        }
+
+        iced::futures::future::pending().await
+    })
+}
+
+fn matugen_theme_stream(path: &PathBuf) -> impl iced::futures::Stream<Item = Message> + 'static {
+    let path = path.clone();
+    let directory = path
+        .parent()
+        .expect("matugen theme path has a parent directory")
+        .to_path_buf();
+    iced::stream::channel(DIRECTORY_WATCH_CHANNEL_SIZE, async move |mut output| {
+        if let Err(error) = tokio::fs::create_dir_all(&directory).await {
+            let _ = output
+                .send(Message::MatugenThemeUpdated(Err(format!(
+                    "could not create matugen theme directory {}: {error}",
+                    directory.display()
+                ))))
+                .await;
+            iced::futures::future::pending().await
+        }
+
+        let watcher = watch_directory(directory, DIRECTORY_WATCH_DEBOUNCE);
+
+        if output
+            .send(Message::MatugenThemeUpdated(
+                read_matugen_theme_file(&path).await,
+            ))
+            .await
+            .is_err()
+        {
+            return;
+        }
+
+        let mut watcher = match watcher {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                let _ = output
+                    .send(Message::MatugenThemeUpdated(Err(format!(
+                        "could not watch matugen theme directory: {error}"
+                    ))))
+                    .await;
+                iced::futures::future::pending().await
+            }
+        };
+
+        while watcher.recv().await.is_some() {
+            if output
+                .send(Message::MatugenThemeUpdated(
+                    read_matugen_theme_file(&path).await,
+                ))
+                .await
+                .is_err()
+            {
+                return;
             }
         }
 
@@ -307,7 +369,7 @@ pub(super) fn system_theme_command() -> Task<Message> {
         async {
             let theme = tokio::task::spawn_blocking(system_theme)
                 .await
-                .unwrap_or(Theme::Light);
+                .unwrap_or_else(|_| fallback_theme(AppearanceMode::Light));
             startup_trace::mark_once("system_theme_detected");
             theme
         },
@@ -323,4 +385,67 @@ pub(super) fn scrollbar_auto_hide_command(generation: u64) -> Task<Message> {
         },
         Message::ScrollbarAutoHideElapsed,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::matugen_theme::{ui_colors, AppearanceMode};
+    use iced::futures::StreamExt;
+    use iced::Theme;
+    use std::fs;
+    use tokio::time::timeout;
+
+    async fn next_matugen_update(
+        stream: &mut std::pin::Pin<Box<impl iced::futures::Stream<Item = Message>>>,
+    ) -> Result<Option<Theme>, String> {
+        match timeout(Duration::from_secs(3), stream.next())
+            .await
+            .expect("Matugen watcher timed out")
+            .expect("Matugen watcher ended")
+        {
+            Message::MatugenThemeUpdated(update) => update,
+            message => panic!("unexpected watcher message: {message:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn matugen_stream_reads_initial_atomic_updates_and_deletion() {
+        let directory = tempfile::tempdir().expect("create temporary config directory");
+        let path = directory.path().join("matugen.toml");
+        fs::write(&path, include_str!("../../test-data/matugen-dark.toml"))
+            .expect("write initial Matugen theme");
+
+        let mut stream = Box::pin(matugen_theme_stream(&path));
+        let initial = next_matugen_update(&mut stream)
+            .await
+            .expect("initial Matugen theme must parse")
+            .expect("initial Matugen theme must exist");
+        assert_eq!(ui_colors(&initial).mode, AppearanceMode::Dark);
+
+        let replacement = directory.path().join("matugen.toml.next");
+        fs::write(
+            &replacement,
+            include_str!("../../test-data/matugen-light.toml"),
+        )
+        .expect("write replacement Matugen theme");
+        fs::rename(&replacement, &path).expect("atomically replace Matugen theme");
+
+        let updated = next_matugen_update(&mut stream)
+            .await
+            .expect("replacement Matugen theme must parse")
+            .expect("replacement Matugen theme must exist");
+        assert_eq!(ui_colors(&updated).mode, AppearanceMode::Light);
+
+        fs::write(&replacement, "version = 1\nmode = \"dark\"\n")
+            .expect("write malformed Matugen theme");
+        fs::rename(&replacement, &path).expect("atomically replace with malformed theme");
+        assert!(next_matugen_update(&mut stream).await.is_err());
+
+        fs::remove_file(&path).expect("remove Matugen theme");
+        assert!(next_matugen_update(&mut stream)
+            .await
+            .expect("deletion must be accepted")
+            .is_none());
+    }
 }

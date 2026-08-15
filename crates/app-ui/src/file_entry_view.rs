@@ -3,7 +3,7 @@ use std::path::Path;
 use file_core::{DirectoryEntry, FileKind};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{container, image, Stack, Svg};
-use iced::{Background, Border, Color, Element, Length, Theme};
+use iced::{Background, Border, Element, Length, Theme};
 
 use crate::app::panes::BrowserPaneView;
 use crate::app::FileBrowser;
@@ -14,6 +14,7 @@ use crate::appearance::{
 };
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
+use crate::matugen_theme::ui_colors;
 use crate::model::{FileEntryContentModifier, Message};
 use crate::thumbnail_cache::{
     COLUMN_THUMBNAIL_EDGE, COLUMN_THUMBNAIL_SIZE, LIST_THUMBNAIL_EDGE, LIST_THUMBNAIL_SIZE,
@@ -287,12 +288,12 @@ where
         .into()
 }
 
-fn cut_badge_style(_theme: &Theme) -> iced::widget::container::Style {
-    let contrast_color = Color::from_rgb8(24, 31, 43);
+fn cut_badge_style(theme: &Theme) -> iced::widget::container::Style {
+    let colors = ui_colors(theme);
     iced::widget::container::Style {
-        background: Some(Background::Color(Color::WHITE)),
+        background: Some(Background::Color(colors.surface_bright)),
         border: Border {
-            color: contrast_color,
+            color: colors.outline,
             width: 1.0,
             radius: 3.0.into(),
         },
@@ -301,11 +302,11 @@ fn cut_badge_style(_theme: &Theme) -> iced::widget::container::Style {
 }
 
 fn cut_badge_icon_style(
-    _theme: &Theme,
+    theme: &Theme,
     _status: iced::widget::svg::Status,
 ) -> iced::widget::svg::Style {
     iced::widget::svg::Style {
-        color: Some(Color::from_rgb8(24, 31, 43)),
+        color: Some(ui_colors(theme).on_surface),
     }
 }
 
@@ -489,11 +490,12 @@ mod tests {
         assert!(renderer.svgs[1].bounds.center_x() < bounds.center_x());
         assert!(renderer.svgs[1].bounds.center_y() > bounds.center_y());
 
+        let badge_backplate_color = ui_colors(&Theme::Light).surface_bright;
         let (badge_quad, badge_background) = renderer
             .quads
             .iter()
             .find(|(_, background)| {
-                matches!(background, Background::Color(color) if *color == Color::WHITE)
+                matches!(background, Background::Color(color) if *color == badge_backplate_color)
             })
             .expect("cut badge must draw an opaque contrast backplate");
         let expected_badge_size =

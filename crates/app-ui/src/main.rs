@@ -48,6 +48,7 @@ mod icons;
 mod input_blocking_space;
 mod list_view;
 mod localization;
+mod matugen_theme;
 mod measured_middle_ellipsized_text;
 mod model;
 mod network_connections;

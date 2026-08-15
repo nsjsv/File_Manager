@@ -1,7 +1,8 @@
 use iced::widget::{button, column, container, row, Button, Column, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
-use crate::appearance::{base_text_color, is_dark_theme, muted_text_color, subtle_border_color};
+use crate::appearance::{base_text_color, muted_text_color, subtle_border_color};
+use crate::matugen_theme::ui_colors;
 use crate::model::Message;
 use crate::typography::readable_text;
 
@@ -147,11 +148,7 @@ fn settings_card_style(theme: &Theme) -> container::Style {
 }
 
 fn settings_card_background(theme: &Theme) -> Color {
-    if is_dark_theme(theme) {
-        Color::from_rgb8(30, 39, 53)
-    } else {
-        Color::from_rgb8(242, 246, 251)
-    }
+    ui_colors(theme).surface_container
 }
 
 fn muted_text_style(theme: &Theme) -> container::Style {
