@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::{FileOperationVerification, SortDirection, SortField};
 
+use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
 use crate::model::{BrowserViewMode, ListDirectorySizeDisplayMode, SearchHistory};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
@@ -248,6 +249,8 @@ pub(crate) struct UserConfig {
     pub(crate) search_content_indexing_enabled: bool,
     pub(crate) search_max_extract_bytes: u64,
     pub(crate) search_history: SearchHistory,
+    pub(crate) theme_mode: ThemeMode,
+    pub(crate) color_scheme: ColorSchemePreset,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) window_controls: crate::model::WindowControlsConfig,
@@ -293,6 +296,8 @@ pub(crate) fn default_user_config() -> UserConfig {
         search_content_indexing_enabled: true,
         search_max_extract_bytes: DEFAULT_SEARCH_MAX_EXTRACT_BYTES,
         search_history: SearchHistory::default(),
+        theme_mode: ThemeMode::Automatic,
+        color_scheme: ColorSchemePreset::Default,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         window_controls: crate::model::WindowControlsConfig::default(),
@@ -321,6 +326,8 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         search_content_indexing_enabled: true,
         search_max_extract_bytes: DEFAULT_SEARCH_MAX_EXTRACT_BYTES,
         search_history: SearchHistory::default(),
+        theme_mode: ThemeMode::Automatic,
+        color_scheme: ColorSchemePreset::Default,
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
         window_controls: crate::model::WindowControlsConfig::default(),

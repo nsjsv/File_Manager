@@ -191,6 +191,7 @@ mod tests {
     use crate::app::FileBrowser;
     use crate::commands::classify_startup_session;
     use crate::config::{self, StartupLocationPolicy};
+    use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
     use crate::model::{
         BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
         BrowserTabSession, BrowserViewMode, ClassifiedStartupSession, ColumnBrowserViewport,
@@ -721,6 +722,33 @@ mod tests {
             .error
             .as_deref()
             .is_some_and(|error| error.contains("Failed to restore saved view state")));
+    }
+
+    #[test]
+    fn loaded_user_config_applies_saved_theme_selection() {
+        let (mut browser, _) = FileBrowser::new(config::ui_thread_startup_config());
+        let mut user_config = config::default_user_config();
+        user_config.theme_mode = ThemeMode::Dark;
+        user_config.color_scheme = ColorSchemePreset::Nord;
+
+        drop(browser.accept_startup_environment(startup_environment(
+            PathBuf::from("/home/user"),
+            user_config,
+            PathBuf::from("/tmp/state.sqlite"),
+        )));
+
+        assert!(
+            browser
+                .application_theme
+                .active(
+                    browser.user_config.theme_mode,
+                    browser.user_config.color_scheme
+                )
+                .extended_palette()
+                .is_dark
+        );
+        assert_eq!(browser.user_config.theme_mode, ThemeMode::Dark);
+        assert_eq!(browser.user_config.color_scheme, ColorSchemePreset::Nord);
     }
 
     #[test]

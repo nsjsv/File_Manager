@@ -19,6 +19,7 @@ use super::{
     sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
     SidebarFavoriteConfig, UiLanguageSetting, UserConfig,
 };
+use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
     ListColumnConfig, ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences,
@@ -49,6 +50,8 @@ pub(crate) struct UserPreferences {
     pub(crate) save_view_state: bool,
     pub(crate) shortcuts: ShortcutConfig,
     pub(crate) search_history: crate::model::SearchHistory,
+    pub(crate) theme_mode: ThemeMode,
+    pub(crate) color_scheme: ColorSchemePreset,
 }
 
 impl UserPreferences {
@@ -74,6 +77,8 @@ impl UserPreferences {
             save_view_state: config.startup_location_policy.saves_view_state(),
             shortcuts: config.shortcuts.clone(),
             search_history: config.search_history.clone(),
+            theme_mode: config.theme_mode,
+            color_scheme: config.color_scheme,
         }
     }
 
@@ -98,6 +103,8 @@ impl UserPreferences {
         config.save_view_state = self.startup_location_policy.saves_view_state();
         config.shortcuts = self.shortcuts.clone();
         config.search_history = self.search_history.clone();
+        config.theme_mode = self.theme_mode;
+        config.color_scheme = self.color_scheme;
     }
 
     pub(crate) fn to_stored(&self) -> StoredUserPreferences {
@@ -135,11 +142,23 @@ impl UserPreferences {
         stored.save_view_state = self.startup_location_policy.saves_view_state();
         stored.shortcuts = stored_shortcuts(&self.shortcuts);
         stored.search_history = self.search_history.entries().to_vec();
+        stored.theme_mode = self.theme_mode.config_value().to_owned();
+        stored.color_scheme = self.color_scheme.config_value().to_owned();
         stored
     }
 
     pub(crate) fn from_stored(stored: StoredUserPreferences, default: &UserConfig) -> Self {
         let default_preferences = Self::from_user_config(default);
+        let (theme_mode, color_scheme) = match (
+            ThemeMode::from_config_value(&stored.theme_mode),
+            ColorSchemePreset::from_config_value(&stored.color_scheme),
+        ) {
+            (Some(theme_mode), Some(color_scheme)) => (theme_mode, color_scheme),
+            _ => (
+                default_preferences.theme_mode,
+                default_preferences.color_scheme,
+            ),
+        };
         let startup_location_policy =
             StartupLocationPolicy::from_config_value(&stored.startup_location)
                 .unwrap_or(default_preferences.startup_location_policy);
@@ -178,6 +197,8 @@ impl UserPreferences {
             save_view_state: startup_location_policy.saves_view_state(),
             shortcuts: shortcut_config_from_stored(&stored.shortcuts),
             search_history: crate::model::SearchHistory::from_persisted(stored.search_history),
+            theme_mode,
+            color_scheme,
         }
     }
 }
@@ -403,4 +424,36 @@ fn shortcut_config_from_stored(shortcuts: &[StoredShortcutBinding]) -> ShortcutC
         .collect();
     config.apply_toml_table(&table);
     config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_selection_roundtrips_through_stored_preferences() {
+        let mut config = default_user_config();
+        config.theme_mode = ThemeMode::Dark;
+        config.color_scheme = ColorSchemePreset::Claude;
+
+        let stored = config.user_preferences().to_stored();
+        let restored = UserPreferences::from_stored(stored, &default_user_config());
+
+        assert_eq!(restored.theme_mode, ThemeMode::Dark);
+        assert_eq!(restored.color_scheme, ColorSchemePreset::Claude);
+    }
+
+    #[test]
+    fn invalid_theme_selection_falls_back_to_current_defaults() {
+        for (theme_mode, color_scheme) in [("sepia", "claude"), ("dark", "unknown")] {
+            let mut stored = StoredUserPreferences::default();
+            stored.theme_mode = theme_mode.to_owned();
+            stored.color_scheme = color_scheme.to_owned();
+
+            let restored = UserPreferences::from_stored(stored, &default_user_config());
+
+            assert_eq!(restored.theme_mode, ThemeMode::Automatic);
+            assert_eq!(restored.color_scheme, ColorSchemePreset::Default);
+        }
+    }
 }

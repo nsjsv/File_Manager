@@ -671,6 +671,22 @@ impl FileBrowser {
                 );
                 Task::none()
             }
+            Message::ThemeModeSelected(theme_mode) => {
+                if self.user_config.color_scheme == crate::matugen_theme::ColorSchemePreset::Matugen
+                    || self.user_config.theme_mode == theme_mode
+                {
+                    return Task::none();
+                }
+                self.user_config.theme_mode = theme_mode;
+                self.persist_user_preferences_command()
+            }
+            Message::ColorSchemePresetSelected(color_scheme) => {
+                if self.user_config.color_scheme == color_scheme {
+                    return Task::none();
+                }
+                self.user_config.color_scheme = color_scheme;
+                self.persist_user_preferences_command()
+            }
             Message::UserPreferencesSaved(result) => self.accept_user_preferences_saved(result),
             Message::AppConfigSaved(result) => self.accept_app_config_saved(result),
             Message::ColumnWidthOverrideSaved(result) => self.accept_column_width_saved(result),
@@ -941,5 +957,45 @@ impl FileBrowser {
                 self.apply_transfer_conflict_message(message)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod theme_selection_tests {
+    use super::*;
+    use crate::config;
+    use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
+
+    #[test]
+    fn built_in_theme_selection_updates_the_active_theme() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+        drop(browser.update(Message::ThemeModeSelected(ThemeMode::Dark)));
+        drop(browser.update(Message::ColorSchemePresetSelected(ColorSchemePreset::Nord)));
+
+        assert_eq!(browser.user_config.theme_mode, ThemeMode::Dark);
+        assert_eq!(browser.user_config.color_scheme, ColorSchemePreset::Nord);
+        assert!(
+            browser
+                .application_theme
+                .active(
+                    browser.user_config.theme_mode,
+                    browser.user_config.color_scheme
+                )
+                .extended_palette()
+                .is_dark
+        );
+    }
+
+    #[test]
+    fn matugen_selection_preserves_the_previous_mode() {
+        let mut user_config = config::default_user_config();
+        user_config.theme_mode = ThemeMode::Light;
+        user_config.color_scheme = ColorSchemePreset::Matugen;
+        let (mut browser, _) = FileBrowser::new(user_config);
+
+        drop(browser.update(Message::ThemeModeSelected(ThemeMode::Dark)));
+
+        assert_eq!(browser.user_config.theme_mode, ThemeMode::Light);
     }
 }

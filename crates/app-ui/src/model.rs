@@ -28,6 +28,7 @@ use crate::app::archive_extraction::ArchiveExtractionMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UiLanguage, UiLanguageSetting, UserConfig};
 use crate::document_preview::DocumentPreviewMessage;
+use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
 use crate::network_connections::{
     NetworkConnectionMessage, SidebarNetworkConnectionContextMenuState,
 };
@@ -521,6 +522,8 @@ pub(crate) enum Message {
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
+    ThemeModeSelected(ThemeMode),
+    ColorSchemePresetSelected(ColorSchemePreset),
     WindowChromeLayoutSelected(WindowChromeLayout),
     WindowControlVisibilityToggled(WindowControlKind),
     WindowControlSideSelected(WindowControlKind, WindowControlSide),

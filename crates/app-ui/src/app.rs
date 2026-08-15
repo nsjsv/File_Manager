@@ -801,7 +801,8 @@ impl FileBrowser {
     }
 
     fn theme(&self, _window: window::Id) -> Theme {
-        self.application_theme.active()
+        self.application_theme
+            .active(self.user_config.theme_mode, self.user_config.color_scheme)
     }
 
     fn view_with_window_chrome<'a>(

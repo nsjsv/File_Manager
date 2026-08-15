@@ -24,6 +24,105 @@ impl AppearanceMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThemeMode {
+    Light,
+    Dark,
+    Automatic,
+}
+
+impl ThemeMode {
+    pub(crate) const ALL: [Self; 3] = [Self::Light, Self::Dark, Self::Automatic];
+
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            "automatic" => Some(Self::Automatic),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn config_value(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::Automatic => "automatic",
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::Automatic => "Automatic",
+        }
+    }
+
+    fn resolve(self, detected: AppearanceMode) -> AppearanceMode {
+        match self {
+            Self::Light => AppearanceMode::Light,
+            Self::Dark => AppearanceMode::Dark,
+            Self::Automatic => detected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorSchemePreset {
+    Default,
+    Everforest,
+    Nord,
+    Catppuccin,
+    Claude,
+    Matugen,
+}
+
+impl ColorSchemePreset {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Default,
+        Self::Everforest,
+        Self::Nord,
+        Self::Catppuccin,
+        Self::Claude,
+        Self::Matugen,
+    ];
+
+    pub(crate) fn from_config_value(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "everforest" => Some(Self::Everforest),
+            "nord" => Some(Self::Nord),
+            "catppuccin" => Some(Self::Catppuccin),
+            "claude" => Some(Self::Claude),
+            "matugen" => Some(Self::Matugen),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn config_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Everforest => "everforest",
+            Self::Nord => "nord",
+            Self::Catppuccin => "catppuccin",
+            Self::Claude => "claude",
+            Self::Matugen => "matugen",
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Everforest => "Everforest",
+            Self::Nord => "Nord",
+            Self::Catppuccin => "Catppuccin",
+            Self::Claude => "Claude",
+            Self::Matugen => "Matugen",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct UiColorRoles {
     pub(crate) mode: AppearanceMode,
@@ -220,10 +319,26 @@ impl ApplicationTheme {
         }
     }
 
-    pub(crate) fn active(&self) -> Theme {
-        self.matugen_override
-            .clone()
-            .unwrap_or_else(|| self.system_fallback.clone())
+    pub(crate) fn active(&self, theme_mode: ThemeMode, color_scheme: ColorSchemePreset) -> Theme {
+        if color_scheme == ColorSchemePreset::Matugen {
+            return self
+                .matugen_override
+                .clone()
+                .unwrap_or_else(|| self.system_fallback.clone());
+        }
+        if color_scheme == ColorSchemePreset::Default && theme_mode == ThemeMode::Automatic {
+            return self.system_fallback.clone();
+        }
+
+        let mode = theme_mode.resolve(ui_colors(&self.system_fallback).mode);
+        match color_scheme {
+            ColorSchemePreset::Default => fallback_theme(mode),
+            ColorSchemePreset::Everforest => preset_theme(ColorSchemePreset::Everforest, mode),
+            ColorSchemePreset::Nord => preset_theme(ColorSchemePreset::Nord, mode),
+            ColorSchemePreset::Catppuccin => preset_theme(ColorSchemePreset::Catppuccin, mode),
+            ColorSchemePreset::Claude => preset_theme(ColorSchemePreset::Claude, mode),
+            ColorSchemePreset::Matugen => unreachable!("Matugen is handled above"),
+        }
     }
 
     pub(crate) fn replace_system_fallback(&mut self, theme: Theme) {
@@ -256,6 +371,80 @@ pub(crate) fn fallback_theme(mode: AppearanceMode) -> Theme {
     };
 
     UiColorRoles::from_fallback_palette(mode, palette).into_theme("System")
+}
+
+fn preset_theme(preset: ColorSchemePreset, mode: AppearanceMode) -> Theme {
+    let palette = match (preset, mode) {
+        (ColorSchemePreset::Everforest, AppearanceMode::Light) => Palette {
+            background: Color::from_rgb8(253, 246, 227),
+            text: Color::from_rgb8(92, 106, 114),
+            primary: Color::from_rgb8(147, 178, 89),
+            success: Color::from_rgb8(141, 161, 1),
+            warning: Color::from_rgb8(228, 182, 73),
+            danger: Color::from_rgb8(248, 85, 82),
+        },
+        (ColorSchemePreset::Everforest, AppearanceMode::Dark) => Palette {
+            background: Color::from_rgb8(45, 53, 59),
+            text: Color::from_rgb8(211, 198, 170),
+            primary: Color::from_rgb8(167, 192, 128),
+            success: Color::from_rgb8(167, 192, 128),
+            warning: Color::from_rgb8(191, 152, 61),
+            danger: Color::from_rgb8(230, 126, 128),
+        },
+        (ColorSchemePreset::Nord, AppearanceMode::Light) => Palette {
+            background: Color::from_rgb8(236, 239, 244),
+            text: Color::from_rgb8(46, 52, 64),
+            primary: Color::from_rgb8(94, 129, 172),
+            success: Color::from_rgb8(163, 190, 140),
+            warning: Color::from_rgb8(235, 203, 139),
+            danger: Color::from_rgb8(191, 97, 106),
+        },
+        (ColorSchemePreset::Nord, AppearanceMode::Dark) => Palette {
+            background: Color::from_rgb8(46, 52, 64),
+            text: Color::from_rgb8(216, 222, 233),
+            primary: Color::from_rgb8(136, 192, 208),
+            success: Color::from_rgb8(163, 190, 140),
+            warning: Color::from_rgb8(235, 203, 139),
+            danger: Color::from_rgb8(191, 97, 106),
+        },
+        (ColorSchemePreset::Catppuccin, AppearanceMode::Light) => Palette {
+            background: Color::from_rgb8(239, 241, 245),
+            text: Color::from_rgb8(76, 79, 105),
+            primary: Color::from_rgb8(136, 57, 239),
+            success: Color::from_rgb8(64, 160, 43),
+            warning: Color::from_rgb8(223, 142, 29),
+            danger: Color::from_rgb8(210, 15, 57),
+        },
+        (ColorSchemePreset::Catppuccin, AppearanceMode::Dark) => Palette {
+            background: Color::from_rgb8(30, 30, 46),
+            text: Color::from_rgb8(205, 214, 244),
+            primary: Color::from_rgb8(203, 166, 247),
+            success: Color::from_rgb8(166, 227, 161),
+            warning: Color::from_rgb8(249, 226, 175),
+            danger: Color::from_rgb8(243, 139, 168),
+        },
+        (ColorSchemePreset::Claude, AppearanceMode::Light) => Palette {
+            background: Color::from_rgb8(241, 241, 240),
+            text: Color::from_rgb8(53, 53, 53),
+            primary: Color::from_rgb8(217, 119, 87),
+            success: Color::from_rgb8(120, 140, 93),
+            warning: Color::from_rgb8(156, 146, 135),
+            danger: Color::from_rgb8(196, 102, 134),
+        },
+        (ColorSchemePreset::Claude, AppearanceMode::Dark) => Palette {
+            background: Color::from_rgb8(55, 55, 55),
+            text: Color::from_rgb8(238, 238, 236),
+            primary: Color::from_rgb8(217, 119, 87),
+            success: Color::from_rgb8(135, 154, 118),
+            warning: Color::from_rgb8(169, 157, 145),
+            danger: Color::from_rgb8(196, 102, 134),
+        },
+        (ColorSchemePreset::Default | ColorSchemePreset::Matugen, _) => {
+            unreachable!("only named presets have custom palettes")
+        }
+    };
+
+    UiColorRoles::from_fallback_palette(mode, palette).into_theme(preset.label())
 }
 
 pub(crate) fn ui_colors(theme: &Theme) -> UiColorRoles {
@@ -438,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn matugen_override_wins_even_when_system_theme_arrives_late() {
+    fn matugen_override_wins_when_selected_even_if_system_theme_arrives_late() {
         let light = fallback_theme(AppearanceMode::Light);
         let dark = fallback_theme(AppearanceMode::Dark);
         let generated = parse_matugen_theme(LIGHT_THEME).expect("light matugen theme");
@@ -448,12 +637,149 @@ mod tests {
         application_theme.replace_matugen_override(Some(generated));
         application_theme.replace_system_fallback(dark.clone());
         assert_eq!(
-            application_theme.active().palette().background,
+            application_theme
+                .active(ThemeMode::Dark, ColorSchemePreset::Matugen)
+                .palette()
+                .background,
             generated_background
         );
 
         application_theme.replace_matugen_override(None);
-        assert_eq!(application_theme.active().palette(), dark.palette());
+        assert_eq!(
+            application_theme
+                .active(ThemeMode::Dark, ColorSchemePreset::Matugen)
+                .palette(),
+            dark.palette()
+        );
+    }
+
+    #[test]
+    fn settings_options_keep_their_stable_order_and_values() {
+        assert_eq!(
+            ThemeMode::ALL.map(ThemeMode::config_value),
+            ["light", "dark", "automatic"]
+        );
+        assert_eq!(
+            ColorSchemePreset::ALL.map(ColorSchemePreset::config_value),
+            [
+                "default",
+                "everforest",
+                "nord",
+                "catppuccin",
+                "claude",
+                "matugen",
+            ]
+        );
+    }
+
+    #[test]
+    fn built_in_presets_provide_complete_roles_and_ignore_matugen_updates() {
+        let light = fallback_theme(AppearanceMode::Light);
+        let generated = parse_matugen_theme(DARK_THEME).expect("dark matugen theme");
+        let generated_background = generated.palette().background;
+        let mut application_theme = ApplicationTheme::new(light);
+        application_theme.replace_matugen_override(Some(generated));
+
+        for (theme_mode, expected_mode) in [
+            (ThemeMode::Light, AppearanceMode::Light),
+            (ThemeMode::Dark, AppearanceMode::Dark),
+        ] {
+            for preset in [
+                ColorSchemePreset::Default,
+                ColorSchemePreset::Everforest,
+                ColorSchemePreset::Nord,
+                ColorSchemePreset::Catppuccin,
+                ColorSchemePreset::Claude,
+            ] {
+                let theme = application_theme.active(theme_mode, preset);
+                let roles = ui_colors(&theme);
+                assert_eq!(roles.mode, expected_mode);
+                assert_ne!(roles.background, generated_background);
+                for color in [
+                    roles.background,
+                    roles.on_background,
+                    roles.primary,
+                    roles.outline,
+                    roles.tertiary,
+                    roles.error,
+                ] {
+                    assert!(color.a > 0.0);
+                }
+            }
+        }
+    }
+    #[test]
+    fn revised_presets_use_reference_palette_anchors() {
+        let rgb =
+            |value: u32| Color::from_rgb8((value >> 16) as u8, (value >> 8) as u8, value as u8);
+        for (preset, mode, expected) in [
+            (
+                ColorSchemePreset::Everforest,
+                AppearanceMode::Light,
+                [0xfdf6e3, 0x5c6a72, 0x93b259, 0xe4b649, 0xf85552],
+            ),
+            (
+                ColorSchemePreset::Everforest,
+                AppearanceMode::Dark,
+                [0x2d353b, 0xd3c6aa, 0xa7c080, 0xbf983d, 0xe67e80],
+            ),
+            (
+                ColorSchemePreset::Catppuccin,
+                AppearanceMode::Light,
+                [0xeff1f5, 0x4c4f69, 0x8839ef, 0xdf8e1d, 0xd20f39],
+            ),
+            (
+                ColorSchemePreset::Catppuccin,
+                AppearanceMode::Dark,
+                [0x1e1e2e, 0xcdd6f4, 0xcba6f7, 0xf9e2af, 0xf38ba8],
+            ),
+            (
+                ColorSchemePreset::Claude,
+                AppearanceMode::Light,
+                [0xf1f1f0, 0x353535, 0xd97757, 0x9c9287, 0xc46686],
+            ),
+            (
+                ColorSchemePreset::Claude,
+                AppearanceMode::Dark,
+                [0x373737, 0xeeeeec, 0xd97757, 0xa99d91, 0xc46686],
+            ),
+        ] {
+            let roles = ui_colors(&preset_theme(preset, mode));
+            assert_eq!(
+                [
+                    roles.background,
+                    roles.on_background,
+                    roles.primary,
+                    roles.tertiary,
+                    roles.error
+                ],
+                expected.map(rgb)
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_mode_uses_the_detected_system_mode() {
+        let mut application_theme = ApplicationTheme::new(fallback_theme(AppearanceMode::Light));
+        for (system_theme, expected_dark) in [
+            (fallback_theme(AppearanceMode::Light), false),
+            (fallback_theme(AppearanceMode::Dark), true),
+        ] {
+            application_theme.replace_system_fallback(system_theme.clone());
+            assert_eq!(
+                ui_colors(
+                    &application_theme.active(ThemeMode::Automatic, ColorSchemePreset::Default)
+                ),
+                ui_colors(&system_theme)
+            );
+            assert_eq!(
+                application_theme
+                    .active(ThemeMode::Automatic, ColorSchemePreset::Nord)
+                    .extended_palette()
+                    .is_dark,
+                expected_dark
+            );
+        }
     }
 
     #[tokio::test]

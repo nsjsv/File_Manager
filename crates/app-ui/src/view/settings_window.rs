@@ -7,6 +7,7 @@ use iced::{Alignment, Element, Length};
 use crate::app::FileBrowser;
 use crate::appearance::context_menu_button_style;
 use crate::config::{StartupLocationPolicy, UiLanguageSetting};
+use crate::matugen_theme::{ColorSchemePreset, ThemeMode};
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
 use crate::typography::{localized_text, readable_text};
 
@@ -26,6 +27,24 @@ use super::shortcut_settings::shortcut_settings_section;
 use super::window_control_settings::window_control_settings_row;
 
 const SETTINGS_DROPDOWN_WIDTH: f32 = 220.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ThemeModePickOption(ThemeMode);
+
+impl fmt::Display for ThemeModePickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&crate::localization::translate_current(self.0.label()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ColorSchemePickOption(ColorSchemePreset);
+
+impl fmt::Display for ColorSchemePickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&crate::localization::translate_current(self.0.label()))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerminalEmulatorPickOption(TerminalEmulator);
@@ -128,6 +147,13 @@ fn appearance_settings_detail(
     settings_detail_scroller(
         column![
             settings_group(
+                "Theme",
+                vec![
+                    labeled_setting_row("Mode", theme_mode_dropdown(browser)),
+                    labeled_setting_row("Color scheme", color_scheme_dropdown(browser)),
+                ],
+            ),
+            settings_group(
                 "Window controls",
                 vec![window_control_settings_row(browser)]
             ),
@@ -212,6 +238,39 @@ fn settings_detail_scroller<'a>(
         scrollbar_visibility,
         Message::SettingsScrolled,
     )
+}
+
+fn theme_mode_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
+    let selected = ThemeModePickOption(browser.user_config().theme_mode);
+    if browser.user_config().color_scheme == ColorSchemePreset::Matugen {
+        return button(readable_text(selected.to_string()).size(12))
+            .padding([5, 8])
+            .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+            .style(context_menu_button_style())
+            .into();
+    }
+
+    pick_list(
+        ThemeMode::ALL.map(ThemeModePickOption),
+        Some(selected),
+        |selected| Message::ThemeModeSelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
+}
+
+fn color_scheme_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
+    pick_list(
+        ColorSchemePreset::ALL.map(ColorSchemePickOption),
+        Some(ColorSchemePickOption(browser.user_config().color_scheme)),
+        |selected| Message::ColorSchemePresetSelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
 }
 
 fn language_setting_label(setting: UiLanguageSetting) -> &'static str {

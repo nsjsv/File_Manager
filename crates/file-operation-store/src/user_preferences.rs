@@ -39,6 +39,10 @@ pub struct StoredUserPreferences {
     pub window_controls: Vec<StoredWindowControlPlacement>,
     #[serde(default)]
     pub search_history: Vec<String>,
+    #[serde(default = "default_theme_mode")]
+    pub theme_mode: String,
+    #[serde(default = "default_color_scheme")]
+    pub color_scheme: String,
 }
 
 impl Default for StoredUserPreferences {
@@ -66,6 +70,8 @@ impl Default for StoredUserPreferences {
             window_chrome_layout: default_window_chrome_layout(),
             window_controls: default_stored_window_controls(),
             search_history: Vec::new(),
+            theme_mode: default_theme_mode(),
+            color_scheme: default_color_scheme(),
         }
     }
 }
@@ -136,6 +142,14 @@ fn default_list_sort_direction() -> String {
 
 fn default_list_directory_size_display_mode() -> String {
     "item_count".to_owned()
+}
+
+fn default_theme_mode() -> String {
+    "automatic".to_owned()
+}
+
+fn default_color_scheme() -> String {
+    "default".to_owned()
 }
 
 fn default_language_setting() -> String {

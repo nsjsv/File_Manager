@@ -555,6 +555,8 @@ fn user_preferences_roundtrip_replace() {
             },
         ],
         search_history: vec!["report".to_owned(), "images".to_owned()],
+        theme_mode: "dark".to_owned(),
+        color_scheme: "claude".to_owned(),
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -610,6 +612,8 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("window_chrome_layout");
     object.remove("window_controls");
     object.remove("search_history");
+    object.remove("theme_mode");
+    object.remove("color_scheme");
     let payload_json = serde_json::to_string(&payload).unwrap();
     let connection = Connection::open(store.db_path()).unwrap();
     connection
@@ -643,6 +647,8 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.window_controls[2].kind, "close");
     assert!(preferences.window_controls[2].visible);
     assert!(preferences.search_history.is_empty());
+    assert_eq!(preferences.theme_mode, "automatic");
+    assert_eq!(preferences.color_scheme, "default");
     let _ = fs::remove_dir_all(root);
 }
 
