@@ -366,4 +366,6 @@ fn focus_rename_input_command() -> Task<Message> {
 }
 
 #[cfg(test)]
+mod path_migration_tests;
+#[cfg(test)]
 mod tests;

@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use file_core::{DirectoryEntry, EntryMetadata, FileKind};
 use file_search::SearchScope;
-use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::config;
@@ -71,17 +69,6 @@ fn loaded_expanded_directory() -> ExpandedDirectory {
             direction: file_core::SortDirection::Ascending,
         },
     }
-}
-
-fn directory_entry(path: &str) -> DirectoryEntry {
-    DirectoryEntry::new(
-        PathBuf::from(path),
-        FileKind::Directory,
-        EntryMetadata::default(),
-        false,
-        false,
-        false,
-    )
 }
 
 #[test]
@@ -335,89 +322,6 @@ fn completed_non_migration_operation_restarts_active_search_workspace() {
     ));
 
     assert!(browser.search_workspace.as_ref().unwrap().run.generation > first_generation);
-}
-
-#[test]
-fn cross_directory_move_invalidates_source_and_target_tab_caches() {
-    let (browser, _) = FileBrowser::new(config::default_user_config());
-    let source_directory = PathBuf::from("/source");
-    let target_directory = PathBuf::from("/target");
-    let source_path = source_directory.join("item");
-    let target_path = target_directory.join("item");
-    let source_load_cancellation = CancellationToken::new();
-    let target_load_cancellation = CancellationToken::new();
-
-    let mut pane = browser.capture_active_pane_snapshot();
-    pane.current_dir = source_directory.clone();
-    pane.entries = vec![directory_entry("/source/item")].into();
-    pane.selected = Some(source_path.clone());
-    pane.expanded_directories.insert(
-        source_path.clone(),
-        ExpandedDirectory {
-            entries: Vec::new(),
-            directory_discovery: None,
-            status: ExpandedDirectoryStatus::Loading,
-            is_expanded: true,
-            is_collapsing: false,
-            animation_progress: 1.0,
-            load_generation: 1,
-            load_context: None,
-            load_cancel: Some(source_load_cancellation.clone()),
-            directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
-                field: file_core::SortField::Name,
-                direction: file_core::SortDirection::Ascending,
-            },
-        },
-    );
-    let source_tab_id = 20;
-    let target_tab_id = 21;
-    pane.tabs = vec![BrowserTab::directory(source_tab_id, source_directory), {
-        let mut target_tab = BrowserTab::directory(target_tab_id, target_directory);
-        target_tab.entries = vec![directory_entry("/target/existing")].into();
-        target_tab.expanded_directories.insert(
-            PathBuf::from("/target/existing"),
-            ExpandedDirectory {
-                entries: Vec::new(),
-                directory_discovery: None,
-                status: ExpandedDirectoryStatus::Loading,
-                is_expanded: true,
-                is_collapsing: false,
-                animation_progress: 1.0,
-                load_generation: 1,
-                load_context: None,
-                load_cancel: Some(target_load_cancellation.clone()),
-                directory_order_phase: crate::model::DirectoryOrderPhase::Ready {
-                    field: file_core::SortField::Name,
-                    direction: file_core::SortDirection::Ascending,
-                },
-            },
-        );
-        target_tab
-    }];
-    pane.active_tab_id = source_tab_id;
-    pane.sync_active_tab_state();
-
-    let outcome = FileOperationOutcome::Move {
-        transfers: vec![crate::operation_history::CompletedTransfer {
-            source: source_path,
-            target: target_path,
-        }],
-        history_eligibility: crate::operation_history::FileOperationHistoryEligibility::Replayable,
-    };
-    pane.migrate_completed_paths(&outcome.completed_path_migrations());
-
-    assert!(pane.entries.is_empty());
-    assert!(pane.selected.is_none());
-    assert!(pane.expanded_directories.is_empty());
-    assert!(source_load_cancellation.is_cancelled());
-    let target_tab = pane
-        .tabs
-        .iter()
-        .find(|tab| tab.id == target_tab_id)
-        .expect("target tab");
-    assert!(target_tab.entries.is_empty());
-    assert!(target_tab.expanded_directories.is_empty());
-    assert!(target_load_cancellation.is_cancelled());
 }
 
 #[test]

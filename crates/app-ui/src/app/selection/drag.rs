@@ -204,7 +204,7 @@ impl FileBrowser {
         pane_id: BrowserPaneId,
         path: &Path,
     ) -> Option<PathBuf> {
-        self.cursor_paste_directory_for_entry_in_pane(pane_id, path)
+        self.directory_drop_target_for_entry_in_pane(pane_id, path)
     }
 
     pub(crate) fn file_drag_release_directory_for_drop_target(

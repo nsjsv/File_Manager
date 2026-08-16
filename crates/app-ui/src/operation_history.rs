@@ -222,6 +222,25 @@ pub(crate) fn completed_migrations_cross_directory_tree_boundary(
     })
 }
 
+pub(crate) fn completed_migrations_leave_directory_tree(
+    directory: &Path,
+    migrations: &[CompletedPathMigration],
+) -> bool {
+    migrations.iter().any(|migration| {
+        migration.source.strip_prefix(directory).is_ok()
+            && migration.destination.strip_prefix(directory).is_err()
+    })
+}
+
+pub(crate) fn completed_migrations_have_source_in_directory_tree(
+    directory: &Path,
+    migrations: &[CompletedPathMigration],
+) -> bool {
+    migrations
+        .iter()
+        .any(|migration| migration.source.strip_prefix(directory).is_ok())
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PendingHistoryOperation {
     direction: HistoryDirection,

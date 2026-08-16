@@ -402,16 +402,22 @@ mod tests {
 
     use super::*;
     use crate::config;
-    use crate::model::FileEntryContentModifier;
+    use crate::model::{
+        BrowserViewMode, FileDragStationaryAction, FileDropTarget, FileEntryContentModifier,
+    };
     use desktop_linux::{
         NetworkConnection, NetworkConnectionId, NetworkMountState, NetworkProtocol,
     };
     use file_core::{DirectoryEntry, EntryMetadata, FileKind};
 
     fn test_entry(path: &Path) -> DirectoryEntry {
+        test_entry_with_kind(path, FileKind::File)
+    }
+
+    fn test_entry_with_kind(path: &Path, kind: FileKind) -> DirectoryEntry {
         DirectoryEntry::new(
             path.to_path_buf(),
-            FileKind::File,
+            kind,
             EntryMetadata {
                 len: 0,
                 modified: None,
@@ -450,6 +456,41 @@ mod tests {
         browser
             .network_connections
             .accept_loaded(vec![(id, NetworkMountState::Mounted(mount_path))]);
+    }
+
+    #[test]
+    fn entry_hover_uses_current_level_for_paste_and_directory_for_drop() {
+        let current_dir = PathBuf::from("/workspace");
+        let source = current_dir.join("report.txt");
+        let directory = current_dir.join("project");
+        let mut browser = browser_with_entries(std::slice::from_ref(&source));
+        browser.view_mode = BrowserViewMode::List;
+        browser.entries = vec![
+            test_entry(&source),
+            test_entry_with_kind(&directory, FileKind::Directory),
+        ]
+        .into();
+
+        drop(browser.handle_entry_hovered(directory.clone()));
+        assert_eq!(browser.paste_target_directory(), current_dir);
+        drop(browser.handle_entry_hovered(source.clone()));
+        assert_eq!(browser.paste_target_directory(), current_dir);
+
+        browser.cursor_position = iced::Point::new(0.0, 0.0);
+        browser.start_file_drag(source, FileDragStationaryAction::SelectionOnly, Vec::new());
+        drop(browser.update_file_drag(iced::Point::new(10.0, 0.0)));
+        drop(browser.handle_entry_hovered(directory.clone()));
+
+        assert_eq!(browser.paste_target_directory(), current_dir);
+        drop(browser.handle_drop_target_hovered(directory.clone()));
+        assert_eq!(browser.paste_target_directory(), current_dir);
+        assert!(matches!(
+            browser
+                .file_drop_session
+                .as_ref()
+                .and_then(|session| session.hovered_target.as_ref()),
+            Some(FileDropTarget::Directory(target)) if target == &directory
+        ));
     }
 
     #[test]

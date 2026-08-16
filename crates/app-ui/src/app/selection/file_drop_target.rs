@@ -24,7 +24,7 @@ pub(super) fn freeze_file_drop_hit_test_bounds(
                 browser
                     .pane_accepts_file_drag(entry.pane_id)
                     .then(|| {
-                        browser.cursor_paste_directory_for_entry_in_pane(entry.pane_id, &entry.path)
+                        browser.directory_drop_target_for_entry_in_pane(entry.pane_id, &entry.path)
                     })
                     .flatten()
                     .map(|directory| FileDropEntryTargetBounds {

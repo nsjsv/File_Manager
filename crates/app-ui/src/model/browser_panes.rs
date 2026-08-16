@@ -9,8 +9,9 @@ use file_core::{
 use tokio_util::sync::CancellationToken;
 
 use crate::operation_history::{
-    completed_migrations_cross_directory_tree_boundary, completed_migrations_touch_directory_tree,
-    path_after_completed_migrations, CompletedPathMigration,
+    completed_migrations_have_source_in_directory_tree, completed_migrations_leave_directory_tree,
+    completed_migrations_touch_directory_tree, path_after_completed_migrations,
+    CompletedPathMigration,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -317,16 +318,18 @@ impl BrowserPane {
         let directory_was_migrated = migrated_directory != original_directory;
         let directory_tree_was_touched =
             completed_migrations_touch_directory_tree(&original_directory, migrations);
-        let migration_crossed_directory_tree =
-            completed_migrations_cross_directory_tree_boundary(&original_directory, migrations);
+        let migration_left_directory_tree =
+            completed_migrations_leave_directory_tree(&original_directory, migrations);
+        let migration_has_source_in_directory_tree =
+            completed_migrations_have_source_in_directory_tree(&original_directory, migrations);
 
         self.current_dir = migrated_directory;
         if directory_was_migrated || directory_tree_was_touched {
             self.cancel_current_directory_load();
         }
-        if !directory_was_migrated && migration_crossed_directory_tree {
+        if !directory_was_migrated && migration_left_directory_tree {
             self.invalidate_cached_directory_tree();
-        } else {
+        } else if directory_was_migrated || migration_has_source_in_directory_tree {
             self.migrate_cached_directory_tree_paths(migrations);
         }
         migrate_path_list(&mut self.back_stack, migrations);
@@ -555,13 +558,15 @@ impl BrowserTab {
         let original_directory = self.directory.clone();
         let migrated_directory = path_after_completed_migrations(&original_directory, migrations);
         let directory_was_migrated = migrated_directory != original_directory;
-        let migration_crossed_directory_tree =
-            completed_migrations_cross_directory_tree_boundary(&original_directory, migrations);
+        let migration_left_directory_tree =
+            completed_migrations_leave_directory_tree(&original_directory, migrations);
+        let migration_has_source_in_directory_tree =
+            completed_migrations_have_source_in_directory_tree(&original_directory, migrations);
 
         self.directory = migrated_directory;
-        if !directory_was_migrated && migration_crossed_directory_tree {
+        if !directory_was_migrated && migration_left_directory_tree {
             self.invalidate_cached_directory_tree();
-        } else {
+        } else if directory_was_migrated || migration_has_source_in_directory_tree {
             self.migrate_cached_directory_tree_paths(migrations);
         }
         migrate_path_list(&mut self.back_stack, migrations);

@@ -169,7 +169,7 @@ impl FileBrowser {
             .and_then(|session| session.hovered_target.clone());
         let fallback = self.file_drag_drop_directory_at_cursor();
         self.file_drop_session = None;
-        self.clear_file_drop_visuals();
+        self.clear_internal_file_drop_visuals();
         let target = resolve_file_drag_target(
             &file_drag.sources,
             release_directory,
@@ -272,7 +272,7 @@ impl FileBrowser {
         }
         let file_drag = self.file_drag.take().expect("matching Iced file drag");
         self.file_drop_session = None;
-        self.clear_file_drop_visuals();
+        self.clear_internal_file_drop_visuals();
         self.dispatch_file_drop(
             FileDropOrigin::Internal(InternalFileDragSnapshot {
                 source_session_id: None,
@@ -377,7 +377,7 @@ impl FileBrowser {
     pub(in crate::app) fn cancel_file_drag_interaction(&mut self) {
         self.file_drag = None;
         self.file_drop_session = None;
-        self.clear_file_drop_visuals();
+        self.clear_internal_file_drop_visuals();
     }
 
     pub(in crate::app) fn request_breadcrumb_drop_target_bounds_measurement(
@@ -557,7 +557,12 @@ impl FileBrowser {
             .file_drop_session
             .take()
             .expect("ready file drop session");
-        self.clear_file_drop_visuals();
+        let internal = matches!(session.origin, FileDropOrigin::Internal(_));
+        if internal {
+            self.clear_internal_file_drop_visuals();
+        } else {
+            self.clear_file_drop_visuals();
+        }
         let payload = session.pending_payload.expect("ready file drop payload");
         let target = match session.frozen_drop_target {
             Some(FrozenFileDropTarget::Target(target)) => Some(target),
@@ -648,17 +653,17 @@ impl FileBrowser {
             Some(FileDropTarget::SidebarBookmarkSlot(slot)) => Some(*slot),
             _ => None,
         };
-        self.cursor_paste_directory = match target {
-            Some(FileDropTarget::Directory(directory)) => Some(directory.clone()),
-            _ => None,
-        };
     }
 
     fn clear_file_drop_visuals(&mut self) {
         self.hovered_entry = None;
         self.hovered_sidebar = None;
-        self.cursor_paste_directory = None;
         self.sidebar_bookmark_drop_slot = None;
+    }
+
+    fn clear_internal_file_drop_visuals(&mut self) {
+        self.clear_file_drop_visuals();
+        self.cursor_paste_directory = None;
     }
 
     fn cancel_file_drop_session(&mut self, identity: FileDropSessionIdentity) -> bool {
@@ -667,8 +672,16 @@ impl FileBrowser {
             .as_ref()
             .is_some_and(|session| session.identity == identity);
         if matches {
+            let internal = self
+                .file_drop_session
+                .as_ref()
+                .is_some_and(|session| matches!(&session.origin, FileDropOrigin::Internal(_)));
             self.file_drop_session = None;
-            self.clear_file_drop_visuals();
+            if internal {
+                self.clear_internal_file_drop_visuals();
+            } else {
+                self.clear_file_drop_visuals();
+            }
         }
         matches
     }

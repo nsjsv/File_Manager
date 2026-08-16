@@ -149,10 +149,9 @@ impl FileBrowser {
 
     pub(super) fn handle_entry_hovered(&mut self, path: PathBuf) -> Task<Message> {
         self.hovered_entry = Some(path.clone());
-        let target_directory = self.cursor_paste_directory_for_entry(&path);
-        self.cursor_paste_directory = Some(target_directory.clone());
+        self.cursor_paste_directory = Some(self.entry_parent_directory(&path));
         if self.file_drag.is_some() {
-            self.set_file_drag_target(target_directory);
+            self.set_file_drag_target(self.directory_drop_target_for_entry(&path));
         } else if self.selection_marquee.is_none() {
             self.extend_drag_selection_to(path);
         }
@@ -169,15 +168,16 @@ impl FileBrowser {
 
     pub(super) fn handle_drop_target_hovered(&mut self, directory: PathBuf) -> Task<Message> {
         self.hovered_entry = None;
-        self.cursor_paste_directory = Some(directory.clone());
         if self.file_drag.is_some() {
             self.set_file_drag_target(directory);
+        } else {
+            self.cursor_paste_directory = Some(directory);
         }
         Task::none()
     }
 
     pub(super) fn handle_drop_target_hover_cleared(&mut self, directory: PathBuf) -> Task<Message> {
-        if self.cursor_paste_directory.as_ref() == Some(&directory) {
+        if self.file_drag.is_none() && self.cursor_paste_directory.as_ref() == Some(&directory) {
             self.cursor_paste_directory = None;
         }
         self.clear_file_drag_target_if_matching(&directory);
@@ -193,7 +193,7 @@ impl FileBrowser {
             return Task::none();
         }
 
-        let Some(target_directory) = self.cursor_paste_directory_for_entry_in_pane(pane_id, &path)
+        let Some(target_directory) = self.directory_drop_target_for_entry_in_pane(pane_id, &path)
         else {
             self.clear_file_drag_target();
             return Task::none();
@@ -212,8 +212,7 @@ impl FileBrowser {
             return Task::none();
         }
 
-        if let Some(target_directory) =
-            self.cursor_paste_directory_for_entry_in_pane(pane_id, &path)
+        if let Some(target_directory) = self.directory_drop_target_for_entry_in_pane(pane_id, &path)
         {
             self.clear_file_drag_target_if_matching(&target_directory);
         }
@@ -507,7 +506,7 @@ impl FileBrowser {
         self.entry_kind_recursive(path)
     }
 
-    fn cursor_paste_directory_for_entry(&self, path: &Path) -> PathBuf {
+    fn directory_drop_target_for_entry(&self, path: &Path) -> PathBuf {
         if self.entry_kind(path) == Some(FileKind::Directory) {
             path.to_path_buf()
         } else {
@@ -515,7 +514,7 @@ impl FileBrowser {
         }
     }
 
-    fn cursor_paste_directory_for_entry_in_pane(
+    fn directory_drop_target_for_entry_in_pane(
         &self,
         pane_id: BrowserPaneId,
         path: &Path,

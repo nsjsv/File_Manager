@@ -749,6 +749,7 @@ fn right_clicking_directory_selects_menu_target_without_focusing_it() {
     };
     assert_eq!(context_menu.target.as_ref(), Some(&directory));
     assert!(context_menu.target_is_directory);
+    assert_eq!(browser.paste_target_directory(), current_dir);
 }
 
 #[test]

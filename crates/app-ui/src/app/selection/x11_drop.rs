@@ -20,6 +20,8 @@ use crate::operation_queue::QueuedFileOperation;
 #[test]
 fn x11_multi_file_directory_drop_opens_one_existing_prompt() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let clipboard_directory = PathBuf::from("/workspace/clipboard-level");
+    browser.cursor_paste_directory = Some(clipboard_directory.clone());
     let id = X11FileDropTargetSessionId::unique();
     let request = begin_session(&mut browser, id, position(1, 40, 40), 1.0, 1);
     let destination = PathBuf::from("/workspace/destination");
@@ -31,6 +33,7 @@ fn x11_multi_file_directory_drop_opens_one_existing_prompt() {
             rectangle(0.0, 0.0, 100.0, 100.0),
         ),
     ));
+    assert_eq!(browser.paste_target_directory(), clipboard_directory);
     drop(browser.accept_x11_target_event(
         X11FileDropTargetEvent::Dropped {
             target_session_id: id,
@@ -57,6 +60,7 @@ fn x11_multi_file_directory_drop_opens_one_existing_prompt() {
         Some(FileDropPrompt { paste_directory, paths: actual })
             if paste_directory == &destination && actual == &paths
     ));
+    assert_eq!(browser.paste_target_directory(), clipboard_directory);
     assert!(browser.file_drop_session.is_none());
 }
 
