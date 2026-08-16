@@ -12,7 +12,7 @@ use crate::model::{Message, ScrollbarRegion};
 
 const MOS_SCROLL_STEP: f32 = 33.6;
 const MOS_SCROLL_SPEED: f32 = 2.70;
-const MOS_SCROLL_DURATION_TRANSITION: f32 = 0.095;
+const MOS_SCROLL_DURATION_TRANSITION: f32 = 0.125;
 const MOS_SCROLL_DEAD_ZONE: f32 = 0.1;
 const MOS_SCROLL_FILTER_WEIGHT: f32 = 0.23;
 
@@ -730,6 +730,21 @@ mod tests {
         let (_, second_frame) = state.next_frame_delta().expect("second frame");
 
         assert!(second_frame.y > MOS_SCROLL_DEAD_ZONE);
+    }
+
+    #[test]
+    fn standard_line_reaches_ninety_percent_within_twenty_four_frames() {
+        let mut state = MosScrollState::default();
+        let mut input = SmoothScrollDelta::default();
+        input.y = MOS_SCROLL_STEP;
+        state.push_wheel_delta(ScrollbarRegion::Sidebar, input);
+        let target = MOS_SCROLL_STEP * MOS_SCROLL_SPEED;
+        let mut scrolled = 0.0;
+        for _ in 0..24 {
+            scrolled += state.next_frame_delta().map_or(0.0, |frame| frame.1.y);
+        }
+        assert!((target - 90.72).abs() <= 0.0001);
+        assert!(scrolled >= target * 0.9);
     }
 
     #[test]
