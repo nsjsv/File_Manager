@@ -241,9 +241,10 @@ fn preview_tree_directory_status_message(entry: &PreviewTreeEntry) -> Option<Str
     }
 
     match entry.directory_children.as_ref()? {
-        PreviewTreeDirectoryChildren::Loading => Some("Loading...".to_owned()),
         PreviewTreeDirectoryChildren::Error(error) => Some(format!("Could not load: {error}")),
-        PreviewTreeDirectoryChildren::Pending | PreviewTreeDirectoryChildren::Loaded => None,
+        PreviewTreeDirectoryChildren::Loading
+        | PreviewTreeDirectoryChildren::Pending
+        | PreviewTreeDirectoryChildren::Loaded => None,
     }
 }
 

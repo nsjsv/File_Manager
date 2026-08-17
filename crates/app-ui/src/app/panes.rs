@@ -546,6 +546,7 @@ mod tests {
             include_str!("../list_view.rs"),
             include_str!("../icon_grid_view.rs"),
             include_str!("../three_column_view.rs"),
+            include_str!("../view/preview_panel.rs"),
         ];
 
         assert!(directory_view_sources
