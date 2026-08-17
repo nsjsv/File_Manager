@@ -115,6 +115,21 @@ fn undo_move_reverses_completed_transfers() {
 }
 
 #[test]
+fn pending_history_task_id_remaps_after_durable_insert() {
+    let mut history = FileOperationHistory::new();
+    history.undo_stack.push(FileOperationHistoryItem::Move {
+        transfers: vec![transfer("/a", "/b")],
+    });
+    let (_operation, pending) = history.take_undo_operation().expect("undo operation");
+    history.track_pending(u64::MAX - 1, pending);
+
+    history.remap_pending_task(u64::MAX - 1, 42);
+
+    assert!(!history.is_replaying(u64::MAX - 1));
+    assert!(history.is_replaying(42));
+}
+
+#[test]
 fn failed_undo_move_splits_completed_and_remaining_transfers() {
     let mut history = FileOperationHistory::new();
     history.undo_stack.push(FileOperationHistoryItem::Move {

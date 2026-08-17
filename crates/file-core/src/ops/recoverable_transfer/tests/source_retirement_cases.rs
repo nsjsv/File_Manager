@@ -5,61 +5,67 @@ use super::*;
 async fn source_retirement_rejects_payload_modified_after_deletion_intent() {
     use std::os::unix::fs::MetadataExt;
 
-    let source_directory = tempdir().unwrap();
-    let Ok(target_directory) = tempfile::tempdir_in("/dev/shm") else {
-        return;
-    };
-    if std::fs::metadata(source_directory.path()).unwrap().dev()
-        == std::fs::metadata(target_directory.path()).unwrap().dev()
-    {
-        return;
-    }
-    let source = source_directory.path().join("source");
-    let target = target_directory.path().join("target");
-    fs::create_dir(&source).await.unwrap();
-    fs::write(source.join("file"), b"original").await.unwrap();
-    let request = transfer_request(
-        source,
-        target.clone(),
-        RecoverableTransferOperation::Move,
-        TransferConflictStrategy::Fail,
-    );
-    let journal = MemoryJournal::new(702, TransferWorkKey::top_level(0), None);
-    let mut record = journal.record(request);
-
-    let (retired_entry, deletion_slot) = loop {
-        assert_eq!(
-            advance_recoverable_transfer(&mut record, &journal, &running_transfer_options())
-                .await
-                .unwrap(),
-            TransferAdvance::Continue
-        );
-        if let TransferCheckpoint::SourceRetired(retired) = &record.checkpoint {
-            if retired
-                .cleanup_intent
-                .as_ref()
-                .is_some_and(|intent| intent.entry.relative_path.as_path() == Path::new("file"))
-            {
-                break (
-                    retired.artifact.plan.payload_path().join("file"),
-                    retired.artifact.plan.backup_path(),
-                );
-            }
+    for (task_id, verification) in [
+        (702, FileOperationVerification::BasicMetadata),
+        (704, FileOperationVerification::Strong),
+    ] {
+        let source_directory = tempdir().unwrap();
+        let Ok(target_directory) = tempfile::tempdir_in("/dev/shm") else {
+            return;
+        };
+        if std::fs::metadata(source_directory.path()).unwrap().dev()
+            == std::fs::metadata(target_directory.path()).unwrap().dev()
+        {
+            return;
         }
-    };
-    rename_noreplace(&retired_entry, &deletion_slot).unwrap();
-    fs::write(&deletion_slot, b"tampered").await.unwrap();
+        let source = source_directory.path().join("source");
+        let target = target_directory.path().join("target");
+        fs::create_dir(&source).await.unwrap();
+        fs::write(source.join("file"), b"original").await.unwrap();
+        let mut request = transfer_request(
+            source,
+            target.clone(),
+            RecoverableTransferOperation::Move,
+            TransferConflictStrategy::Fail,
+        );
+        request.verification = verification;
+        let journal = MemoryJournal::new(task_id, TransferWorkKey::top_level(0), None);
+        let mut record = journal.record(request);
 
-    let error = run_recoverable_transfer(record, &journal, running_transfer_options())
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        RecoverableTransferError::RecoveryBlocked { .. }
-    ));
-    assert_eq!(fs::read(&retired_entry).await.unwrap(), b"tampered");
-    assert!(fs::symlink_metadata(&deletion_slot).await.is_err());
-    assert_eq!(fs::read(target.join("file")).await.unwrap(), b"original");
+        let (retired_entry, deletion_slot) = loop {
+            assert_eq!(
+                advance_recoverable_transfer(&mut record, &journal, &running_transfer_options())
+                    .await
+                    .unwrap(),
+                TransferAdvance::Continue
+            );
+            if let TransferCheckpoint::SourceRetired(retired) = &record.checkpoint {
+                if retired
+                    .cleanup_intent
+                    .as_ref()
+                    .is_some_and(|intent| intent.entry.relative_path.as_path() == Path::new("file"))
+                {
+                    break (
+                        retired.artifact.plan.payload_path().join("file"),
+                        retired.artifact.plan.backup_path(),
+                    );
+                }
+            }
+        };
+        rename_noreplace(&retired_entry, &deletion_slot).unwrap();
+        fs::write(&deletion_slot, b"tampered").await.unwrap();
+
+        let error = run_recoverable_transfer(record, &journal, running_transfer_options())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            RecoverableTransferError::RecoveryBlocked { .. }
+        ));
+        assert_eq!(fs::read(&retired_entry).await.unwrap(), b"tampered");
+        assert!(fs::symlink_metadata(&deletion_slot).await.is_err());
+        assert_eq!(fs::read(target.join("file")).await.unwrap(), b"original");
+    }
 }
 
 #[cfg(unix)]

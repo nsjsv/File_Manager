@@ -65,6 +65,7 @@ impl Recipe for FileOperationRecipe {
     fn stream(self: Box<Self>, _input: EventStream) -> BoxStream<'static, Self::Output> {
         let RunningFileOperation {
             id: task_id,
+            stored_id,
             operation,
             controls,
             store,
@@ -73,9 +74,15 @@ impl Recipe for FileOperationRecipe {
         Box::pin(iced::stream::channel(
             FILE_OPERATION_CHANNEL_SIZE,
             async move |mut output| {
-                let result =
-                    run_queued_file_operation(operation, controls, store, task_id, &mut output)
-                        .await;
+                let result = run_queued_file_operation(
+                    operation,
+                    controls,
+                    store,
+                    stored_id,
+                    task_id,
+                    &mut output,
+                )
+                .await;
                 let _ = output
                     .send(Message::FileOperationFinished(task_id, result))
                     .await;
@@ -89,6 +96,7 @@ async fn run_queued_file_operation(
     operation: QueuedFileOperation,
     controls: FileOperationControls,
     store: Option<TaskQueueStore>,
+    stored_task_id: Option<u64>,
     task_id: u64,
     output: &mut IcedSender<Message>,
 ) -> FileOperationCompletion {
@@ -147,6 +155,7 @@ async fn run_queued_file_operation(
                 run_queued_transfers(
                     transfers,
                     controls,
+                    stored_task_id.expect("recoverable copy has a persisted task id"),
                     task_id,
                     output,
                     store,
@@ -164,6 +173,7 @@ async fn run_queued_file_operation(
                 run_queued_transfers(
                     transfers,
                     controls,
+                    stored_task_id.expect("recoverable move has a persisted task id"),
                     task_id,
                     output,
                     store,

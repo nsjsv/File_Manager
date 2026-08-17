@@ -40,13 +40,13 @@ pub(crate) use manifest::{
 };
 pub use manifest::{SourceManifest, SourceManifestEntry};
 pub use protocol::{
-    CommitPayload, CommitTransfer, CommittedTransfer, CompletedTarget, MergeChildCompletion,
-    MergeChildOutcome, MergeTransfer, OwnedTreeEntryDeletionIntent, PreparedTransfer,
-    RecoverableTransferOperation, RecoverableTransferOutcome, RecoverableTransferRequest,
-    RetiredSource, SourceDisposition, SourceRetirementPlan, StagedSourceLocation, StagingTransfer,
-    TransferCheckpoint, TransferExecutionKind, TransferFailureIntent, TransferJournal,
-    TransferJournalError, TransferJournalFuture, TransferJournalMutation, TransferJournalRecord,
-    TransferWorkKey,
+    BackupCreationTransfer, CommitPayload, CommitTransfer, CommittedTransfer, CompletedTarget,
+    MergeChildCompletion, MergeChildOutcome, MergeTransfer, OwnedTreeEntryDeletionIntent,
+    PreparedTransfer, RecoverableTransferOperation, RecoverableTransferOutcome,
+    RecoverableTransferRequest, RetiredSource, SourceDisposition, SourceRetirementPlan,
+    StagedSourceLocation, StagingTransfer, TransferCheckpoint, TransferExecutionKind,
+    TransferFailureIntent, TransferJournal, TransferJournalError, TransferJournalFuture,
+    TransferJournalMutation, TransferJournalRecord, TransferWorkKey,
 };
 pub(crate) use rename::{rename_noreplace, NoReplaceRenameError};
 

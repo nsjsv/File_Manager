@@ -7,7 +7,8 @@ use crate::operation_history::{
     path_after_completed_migrations, FileOperationCompletion, PendingHistoryOperation,
 };
 use crate::operation_queue::{
-    FileOperationEnqueueOutcome, FileOperationFinish, QueuedFileOperation,
+    file_operation_persistence_command, FileOperationEnqueueOutcome, FileOperationFinish,
+    FileOperationPersistenceOutcome, QueuedFileOperation,
 };
 use crate::view::rename_input_id;
 
@@ -158,7 +159,43 @@ impl FileBrowser {
             path_migration_task,
             search_refresh_task,
             pane_reload_task,
+            self.continue_file_operation_persistence(),
         ])
+    }
+
+    pub(super) fn accept_file_operation_persistence_finished(
+        &mut self,
+        persistence_outcome: FileOperationPersistenceOutcome,
+    ) -> Task<Message> {
+        let acceptance = self
+            .operation_queue
+            .accept_persistence_outcome(persistence_outcome);
+        if let Some((local_task_id, stored_task_id)) = acceptance.task_id_remap {
+            self.operation_history
+                .remap_pending_task(local_task_id, stored_task_id);
+        }
+        if let Some(error) = acceptance.error {
+            self.show_global_error(error);
+        }
+        if let Some(task_id) = acceptance.rejected_task_id {
+            self.operation_history.accept_failed(task_id, &[]);
+        }
+        if let Some(task_id) = acceptance.canceled_before_start_task_id {
+            self.operation_history.accept_failed(task_id, &[]);
+        }
+        let next_persistence = self.continue_file_operation_persistence();
+        let shutdown_progress = self.accept_file_operation_persistence_progress(
+            acceptance.persisted_recoverable_terminal_stored_id,
+            acceptance.persisted_shutdown_operation,
+        );
+        Task::batch([next_persistence, shutdown_progress])
+    }
+
+    pub(super) fn continue_file_operation_persistence(&mut self) -> Task<Message> {
+        self.operation_queue
+            .take_next_persistence_request()
+            .map(file_operation_persistence_command)
+            .unwrap_or_else(Task::none)
     }
 
     fn migrate_paths_after_file_operation(
@@ -353,7 +390,7 @@ impl FileBrowser {
                 }
             }
         }
-        Task::none()
+        self.continue_file_operation_persistence()
     }
 }
 

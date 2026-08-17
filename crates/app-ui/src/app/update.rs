@@ -8,6 +8,9 @@ impl FileBrowser {
                 Message::FileOperationFinished(task_id, completion) => {
                     self.accept_application_shutdown_operation_finished(task_id, completion)
                 }
+                Message::FileOperationPersistenceFinished(outcome) => {
+                    self.accept_file_operation_persistence_finished(outcome)
+                }
                 Message::BrowserSessionSaved(outcome) => {
                     self.accept_application_shutdown_browser_session_saved(outcome)
                 }
@@ -193,6 +196,9 @@ impl FileBrowser {
             Message::FileOperationFinished(task_id, completion) => {
                 self.accept_file_operation_finished(task_id, completion)
             }
+            Message::FileOperationPersistenceFinished(outcome) => {
+                self.accept_file_operation_persistence_finished(outcome)
+            }
             Message::OperationProgressAnimationTick => {
                 self.operation_progress_animation_frame =
                     self.operation_progress_animation_frame.wrapping_add(1);
@@ -215,13 +221,13 @@ impl FileBrowser {
                 if let Some(error) = self.operation_queue.toggle_pause(task_id) {
                     self.show_global_error(error);
                 }
-                Task::none()
+                self.continue_file_operation_persistence()
             }
             Message::FileOperationCancelRequested(task_id) => {
                 if let Some(error) = self.operation_queue.cancel(task_id) {
                     self.show_global_error(error);
                 }
-                Task::none()
+                self.continue_file_operation_persistence()
             }
             Message::FileOperationDetailsCopyRequested(task_id) => self
                 .operation_queue
@@ -240,13 +246,13 @@ impl FileBrowser {
                 if let Some(error) = self.operation_queue.clear_terminal_task(task_id) {
                     self.show_global_error(error);
                 }
-                Task::none()
+                self.continue_file_operation_persistence()
             }
             Message::FileOperationClearFinishedRequested => {
                 if let Some(error) = self.operation_queue.clear_terminal_tasks() {
                     self.show_global_error(error);
                 }
-                Task::none()
+                self.continue_file_operation_persistence()
             }
             Message::PreviewTreeDirectoryToggled(entry_id) => {
                 self.toggle_preview_tree_directory(entry_id)

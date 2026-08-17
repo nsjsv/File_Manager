@@ -10,6 +10,7 @@ use super::FileBrowser;
 use crate::commands::commit_application_shutdown_command;
 use crate::model::{snapshot_to_stored, Message};
 use crate::operation_history::FileOperationCompletion;
+use crate::operation_queue::PersistedShutdownFileOperation;
 use crate::startup_trace;
 
 enum ShutdownWindowFact {
@@ -207,45 +208,67 @@ impl FileBrowser {
         let is_recoverable = self
             .operation_queue
             .operation_uses_recovery_journal(task_id);
-        let normal_recoverable_finalized = if is_recoverable
+        if is_recoverable
             && !matches!(
                 completion,
                 FileOperationCompletion::RecoveryInterrupted(_, _)
-            ) {
-            let (terminal_status, storage_error) =
+            )
+        {
+            let (_, _, persisted_terminal_stored_id) =
                 self.operation_queue.finish_for_application_shutdown(
                     task_id,
                     queue_finish_from_completion(&completion),
                 );
-            let storage_succeeded = storage_error.is_none();
-            if let Some(error) = &storage_error {
-                tracing::error!(
-                    target: "app_ui::shutdown",
-                    task_id,
-                    error = %error,
-                    "normal operation completion could not be persisted during shutdown"
-                );
+            if let Some(stored_task_id) = persisted_terminal_stored_id {
+                if let ApplicationShutdownPhase::Draining(drain) =
+                    &mut self.application_shutdown_phase
+                {
+                    if let Some(commit) = &mut drain.commit {
+                        commit
+                            .interrupted_recoverable_tasks
+                            .retain(|task| task.task_id != stored_task_id);
+                    }
+                }
             }
-            terminal_status.is_some() && storage_succeeded
-        } else {
-            false
-        };
+        }
 
         let ApplicationShutdownPhase::Draining(drain) = &mut self.application_shutdown_phase else {
             return Task::none();
         };
         drain.waiting_for_operation_ids.remove(&task_id);
-        if normal_recoverable_finalized {
-            if let Some(commit) = &mut drain.commit {
-                commit
-                    .interrupted_recoverable_tasks
-                    .retain(|task| task.task_id != task_id);
-            }
-        }
         if !drain.waiting_for_operation_ids.is_empty() {
-            return Task::none();
+            return self.continue_file_operation_persistence();
         }
         startup_trace::mark("shutdown_operation_quiescence_finished");
+        Task::batch([
+            self.continue_file_operation_persistence(),
+            self.start_application_shutdown_persistence(),
+        ])
+    }
+
+    pub(super) fn accept_file_operation_persistence_progress(
+        &mut self,
+        persisted_recoverable_terminal_stored_id: Option<u64>,
+        persisted_shutdown_operation: Option<PersistedShutdownFileOperation>,
+    ) -> Task<Message> {
+        if let ApplicationShutdownPhase::Draining(drain) = &mut self.application_shutdown_phase {
+            if let Some(commit) = &mut drain.commit {
+                if let Some(stored_task_id) = persisted_recoverable_terminal_stored_id {
+                    commit
+                        .interrupted_recoverable_tasks
+                        .retain(|task| task.task_id != stored_task_id);
+                }
+                match persisted_shutdown_operation {
+                    Some(PersistedShutdownFileOperation::Recoverable(task)) => {
+                        commit.interrupted_recoverable_tasks.push(task);
+                    }
+                    Some(PersistedShutdownFileOperation::Transient(stored_task_id)) => {
+                        commit.transient_task_ids.push(stored_task_id);
+                    }
+                    None => {}
+                }
+            }
+        }
         self.start_application_shutdown_persistence()
     }
 
@@ -286,6 +309,7 @@ impl FileBrowser {
             || !drain.waiting_for_operation_ids.is_empty()
             || self.user_preferences_save_in_flight
             || self.browser_session_saves_in_flight > 0
+            || !self.operation_queue.persistence_is_idle()
         {
             return Task::none();
         }

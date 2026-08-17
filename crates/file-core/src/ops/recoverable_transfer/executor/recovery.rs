@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use super::commit::{commit_payload_identity, verify_completed_target};
+use super::commit::{
+    commit_payload_identity, matches_object_verification, verify_completed_target,
+};
 use super::{next_recovered_path, path_exists, persist_checkpoint, sync_rename_parents};
 use crate::ops::recoverable_transfer::{
     fingerprint_object, inspect_file_identity, recover_owned_artifact,
@@ -102,14 +104,15 @@ async fn cleanup_checkpoint_files(
             restore_or_remove_staging(record, staging).await?;
             Ok(None)
         }
-        TransferCheckpoint::CommitIntent(commit) => cleanup_commit_intent(record, commit).await,
-        TransferCheckpoint::TargetCommitted(_)
+        TransferCheckpoint::BackupCreationIntent(_)
+        | TransferCheckpoint::TargetCommitted(_)
         | TransferCheckpoint::SourceRetirementIntent(_)
         | TransferCheckpoint::SourceRetired(_) => {
             Err(RecoverableTransferError::InvalidCheckpoint {
-                message: "committed transfer cleanup must only move forward".to_owned(),
+                message: "forward-only transfer cleanup must only move forward".to_owned(),
             })
         }
+        TransferCheckpoint::CommitIntent(commit) => cleanup_commit_intent(record, commit).await,
         TransferCheckpoint::Completed(completed) => {
             verify_completed_target(completed).await?;
             Ok(Some(completed.path.clone()))
@@ -175,7 +178,7 @@ async fn restore_or_remove_artifact_payload(
     record: &TransferJournalRecord,
     artifact: &OwnedArtifact,
     source_identity: &FileIdentity,
-    source_fingerprint: crate::ops::recoverable_transfer::ObjectFingerprint,
+    source_fingerprint: Option<crate::ops::recoverable_transfer::ObjectFingerprint>,
     source_location: StagedSourceLocation,
 ) -> Result<(), RecoverableTransferError> {
     if source_location == StagedSourceLocation::ArtifactPayload {
@@ -197,8 +200,13 @@ async fn cleanup_commit_intent(
 ) -> Result<Option<PathBuf>, RecoverableTransferError> {
     if path_exists(&commit.prepared.resolved_target).await? {
         let target_identity = inspect_file_identity(&commit.prepared.resolved_target).await?;
-        if target_identity.same_object(commit_payload_identity(commit))
-            && fingerprint_object(&commit.prepared.resolved_target).await? == commit.fingerprint
+        if matches_object_verification(
+            &commit.prepared.resolved_target,
+            &target_identity,
+            commit_payload_identity(commit),
+            commit.fingerprint,
+        )
+        .await?
         {
             return Err(RecoverableTransferError::InvalidCheckpoint {
                 message: "committed target cannot be rolled back by terminal cleanup".to_owned(),
@@ -224,7 +232,7 @@ async fn cleanup_commit_intent(
                 record,
                 artifact,
                 payload_identity,
-                commit.fingerprint,
+                Some(commit.fingerprint),
                 PayloadIdentityExpectation::Exact,
             )
             .await?;
@@ -232,7 +240,7 @@ async fn cleanup_commit_intent(
             verify_owned_payload(
                 artifact,
                 payload_identity,
-                commit.fingerprint,
+                Some(commit.fingerprint),
                 PayloadIdentityExpectation::Exact,
             )
             .await?;
@@ -260,7 +268,7 @@ async fn cleanup_commit_intent(
                 record,
                 artifact,
                 payload_identity,
-                commit.fingerprint,
+                Some(commit.fingerprint),
                 PayloadIdentityExpectation::Exact,
             )
             .await?;
@@ -268,7 +276,7 @@ async fn cleanup_commit_intent(
             verify_owned_payload(
                 artifact,
                 payload_identity,
-                commit.fingerprint,
+                Some(commit.fingerprint),
                 PayloadIdentityExpectation::Exact,
             )
             .await?;
@@ -297,17 +305,19 @@ async fn verify_displaced_backup(
     commit: &CommitTransfer,
     backup_path: &std::path::Path,
 ) -> Result<(), RecoverableTransferError> {
-    let expected_identity = commit
-        .prepared
-        .expected_target_identity
-        .as_ref()
-        .ok_or_else(|| RecoverableTransferError::InvalidCheckpoint {
-            message: "commit backup has no expected target identity".to_owned(),
-        })?;
+    let expected_identity = commit.backup_identity.as_ref().ok_or_else(|| {
+        RecoverableTransferError::InvalidCheckpoint {
+            message: "commit backup has no verified backup identity".to_owned(),
+        }
+    })?;
+    let expected_fingerprint = commit.prepared.expected_target_fingerprint.ok_or_else(|| {
+        RecoverableTransferError::InvalidCheckpoint {
+            message: "commit backup has no expected target fingerprint".to_owned(),
+        }
+    })?;
     let backup_identity = inspect_file_identity(backup_path).await?;
-    let backup_fingerprint = fingerprint_object(backup_path).await?;
-    if backup_identity.same_object(expected_identity)
-        && Some(backup_fingerprint) == commit.prepared.expected_target_fingerprint
+    if backup_identity == *expected_identity
+        && fingerprint_object(backup_path).await? == expected_fingerprint
     {
         Ok(())
     } else {
@@ -326,18 +336,31 @@ enum PayloadIdentityExpectation {
 async fn verify_owned_payload(
     artifact: &OwnedArtifact,
     expected_identity: &FileIdentity,
-    expected_fingerprint: crate::ops::recoverable_transfer::ObjectFingerprint,
+    expected_fingerprint: Option<crate::ops::recoverable_transfer::ObjectFingerprint>,
     identity_expectation: PayloadIdentityExpectation,
 ) -> Result<(), RecoverableTransferError> {
     crate::ops::recoverable_transfer::validate_owned_artifact(artifact).await?;
     let payload_path = artifact.plan.payload_path();
     let payload_identity = inspect_file_identity(&payload_path).await?;
-    let payload_fingerprint = fingerprint_object(&payload_path).await?;
-    let identity_matches = match identity_expectation {
-        PayloadIdentityExpectation::Exact => payload_identity == *expected_identity,
-        PayloadIdentityExpectation::SameObject => payload_identity.same_object(expected_identity),
+    let payload_matches = match identity_expectation {
+        PayloadIdentityExpectation::Exact => match expected_fingerprint {
+            Some(expected) => {
+                payload_identity == *expected_identity
+                    && fingerprint_object(&payload_path).await? == expected
+            }
+            None => false,
+        },
+        PayloadIdentityExpectation::SameObject => {
+            if !payload_identity.same_object(expected_identity) {
+                false
+            } else if let Some(expected) = expected_fingerprint {
+                fingerprint_object(&payload_path).await? == expected
+            } else {
+                same_staging_metadata(&payload_identity, expected_identity)
+            }
+        }
     };
-    if identity_matches && payload_fingerprint == expected_fingerprint {
+    if payload_matches {
         Ok(())
     } else {
         Err(RecoverableTransferError::SourceChanged { path: payload_path })
@@ -348,7 +371,7 @@ async fn restore_owned_payload(
     record: &TransferJournalRecord,
     artifact: &OwnedArtifact,
     expected_identity: &FileIdentity,
-    expected_fingerprint: crate::ops::recoverable_transfer::ObjectFingerprint,
+    expected_fingerprint: Option<crate::ops::recoverable_transfer::ObjectFingerprint>,
     identity_expectation: PayloadIdentityExpectation,
 ) -> Result<(), RecoverableTransferError> {
     let payload_path = artifact.plan.payload_path();
@@ -357,14 +380,25 @@ async fn restore_owned_payload(
             return Err(RecoverableTransferError::SourceChanged { path: payload_path });
         }
         let source_identity = inspect_file_identity(&record.request.source).await?;
-        let source_fingerprint = fingerprint_object(&record.request.source).await?;
-        let identity_matches = match identity_expectation {
-            PayloadIdentityExpectation::Exact => source_identity == *expected_identity,
+        let source_matches = match identity_expectation {
+            PayloadIdentityExpectation::Exact => match expected_fingerprint {
+                Some(expected) => {
+                    source_identity == *expected_identity
+                        && fingerprint_object(&record.request.source).await? == expected
+                }
+                None => false,
+            },
             PayloadIdentityExpectation::SameObject => {
-                source_identity.same_object(expected_identity)
+                if !source_identity.same_object(expected_identity) {
+                    false
+                } else if let Some(expected) = expected_fingerprint {
+                    fingerprint_object(&record.request.source).await? == expected
+                } else {
+                    same_staging_metadata(&source_identity, expected_identity)
+                }
             }
         };
-        return if identity_matches && source_fingerprint == expected_fingerprint {
+        return if source_matches {
             Ok(())
         } else {
             Err(RecoverableTransferError::SourceChanged {
@@ -387,4 +421,12 @@ async fn restore_owned_payload(
     rename_noreplace(&payload_path, &restored)
         .map_err(|error| error.into_transfer_error(&payload_path, &restored))?;
     sync_rename_parents(&payload_path, &restored).await
+}
+
+fn same_staging_metadata(current: &FileIdentity, expected: &FileIdentity) -> bool {
+    current.object_kind == expected.object_kind
+        && current.size == expected.size
+        && current.modified_seconds == expected.modified_seconds
+        && current.modified_nanoseconds == expected.modified_nanoseconds
+        && current.symbolic_link_target == expected.symbolic_link_target
 }

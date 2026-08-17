@@ -58,7 +58,8 @@ pub struct PreparedTransfer {
     pub resolved_target: PathBuf,
     pub expected_target_identity: Option<FileIdentity>,
     pub expected_target_fingerprint: Option<ObjectFingerprint>,
-    pub source_fingerprint: ObjectFingerprint,
+    #[serde(with = "required_optional_fingerprint")]
+    pub source_fingerprint: Option<ObjectFingerprint>,
     pub execution: TransferExecutionKind,
     pub staging_plan: Option<OwnedArtifactPlan>,
 }
@@ -94,6 +95,15 @@ pub struct CommitTransfer {
     pub prepared: PreparedTransfer,
     pub payload: CommitPayload,
     pub fingerprint: ObjectFingerprint,
+    #[serde(default)]
+    pub backup_identity: Option<FileIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BackupCreationTransfer {
+    pub prepared: PreparedTransfer,
+    pub payload: CommitPayload,
+    pub fingerprint: ObjectFingerprint,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -112,6 +122,8 @@ pub struct CommittedTransfer {
     pub fingerprint: ObjectFingerprint,
     pub artifact: Option<OwnedArtifact>,
     pub source_disposition: SourceDisposition,
+    #[serde(default)]
+    pub backup_identity: Option<FileIdentity>,
     pub backup_fingerprint: Option<ObjectFingerprint>,
     #[serde(default)]
     pub backup_cleanup_index: usize,
@@ -132,6 +144,8 @@ pub struct RetiredSource {
     pub committed: CommittedTransfer,
     pub artifact: OwnedArtifact,
     #[serde(default)]
+    pub payload_identity: Option<FileIdentity>,
+    #[serde(default)]
     pub cleanup_index: usize,
     #[serde(default)]
     pub cleanup_intent: Option<OwnedTreeEntryDeletionIntent>,
@@ -141,6 +155,10 @@ pub struct RetiredSource {
 pub struct OwnedTreeEntryDeletionIntent {
     pub entry: SourceManifestEntry,
     pub fingerprint: Option<ObjectFingerprint>,
+    #[serde(default)]
+    pub expected_identity: Option<FileIdentity>,
+    #[serde(default)]
+    pub deletion_slot_identity: Option<FileIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -201,10 +219,11 @@ pub enum TransferCheckpoint {
     Merging(MergeTransfer),
     StageCreationIntent(PreparedTransfer),
     Staging(StagingTransfer),
+    BackupCreationIntent(BackupCreationTransfer),
     CommitIntent(CommitTransfer),
     TargetCommitted(CommittedTransfer),
-    SourceRetirementIntent(SourceRetirementPlan),
-    SourceRetired(RetiredSource),
+    SourceRetirementIntent(Box<SourceRetirementPlan>),
+    SourceRetired(Box<RetiredSource>),
     Completed(CompletedTarget),
     CancelIntent(Box<TransferCheckpoint>),
     Canceled {
@@ -218,6 +237,26 @@ pub enum TransferCheckpoint {
         diagnostic: String,
     },
     Skipped,
+}
+
+mod required_optional_fingerprint {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ObjectFingerprint;
+
+    pub fn serialize<S>(value: &Option<ObjectFingerprint>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<ObjectFingerprint>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<ObjectFingerprint>::deserialize(deserializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

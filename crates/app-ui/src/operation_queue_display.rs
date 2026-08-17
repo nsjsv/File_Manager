@@ -146,7 +146,7 @@ pub(crate) fn file_operation_copy_text(task: &FileOperationTask, language: UiLan
         format!(
             "{}: {}",
             translate("Status"),
-            translate(task.status.label())
+            translate(task.status_label())
         ),
         format!("{}: {progress}", translate("Progress")),
     ];

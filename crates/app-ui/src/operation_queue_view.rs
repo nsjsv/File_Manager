@@ -116,7 +116,7 @@ fn operation_task_row(task: &FileOperationTask, animation_frame: u8) -> Element<
         readable_text(operation_title_text(task.operation.title(), &path_lines))
             .size(13)
             .width(Length::Fill),
-        readable_text(task.status.label()).size(11),
+        readable_text(task.status_label()).size(11),
     ]
     .spacing(6)
     .align_y(Alignment::Center);

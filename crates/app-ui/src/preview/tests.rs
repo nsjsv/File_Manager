@@ -217,7 +217,7 @@ async fn load_preview_renders_markdown_text_preview() {
 }
 
 #[tokio::test]
-async fn load_preview_reads_full_plain_text_preview() {
+async fn load_preview_chunks_plain_text_preview() {
     let temp_dir = tempdir().expect("temp dir");
     let text_path = temp_dir.path().join("large.txt");
     let content = numbered_line_range(0, 150);
@@ -242,9 +242,10 @@ async fn load_preview_reads_full_plain_text_preview() {
     else {
         panic!("expected text preview");
     };
-    assert_eq!(rendered, content);
-    assert_eq!(loaded_line_count, 151);
-    assert_eq!(next_offset, None);
+    assert!(rendered.contains("line 49"));
+    assert!(!rendered.contains("line 50"));
+    assert_eq!(loaded_line_count, 50);
+    assert!(next_offset.is_some());
     assert_eq!(line_limit_notice, None);
 }
 

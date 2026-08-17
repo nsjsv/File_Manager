@@ -38,7 +38,7 @@ pub(crate) async fn load_preview(
             } else if is_supported_video_path(&path) {
                 load_video_preview(path).await
             } else {
-                load_text_preview(path, max_file_bytes).await
+                load_text_preview(path).await
             }
         }
         FileKind::Symlink | FileKind::Other => {
@@ -299,8 +299,8 @@ fn archive_path_segments(path: &str) -> Vec<&str> {
         .collect()
 }
 
-async fn load_text_preview(path: PathBuf, max_file_bytes: u64) -> Result<PreviewContent, String> {
-    load_initial_text_preview(path, max_file_bytes).await
+async fn load_text_preview(path: PathBuf) -> Result<PreviewContent, String> {
+    load_initial_text_preview(path).await
 }
 
 #[cfg(test)]

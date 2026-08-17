@@ -326,6 +326,12 @@ impl FileOperationHistory {
         self.pending_tasks.insert(task_id, operation);
     }
 
+    pub(crate) fn remap_pending_task(&mut self, local_task_id: u64, stored_task_id: u64) {
+        if let Some(operation) = self.pending_tasks.remove(&local_task_id) {
+            self.pending_tasks.insert(stored_task_id, operation);
+        }
+    }
+
     pub(crate) fn is_replaying(&self, task_id: u64) -> bool {
         self.pending_tasks.contains_key(&task_id)
     }

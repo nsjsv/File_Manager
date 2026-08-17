@@ -113,6 +113,7 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
         transfers,
         restored_running.controls,
         task_id,
+        task_id,
         &mut output,
         restored_running.store,
         QueuedTransferMode::Move,

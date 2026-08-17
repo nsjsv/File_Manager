@@ -40,3 +40,4 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 chrono-tz = "0.10.4"
 iced_runtime = "0.14"
+rusqlite = { version = "0.32.1", features = ["bundled"] }

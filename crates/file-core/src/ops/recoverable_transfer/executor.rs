@@ -13,12 +13,13 @@ use super::super::transfer_object::inspect_transfer_source;
 use super::{
     build_source_manifest_with_controls, fingerprint_object_with_controls, inspect_file_identity,
     plan_owned_artifact, recover_owned_artifact, remove_owned_artifact, rename_noreplace,
-    sync_parent_blocking, sync_tree_blocking, verify_source_manifest_with_controls, CommitPayload,
-    CommitTransfer, FileIdentity, FileObjectKind, NoReplaceRenameError, OwnedArtifact,
-    OwnedArtifactKind, PreparedTransfer, RecoverableTransferError, RecoverableTransferOperation,
-    RecoverableTransferOutcome, SourceManifest, StagedSourceLocation, StagingTransfer,
-    TransferCheckpoint, TransferExecutionKind, TransferJournal, TransferJournalError,
-    TransferJournalMutation, TransferJournalRecord,
+    sync_parent_blocking, sync_tree_blocking, verify_source_manifest_with_controls,
+    BackupCreationTransfer, CommitPayload, CommitTransfer, FileIdentity, FileObjectKind,
+    NoReplaceRenameError, OwnedArtifact, OwnedArtifactKind, PreparedTransfer,
+    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
+    SourceManifest, StagedSourceLocation, StagingTransfer, TransferCheckpoint,
+    TransferExecutionKind, TransferJournal, TransferJournalError, TransferJournalMutation,
+    TransferJournalRecord,
 };
 use crate::transfer_conflict::{
     available_transfer_target_path_candidate, transfer_target_metadata_if_exists,
@@ -30,8 +31,8 @@ mod recovery;
 mod validation;
 
 use commit::{
-    advance_committed_transfer, advance_retired_source, commit_transfer, retire_source,
-    verify_completed_target, verify_prepared_source_with_controls,
+    advance_committed_transfer, advance_retired_source, commit_transfer, create_replace_backup,
+    retire_source, verify_completed_target, verify_prepared_source_with_controls,
 };
 use merge::{advance_merge_transfer, prepare_merge_transfer};
 use recovery::{
@@ -195,6 +196,10 @@ pub async fn advance_recoverable_transfer<J: TransferJournal>(
             stage_transfer(record, journal, transfer_options, staging).await?;
             Ok(TransferAdvance::Continue)
         }
+        TransferCheckpoint::BackupCreationIntent(backup) => {
+            create_replace_backup(record, journal, backup).await?;
+            Ok(TransferAdvance::Continue)
+        }
         TransferCheckpoint::CommitIntent(commit) => {
             if path_exists(&commit_payload_path(record, &commit)).await? {
                 wait_until_running(transfer_options).await?;
@@ -207,11 +212,11 @@ pub async fn advance_recoverable_transfer<J: TransferJournal>(
             Ok(TransferAdvance::Continue)
         }
         TransferCheckpoint::SourceRetirementIntent(retirement) => {
-            retire_source(record, journal, retirement).await?;
+            retire_source(record, journal, *retirement).await?;
             Ok(TransferAdvance::Continue)
         }
         TransferCheckpoint::SourceRetired(retired) => {
-            advance_retired_source(record, journal, retired).await?;
+            advance_retired_source(record, journal, *retired).await?;
             Ok(TransferAdvance::Continue)
         }
         TransferCheckpoint::Completed(completed) => {
@@ -250,8 +255,12 @@ async fn prepare_transfer<J: TransferJournal>(
         Some(manifest) => manifest.clone(),
         None => build_source_manifest_with_controls(&record.request.source, &mut controls).await?,
     };
-    let source_fingerprint =
-        fingerprint_object_with_controls(&record.request.source, &controls).await?;
+    let source_fingerprint = match record.request.verification {
+        crate::ops::FileOperationVerification::BasicMetadata => None,
+        crate::ops::FileOperationVerification::Strong => {
+            Some(fingerprint_object_with_controls(&record.request.source, &controls).await?)
+        }
+    };
     verify_source_manifest_with_controls(&manifest, &mut controls).await?;
     let source_identity = manifest_root_identity(&manifest)?.clone();
     let requested_target_identity =
@@ -328,9 +337,16 @@ async fn prepare_transfer<J: TransferJournal>(
                     &mut controls,
                 )
                 .await?;
-                let fingerprint =
-                    fingerprint_object_with_controls(&record.request.requested_target, &controls)
-                        .await?;
+                let fingerprint = match record.request.verification {
+                    crate::ops::FileOperationVerification::BasicMetadata => None,
+                    crate::ops::FileOperationVerification::Strong => Some(
+                        fingerprint_object_with_controls(
+                            &record.request.requested_target,
+                            &controls,
+                        )
+                        .await?,
+                    ),
+                };
                 verify_source_manifest_with_controls(&replacement_manifest, &mut controls).await?;
                 if manifest_root_identity(&replacement_manifest)? != &target_identity {
                     return Err(RecoverableTransferError::TargetConflict {
@@ -340,7 +356,7 @@ async fn prepare_transfer<J: TransferJournal>(
                 (
                     record.request.requested_target.clone(),
                     Some(target_identity),
-                    Some(fingerprint),
+                    fingerprint,
                     Some(replacement_manifest),
                 )
             }
@@ -352,12 +368,19 @@ async fn prepare_transfer<J: TransferJournal>(
         },
     };
 
-    let execution = match record.request.operation {
-        RecoverableTransferOperation::Copy => TransferExecutionKind::CopyToStage,
-        RecoverableTransferOperation::Move if expected_target_identity.is_some() => {
+    let execution = match (record.request.operation, record.request.verification) {
+        (RecoverableTransferOperation::Copy, _) => TransferExecutionKind::CopyToStage,
+        (RecoverableTransferOperation::Move, crate::FileOperationVerification::BasicMetadata) => {
             TransferExecutionKind::MoveToStage
         }
-        RecoverableTransferOperation::Move => TransferExecutionKind::MoveDirect,
+        (RecoverableTransferOperation::Move, crate::FileOperationVerification::Strong)
+            if expected_target_identity.is_some() =>
+        {
+            TransferExecutionKind::MoveToStage
+        }
+        (RecoverableTransferOperation::Move, crate::FileOperationVerification::Strong) => {
+            TransferExecutionKind::MoveDirect
+        }
     };
     let staging_plan = match execution {
         TransferExecutionKind::CopyToStage | TransferExecutionKind::MoveToStage => {
@@ -386,7 +409,12 @@ async fn prepare_transfer<J: TransferJournal>(
             payload: CommitPayload::DirectSource {
                 identity: prepared.source_identity.clone(),
             },
-            fingerprint: prepared.source_fingerprint,
+            fingerprint: prepared.source_fingerprint.ok_or_else(|| {
+                RecoverableTransferError::InvalidCheckpoint {
+                    message: "direct move has no preflight content fingerprint".to_owned(),
+                }
+            })?,
+            backup_identity: None,
         }),
         TransferExecutionKind::CopyToStage | TransferExecutionKind::MoveToStage => {
             TransferCheckpoint::StageCreationIntent(prepared)
@@ -478,27 +506,39 @@ async fn stage_transfer<J: TransferJournal>(
             .await?;
     }
     sync_tree(&payload_path).await?;
+    let payload_identity = inspect_file_identity(&payload_path).await?;
     let payload_fingerprint =
         fingerprint_object_with_controls(&payload_path, &transfer_options.controls).await?;
-    if payload_fingerprint != staging.prepared.source_fingerprint {
-        return Err(RecoverableTransferError::FingerprintMismatch { path: payload_path });
+    if inspect_file_identity(&payload_path).await? != payload_identity {
+        return Err(RecoverableTransferError::SourceChanged { path: payload_path });
     }
-    let payload_identity = inspect_file_identity(&payload_path).await?;
-    let fingerprint = staging.prepared.source_fingerprint;
-    persist_checkpoint(
-        record,
-        journal,
+    if let Some(expected_fingerprint) = staging.prepared.source_fingerprint {
+        if payload_fingerprint != expected_fingerprint {
+            return Err(RecoverableTransferError::FingerprintMismatch { path: payload_path });
+        }
+    } else if !same_staging_metadata(&payload_identity, &staging.prepared.source_identity) {
+        return Err(RecoverableTransferError::SourceChanged { path: payload_path });
+    }
+    let payload = CommitPayload::Artifact {
+        artifact: staging.artifact,
+        payload_identity,
+        source_location,
+    };
+    let checkpoint = if staging.prepared.expected_target_identity.is_some() {
+        TransferCheckpoint::BackupCreationIntent(BackupCreationTransfer {
+            prepared: staging.prepared,
+            payload,
+            fingerprint: payload_fingerprint,
+        })
+    } else {
         TransferCheckpoint::CommitIntent(CommitTransfer {
             prepared: staging.prepared,
-            payload: CommitPayload::Artifact {
-                artifact: staging.artifact,
-                payload_identity,
-                source_location,
-            },
-            fingerprint,
-        }),
-    )
-    .await
+            payload,
+            fingerprint: payload_fingerprint,
+            backup_identity: None,
+        })
+    };
+    persist_checkpoint(record, journal, checkpoint).await
 }
 
 async fn copy_to_payload(
@@ -617,7 +657,8 @@ async fn next_recovered_path(path: &Path) -> Result<PathBuf, RecoverableTransfer
 fn checkpoint_requires_forward_recovery(checkpoint: &TransferCheckpoint) -> bool {
     matches!(
         checkpoint,
-        TransferCheckpoint::TargetCommitted(_)
+        TransferCheckpoint::BackupCreationIntent(_)
+            | TransferCheckpoint::TargetCommitted(_)
             | TransferCheckpoint::SourceRetirementIntent(_)
             | TransferCheckpoint::SourceRetired(_)
             | TransferCheckpoint::CancelIntent(_)
@@ -631,7 +672,8 @@ fn checkpoint_accepts_controls(checkpoint: &TransferCheckpoint) -> bool {
         | TransferCheckpoint::Merging(_)
         | TransferCheckpoint::StageCreationIntent(_)
         | TransferCheckpoint::Staging(_) => true,
-        TransferCheckpoint::CommitIntent(_)
+        TransferCheckpoint::BackupCreationIntent(_)
+        | TransferCheckpoint::CommitIntent(_)
         | TransferCheckpoint::TargetCommitted(_)
         | TransferCheckpoint::SourceRetirementIntent(_)
         | TransferCheckpoint::SourceRetired(_)
@@ -663,6 +705,14 @@ async fn sync_parent(path: &Path) -> Result<(), RecoverableTransferError> {
                 io::Error::other(join_error),
             )
         })?
+}
+
+fn same_staging_metadata(current: &FileIdentity, expected: &FileIdentity) -> bool {
+    current.object_kind == expected.object_kind
+        && current.size == expected.size
+        && current.modified_seconds == expected.modified_seconds
+        && current.modified_nanoseconds == expected.modified_nanoseconds
+        && current.symbolic_link_target == expected.symbolic_link_target
 }
 
 async fn sync_tree(path: &Path) -> Result<(), RecoverableTransferError> {

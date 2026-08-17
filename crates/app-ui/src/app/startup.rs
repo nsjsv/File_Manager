@@ -111,6 +111,7 @@ impl FileBrowser {
                 return Task::batch([
                     session_command,
                     self.maybe_flush_pending_browser_session_save(),
+                    self.continue_file_operation_persistence(),
                 ]);
             }
             Err(error) => {

@@ -127,6 +127,7 @@ fn interrupted_journal_error(controls: &FileOperationControls) -> TransferJourna
 pub(super) async fn run_queued_transfers(
     transfers: Vec<QueuedTransfer>,
     controls: FileOperationControls,
+    stored_task_id: u64,
     task_id: u64,
     output: &mut IcedSender<Message>,
     store: Option<TaskQueueStore>,
@@ -138,7 +139,7 @@ pub(super) async fn run_queued_transfers(
             "File operation queue storage is unavailable; transfer was not started".to_owned(),
         ));
     };
-    let mut records = match load_recoverable_transfer_records(store.clone(), task_id).await {
+    let mut records = match load_recoverable_transfer_records(store.clone(), stored_task_id).await {
         Ok(records) => records,
         Err(RecoverableRecordLoadError::Interrupted(error)) => {
             return FileOperationCompletion::RecoveryInterrupted(error, Vec::new());
@@ -409,6 +410,7 @@ mod recoverable_transfer_tests {
     use iced::futures::StreamExt;
 
     mod cross_filesystem_recovery;
+    mod start_latency_harness;
 
     #[test]
     fn application_stopping_has_recoverable_interruption_completion() {
@@ -476,6 +478,7 @@ mod recoverable_transfer_tests {
             transfers,
             running.controls,
             task_id,
+            task_id,
             &mut output,
             running.store,
             QueuedTransferMode::Copy,
@@ -536,6 +539,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
+            task_id,
             task_id,
             &mut output,
             running.store,
@@ -599,6 +603,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
+            task_id,
             task_id,
             &mut output,
             running.store,
@@ -686,6 +691,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             restored_running.controls,
+            task_id,
             task_id,
             &mut output,
             restored_running.store,
@@ -785,6 +791,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             restored_running.controls,
+            task_id,
             task_id,
             &mut output,
             restored_running.store,

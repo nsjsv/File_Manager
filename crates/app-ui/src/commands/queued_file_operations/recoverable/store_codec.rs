@@ -206,6 +206,9 @@ fn checkpoint_kind(checkpoint: &TransferCheckpoint) -> StoredTransferCheckpointK
             StoredTransferCheckpointKind::StageCreationIntent
         }
         TransferCheckpoint::Staging(_) => StoredTransferCheckpointKind::Staging,
+        TransferCheckpoint::BackupCreationIntent(_) => {
+            StoredTransferCheckpointKind::BackupCreationIntent
+        }
         TransferCheckpoint::CommitIntent(_) => StoredTransferCheckpointKind::CommitIntent,
         TransferCheckpoint::TargetCommitted(_) => StoredTransferCheckpointKind::TargetCommitted,
         TransferCheckpoint::SourceRetirementIntent(_) => {
@@ -325,7 +328,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use file_core::{
-        CompletedTarget, MergeChildOutcome, MergeTransfer, ObjectFingerprint, TransferCheckpoint,
+        BackupCreationTransfer, CommitPayload, CompletedTarget, MergeChildOutcome, MergeTransfer,
+        ObjectFingerprint, PreparedTransfer, TransferCheckpoint, TransferExecutionKind,
     };
 
     use file_operation_store::StoredTransferJournalEntry;
@@ -366,6 +370,32 @@ mod tests {
 
         assert!(encoded.is_none());
         assert_eq!(checks, 8);
+    }
+
+    #[test]
+    fn backup_creation_checkpoint_round_trips_with_its_distinct_kind() {
+        let checkpoint = TransferCheckpoint::BackupCreationIntent(BackupCreationTransfer {
+            prepared: PreparedTransfer {
+                source_identity: identity(1),
+                resolved_target: PathBuf::from("/tmp/target"),
+                expected_target_identity: Some(identity(2)),
+                expected_target_fingerprint: None,
+                source_fingerprint: None,
+                execution: TransferExecutionKind::MoveToStage,
+                staging_plan: None,
+            },
+            payload: CommitPayload::DirectSource {
+                identity: identity(1),
+            },
+            fingerprint: ObjectFingerprint([7; 32]),
+        });
+
+        let stored = encode_checkpoint(&checkpoint).unwrap();
+        assert_eq!(
+            stored.kind,
+            StoredTransferCheckpointKind::BackupCreationIntent
+        );
+        assert_eq!(decode_checkpoint(&stored).unwrap(), checkpoint);
     }
 
     #[test]

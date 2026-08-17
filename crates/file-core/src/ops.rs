@@ -18,15 +18,15 @@ mod recoverable_transfer;
 pub(crate) use recoverable_transfer::rename_noreplace;
 pub use recoverable_transfer::{
     persist_recoverable_source_manifest, persist_recoverable_source_manifest_with_controls,
-    run_recoverable_transfer, ArtifactOwner, ArtifactToken, CommitPayload, CommitTransfer,
-    CommittedTransfer, CompletedTarget, FileIdentity, FileObjectKind, MergeChildCompletion,
-    MergeChildOutcome, MergeTransfer, ObjectFingerprint, OwnedArtifact, OwnedArtifactKind,
-    OwnedArtifactPlan, PreparedTransfer, RecoverableTransferError, RecoverableTransferOperation,
-    RecoverableTransferOutcome, RecoverableTransferRequest, RetiredSource, SourceDisposition,
-    SourceManifest, SourceManifestEntry, SourceRetirementPlan, StagedSourceLocation,
-    StagingTransfer, TransferCheckpoint, TransferExecutionKind, TransferJournal,
-    TransferJournalError, TransferJournalFuture, TransferJournalMutation, TransferJournalRecord,
-    TransferWorkKey,
+    run_recoverable_transfer, ArtifactOwner, ArtifactToken, BackupCreationTransfer, CommitPayload,
+    CommitTransfer, CommittedTransfer, CompletedTarget, FileIdentity, FileObjectKind,
+    MergeChildCompletion, MergeChildOutcome, MergeTransfer, ObjectFingerprint, OwnedArtifact,
+    OwnedArtifactKind, OwnedArtifactPlan, PreparedTransfer, RecoverableTransferError,
+    RecoverableTransferOperation, RecoverableTransferOutcome, RecoverableTransferRequest,
+    RetiredSource, SourceDisposition, SourceManifest, SourceManifestEntry, SourceRetirementPlan,
+    StagedSourceLocation, StagingTransfer, TransferCheckpoint, TransferExecutionKind,
+    TransferJournal, TransferJournalError, TransferJournalFuture, TransferJournalMutation,
+    TransferJournalRecord, TransferWorkKey,
 };
 mod transfer_metadata;
 mod transfer_object;

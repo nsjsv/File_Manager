@@ -326,6 +326,7 @@ pub(crate) enum Message {
     VideoPreviewFailed(PathBuf, u64, String),
     FileOperationProgressed(u64, crate::operation_progress::FileOperationProgressUpdate),
     FileOperationFinished(u64, FileOperationCompletion),
+    FileOperationPersistenceFinished(crate::operation_queue::FileOperationPersistenceOutcome),
     OperationProgressAnimationTick,
     DesktopNotificationPublished(Result<(), String>),
     FileOperationIndicatorPressed,

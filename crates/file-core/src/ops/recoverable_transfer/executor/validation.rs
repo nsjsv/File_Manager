@@ -1,7 +1,8 @@
 use super::super::{
-    CommitPayload, CommitTransfer, PreparedTransfer, RecoverableTransferError,
-    RecoverableTransferOperation, SourceDisposition, StagedSourceLocation, StagingTransfer,
-    TransferCheckpoint, TransferExecutionKind, TransferJournalRecord,
+    BackupCreationTransfer, CommitPayload, CommitTransfer, PreparedTransfer,
+    RecoverableTransferError, RecoverableTransferOperation, SourceDisposition,
+    StagedSourceLocation, StagingTransfer, TransferCheckpoint, TransferExecutionKind,
+    TransferJournalRecord,
 };
 
 pub(super) fn validate_checkpoint_semantics(
@@ -51,6 +52,9 @@ pub(super) fn validate_checkpoint_semantics(
             validate_staged_prepared(record, prepared)
         }
         TransferCheckpoint::Staging(staging) => validate_staging(record, staging),
+        TransferCheckpoint::BackupCreationIntent(backup) => {
+            validate_backup_creation(record, backup)
+        }
         TransferCheckpoint::CommitIntent(commit) => validate_commit(record, commit),
         TransferCheckpoint::TargetCommitted(committed) => {
             validate_manifest_roots(record)?;
@@ -66,7 +70,11 @@ pub(super) fn validate_checkpoint_semantics(
                 || record.replacement_manifest.is_some()
                     && record.request.conflict_strategy != crate::TransferConflictStrategy::Replace
                 || committed.backup_fingerprint.is_some() != record.replacement_manifest.is_some()
-                || committed.backup_fingerprint.is_some() && committed.artifact.is_none()
+                || committed.backup_identity.is_some() != record.replacement_manifest.is_some()
+                    && !(record.request.verification == crate::FileOperationVerification::Strong
+                        && record.replacement_manifest.is_some()
+                        && committed.backup_identity.is_none())
+                || record.replacement_manifest.is_some() && committed.artifact.is_none()
             {
                 return invalid("committed checkpoint does not match the transfer request");
             }
@@ -89,6 +97,8 @@ pub(super) fn validate_checkpoint_semantics(
             validate_manifest_roots(record)?;
             if record.request.operation != RecoverableTransferOperation::Move
                 || retired.committed.source_disposition != SourceDisposition::RequiresRetirement
+                || retired.payload_identity.is_none()
+                    && record.request.verification != crate::FileOperationVerification::Strong
             {
                 return invalid("retired source does not belong to a cross-filesystem move");
             }
@@ -110,6 +120,34 @@ fn validate_staging(
         return invalid("staging artifact does not match its persisted plan");
     }
     Ok(())
+}
+
+fn validate_backup_creation(
+    record: &TransferJournalRecord,
+    backup: &BackupCreationTransfer,
+) -> Result<(), RecoverableTransferError> {
+    validate_staged_prepared(record, &backup.prepared)?;
+    let valid_payload = match &backup.payload {
+        CommitPayload::Artifact { artifact, .. } => {
+            backup.prepared.staging_plan.as_ref() == Some(&artifact.plan)
+        }
+        CommitPayload::DirectSource { .. } => false,
+    };
+    let valid_target_proof = backup.prepared.expected_target_identity.is_some()
+        && record.replacement_manifest.is_some()
+        && match record.request.verification {
+            crate::FileOperationVerification::BasicMetadata => {
+                backup.prepared.expected_target_fingerprint.is_none()
+            }
+            crate::FileOperationVerification::Strong => {
+                backup.prepared.expected_target_fingerprint.is_some()
+            }
+        };
+    if valid_payload && valid_target_proof {
+        Ok(())
+    } else {
+        invalid("backup creation checkpoint does not match a replacement transfer")
+    }
 }
 
 fn validate_commit(
@@ -143,7 +181,19 @@ fn validate_commit(
         ) => true,
         _ => false,
     };
-    if !valid_payload {
+    let strong_payload_matches = record.request.verification
+        != crate::FileOperationVerification::Strong
+        || commit.prepared.source_fingerprint == Some(commit.fingerprint);
+    let replacement_proof_matches = if record.replacement_manifest.is_some() {
+        commit.prepared.expected_target_fingerprint.is_some()
+            && (commit.backup_identity.is_some()
+                || record.request.verification == crate::FileOperationVerification::Strong)
+    } else {
+        commit.backup_identity.is_none()
+            && commit.prepared.expected_target_identity.is_none()
+            && commit.prepared.expected_target_fingerprint.is_none()
+    };
+    if !valid_payload || !strong_payload_matches || !replacement_proof_matches {
         return invalid("commit payload does not match the transfer operation");
     }
     Ok(())
@@ -180,7 +230,10 @@ fn validate_commit_prepared(
         TransferExecutionKind::CopyToStage | TransferExecutionKind::MoveToStage => {
             prepared.staging_plan.is_some()
         }
-        TransferExecutionKind::MoveDirect => prepared.staging_plan.is_none(),
+        TransferExecutionKind::MoveDirect => {
+            prepared.staging_plan.is_none()
+                && record.request.verification == crate::FileOperationVerification::Strong
+        }
         TransferExecutionKind::MergeDirectory => false,
     };
     if valid_plan {
@@ -206,11 +259,22 @@ fn validate_prepared_facts(
         })
         .is_some_and(|entry| entry.identity == prepared.source_identity);
     let replacement_facts_are_paired = prepared.expected_target_identity.is_some()
-        == prepared.expected_target_fingerprint.is_some()
-        && prepared.expected_target_identity.is_some() == record.replacement_manifest.is_some()
+        == record.replacement_manifest.is_some()
         && (prepared.expected_target_identity.is_none()
-            || record.request.conflict_strategy == crate::TransferConflictStrategy::Replace);
-    if !source_identity_matches_manifest || !replacement_facts_are_paired {
+            || record.request.conflict_strategy == crate::TransferConflictStrategy::Replace)
+        && !(prepared.expected_target_fingerprint.is_some()
+            && prepared.expected_target_identity.is_none())
+        && !(record.request.verification == crate::FileOperationVerification::Strong
+            && prepared.expected_target_identity.is_some()
+            && prepared.expected_target_fingerprint.is_none());
+    let source_fingerprint_matches_mode = match record.request.verification {
+        crate::FileOperationVerification::BasicMetadata => prepared.source_fingerprint.is_none(),
+        crate::FileOperationVerification::Strong => prepared.source_fingerprint.is_some(),
+    };
+    if !source_identity_matches_manifest
+        || !replacement_facts_are_paired
+        || !source_fingerprint_matches_mode
+    {
         return invalid("prepared checkpoint does not match the transfer request");
     }
     Ok(())

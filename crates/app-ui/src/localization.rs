@@ -415,6 +415,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Enter the archive password." => Some("请输入归档密码。"),
         "Incorrect password. Try again." => Some("密码不正确，请重试。"),
         "Running" => Some("运行中"),
+        "Saving" => Some("正在持久化"),
+        "Preparing" => Some("准备中"),
         "Image" => Some("图像"),
         "Audio" => Some("音频"),
         "Video" => Some("视频"),

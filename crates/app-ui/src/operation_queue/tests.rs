@@ -1,6 +1,7 @@
 use super::*;
 use file_core::TransferCheckpoint;
 use file_operation_store::StoredProgress;
+use std::time::{Duration, Instant};
 
 fn sample_operation() -> QueuedFileOperation {
     QueuedFileOperation::CreateDirectory {
@@ -18,6 +19,195 @@ fn sample_transfer_operation() -> QueuedFileOperation {
     }
 }
 
+#[test]
+fn enqueue_accepts_before_a_contended_store_writer_releases() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&database_path).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    let (writer_ready, wait_for_writer) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let mut connection = rusqlite::Connection::open(database_path).unwrap();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        writer_ready.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        drop(transaction);
+    });
+    wait_for_writer.recv().unwrap();
+
+    let started_at = Instant::now();
+    let outcome = queue.enqueue(sample_transfer_operation());
+    let acceptance_latency = started_at.elapsed();
+    writer.join().unwrap();
+    eprintln!("contended enqueue acceptance latency: {acceptance_latency:?}");
+
+    assert!(outcome.error().is_none());
+    assert!(
+        acceptance_latency < Duration::from_millis(50),
+        "enqueue blocked the caller for {acceptance_latency:?}"
+    );
+}
+
+#[test]
+fn recoverable_task_waits_for_journal_ack_before_starting() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+
+    let outcome = queue.enqueue(sample_transfer_operation());
+    let local_task_id = match outcome {
+        FileOperationEnqueueOutcome::Queued { task_id } => task_id,
+        _ => panic!("unexpected enqueue outcome"),
+    };
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Persisting);
+    assert!(queue.active_subscription().is_none());
+
+    let request = queue
+        .take_next_persistence_request()
+        .expect("insert must be the first persistence request");
+    let persistence_outcome = execute_file_operation_persistence(request);
+    let acceptance = queue.accept_persistence_outcome(persistence_outcome);
+
+    assert!(acceptance.error.is_none());
+    assert_eq!(
+        acceptance.task_id_remap,
+        Some((local_task_id, queue.tasks()[0].id))
+    );
+    assert_ne!(queue.tasks()[0].id, local_task_id);
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Running);
+    assert_eq!(queue.tasks()[0].status_label(), "Preparing");
+    assert!(queue.active_subscription().is_some());
+
+    queue.update_progress(
+        queue.tasks()[0].id,
+        FileOperationProgressUpdate::Indeterminate,
+    );
+    assert_eq!(queue.tasks()[0].status_label(), "Running");
+}
+
+#[test]
+fn persistence_requests_are_fifo_across_multiple_accepts() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    queue.enqueue(sample_operation());
+    queue.enqueue(sample_operation());
+
+    let first = queue
+        .take_next_persistence_request()
+        .expect("first insert must be available");
+    let first_id = first.request_id;
+    assert!(queue.take_next_persistence_request().is_none());
+    let first_outcome = execute_file_operation_persistence(first);
+    queue.accept_persistence_outcome(first_outcome);
+
+    let second = queue
+        .take_next_persistence_request()
+        .expect("second insert must remain at the head of the FIFO");
+    assert!(matches!(
+        second.action,
+        FileOperationPersistenceAction::Insert { .. }
+    ));
+    assert_ne!(second.request_id, first_id);
+}
+
+#[test]
+fn failed_recoverable_insert_removes_transient_task_without_starting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&database_path).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    queue.enqueue(sample_transfer_operation());
+    let request = queue
+        .take_next_persistence_request()
+        .expect("insert must be available");
+
+    std::fs::remove_file(&database_path).unwrap();
+    std::fs::create_dir(&database_path).unwrap();
+    let acceptance = queue.accept_persistence_outcome(execute_file_operation_persistence(request));
+
+    assert!(acceptance.error.is_some());
+    assert!(acceptance.rejected_task_id.is_some());
+    assert!(queue.tasks().is_empty());
+    assert!(queue.active_subscription().is_none());
+}
+
+#[test]
+fn canceled_persisting_task_does_not_run_when_insert_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&database_path).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    let task_id = match queue.enqueue(sample_operation()) {
+        FileOperationEnqueueOutcome::Queued { task_id }
+        | FileOperationEnqueueOutcome::QueuedWithStorageWarning { task_id, .. } => task_id,
+        FileOperationEnqueueOutcome::Rejected { error } => panic!("enqueue failed: {error}"),
+    };
+    queue.cancel(task_id);
+    let request = queue.take_next_persistence_request().unwrap();
+    std::fs::remove_file(&database_path).unwrap();
+    std::fs::create_dir(&database_path).unwrap();
+
+    let acceptance = queue.accept_persistence_outcome(execute_file_operation_persistence(request));
+
+    assert!(acceptance.error.is_some());
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceled);
+    assert!(queue.active_subscription().is_none());
+}
+
+#[test]
+fn shutdown_canceled_persisting_task_does_not_run_when_insert_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("state.sqlite");
+    let store = TaskQueueStore::new(&database_path).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    queue.enqueue(sample_operation());
+    let request = queue.take_next_persistence_request().unwrap();
+    queue.begin_application_shutdown();
+    std::fs::remove_file(&database_path).unwrap();
+    std::fs::create_dir(&database_path).unwrap();
+
+    let acceptance = queue.accept_persistence_outcome(execute_file_operation_persistence(request));
+
+    assert!(acceptance.error.is_some());
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceled);
+    assert!(queue.active_subscription().is_none());
+}
+
+#[test]
+fn shutdown_persists_in_flight_recoverable_insert_into_the_final_transaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    queue.enqueue(sample_transfer_operation());
+    let request = queue
+        .take_next_persistence_request()
+        .expect("insert must be in flight");
+
+    let disposition = queue.begin_application_shutdown();
+    assert!(disposition.waiting_for_operation_ids.is_empty());
+    assert!(disposition.interrupted_recoverable_tasks.is_empty());
+
+    let acceptance = queue.accept_persistence_outcome(execute_file_operation_persistence(request));
+    assert!(matches!(
+        acceptance.persisted_shutdown_operation,
+        Some(PersistedShutdownFileOperation::Recoverable(
+            StoredInterruptedRecoverableTask {
+                status: StoredTaskStatus::RecoveryPending,
+                ..
+            }
+        ))
+    ));
+}
 fn completed_checkpoint(path: &std::path::Path) -> TransferCheckpoint {
     TransferCheckpoint::Completed(file_core::CompletedTarget {
         path: path.to_path_buf(),
@@ -264,6 +454,95 @@ fn terminal_completion_releases_recoverable_runner_lease() {
         .unwrap()
         .is_some());
     assert_eq!(queue.tasks().len(), 1);
+}
+
+#[test]
+fn terminal_persistence_keeps_recoverable_runner_lease_until_fifo_ack() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store.clone());
+    queue.enqueue(sample_transfer_operation());
+
+    let insert = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(insert));
+    let ui_task_id = queue.tasks()[0].id;
+    let stored_task_id = queue.tasks()[0].stored_id.unwrap();
+    persist_terminal_checkpoint(
+        &store,
+        stored_task_id,
+        &completed_checkpoint(std::path::Path::new("/tmp/target")),
+    );
+    assert_eq!(
+        queue.finish(ui_task_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+
+    assert!(store
+        .try_acquire_recoverable_task_runner(stored_task_id)
+        .unwrap()
+        .is_none());
+    assert!(queue.tasks()[0].terminal_persistence_pending);
+    assert!(queue.clear_terminal_task(ui_task_id).is_none());
+
+    let running_state = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(running_state));
+    assert!(store
+        .try_acquire_recoverable_task_runner(stored_task_id)
+        .unwrap()
+        .is_none());
+
+    let terminal_state = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(terminal_state));
+    assert!(!queue.tasks()[0].terminal_persistence_pending);
+    assert!(store
+        .try_acquire_recoverable_task_runner(stored_task_id)
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn shutdown_snapshots_recoverable_terminal_task_until_terminal_persistence_ack() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store.clone());
+    queue.enqueue(sample_transfer_operation());
+
+    let insert = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(insert));
+    let task_id = queue.tasks()[0].id;
+    let stored_task_id = queue.tasks()[0].stored_id.unwrap();
+    persist_terminal_checkpoint(
+        &store,
+        stored_task_id,
+        &completed_checkpoint(std::path::Path::new("/tmp/target")),
+    );
+    assert_eq!(
+        queue.finish(task_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    let running_state = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(running_state));
+
+    let disposition = queue.begin_application_shutdown();
+
+    assert_eq!(
+        disposition
+            .interrupted_recoverable_tasks
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>(),
+        vec![stored_task_id]
+    );
+    assert_eq!(
+        disposition.interrupted_recoverable_tasks[0].status,
+        StoredTaskStatus::RecoveryPending
+    );
+
+    let terminal_state = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(terminal_state));
+    assert!(!queue.tasks()[0].terminal_persistence_pending);
 }
 
 #[test]
