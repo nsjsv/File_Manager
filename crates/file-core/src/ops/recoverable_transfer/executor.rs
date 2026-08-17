@@ -15,28 +15,35 @@ use super::{
     plan_owned_artifact, recover_owned_artifact, remove_owned_artifact, rename_noreplace,
     sync_parent_blocking, sync_tree_blocking, verify_source_manifest_with_controls,
     BackupCreationTransfer, CommitPayload, CommitTransfer, FileIdentity, FileObjectKind,
-    NoReplaceRenameError, OwnedArtifact, OwnedArtifactKind, PreparedTransfer,
-    RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
-    SourceManifest, StagedSourceLocation, StagingTransfer, TransferCheckpoint,
-    TransferExecutionKind, TransferJournal, TransferJournalError, TransferJournalMutation,
-    TransferJournalRecord,
+    ManifestCheckpointBatchUpdate, NoReplaceRenameError, OwnedArtifact, OwnedArtifactKind,
+    PreparedTransfer, RecoverableTransferError, RecoverableTransferOperation,
+    RecoverableTransferOutcome, SourceManifest, StagedSourceLocation, StagingTransfer,
+    TransferCheckpoint, TransferExecutionKind, TransferJournal, TransferJournalError,
+    TransferJournalMutation, TransferJournalRecord,
 };
 use crate::transfer_conflict::{
     available_transfer_target_path_candidate, transfer_target_metadata_if_exists,
 };
 
+mod batch;
 mod commit;
+mod direct_move;
 mod merge;
 mod recovery;
+mod run;
 mod validation;
 
+pub use batch::{run_direct_move_batch_to_durable_renamed, DirectMoveBatchRecord};
 use commit::{
     advance_committed_transfer, advance_retired_source, commit_transfer, create_replace_backup,
     retire_source, verify_completed_target, verify_prepared_source_with_controls,
 };
+use direct_move::{advance_direct_move_intent, advance_direct_move_renamed};
 use merge::{advance_merge_transfer, prepare_merge_transfer};
-use recovery::{
-    cancel_recoverable_transfer, fail_recoverable_transfer, finish_cancel, finish_failure,
+use recovery::{finish_cancel, finish_failure};
+pub use run::{
+    run_recoverable_transfer, run_recoverable_transfer_to_direct_move_intent,
+    DirectMoveIntentBoundary,
 };
 use validation::validate_checkpoint_semantics;
 
@@ -79,83 +86,6 @@ pub async fn persist_recoverable_source_manifest_with_controls<J: TransferJourna
     .await
 }
 
-pub async fn run_recoverable_transfer<J: TransferJournal>(
-    mut record: TransferJournalRecord,
-    journal: &J,
-    transfer_options: FileTransferOptions,
-) -> Result<RecoverableTransferOutcome, RecoverableTransferError> {
-    loop {
-        match advance_recoverable_transfer(&mut record, journal, &transfer_options).await {
-            Ok(TransferAdvance::Continue) => {}
-            Ok(TransferAdvance::Complete(outcome)) => return Ok(outcome),
-            Err(
-                error @ RecoverableTransferError::FileOperation(
-                    crate::FileError::ApplicationStopping,
-                ),
-            ) => return Err(error),
-            Err(error)
-                if matches!(
-                    error,
-                    RecoverableTransferError::FileOperation(crate::FileError::Cancelled)
-                ) =>
-            {
-                if !matches!(record.checkpoint, TransferCheckpoint::Canceled { .. }) {
-                    if let Err(cancel_error) =
-                        cancel_recoverable_transfer(&mut record, journal).await
-                    {
-                        return match cancel_error {
-                            RecoverableTransferError::Journal { .. } => Err(cancel_error),
-                            cancel_error => Err(RecoverableTransferError::RecoveryBlocked {
-                                diagnostic: format!(
-                                    "cancellation cleanup could not finish: {cancel_error}"
-                                ),
-                            }),
-                        };
-                    }
-                }
-                return Err(error);
-            }
-            Err(error)
-                if matches!(
-                    error,
-                    RecoverableTransferError::Journal { .. }
-                        | RecoverableTransferError::RecoveryRequired { .. }
-                        | RecoverableTransferError::RecoveryBlocked { .. }
-                        | RecoverableTransferError::RecordedFailure { .. }
-                ) =>
-            {
-                return Err(error);
-            }
-            Err(error @ RecoverableTransferError::InvalidCheckpoint { .. }) => {
-                return Err(RecoverableTransferError::RecoveryBlocked {
-                    diagnostic: error.to_string(),
-                });
-            }
-            Err(error) if checkpoint_requires_forward_recovery(&record.checkpoint) => {
-                return Err(RecoverableTransferError::RecoveryBlocked {
-                    diagnostic: error.to_string(),
-                });
-            }
-            Err(error) => {
-                let diagnostic = error.to_string();
-                if let Err(cleanup_error) =
-                    fail_recoverable_transfer(&mut record, journal, diagnostic.clone()).await
-                {
-                    return match cleanup_error {
-                        RecoverableTransferError::Journal { .. } => Err(cleanup_error),
-                        cleanup_error => Err(RecoverableTransferError::RecoveryBlocked {
-                            diagnostic: format!(
-                                "{diagnostic}; recovery cleanup could not finish: {cleanup_error}"
-                            ),
-                        }),
-                    };
-                }
-                return Err(error);
-            }
-        }
-    }
-}
-
 pub async fn advance_recoverable_transfer<J: TransferJournal>(
     record: &mut TransferJournalRecord,
     journal: &J,
@@ -194,6 +124,14 @@ pub async fn advance_recoverable_transfer<J: TransferJournal>(
         }
         TransferCheckpoint::Staging(staging) => {
             stage_transfer(record, journal, transfer_options, staging).await?;
+            Ok(TransferAdvance::Continue)
+        }
+        TransferCheckpoint::DirectMoveIntent(prepared) => {
+            advance_direct_move_intent(record, journal, transfer_options, prepared).await?;
+            Ok(TransferAdvance::Continue)
+        }
+        TransferCheckpoint::DirectMoveRenamed(renamed) => {
+            advance_direct_move_renamed(record, journal, renamed).await?;
             Ok(TransferAdvance::Continue)
         }
         TransferCheckpoint::BackupCreationIntent(backup) => {
@@ -370,16 +308,19 @@ async fn prepare_transfer<J: TransferJournal>(
 
     let execution = match (record.request.operation, record.request.verification) {
         (RecoverableTransferOperation::Copy, _) => TransferExecutionKind::CopyToStage,
-        (RecoverableTransferOperation::Move, crate::FileOperationVerification::BasicMetadata) => {
-            TransferExecutionKind::MoveToStage
-        }
-        (RecoverableTransferOperation::Move, crate::FileOperationVerification::Strong)
-            if expected_target_identity.is_some() =>
+        (RecoverableTransferOperation::Move, crate::FileOperationVerification::BasicMetadata)
+            if expected_target_identity.is_none() =>
         {
+            TransferExecutionKind::MoveDirect
+        }
+        (RecoverableTransferOperation::Move, _) if expected_target_identity.is_some() => {
             TransferExecutionKind::MoveToStage
         }
         (RecoverableTransferOperation::Move, crate::FileOperationVerification::Strong) => {
             TransferExecutionKind::MoveDirect
+        }
+        (RecoverableTransferOperation::Move, crate::FileOperationVerification::BasicMetadata) => {
+            unreachable!("basic move with a replacement target must use staging")
         }
     };
     let staging_plan = match execution {
@@ -403,26 +344,226 @@ async fn prepare_transfer<J: TransferJournal>(
         execution,
         staging_plan,
     };
-    let checkpoint = match execution {
-        TransferExecutionKind::MoveDirect => TransferCheckpoint::CommitIntent(CommitTransfer {
-            prepared: prepared.clone(),
-            payload: CommitPayload::DirectSource {
-                identity: prepared.source_identity.clone(),
-            },
-            fingerprint: prepared.source_fingerprint.ok_or_else(|| {
-                RecoverableTransferError::InvalidCheckpoint {
-                    message: "direct move has no preflight content fingerprint".to_owned(),
-                }
-            })?,
-            backup_identity: None,
-        }),
-        TransferExecutionKind::CopyToStage | TransferExecutionKind::MoveToStage => {
+    let checkpoint = match (execution, record.request.verification) {
+        (TransferExecutionKind::MoveDirect, crate::FileOperationVerification::BasicMetadata) => {
+            TransferCheckpoint::DirectMoveIntent(prepared)
+        }
+        (TransferExecutionKind::MoveDirect, crate::FileOperationVerification::Strong) => {
+            TransferCheckpoint::CommitIntent(CommitTransfer {
+                prepared: prepared.clone(),
+                payload: CommitPayload::DirectSource {
+                    identity: prepared.source_identity.clone(),
+                },
+                fingerprint: prepared.source_fingerprint.ok_or_else(|| {
+                    RecoverableTransferError::InvalidCheckpoint {
+                        message: "direct move has no preflight content fingerprint".to_owned(),
+                    }
+                })?,
+                backup_identity: None,
+            })
+        }
+        (TransferExecutionKind::CopyToStage | TransferExecutionKind::MoveToStage, _) => {
             TransferCheckpoint::StageCreationIntent(prepared)
         }
-        TransferExecutionKind::MergeDirectory => unreachable!(),
+        (TransferExecutionKind::MergeDirectory, _) => unreachable!(),
     };
     install_manifest_and_checkpoint(record, journal, manifest, replacement_manifest, checkpoint)
         .await
+}
+
+/// A record that has completed the intent-preparation boundary of a Basic
+/// DirectMove segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectMoveIntentBatchRecord {
+    /// At a durable `DirectMoveIntent`, ready for the rename batch.
+    Intent(TransferJournalRecord),
+    /// At a durable non-direct checkpoint (StageCreationIntent, Skipped,
+    /// Merging, CommitIntent, ...); still needs the sequential executor.
+    NotApplicable(TransferJournalRecord),
+}
+
+struct PendingDirectMoveIntent {
+    index: usize,
+    record: TransferJournalRecord,
+    manifest: SourceManifest,
+    checkpoint: TransferCheckpoint,
+}
+
+pub fn is_direct_move_segment_candidate(record: &TransferJournalRecord) -> bool {
+    match record.checkpoint {
+        TransferCheckpoint::DirectMoveIntent(_) => true,
+        TransferCheckpoint::AwaitingManifest => {
+            record.request.operation == RecoverableTransferOperation::Move
+                && record.request.verification
+                    == crate::ops::FileOperationVerification::BasicMetadata
+                && record.request.conflict_strategy != TransferConflictStrategy::Merge
+                && (record.request.source != record.request.requested_target
+                    || record.request.conflict_strategy == TransferConflictStrategy::KeepBoth)
+        }
+        _ => false,
+    }
+}
+
+/// Compute the `DirectMoveIntent` for one Basic Move that can take the direct
+/// rename fast path. Returns `None` for anything that must stay on the sequential
+/// `prepare_transfer` path (Copy, Strong, Replace, Skip, Merge, source == target,
+/// or a conflicting target under Fail/Skip). This mirrors the MoveDirect branch
+/// of [`prepare_transfer`]; keep the two in sync.
+async fn compute_direct_move_intent(
+    record: &TransferJournalRecord,
+    controls: &mut FileOperationControls,
+) -> Result<Option<(SourceManifest, TransferCheckpoint)>, RecoverableTransferError> {
+    match &record.checkpoint {
+        TransferCheckpoint::DirectMoveRenamed(_) => return Ok(None),
+        TransferCheckpoint::DirectMoveIntent(_) => {
+            let manifest = record.manifest.clone().ok_or_else(|| {
+                RecoverableTransferError::InvalidCheckpoint {
+                    message: "DirectMoveIntent is missing its persisted source manifest".to_owned(),
+                }
+            })?;
+            return Ok(Some((manifest, record.checkpoint.clone())));
+        }
+        TransferCheckpoint::AwaitingManifest => {}
+        _ => return Ok(None),
+    }
+
+    if record.request.operation != RecoverableTransferOperation::Move
+        || record.request.verification != crate::ops::FileOperationVerification::BasicMetadata
+    {
+        return Ok(None);
+    }
+    if record.request.source == record.request.requested_target
+        && record.request.conflict_strategy != TransferConflictStrategy::KeepBoth
+    {
+        return Ok(None);
+    }
+    if record.request.conflict_strategy == TransferConflictStrategy::Merge {
+        return Ok(None);
+    }
+
+    let manifest = match &record.manifest {
+        Some(manifest) => manifest.clone(),
+        None => build_source_manifest_with_controls(&record.request.source, controls).await?,
+    };
+    verify_source_manifest_with_controls(&manifest, controls).await?;
+    let source_identity = manifest_root_identity(&manifest)?.clone();
+    let target_exists = inspect_optional_identity(&record.request.requested_target)
+        .await?
+        .is_some();
+    let resolved_target = match (target_exists, record.request.conflict_strategy) {
+        (false, _) => record.request.requested_target.clone(),
+        (true, TransferConflictStrategy::KeepBoth) => {
+            available_transfer_target_path_candidate(&record.request.requested_target)
+                .await
+                .map_err(|source| {
+                    RecoverableTransferError::file_system(
+                        "select keep-both target for",
+                        &record.request.requested_target,
+                        source,
+                    )
+                })?
+        }
+        (true, _) => return Ok(None),
+    };
+    let prepared = PreparedTransfer {
+        source_identity,
+        resolved_target,
+        expected_target_identity: None,
+        expected_target_fingerprint: None,
+        source_fingerprint: None,
+        execution: TransferExecutionKind::MoveDirect,
+        staging_plan: None,
+    };
+    Ok(Some((
+        manifest,
+        TransferCheckpoint::DirectMoveIntent(prepared),
+    )))
+}
+
+/// Prepare a whole Basic DirectMove segment in one pass: compute every
+/// DirectMove intent (and, implicitly, verify every source) before any rename,
+/// then persist all intents + manifests in a single batch transaction. A source
+/// identity change fails the whole segment before anything is persisted; a
+/// business conflict only excludes that record and lets its siblings proceed.
+pub async fn prepare_direct_move_intent_segment<J: TransferJournal>(
+    records: Vec<TransferJournalRecord>,
+    journal: &J,
+    transfer_options: &FileTransferOptions,
+) -> Result<Vec<DirectMoveIntentBatchRecord>, RecoverableTransferError> {
+    let mut controls = transfer_options.controls.clone();
+    let mut pending: Vec<PendingDirectMoveIntent> = Vec::new();
+    let mut output: Vec<Option<DirectMoveIntentBatchRecord>> = Vec::with_capacity(records.len());
+
+    for record in records {
+        let index = output.len();
+        match compute_direct_move_intent(&record, &mut controls).await? {
+            Some((manifest, checkpoint)) => {
+                pending.push(PendingDirectMoveIntent {
+                    index,
+                    record,
+                    manifest,
+                    checkpoint,
+                });
+                output.push(None);
+            }
+            None => {
+                if !pending.is_empty() {
+                    persist_direct_move_intents(&mut pending, journal, &mut output).await?;
+                }
+                output.push(Some(DirectMoveIntentBatchRecord::NotApplicable(record)));
+            }
+        }
+    }
+
+    if !pending.is_empty() {
+        persist_direct_move_intents(&mut pending, journal, &mut output).await?;
+    }
+
+    Ok(output
+        .into_iter()
+        .map(|record| record.expect("direct move preparation record is present"))
+        .collect())
+}
+
+async fn persist_direct_move_intents<J: TransferJournal>(
+    pending: &mut Vec<PendingDirectMoveIntent>,
+    journal: &J,
+    output: &mut [Option<DirectMoveIntentBatchRecord>],
+) -> Result<(), RecoverableTransferError> {
+    let updates = pending
+        .iter()
+        .map(|pending| ManifestCheckpointBatchUpdate {
+            task_id: pending.record.task_id,
+            key: pending.record.key.clone(),
+            expected_revision: pending.record.revision,
+            manifest: pending.manifest.clone(),
+            replacement_manifest: None,
+            checkpoint: pending.checkpoint.clone(),
+        })
+        .collect::<Vec<_>>();
+    let revisions = journal
+        .commit_manifest_batch(updates)
+        .await
+        .map_err(journal_error)?;
+    if revisions.len() != pending.len() {
+        return Err(RecoverableTransferError::Journal {
+            message: format!(
+                "manifest batch commit returned {} revisions for {} intents",
+                revisions.len(),
+                pending.len()
+            ),
+        });
+    }
+
+    for (pending, revision) in pending.drain(..).zip(revisions) {
+        validate_next_revision(pending.record.revision, revision)?;
+        let mut record = pending.record;
+        record.revision = revision;
+        record.checkpoint = pending.checkpoint;
+        record.manifest = Some(pending.manifest);
+        output[pending.index] = Some(DirectMoveIntentBatchRecord::Intent(record));
+    }
+    Ok(())
 }
 
 async fn stage_transfer<J: TransferJournal>(
@@ -654,10 +795,11 @@ async fn next_recovered_path(path: &Path) -> Result<PathBuf, RecoverableTransfer
     })
 }
 
-fn checkpoint_requires_forward_recovery(checkpoint: &TransferCheckpoint) -> bool {
+pub(super) fn checkpoint_requires_forward_recovery(checkpoint: &TransferCheckpoint) -> bool {
     matches!(
         checkpoint,
-        TransferCheckpoint::BackupCreationIntent(_)
+        TransferCheckpoint::DirectMoveRenamed(_)
+            | TransferCheckpoint::BackupCreationIntent(_)
             | TransferCheckpoint::TargetCommitted(_)
             | TransferCheckpoint::SourceRetirementIntent(_)
             | TransferCheckpoint::SourceRetired(_)
@@ -672,7 +814,9 @@ fn checkpoint_accepts_controls(checkpoint: &TransferCheckpoint) -> bool {
         | TransferCheckpoint::Merging(_)
         | TransferCheckpoint::StageCreationIntent(_)
         | TransferCheckpoint::Staging(_) => true,
-        TransferCheckpoint::BackupCreationIntent(_)
+        TransferCheckpoint::DirectMoveIntent(_)
+        | TransferCheckpoint::DirectMoveRenamed(_)
+        | TransferCheckpoint::BackupCreationIntent(_)
         | TransferCheckpoint::CommitIntent(_)
         | TransferCheckpoint::TargetCommitted(_)
         | TransferCheckpoint::SourceRetirementIntent(_)
@@ -693,7 +837,7 @@ async fn wait_until_running(
     controls.wait_until_running().await.map_err(Into::into)
 }
 
-async fn sync_parent(path: &Path) -> Result<(), RecoverableTransferError> {
+pub(super) async fn sync_parent(path: &Path) -> Result<(), RecoverableTransferError> {
     let work_path = path.to_path_buf();
     let error_path = work_path.clone();
     tokio::task::spawn_blocking(move || sync_parent_blocking(&work_path))
@@ -820,7 +964,10 @@ async fn persist_checkpoint<J: TransferJournal>(
     Ok(())
 }
 
-fn validate_next_revision(current: u64, next: u64) -> Result<(), RecoverableTransferError> {
+pub(super) fn validate_next_revision(
+    current: u64,
+    next: u64,
+) -> Result<(), RecoverableTransferError> {
     if current.checked_add(1) == Some(next) {
         Ok(())
     } else {
@@ -830,7 +977,7 @@ fn validate_next_revision(current: u64, next: u64) -> Result<(), RecoverableTran
     }
 }
 
-fn journal_error(error: TransferJournalError) -> RecoverableTransferError {
+pub(super) fn journal_error(error: TransferJournalError) -> RecoverableTransferError {
     match error {
         TransferJournalError::UserCancelled => {
             RecoverableTransferError::FileOperation(crate::FileError::Cancelled)

@@ -1,9 +1,10 @@
 use super::super::{
     BackupCreationTransfer, CommitPayload, CommitTransfer, PreparedTransfer,
-    RecoverableTransferError, RecoverableTransferOperation, SourceDisposition,
+    RecoverableTransferError, RecoverableTransferOperation, RenamedDirectMove, SourceDisposition,
     StagedSourceLocation, StagingTransfer, TransferCheckpoint, TransferExecutionKind,
     TransferJournalRecord,
 };
+use super::direct_move::renamed_target_matches_source;
 
 pub(super) fn validate_checkpoint_semantics(
     record: &TransferJournalRecord,
@@ -52,6 +53,12 @@ pub(super) fn validate_checkpoint_semantics(
             validate_staged_prepared(record, prepared)
         }
         TransferCheckpoint::Staging(staging) => validate_staging(record, staging),
+        TransferCheckpoint::DirectMoveIntent(prepared) => {
+            validate_direct_move_prepared(record, prepared)
+        }
+        TransferCheckpoint::DirectMoveRenamed(renamed) => {
+            validate_direct_move_renamed(record, renamed)
+        }
         TransferCheckpoint::BackupCreationIntent(backup) => {
             validate_backup_creation(record, backup)
         }
@@ -108,6 +115,36 @@ pub(super) fn validate_checkpoint_semantics(
         TransferCheckpoint::FailureIntent(failure) => {
             validate_terminal_intent(record, &failure.previous)
         }
+    }
+}
+
+fn validate_direct_move_prepared(
+    record: &TransferJournalRecord,
+    prepared: &PreparedTransfer,
+) -> Result<(), RecoverableTransferError> {
+    validate_prepared_facts(record, prepared)?;
+    if record.request.operation == RecoverableTransferOperation::Move
+        && record.request.verification == crate::FileOperationVerification::BasicMetadata
+        && prepared.execution == TransferExecutionKind::MoveDirect
+        && prepared.staging_plan.is_none()
+        && prepared.expected_target_identity.is_none()
+        && record.replacement_manifest.is_none()
+    {
+        Ok(())
+    } else {
+        invalid("direct move intent does not match a basic no-replace move")
+    }
+}
+
+fn validate_direct_move_renamed(
+    record: &TransferJournalRecord,
+    renamed: &RenamedDirectMove,
+) -> Result<(), RecoverableTransferError> {
+    validate_direct_move_prepared(record, &renamed.prepared)?;
+    if renamed_target_matches_source(&renamed.target_identity, &renamed.prepared.source_identity) {
+        Ok(())
+    } else {
+        invalid("renamed direct move does not identify the prepared source")
     }
 }
 
@@ -314,6 +351,7 @@ fn validate_terminal_intent(
             | TransferCheckpoint::Merging(_)
             | TransferCheckpoint::StageCreationIntent(_)
             | TransferCheckpoint::Staging(_)
+            | TransferCheckpoint::DirectMoveIntent(_)
             | TransferCheckpoint::CommitIntent(_)
     ) {
         validate_checkpoint_semantics(record, previous)

@@ -65,11 +65,13 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
         .await
         .unwrap()
         .remove(0);
+    let (journal, _direct_move_commit_receiver) = task_queue_transfer_journal_channel(
+        store.clone(),
+        running.controls.clone(),
+        std::slice::from_ref(&record),
+    );
     let interrupted_journal = InterruptSourceRetiredJournal {
-        inner: TaskQueueTransferJournal {
-            store: store.clone(),
-            controls: running.controls.clone(),
-        },
+        inner: journal,
         interrupted: Default::default(),
     };
 

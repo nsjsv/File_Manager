@@ -429,12 +429,13 @@ impl BrowserPane {
         if let Some(cancellation) = self.directory_load_cancel.take() {
             cancellation.cancel();
         }
+        // File-operation callers synchronously schedule the replacement load; that
+        // request owns the single generation advance for the whole commit batch.
         detach_directory_discovery(
             Arc::make_mut(&mut self.entries).as_mut_slice(),
             &mut self.directory_discovery,
             &mut self.directory_order_phase,
         );
-        self.directory_load_generation = self.directory_load_generation.saturating_add(1);
         self.directory_collection_phase = DirectoryCollectionPhase::Ready;
     }
 

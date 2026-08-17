@@ -193,6 +193,9 @@ impl FileBrowser {
                 }
                 Task::none()
             }
+            Message::FileOperationDirectMovesCommitted { task_id, commits } => {
+                self.accept_file_operation_direct_moves_committed(task_id, commits)
+            }
             Message::FileOperationFinished(task_id, completion) => {
                 self.accept_file_operation_finished(task_id, completion)
             }

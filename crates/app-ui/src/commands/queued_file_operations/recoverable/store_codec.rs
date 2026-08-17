@@ -206,6 +206,8 @@ fn checkpoint_kind(checkpoint: &TransferCheckpoint) -> StoredTransferCheckpointK
             StoredTransferCheckpointKind::StageCreationIntent
         }
         TransferCheckpoint::Staging(_) => StoredTransferCheckpointKind::Staging,
+        TransferCheckpoint::DirectMoveIntent(_) => StoredTransferCheckpointKind::DirectMoveIntent,
+        TransferCheckpoint::DirectMoveRenamed(_) => StoredTransferCheckpointKind::DirectMoveRenamed,
         TransferCheckpoint::BackupCreationIntent(_) => {
             StoredTransferCheckpointKind::BackupCreationIntent
         }
@@ -329,7 +331,8 @@ mod tests {
 
     use file_core::{
         BackupCreationTransfer, CommitPayload, CompletedTarget, MergeChildOutcome, MergeTransfer,
-        ObjectFingerprint, PreparedTransfer, TransferCheckpoint, TransferExecutionKind,
+        ObjectFingerprint, PreparedTransfer, RenamedDirectMove, TransferCheckpoint,
+        TransferExecutionKind,
     };
 
     use file_operation_store::StoredTransferJournalEntry;
@@ -370,6 +373,37 @@ mod tests {
 
         assert!(encoded.is_none());
         assert_eq!(checks, 8);
+    }
+
+    #[test]
+    fn direct_move_checkpoints_round_trip_with_distinct_kinds() {
+        let prepared = PreparedTransfer {
+            source_identity: identity(1),
+            resolved_target: PathBuf::from("/tmp/target"),
+            expected_target_identity: None,
+            expected_target_fingerprint: None,
+            source_fingerprint: None,
+            execution: TransferExecutionKind::MoveDirect,
+            staging_plan: None,
+        };
+        let intent = TransferCheckpoint::DirectMoveIntent(prepared.clone());
+        let stored_intent = encode_checkpoint(&intent).unwrap();
+        assert_eq!(
+            stored_intent.kind,
+            StoredTransferCheckpointKind::DirectMoveIntent
+        );
+        assert_eq!(decode_checkpoint(&stored_intent).unwrap(), intent);
+
+        let renamed = TransferCheckpoint::DirectMoveRenamed(RenamedDirectMove {
+            prepared,
+            target_identity: identity(1),
+        });
+        let stored_renamed = encode_checkpoint(&renamed).unwrap();
+        assert_eq!(
+            stored_renamed.kind,
+            StoredTransferCheckpointKind::DirectMoveRenamed
+        );
+        assert_eq!(decode_checkpoint(&stored_renamed).unwrap(), renamed);
     }
 
     #[test]

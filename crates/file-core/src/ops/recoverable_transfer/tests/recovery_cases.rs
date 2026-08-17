@@ -325,50 +325,198 @@ async fn copy_recovers_after_every_journal_boundary() {
 }
 
 #[tokio::test]
-async fn direct_move_recovers_after_every_journal_boundary() {
-    for failed_attempt in 1.. {
-        let directory = tempdir().unwrap();
-        let source = directory.path().join("source");
-        let target = directory.path().join("target");
-        fs::write(&source, b"move-content").await.unwrap();
-        let request = transfer_request(
-            source.clone(),
-            target.clone(),
-            RecoverableTransferOperation::Move,
-            TransferConflictStrategy::Fail,
-        );
-        let journal = MemoryJournal::new(
-            200 + failed_attempt as u64,
-            TransferWorkKey::top_level(0),
-            Some(failed_attempt),
-        );
+async fn basic_direct_move_persists_target_visibility_before_content_hash() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"move-content").await.unwrap();
+    let source_identity = inspect_file_identity(&source).await.unwrap();
+    let request = basic_transfer_request(
+        source.clone(),
+        target.clone(),
+        RecoverableTransferOperation::Move,
+        TransferConflictStrategy::Fail,
+    );
+    let journal = MemoryJournal::new(199, TransferWorkKey::top_level(0), None);
+    let mut record = journal.record(request);
 
-        let first_run = run_recoverable_transfer(
+    assert_eq!(
+        advance_recoverable_transfer(&mut record, &journal, &running_transfer_options())
+            .await
+            .unwrap(),
+        TransferAdvance::Continue
+    );
+    assert!(matches!(
+        record.checkpoint,
+        TransferCheckpoint::DirectMoveIntent(_)
+    ));
+    assert!(fs::symlink_metadata(&source).await.is_ok());
+    assert!(fs::symlink_metadata(&target).await.is_err());
+
+    assert_eq!(
+        advance_recoverable_transfer(&mut record, &journal, &running_transfer_options())
+            .await
+            .unwrap(),
+        TransferAdvance::Continue
+    );
+    let TransferCheckpoint::DirectMoveRenamed(renamed) = &record.checkpoint else {
+        panic!("durable direct-move rename fact expected");
+    };
+    assert!(renamed.target_identity.same_object(&source_identity));
+    assert!(fs::symlink_metadata(&source).await.is_err());
+    assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
+
+    assert_eq!(
+        advance_recoverable_transfer(&mut record, &journal, &running_transfer_options())
+            .await
+            .unwrap(),
+        TransferAdvance::Continue
+    );
+    assert!(matches!(
+        record.checkpoint,
+        TransferCheckpoint::TargetCommitted(_)
+    ));
+}
+
+#[tokio::test]
+async fn basic_direct_move_recovers_when_renamed_checkpoint_write_fails() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"move-content").await.unwrap();
+    let request = basic_transfer_request(
+        source.clone(),
+        target.clone(),
+        RecoverableTransferOperation::Move,
+        TransferConflictStrategy::Fail,
+    );
+    let journal = MemoryJournal::new(200, TransferWorkKey::top_level(0), Some(2));
+
+    assert!(matches!(
+        run_recoverable_transfer(
             journal.record(request.clone()),
             &journal,
-            running_transfer_options(),
+            running_transfer_options()
         )
-        .await;
-        let hit_journal_boundary = match first_run {
-            Err(RecoverableTransferError::Journal { .. }) => true,
-            Ok(_) => false,
-            Err(error) => panic!("unexpected transfer error: {error:?}"),
-        };
-        if hit_journal_boundary {
-            run_recoverable_transfer(
+        .await,
+        Err(RecoverableTransferError::Journal { .. })
+    ));
+    assert!(matches!(
+        journal.record(request.clone()).checkpoint,
+        TransferCheckpoint::DirectMoveIntent(_)
+    ));
+    assert!(fs::symlink_metadata(&source).await.is_err());
+    assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
+
+    journal.set_failure(None);
+    let outcome = run_recoverable_transfer(
+        journal.record(request),
+        &journal,
+        running_transfer_options(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.final_target, Some(target.clone()));
+    assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
+    assert_no_transfer_artifacts(directory.path());
+}
+
+#[tokio::test]
+async fn basic_direct_move_recovers_when_target_committed_write_fails() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"move-content").await.unwrap();
+    let request = basic_transfer_request(
+        source.clone(),
+        target.clone(),
+        RecoverableTransferOperation::Move,
+        TransferConflictStrategy::Fail,
+    );
+    let journal = MemoryJournal::new(201, TransferWorkKey::top_level(0), Some(3));
+
+    assert!(matches!(
+        run_recoverable_transfer(
+            journal.record(request.clone()),
+            &journal,
+            running_transfer_options()
+        )
+        .await,
+        Err(RecoverableTransferError::Journal { .. })
+    ));
+    assert!(matches!(
+        journal.record(request.clone()).checkpoint,
+        TransferCheckpoint::DirectMoveRenamed(_)
+    ));
+    assert!(fs::symlink_metadata(&source).await.is_err());
+    assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
+
+    journal.set_failure(None);
+    let outcome = run_recoverable_transfer(
+        journal.record(request),
+        &journal,
+        running_transfer_options(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.final_target, Some(target.clone()));
+    assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
+    assert_no_transfer_artifacts(directory.path());
+}
+
+#[tokio::test]
+async fn basic_and_strong_move_recover_after_every_journal_boundary() {
+    for verification in [
+        FileOperationVerification::BasicMetadata,
+        FileOperationVerification::Strong,
+    ] {
+        for failed_attempt in 1.. {
+            let directory = tempdir().unwrap();
+            let source = directory.path().join("source");
+            let target = directory.path().join("target");
+            fs::write(&source, b"move-content").await.unwrap();
+            let mut request = transfer_request(
+                source.clone(),
+                target.clone(),
+                RecoverableTransferOperation::Move,
+                TransferConflictStrategy::Fail,
+            );
+            request.verification = verification;
+            let journal = MemoryJournal::new(
+                200 + failed_attempt as u64,
+                TransferWorkKey::top_level(0),
+                Some(failed_attempt),
+            );
+
+            let first_run = run_recoverable_transfer(
                 journal.record(request.clone()),
                 &journal,
                 running_transfer_options(),
             )
-            .await
-            .unwrap();
-        }
+            .await;
+            let hit_journal_boundary = match first_run {
+                Err(RecoverableTransferError::Journal { .. }) => true,
+                Ok(_) => false,
+                Err(error) => panic!("unexpected transfer error: {error:?}"),
+            };
+            if hit_journal_boundary {
+                run_recoverable_transfer(
+                    journal.record(request.clone()),
+                    &journal,
+                    running_transfer_options(),
+                )
+                .await
+                .unwrap();
+            }
 
-        assert!(fs::symlink_metadata(&source).await.is_err());
-        assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
-        assert_no_transfer_artifacts(directory.path());
-        if !hit_journal_boundary {
-            break;
+            assert!(fs::symlink_metadata(&source).await.is_err());
+            assert_eq!(fs::read(&target).await.unwrap(), b"move-content");
+            assert_no_transfer_artifacts(directory.path());
+            if !hit_journal_boundary {
+                break;
+            }
         }
     }
 }

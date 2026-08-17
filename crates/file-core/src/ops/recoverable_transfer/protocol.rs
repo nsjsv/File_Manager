@@ -26,7 +26,7 @@ pub struct RecoverableTransferRequest {
     pub verification: FileOperationVerification,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TransferWorkKey {
     pub transfer_index: u64,
     #[serde(with = "super::path_codec")]
@@ -97,6 +97,12 @@ pub struct CommitTransfer {
     pub fingerprint: ObjectFingerprint,
     #[serde(default)]
     pub backup_identity: Option<FileIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RenamedDirectMove {
+    pub prepared: PreparedTransfer,
+    pub target_identity: FileIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -219,6 +225,8 @@ pub enum TransferCheckpoint {
     Merging(MergeTransfer),
     StageCreationIntent(PreparedTransfer),
     Staging(StagingTransfer),
+    DirectMoveIntent(PreparedTransfer),
+    DirectMoveRenamed(RenamedDirectMove),
     BackupCreationIntent(BackupCreationTransfer),
     CommitIntent(CommitTransfer),
     TargetCommitted(CommittedTransfer),
@@ -305,6 +313,34 @@ pub enum TransferJournalMutation {
         completion: MergeChildCompletion,
         checkpoint: TransferCheckpoint,
     },
+    InstallManifestAndCheckpointBatch {
+        updates: Vec<ManifestCheckpointBatchUpdate>,
+    },
+}
+
+/// One checkpoint compare-and-swap in a batch commit. A batch swap is only
+/// valid when every swap moves a distinct top-level record forward by exactly
+/// one revision; it is the persistence unit for the post-rename facts of a
+/// Basic DirectMove visibility segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferCheckpointSwap {
+    pub task_id: u64,
+    pub key: TransferWorkKey,
+    pub expected_revision: u64,
+    pub checkpoint: TransferCheckpoint,
+}
+
+/// One manifest + checkpoint install inside a batch commit. Every update moves
+/// a distinct top-level record forward by exactly one revision and installs the
+/// manifest entries for that record in the same transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestCheckpointBatchUpdate {
+    pub task_id: u64,
+    pub key: TransferWorkKey,
+    pub expected_revision: u64,
+    pub manifest: SourceManifest,
+    pub replacement_manifest: Option<SourceManifest>,
+    pub checkpoint: TransferCheckpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +356,31 @@ pub type TransferJournalFuture<'a> =
 
 pub trait TransferJournal: Send + Sync {
     fn commit(&self, mutation: TransferJournalMutation) -> TransferJournalFuture<'_>;
+
+    /// Journals must opt into an atomic batch implementation. A journal that
+    /// cannot provide this boundary fails closed instead of silently turning a
+    /// segment back into per-record persistence.
+    fn commit_checkpoint_batch<'a>(
+        &'a self,
+        _swaps: Vec<TransferCheckpointSwap>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u64>, TransferJournalError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(TransferJournalError::Storage(
+                "atomic checkpoint batches are not supported by this journal".to_owned(),
+            ))
+        })
+    }
+
+    fn commit_manifest_batch<'a>(
+        &'a self,
+        _updates: Vec<ManifestCheckpointBatchUpdate>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u64>, TransferJournalError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(TransferJournalError::Storage(
+                "atomic manifest batches are not supported by this journal".to_owned(),
+            ))
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

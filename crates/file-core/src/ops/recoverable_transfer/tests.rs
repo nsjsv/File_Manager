@@ -385,7 +385,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::executor::{
     advance_recoverable_transfer, persist_recoverable_source_manifest, run_recoverable_transfer,
-    TransferAdvance,
+    run_recoverable_transfer_to_direct_move_intent, DirectMoveIntentBoundary, TransferAdvance,
 };
 
 struct MemoryJournalState {
@@ -492,9 +492,62 @@ impl TransferJournal for MemoryJournal {
                     }
                     state.checkpoint = checkpoint;
                 }
+                TransferJournalMutation::InstallManifestAndCheckpointBatch { .. } => {
+                    return Err(TransferJournalError::Storage(
+                        "memory journal does not support batch manifest installs".to_owned(),
+                    ));
+                }
             }
             state.revision += 1;
             Ok(state.revision)
+        })
+    }
+
+    fn commit_checkpoint_batch<'a>(
+        &'a self,
+        swaps: Vec<TransferCheckpointSwap>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u64>, TransferJournalError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let mut revisions = Vec::with_capacity(swaps.len());
+            for swap in swaps {
+                revisions.push(
+                    self.commit(TransferJournalMutation::CompareAndSwapCheckpoint {
+                        task_id: swap.task_id,
+                        key: swap.key,
+                        expected_revision: swap.expected_revision,
+                        checkpoint: swap.checkpoint,
+                    })
+                    .await?,
+                );
+            }
+            Ok(revisions)
+        })
+    }
+
+    fn commit_manifest_batch<'a>(
+        &'a self,
+        updates: Vec<ManifestCheckpointBatchUpdate>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<u64>, TransferJournalError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let mut revisions = Vec::with_capacity(updates.len());
+            for update in updates {
+                revisions.push(
+                    self.commit(TransferJournalMutation::InstallManifestAndCheckpoint {
+                        task_id: update.task_id,
+                        key: update.key,
+                        expected_revision: update.expected_revision,
+                        manifest: update.manifest,
+                        replacement_manifest: update.replacement_manifest,
+                        checkpoint: update.checkpoint,
+                    })
+                    .await?,
+                );
+            }
+            Ok(revisions)
         })
     }
 }
@@ -620,47 +673,45 @@ fn assert_no_transfer_artifacts(parent: &Path) {
 async fn prepare_records_content_fingerprints_only_for_strong_verification() {
     let directory = tempdir().unwrap();
 
-    for (task_id, verification, expects_preflight_fingerprint) in [
-        (2_003, FileOperationVerification::BasicMetadata, false),
-        (2_004, FileOperationVerification::Strong, true),
+    for (task_id, verification) in [
+        (2_003, FileOperationVerification::BasicMetadata),
+        (2_004, FileOperationVerification::Strong),
     ] {
         let source = directory.path().join(format!("source-{task_id}"));
         let target = directory.path().join(format!("target-{task_id}"));
         fs::write(&source, b"content").await.unwrap();
         let mut request = basic_transfer_request(
             source.clone(),
-            target.clone(),
+            target,
             RecoverableTransferOperation::Move,
             TransferConflictStrategy::Fail,
         );
         request.verification = verification;
         let journal = MemoryJournal::new(task_id, TransferWorkKey::top_level(0), None);
-        let mut record = journal.record(request.clone());
-        let options = running_transfer_options();
+        let mut record = journal.record(request);
 
-        loop {
-            assert!(matches!(
-                advance_recoverable_transfer(&mut record, &journal, &options)
-                    .await
-                    .unwrap(),
-                TransferAdvance::Continue
-            ));
-            if matches!(record.checkpoint, TransferCheckpoint::CommitIntent(_)) {
-                break;
-            }
-        }
-        let TransferCheckpoint::CommitIntent(commit) = record.checkpoint else {
-            unreachable!();
-        };
         assert_eq!(
-            commit.prepared.source_fingerprint.is_some(),
-            expects_preflight_fingerprint
+            advance_recoverable_transfer(&mut record, &journal, &running_transfer_options())
+                .await
+                .unwrap(),
+            TransferAdvance::Continue
         );
+        match (verification, &record.checkpoint) {
+            (
+                FileOperationVerification::BasicMetadata,
+                TransferCheckpoint::DirectMoveIntent(prepared),
+            ) => assert!(prepared.source_fingerprint.is_none()),
+            (FileOperationVerification::Strong, TransferCheckpoint::CommitIntent(commit)) => {
+                assert!(commit.prepared.source_fingerprint.is_some())
+            }
+            _ => panic!("verification mode selected the wrong pre-side-effect checkpoint"),
+        }
+        assert!(source.exists());
     }
 }
 
 #[tokio::test]
-async fn basic_copy_and_same_filesystem_move_hash_the_staged_payload() {
+async fn basic_copy_and_same_filesystem_move_build_complete_post_side_effect_proofs() {
     let directory = tempdir().unwrap();
 
     for (task_id, operation) in [
@@ -686,50 +737,86 @@ async fn basic_copy_and_same_filesystem_move_hash_the_staged_payload() {
                 .unwrap(),
             TransferAdvance::Continue
         );
-        let TransferCheckpoint::StageCreationIntent(prepared) = &record.checkpoint else {
-            panic!(
-                "Basic transfer must persist staging creation before its first payload side effect"
-            );
-        };
-        assert!(prepared.source_fingerprint.is_none());
-        assert!(source.exists());
+        match operation {
+            RecoverableTransferOperation::Copy => {
+                let TransferCheckpoint::StageCreationIntent(prepared) = &record.checkpoint else {
+                    panic!("Basic copy must persist staging before its first payload write");
+                };
+                assert!(prepared.source_fingerprint.is_none());
+                assert!(source.exists());
 
-        assert_eq!(
-            advance_recoverable_transfer(&mut record, &journal, &options)
-                .await
-                .unwrap(),
-            TransferAdvance::Continue
-        );
-        assert!(matches!(record.checkpoint, TransferCheckpoint::Staging(_)));
-        assert!(source.exists());
+                assert_eq!(
+                    advance_recoverable_transfer(&mut record, &journal, &options)
+                        .await
+                        .unwrap(),
+                    TransferAdvance::Continue
+                );
+                assert!(matches!(record.checkpoint, TransferCheckpoint::Staging(_)));
+                assert!(source.exists());
 
-        assert_eq!(
-            advance_recoverable_transfer(&mut record, &journal, &options)
-                .await
-                .unwrap(),
-            TransferAdvance::Continue
-        );
-        let TransferCheckpoint::CommitIntent(commit) = &record.checkpoint else {
-            panic!("staged Basic transfer must persist a complete commit proof");
-        };
-        let CommitPayload::Artifact { artifact, .. } = &commit.payload else {
-            panic!("Basic transfer must commit from owned staging");
-        };
-        assert_eq!(
-            fingerprint_object(&artifact.plan.payload_path())
-                .await
-                .unwrap(),
-            commit.fingerprint
-        );
-        assert_eq!(
-            source.exists(),
-            operation == RecoverableTransferOperation::Copy
-        );
-        assert!(!target.exists());
+                assert_eq!(
+                    advance_recoverable_transfer(&mut record, &journal, &options)
+                        .await
+                        .unwrap(),
+                    TransferAdvance::Continue
+                );
+                let TransferCheckpoint::CommitIntent(commit) = &record.checkpoint else {
+                    panic!("staged Basic copy must persist a complete commit proof");
+                };
+                let CommitPayload::Artifact { artifact, .. } = &commit.payload else {
+                    panic!("Basic copy must commit from owned staging");
+                };
+                assert_eq!(
+                    fingerprint_object(&artifact.plan.payload_path())
+                        .await
+                        .unwrap(),
+                    commit.fingerprint
+                );
+                assert!(source.exists());
+                assert!(!target.exists());
+            }
+            RecoverableTransferOperation::Move => {
+                let TransferCheckpoint::DirectMoveIntent(prepared) = &record.checkpoint else {
+                    panic!("Basic same-filesystem move must persist a direct move intent");
+                };
+                assert!(prepared.source_fingerprint.is_none());
+                assert!(source.exists());
+                assert!(!target.exists());
+
+                assert_eq!(
+                    advance_recoverable_transfer(&mut record, &journal, &options)
+                        .await
+                        .unwrap(),
+                    TransferAdvance::Continue
+                );
+                assert!(matches!(
+                    record.checkpoint,
+                    TransferCheckpoint::DirectMoveRenamed(_)
+                ));
+                assert!(!source.exists());
+                assert_eq!(fs::read(&target).await.unwrap(), b"content");
+
+                assert_eq!(
+                    advance_recoverable_transfer(&mut record, &journal, &options)
+                        .await
+                        .unwrap(),
+                    TransferAdvance::Continue
+                );
+                let TransferCheckpoint::TargetCommitted(committed) = &record.checkpoint else {
+                    panic!("visible Basic move must persist a complete target proof");
+                };
+                assert_eq!(
+                    fingerprint_object(&target).await.unwrap(),
+                    committed.fingerprint
+                );
+            }
+        }
     }
 }
 
+mod batch_cases;
 mod conflict_cases;
+mod direct_move_cases;
 mod invalid_checkpoint_cases;
 mod merge_and_control_cases;
 mod payload_integrity_cases;

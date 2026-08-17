@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -268,6 +268,7 @@ pub(crate) struct FileOperationTask {
     execution_phase: Option<FileOperationExecutionPhase>,
     post_insert_disposition: PostInsertDisposition,
     terminal_persistence_pending: bool,
+    accepted_direct_move_revisions: HashMap<file_core::TransferWorkKey, u64>,
 }
 
 impl FileOperationTask {
@@ -452,6 +453,7 @@ impl FileOperationQueue {
             execution_phase: None,
             post_insert_disposition: PostInsertDisposition::Continue,
             terminal_persistence_pending: false,
+            accepted_direct_move_revisions: HashMap::new(),
         });
 
         if let Some(store) = self.store.clone() {
@@ -517,6 +519,50 @@ impl FileOperationQueue {
                 ),
                 store: self.store.clone(),
             })
+    }
+
+    pub(crate) fn accept_durable_direct_move_commit(
+        &mut self,
+        id: u64,
+        work_key: &file_core::TransferWorkKey,
+        source: &std::path::Path,
+        intent_revision: u64,
+    ) -> bool {
+        let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) else {
+            return false;
+        };
+        if intent_revision == 0
+            || !matches!(
+                task.status,
+                FileOperationStatus::Running
+                    | FileOperationStatus::Paused
+                    | FileOperationStatus::Canceling
+            )
+            || task.accepted_direct_move_revisions.contains_key(work_key)
+        {
+            return false;
+        }
+        let QueuedFileOperation::Move { transfers, .. } = &task.operation else {
+            return false;
+        };
+        let Some(transfer) = usize::try_from(work_key.transfer_index)
+            .ok()
+            .and_then(|index| transfers.get(index))
+        else {
+            return false;
+        };
+        let expected_source = if work_key.relative_path.as_os_str().is_empty() {
+            transfer.source.clone()
+        } else {
+            transfer.source.join(&work_key.relative_path)
+        };
+        if expected_source != source {
+            return false;
+        }
+        task.accepted_direct_move_revisions
+            .insert(work_key.clone(), intent_revision);
+        task.execution_phase = Some(FileOperationExecutionPhase::Executing);
+        true
     }
 
     pub(crate) fn operation(&self, id: u64) -> Option<&QueuedFileOperation> {

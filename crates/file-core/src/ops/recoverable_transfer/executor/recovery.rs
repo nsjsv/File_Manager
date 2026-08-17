@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use super::commit::{
     commit_payload_identity, matches_object_verification, verify_completed_target,
 };
+use super::direct_move::renamed_target_matches_source;
 use super::{next_recovered_path, path_exists, persist_checkpoint, sync_rename_parents};
 use crate::ops::recoverable_transfer::{
     fingerprint_object, inspect_file_identity, recover_owned_artifact,
@@ -104,7 +105,11 @@ async fn cleanup_checkpoint_files(
             restore_or_remove_staging(record, staging).await?;
             Ok(None)
         }
-        TransferCheckpoint::BackupCreationIntent(_)
+        TransferCheckpoint::DirectMoveIntent(prepared) => {
+            cleanup_direct_move_intent(record, prepared).await
+        }
+        TransferCheckpoint::DirectMoveRenamed(_)
+        | TransferCheckpoint::BackupCreationIntent(_)
         | TransferCheckpoint::TargetCommitted(_)
         | TransferCheckpoint::SourceRetirementIntent(_)
         | TransferCheckpoint::SourceRetired(_) => {
@@ -125,6 +130,30 @@ async fn cleanup_checkpoint_files(
             Box::pin(cleanup_checkpoint_files(record, &failure.previous)).await
         }
         TransferCheckpoint::Failed { final_target, .. } => Ok(final_target.clone()),
+    }
+}
+
+async fn cleanup_direct_move_intent(
+    record: &TransferJournalRecord,
+    prepared: &PreparedTransfer,
+) -> Result<Option<PathBuf>, RecoverableTransferError> {
+    if path_exists(&record.request.source).await? {
+        return Ok(None);
+    }
+    if !path_exists(&prepared.resolved_target).await? {
+        return Err(RecoverableTransferError::SourceChanged {
+            path: record.request.source.clone(),
+        });
+    }
+    let target_identity = inspect_file_identity(&prepared.resolved_target).await?;
+    if renamed_target_matches_source(&target_identity, &prepared.source_identity) {
+        Err(RecoverableTransferError::InvalidCheckpoint {
+            message: "a visible direct move can only recover forward".to_owned(),
+        })
+    } else {
+        Err(RecoverableTransferError::TargetConflict {
+            path: prepared.resolved_target.clone(),
+        })
     }
 }
 

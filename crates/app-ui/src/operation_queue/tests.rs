@@ -90,6 +90,45 @@ fn recoverable_task_waits_for_journal_ack_before_starting() {
 }
 
 #[test]
+fn direct_move_commit_revisions_are_accepted_once_for_the_active_work_item() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let mut queue = FileOperationQueue::new();
+    queue.set_store_with_deferred_persistence(store);
+    let first_source = PathBuf::from("/tmp/first-source");
+    let second_source = PathBuf::from("/tmp/second-source");
+    queue.enqueue(QueuedFileOperation::Move {
+        transfers: vec![
+            QueuedTransfer::new(first_source.clone(), PathBuf::from("/tmp/first-target")),
+            QueuedTransfer::new(second_source.clone(), PathBuf::from("/tmp/second-target")),
+        ],
+        verification: FileOperationVerification::BasicMetadata,
+    });
+    let request = queue.take_next_persistence_request().unwrap();
+    queue.accept_persistence_outcome(execute_file_operation_persistence(request));
+    let task_id = queue.tasks()[0].id;
+    let first_key = file_core::TransferWorkKey::top_level(0);
+    let second_key = file_core::TransferWorkKey::top_level(1);
+    let nested_key = file_core::TransferWorkKey {
+        transfer_index: 1,
+        relative_path: PathBuf::from("nested/child"),
+    };
+    let nested_source = second_source.join("nested/child");
+
+    assert!(queue.accept_durable_direct_move_commit(task_id, &first_key, &first_source, 4));
+    assert_eq!(queue.tasks()[0].status_label(), "Running");
+    assert!(!queue.accept_durable_direct_move_commit(task_id, &first_key, &first_source, 4));
+    assert!(!queue.accept_durable_direct_move_commit(task_id, &first_key, &first_source, 5));
+    assert!(!queue.accept_durable_direct_move_commit(task_id, &second_key, &first_source, 4));
+    assert!(queue.accept_durable_direct_move_commit(task_id, &nested_key, &nested_source, 9));
+    assert_eq!(
+        queue.finish(task_id, FileOperationFinish::Succeeded).0,
+        Some(FileOperationTerminalStatus::Completed)
+    );
+    assert!(!queue.accept_durable_direct_move_commit(task_id, &second_key, &second_source, 4));
+}
+
+#[test]
 fn persistence_requests_are_fifo_across_multiple_accepts() {
     let directory = tempfile::tempdir().unwrap();
     let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();

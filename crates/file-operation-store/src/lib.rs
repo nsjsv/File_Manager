@@ -22,8 +22,9 @@ pub use browser_session::{
 mod recoverable_transfer;
 pub use recoverable_transfer::{
     ClaimedRecoverableTask, RecoverableRestoreCoordinatorLease, RecoverableTaskRunnerLease,
-    StoredFileIdentity, StoredFileObjectKind, StoredFileOperationVerification, StoredManifestEntry,
-    StoredMergeChildCompletion, StoredTransferCheckpoint, StoredTransferCheckpointKind,
+    StoredFileIdentity, StoredFileObjectKind, StoredFileOperationVerification,
+    StoredManifestCheckpointBatchUpdate, StoredManifestEntry, StoredMergeChildCompletion,
+    StoredTransferCheckpoint, StoredTransferCheckpointKind, StoredTransferCheckpointSwap,
     StoredTransferConflictStrategy, StoredTransferJournalEntry, StoredTransferOperation,
     StoredTransferRecoverySnapshot, StoredTransferWorkKey, TransferManifestCheckpointUpdate,
     TRANSFER_JOURNAL_VERSION,

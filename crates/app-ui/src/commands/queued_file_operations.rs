@@ -9,13 +9,15 @@ use std::time::{Duration, Instant};
 use file_core::{
     create_archive_with_controls_and_progress, create_directory, create_empty_file,
     delete_path_permanently, delete_trash_entry, extract_archive_with_controls_and_progress,
-    persist_recoverable_source_manifest_with_controls, rename_path, restore_trash_entry,
-    run_recoverable_transfer, trash_path_with_restore_entry_and_cancellation,
-    ArchiveCreationRequest, ArchiveExtractionRequest, CopyProgress, FileError,
-    FileOperationControls, FileOperationVerification, FileTransferOptions,
+    is_direct_move_segment_candidate, persist_recoverable_source_manifest_with_controls,
+    prepare_direct_move_intent_segment, rename_path, restore_trash_entry,
+    run_direct_move_batch_to_durable_renamed, run_recoverable_transfer,
+    trash_path_with_restore_entry_and_cancellation, ArchiveCreationRequest,
+    ArchiveExtractionRequest, CopyProgress, DirectMoveBatchRecord, DirectMoveIntentBatchRecord,
+    FileError, FileOperationControls, FileOperationVerification, FileTransferOptions,
     RecoverableTransferError, RecoverableTransferOperation, RecoverableTransferOutcome,
     TransferConflictStrategy, TransferJournal, TransferJournalError, TransferJournalMutation,
-    TransferJournalRecord, TrashRestoreEntry,
+    TransferJournalRecord, TransferWorkKey, TrashRestoreEntry,
 };
 use file_operation_store::TaskQueueStore;
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
@@ -38,6 +40,31 @@ use super::batch_rename_operation::run_queued_batch_rename;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
 const BYTE_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DurableDirectMoveCommit {
+    pub(crate) work_key: TransferWorkKey,
+    pub(crate) source: PathBuf,
+    pub(crate) target: PathBuf,
+    pub(crate) checkpoint_revision: u64,
+}
+
+#[cfg(test)]
+impl DurableDirectMoveCommit {
+    pub(crate) fn for_test(
+        work_key: TransferWorkKey,
+        source: PathBuf,
+        target: PathBuf,
+        checkpoint_revision: u64,
+    ) -> Self {
+        Self {
+            work_key,
+            source,
+            target,
+            checkpoint_revision,
+        }
+    }
+}
 
 fn should_send_byte_progress(last_sent_at: Option<Instant>, now: Instant) -> bool {
     match last_sent_at {

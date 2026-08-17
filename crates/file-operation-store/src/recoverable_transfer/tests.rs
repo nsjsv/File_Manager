@@ -756,3 +756,44 @@ fn deleting_task_cascades_recovery_rows() {
         .unwrap();
     assert_eq!(journal_count, 0);
 }
+
+#[test]
+fn batch_checkpoint_swap_updates_every_record_in_one_transaction() {
+    let directory = tempdir().unwrap();
+    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
+    let operation = recoverable_copy(vec![
+        transfer(Path::new("/tmp/source-0"), Path::new("/tmp/target-0")),
+        transfer(Path::new("/tmp/source-1"), Path::new("/tmp/target-1")),
+    ]);
+    let claimed = store
+        .insert_claimed_recoverable_transfer_task(&operation)
+        .unwrap();
+    let task_id = claimed.task_id;
+    drop(claimed);
+
+    let swap = |transfer_index: u64| StoredTransferCheckpointSwap {
+        task_id,
+        key: StoredTransferWorkKey::top_level(transfer_index),
+        expected_revision: 0,
+        checkpoint: completed_checkpoint(),
+    };
+    let revisions = store
+        .compare_and_swap_transfer_checkpoints(&[swap(0), swap(1)])
+        .unwrap();
+    assert_eq!(revisions, vec![1, 1]);
+
+    let snapshot = store.read_transfer_recovery(task_id).unwrap();
+    assert!(snapshot.journal_entries.iter().all(|entry| {
+        entry.revision == 1 && entry.checkpoint.kind == StoredTransferCheckpointKind::Completed
+    }));
+
+    // A stale revision in one swap must fail the whole batch atomically.
+    assert!(store
+        .compare_and_swap_transfer_checkpoints(&[swap(0), swap(1)])
+        .is_err());
+    let snapshot = store.read_transfer_recovery(task_id).unwrap();
+    assert!(snapshot
+        .journal_entries
+        .iter()
+        .all(|entry| entry.revision == 1));
+}

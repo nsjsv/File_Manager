@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use super::FileBrowser;
 use crate::model::{IconGridExpansionMigration, Message};
 use crate::operation_history::{
-    path_after_completed_migrations, FileOperationCompletion, PendingHistoryOperation,
+    path_after_completed_migrations, CompletedPathMigration, FileOperationCompletion,
+    PendingHistoryOperation,
 };
 use crate::operation_queue::{
     file_operation_persistence_command, FileOperationEnqueueOutcome, FileOperationFinish,
@@ -74,6 +75,52 @@ pub(super) fn queue_finish_from_completion(
 }
 
 impl FileBrowser {
+    pub(super) fn accept_file_operation_direct_moves_committed(
+        &mut self,
+        task_id: u64,
+        commits: Vec<crate::commands::DurableDirectMoveCommit>,
+    ) -> Task<Message> {
+        let mut migrations = Vec::with_capacity(commits.len());
+        for commit in commits {
+            if !self.operation_queue.accept_durable_direct_move_commit(
+                task_id,
+                &commit.work_key,
+                &commit.source,
+                commit.checkpoint_revision,
+            ) {
+                continue;
+            }
+            tracing::debug!(
+                target: "app_ui::file_operations",
+                event = "direct_move_committed",
+                task_id,
+                checkpoint_revision = commit.checkpoint_revision,
+                source = %commit.source.display(),
+                target_path = %commit.target.display(),
+                "durable basic direct move target became visible"
+            );
+            migrations.push(CompletedPathMigration::new(commit.source, commit.target));
+        }
+        if migrations.is_empty() {
+            return Task::none();
+        }
+
+        let operation = self.operation_queue.operation(task_id).cloned();
+        let path_migration_task = self.migrate_completed_paths(&migrations);
+        let pane_reload_task = if let Some(operation) = operation.as_ref() {
+            self.invalidate_list_directory_summaries_for_file_operation(operation);
+            self.reload_visible_panes_after_file_operation_preserving_list_directory_summaries()
+        } else {
+            self.reload_visible_panes_after_file_operation()
+        };
+        let search_refresh_task = if self.search_workspace.is_some() {
+            self.submit_search()
+        } else {
+            Task::none()
+        };
+        Task::batch([path_migration_task, pane_reload_task, search_refresh_task])
+    }
+
     pub(super) fn accept_file_operation_finished(
         &mut self,
         task_id: u64,
@@ -203,6 +250,10 @@ impl FileBrowser {
         completion: &FileOperationCompletion,
     ) -> Task<Message> {
         let migrations = completion.completed_path_migrations();
+        self.migrate_completed_paths(&migrations)
+    }
+
+    fn migrate_completed_paths(&mut self, migrations: &[CompletedPathMigration]) -> Task<Message> {
         if migrations.is_empty() {
             return Task::none();
         }
@@ -212,8 +263,7 @@ impl FileBrowser {
 
         let invalidate_icon_grid_expansion =
             self.icon_grid_expansion.as_mut().is_some_and(|state| {
-                state.migrate_completed_paths(&migrations)
-                    == IconGridExpansionMigration::Invalidated
+                state.migrate_completed_paths(migrations) == IconGridExpansionMigration::Invalidated
             });
         if invalidate_icon_grid_expansion {
             self.clear_icon_grid_expansion();
@@ -222,7 +272,7 @@ impl FileBrowser {
         self.sync_active_tab_state();
         for pane in &mut self.panes {
             pane.sync_active_tab_state();
-            pane.migrate_completed_paths(&migrations);
+            pane.migrate_completed_paths(migrations);
         }
         if let Some(active_pane) = self.pane_by_id(self.active_pane_id()).cloned() {
             self.apply_pane_browsing_snapshot(active_pane);
@@ -232,20 +282,20 @@ impl FileBrowser {
             .drain()
             .map(|(directory, target)| {
                 (
-                    path_after_completed_migrations(&directory, &migrations),
-                    path_after_completed_migrations(&target, &migrations),
+                    path_after_completed_migrations(&directory, migrations),
+                    path_after_completed_migrations(&target, migrations),
                 )
             })
             .collect();
         if let Some(path) = &mut self.pending_created_entry_rename {
-            *path = path_after_completed_migrations(path, &migrations);
+            *path = path_after_completed_migrations(path, migrations);
         }
         if let Some(path) = &mut self.renaming {
-            *path = path_after_completed_migrations(path, &migrations);
+            *path = path_after_completed_migrations(path, migrations);
         }
         if let Some(address_editing) = &mut self.address_editing {
             for suggestion in &mut address_editing.suggestions {
-                *suggestion = path_after_completed_migrations(suggestion, &migrations);
+                *suggestion = path_after_completed_migrations(suggestion, migrations);
             }
         }
 

@@ -124,6 +124,7 @@ impl FileOperationQueue {
             .then_some(FileOperationExecutionPhase::Preparing),
             post_insert_disposition: PostInsertDisposition::Continue,
             terminal_persistence_pending: false,
+            accepted_direct_move_revisions: HashMap::new(),
         });
         let position = self.tasks.len().saturating_sub(1);
         self.queue_task_state(

@@ -325,6 +325,10 @@ pub(crate) enum Message {
     VideoPreviewFinished(PathBuf, u64),
     VideoPreviewFailed(PathBuf, u64, String),
     FileOperationProgressed(u64, crate::operation_progress::FileOperationProgressUpdate),
+    FileOperationDirectMovesCommitted {
+        task_id: u64,
+        commits: Vec<crate::commands::DurableDirectMoveCommit>,
+    },
     FileOperationFinished(u64, FileOperationCompletion),
     FileOperationPersistenceFinished(crate::operation_queue::FileOperationPersistenceOutcome),
     OperationProgressAnimationTick,

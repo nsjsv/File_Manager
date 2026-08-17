@@ -53,6 +53,43 @@ fn finish_queued_rename(browser: &mut FileBrowser, from: PathBuf, to: PathBuf) {
     ));
 }
 
+fn direct_move_commit_message(
+    task_id: u64,
+    source: PathBuf,
+    target: PathBuf,
+    checkpoint_revision: u64,
+) -> Message {
+    Message::FileOperationDirectMovesCommitted {
+        task_id,
+        commits: vec![crate::commands::DurableDirectMoveCommit::for_test(
+            file_core::TransferWorkKey::top_level(0),
+            source,
+            target,
+            checkpoint_revision,
+        )],
+    }
+}
+
+fn direct_move_commit_batch_message(
+    task_id: u64,
+    commits: Vec<(usize, PathBuf, PathBuf, u64)>,
+) -> Message {
+    Message::FileOperationDirectMovesCommitted {
+        task_id,
+        commits: commits
+            .into_iter()
+            .map(|(transfer_index, source, target, checkpoint_revision)| {
+                crate::commands::DurableDirectMoveCommit::for_test(
+                    file_core::TransferWorkKey::top_level(transfer_index as u64),
+                    source,
+                    target,
+                    checkpoint_revision,
+                )
+            })
+            .collect(),
+    }
+}
+
 fn loaded_expanded_directory() -> ExpandedDirectory {
     ExpandedDirectory {
         entries: Vec::new(),
@@ -259,6 +296,166 @@ fn duplicate_completion_is_rejected_before_history_side_effects() {
 
     assert!(browser.operation_history.take_undo_operation().is_some());
     assert!(browser.operation_history.take_undo_operation().is_none());
+}
+
+#[test]
+fn durable_direct_move_commit_migrates_paths_before_terminal_completion() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("old");
+    let destination = workspace.path().join("new");
+    browser.current_dir = source.join("nested");
+    browser.sync_active_tab_state();
+    browser.operation_queue.set_store(
+        file_operation_store::TaskQueueStore::new(workspace.path().join("state.sqlite")).unwrap(),
+    );
+    drop(browser.enqueue_file_operation(QueuedFileOperation::Move {
+        transfers: vec![crate::operation_queue::QueuedTransfer::new(
+            source.clone(),
+            destination.clone(),
+        )],
+        verification: file_core::FileOperationVerification::BasicMetadata,
+    }));
+    let task_id = browser.operation_queue.tasks().last().unwrap().id;
+
+    drop(browser.update(direct_move_commit_message(
+        task_id,
+        source.clone(),
+        destination.clone(),
+        2,
+    )));
+
+    assert_eq!(browser.current_dir, destination.join("nested"));
+    drop(browser.accept_file_operation_finished(
+        task_id,
+        FileOperationCompletion::Succeeded(FileOperationOutcome::Move {
+            transfers: vec![crate::operation_history::CompletedTransfer {
+                source: source.clone(),
+                target: destination.clone(),
+            }],
+            history_eligibility:
+                crate::operation_history::FileOperationHistoryEligibility::Replayable,
+        }),
+    ));
+    drop(browser.update(direct_move_commit_message(
+        task_id,
+        source,
+        workspace.path().join("stale"),
+        2,
+    )));
+    assert_eq!(browser.current_dir, destination.join("nested"));
+}
+
+#[test]
+fn direct_move_commit_batch_migrates_all_paths_with_one_pane_and_search_refresh() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let workspace = tempfile::tempdir().unwrap();
+    let first_source = workspace.path().join("first-old");
+    let first_target = workspace.path().join("first-new");
+    let second_source = workspace.path().join("second-old");
+    let second_target = workspace.path().join("second-new");
+    std::fs::create_dir_all(first_source.join("nested")).unwrap();
+    std::fs::create_dir_all(&second_source).unwrap();
+    browser.current_dir = first_source.join("nested");
+    browser.renaming = Some(second_source.join("report.txt"));
+    browser.sync_active_tab_state();
+    drop(browser.update_search_input("report".to_owned()));
+    browser.operation_queue.set_store(
+        file_operation_store::TaskQueueStore::new(workspace.path().join("state.sqlite")).unwrap(),
+    );
+    drop(browser.enqueue_file_operation(QueuedFileOperation::Move {
+        transfers: vec![
+            crate::operation_queue::QueuedTransfer::new(first_source.clone(), first_target.clone()),
+            crate::operation_queue::QueuedTransfer::new(
+                second_source.clone(),
+                second_target.clone(),
+            ),
+        ],
+        verification: file_core::FileOperationVerification::BasicMetadata,
+    }));
+    let task_id = browser.operation_queue.tasks().last().unwrap().id;
+    let pane_generation = browser.directory_load_generation;
+    let search_generation = browser.search_workspace.as_ref().unwrap().run.generation;
+
+    drop(browser.update(direct_move_commit_batch_message(
+        task_id,
+        vec![
+            (0, first_source, first_target.clone(), 2),
+            (1, second_source, second_target.clone(), 2),
+        ],
+    )));
+
+    assert_eq!(browser.current_dir, first_target.join("nested"));
+    assert_eq!(browser.renaming, Some(second_target.join("report.txt")));
+    assert_eq!(browser.directory_load_generation, pane_generation + 1);
+    assert_eq!(
+        browser.search_workspace.as_ref().unwrap().run.generation,
+        search_generation + 1
+    );
+
+    drop(browser.update(direct_move_commit_batch_message(
+        task_id,
+        vec![(
+            0,
+            workspace.path().join("stale"),
+            workspace.path().join("wrong"),
+            2,
+        )],
+    )));
+    assert_eq!(browser.directory_load_generation, pane_generation + 1);
+    assert_eq!(
+        browser.search_workspace.as_ref().unwrap().run.generation,
+        search_generation + 1
+    );
+}
+
+#[tokio::test]
+async fn direct_move_batch_rejects_late_scan_when_current_directory_path_is_unchanged() {
+    let workspace = tempfile::tempdir().unwrap();
+    let current_directory = workspace.path().to_path_buf();
+    let source = current_directory.join("old.txt");
+    let target = current_directory.join("new.txt");
+    std::fs::write(&source, b"late scan entry").unwrap();
+    let stale_scan = file_core::scan_directory(&current_directory, Default::default())
+        .await
+        .unwrap();
+
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = current_directory.clone();
+    browser.sync_active_tab_state();
+    let stale_request = browser.next_directory_load_request(current_directory.clone());
+
+    drop(browser.migrate_completed_paths(&[CompletedPathMigration::new(source, target)]));
+    drop(browser.reload_visible_panes_after_file_operation());
+
+    assert_eq!(browser.current_dir, current_directory);
+    assert_eq!(
+        browser.directory_load_generation,
+        stale_request.generation + 1
+    );
+    assert!(browser.entries.is_empty());
+
+    drop(browser.accept_complete_directory_fixture(stale_request, stale_scan));
+    assert!(browser.entries.is_empty());
+}
+
+#[test]
+fn direct_move_commit_during_shutdown_does_not_migrate_paths() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let source = PathBuf::from("/workspace/old");
+    browser.current_dir = source.join("nested");
+    browser.sync_active_tab_state();
+    browser.application_shutdown_phase =
+        crate::app::application_shutdown::ApplicationShutdownPhase::ClosingWindows;
+
+    drop(browser.update(direct_move_commit_message(
+        1,
+        source.clone(),
+        PathBuf::from("/workspace/new"),
+        2,
+    )));
+
+    assert_eq!(browser.current_dir, source.join("nested"));
 }
 
 #[test]

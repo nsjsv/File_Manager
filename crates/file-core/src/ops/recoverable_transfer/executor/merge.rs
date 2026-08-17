@@ -323,6 +323,11 @@ impl TransferJournal for ChildCheckpointJournal {
                     }
                     expected_revision
                 }
+                TransferJournalMutation::InstallManifestAndCheckpointBatch { .. } => {
+                    return Err(TransferJournalError::Storage(
+                        "merge child journal does not support batch manifest installs".to_owned(),
+                    ));
+                }
             };
             expected_revision.checked_add(1).ok_or_else(|| {
                 TransferJournalError::Storage("child transfer revision overflow".to_owned())
