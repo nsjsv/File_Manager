@@ -24,7 +24,7 @@
 
 ### Arch Linux（AUR）
 
-推荐直接安装预编译包 `[file-manager-bin](https://aur.archlinux.org/packages/file-manager-bin)`：
+推荐直接安装预编译包 [file-manager-bin](https://aur.archlinux.org/packages/file-manager-bin)：
 
 ```bash
 paru -S file-manager-bin

@@ -362,16 +362,7 @@ pub(crate) fn selected_sidebar_item_style(theme: &Theme) -> container::Appearanc
 pub(crate) fn tab_strip_style(theme: &Theme) -> container::Appearance {
     let colors = ui_colors(theme);
     container::Appearance {
-        background: Some(Background::Color(Color {
-            a: 0.84,
-            ..colors.surface_container
-        })),
         text_color: Some(colors.on_surface),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            ..Border::default()
-        },
         ..container::Appearance::default()
     }
 }
