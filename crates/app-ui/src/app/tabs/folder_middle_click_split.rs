@@ -38,11 +38,20 @@ impl FileBrowser {
         let tab = self.next_directory_tab(directory);
         self.put_directory_tab_in_pane(destination_id, tab);
 
+        let first_portion = match self.pane_layout {
+            BrowserPaneLayout::Split {
+                axis: current_axis,
+                first_portion,
+                ..
+            } if current_axis == axis => first_portion,
+            _ => 500,
+        };
         self.pane_layout = BrowserPaneLayout::Split {
             axis,
             first: source_id,
             second: destination_id,
             active: destination_id,
+            first_portion,
         };
 
         if let Some(destination) = self.pane_by_id(destination_id).cloned() {
@@ -144,6 +153,7 @@ mod tests {
             first,
             second,
             active,
+            ..
         } = browser.pane_layout
         else {
             panic!("expected split pane layout");

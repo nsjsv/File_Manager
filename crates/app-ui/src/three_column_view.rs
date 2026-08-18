@@ -694,6 +694,7 @@ mod tests {
                 first,
                 second,
                 active: first,
+                first_portion: 500,
             },
             first,
         ));
@@ -703,6 +704,7 @@ mod tests {
                 first,
                 second,
                 active: second,
+                first_portion: 500,
             },
             second,
         ));
@@ -712,6 +714,7 @@ mod tests {
                 first,
                 second,
                 active: second,
+                first_portion: 500,
             },
             second,
         ));

@@ -51,6 +51,7 @@ mod sidebar_bookmarks;
 mod sidebar_devices;
 mod sidebar_resize;
 pub(crate) mod smooth_scroll;
+mod split_resize;
 mod startup;
 mod startup_settings;
 mod tabs;
@@ -99,6 +100,7 @@ use crate::app::scrollbar::{ScrollbarState, SCROLLBAR_ANIMATION_INTERVAL};
 use crate::app::sidebar_bookmarks::SidebarBookmarkMotionState;
 use crate::app::sidebar_resize::SidebarResizeDrag;
 use crate::app::smooth_scroll::MosScrollState;
+use crate::app::split_resize::SplitResizeDrag;
 use crate::app::tabs::{TabAnimationState, TabBarReveal};
 use crate::app::windows::{
     default_preview_size, main_window_settings, MAIN_WINDOW_INITIAL_HEIGHT,
@@ -240,6 +242,7 @@ pub(crate) struct FileBrowser {
     tab_drag: Option<TabDragState>,
     pane_drag: Option<PaneDragState>,
     pane_drag_pointer_press: Option<PaneDragPointerPress>,
+    split_resize_drag: Option<SplitResizeDrag>,
     pub(crate) selection_marquee: Option<SelectionMarquee>,
     pub(crate) file_drag: Option<FileDragState>,
     pub(crate) file_drop_session: Option<FileDropSessionState>,
@@ -565,6 +568,7 @@ impl FileBrowser {
             tab_drag: None,
             pane_drag: None,
             pane_drag_pointer_press: None,
+            split_resize_drag: None,
             selection_marquee: None,
             file_drag: None,
             file_drop_session: None,

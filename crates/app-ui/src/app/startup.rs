@@ -544,6 +544,7 @@ mod tests {
                 first: BrowserPaneId::PRIMARY,
                 second: BrowserPaneId(1),
                 active: BrowserPaneId(1),
+                first_portion: 500,
             },
         };
         let mut user_config = config::default_user_config();

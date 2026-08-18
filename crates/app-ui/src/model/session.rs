@@ -269,6 +269,7 @@ fn layout_from_stored(layout: StoredBrowserPaneLayout) -> BrowserPaneLayout {
             first,
             second,
             active,
+            first_portion,
         } => BrowserPaneLayout::Split {
             axis: match axis {
                 StoredSplitAxis::Horizontal => SplitAxis::Horizontal,
@@ -277,6 +278,7 @@ fn layout_from_stored(layout: StoredBrowserPaneLayout) -> BrowserPaneLayout {
             first: BrowserPaneId(first),
             second: BrowserPaneId(second),
             active: BrowserPaneId(active),
+            first_portion: super::split_layout::normalized_split_portion(first_portion),
         },
     }
 }
@@ -291,6 +293,7 @@ fn layout_to_stored(layout: BrowserPaneLayout) -> StoredBrowserPaneLayout {
             first,
             second,
             active,
+            first_portion,
         } => StoredBrowserPaneLayout::Split {
             axis: match axis {
                 SplitAxis::Horizontal => StoredSplitAxis::Horizontal,
@@ -299,6 +302,7 @@ fn layout_to_stored(layout: BrowserPaneLayout) -> StoredBrowserPaneLayout {
             first: first.key(),
             second: second.key(),
             active: active.key(),
+            first_portion,
         },
     }
 }
@@ -372,5 +376,31 @@ mod tests {
             view_mode_to_stored(BrowserViewMode::Icons),
             StoredBrowserViewMode::Icons
         );
+    }
+
+    #[test]
+    fn split_portion_round_trips_through_stored_session_value() {
+        let layout = BrowserPaneLayout::Split {
+            axis: SplitAxis::Vertical,
+            first: BrowserPaneId::PRIMARY,
+            second: BrowserPaneId(1),
+            active: BrowserPaneId(1),
+            first_portion: 731,
+        };
+
+        assert_eq!(layout_from_stored(layout_to_stored(layout)), layout);
+    }
+
+    #[test]
+    fn stored_split_portion_is_normalized_at_restore_boundary() {
+        let layout = layout_from_stored(StoredBrowserPaneLayout::Split {
+            axis: StoredSplitAxis::Horizontal,
+            first: 0,
+            second: 1,
+            active: 0,
+            first_portion: u16::MAX,
+        });
+
+        assert_eq!(layout.first_portion(), 999);
     }
 }

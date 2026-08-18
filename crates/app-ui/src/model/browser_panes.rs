@@ -194,6 +194,7 @@ pub(crate) enum BrowserPaneLayout {
         first: BrowserPaneId,
         second: BrowserPaneId,
         active: BrowserPaneId,
+        first_portion: u16,
     },
 }
 
@@ -220,12 +221,14 @@ impl BrowserPaneLayout {
                 axis,
                 first,
                 second,
+                first_portion,
                 ..
             } => Self::Split {
                 axis,
                 first,
                 second,
                 active: next_active,
+                first_portion,
             },
         }
     }

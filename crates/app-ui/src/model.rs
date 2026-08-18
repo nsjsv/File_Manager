@@ -64,6 +64,8 @@ pub(crate) use browser_panes::{
     IconGridExpansionSessionId, IconGridViewport, ListExpansionFollowSessionId, SplitAxis,
     SplitRegion,
 };
+mod split_layout;
+pub(crate) use split_layout::{SPLIT_DIVIDER_WIDTH, SPLIT_PORTION_TOTAL};
 mod trash;
 pub(crate) use trash::{TrashRefreshCompletionDecision, TrashRefreshState};
 mod selection;
@@ -381,6 +383,7 @@ pub(crate) enum Message {
     SidebarBookmarkReleased,
     SidebarBookmarkDeleteRequested(PathBuf),
     SidebarResizeStarted,
+    SplitResizeStarted,
     CursorMoved {
         window: window::Id,
         position: Point,

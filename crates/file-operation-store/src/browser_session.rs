@@ -28,7 +28,13 @@ pub enum StoredBrowserPaneLayout {
         first: u64,
         second: u64,
         active: u64,
+        #[serde(default = "default_split_first_portion")]
+        first_portion: u16,
     },
+}
+
+fn default_split_first_portion() -> u16 {
+    500
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,4 +78,28 @@ pub struct StoredBrowserPane {
 pub struct StoredBrowserSession {
     pub panes: Vec<StoredBrowserPane>,
     pub layout: StoredBrowserPaneLayout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_layout_without_portion_defaults_to_equal() {
+        let layout: StoredBrowserPaneLayout = serde_json::from_str(
+            r#"{"kind":"split","axis":"horizontal","first":0,"second":1,"active":0}"#,
+        )
+        .expect("legacy split layout should deserialize");
+
+        assert_eq!(
+            layout,
+            StoredBrowserPaneLayout::Split {
+                axis: StoredSplitAxis::Horizontal,
+                first: 0,
+                second: 1,
+                active: 0,
+                first_portion: 500,
+            }
+        );
+    }
 }

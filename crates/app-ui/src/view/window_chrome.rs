@@ -39,13 +39,14 @@ pub(crate) fn pane_navigation_layout(
     main_window_width: f32,
     sidebar_width: f32,
     pane_layout: BrowserPaneLayout,
+    pane_id: BrowserPaneId,
 ) -> PaneNavigationLayout {
     let browser_width = (main_window_width - sidebar_width).max(1.0);
     let pane_width = match pane_layout {
         BrowserPaneLayout::Split {
             axis: SplitAxis::Horizontal,
             ..
-        } => browser_width / 2.0,
+        } => pane_layout.pane_extent(pane_id, browser_width),
         BrowserPaneLayout::Single { .. }
         | BrowserPaneLayout::Split {
             axis: SplitAxis::Vertical,
@@ -456,11 +457,21 @@ mod tests {
         let first = BrowserPaneId(1);
         let second = BrowserPaneId(2);
         assert_eq!(
-            pane_navigation_layout(633.0, 170.0, BrowserPaneLayout::Single { active: first }),
+            pane_navigation_layout(
+                633.0,
+                170.0,
+                BrowserPaneLayout::Single { active: first },
+                first,
+            ),
             PaneNavigationLayout::StackedRows
         );
         assert_eq!(
-            pane_navigation_layout(700.0, 170.0, BrowserPaneLayout::Single { active: first }),
+            pane_navigation_layout(
+                700.0,
+                170.0,
+                BrowserPaneLayout::Single { active: first },
+                first,
+            ),
             PaneNavigationLayout::SingleRow
         );
         assert_eq!(
@@ -472,7 +483,9 @@ mod tests {
                     first,
                     second,
                     active: first,
-                }
+                    first_portion: 500,
+                },
+                first,
             ),
             PaneNavigationLayout::SingleRow
         );
@@ -485,7 +498,9 @@ mod tests {
                     first,
                     second,
                     active: first,
-                }
+                    first_portion: 500,
+                },
+                first,
             ),
             PaneNavigationLayout::StackedRows
         );

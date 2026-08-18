@@ -302,11 +302,13 @@ fn sanitize_layout(layout: BrowserPaneLayout, panes: &[BrowserPane]) -> BrowserP
             first,
             second,
             active,
+            first_portion,
         } if exists(first) && exists(second) && exists(active) => BrowserPaneLayout::Split {
             axis,
             first,
             second,
             active,
+            first_portion,
         },
         _ => BrowserPaneLayout::Single {
             active: panes[0].id,

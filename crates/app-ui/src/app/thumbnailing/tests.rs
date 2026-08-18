@@ -554,6 +554,7 @@ fn browser_with_inactive_pane_image(
         first: BrowserPaneId::PRIMARY,
         second: inactive_id,
         active: BrowserPaneId::PRIMARY,
+        first_portion: 500,
     };
 
     (browser, inactive_id, inactive_dir, image_entry)

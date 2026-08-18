@@ -573,6 +573,7 @@ fn completed_rename_migrates_another_pane_hidden_tab_history_and_columns() {
         first: BrowserPaneId::PRIMARY,
         second: BrowserPaneId(1),
         active: BrowserPaneId::PRIMARY,
+        first_portion: 500,
     };
 
     finish_queued_rename(&mut browser, source, destination.clone());

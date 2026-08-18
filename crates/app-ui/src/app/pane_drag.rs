@@ -268,7 +268,14 @@ impl FileBrowser {
         source_pane_id: BrowserPaneId,
         region: SplitRegion,
     ) {
-        let BrowserPaneLayout::Split { first, second, .. } = self.pane_layout else {
+        let BrowserPaneLayout::Split {
+            axis,
+            first,
+            second,
+            first_portion,
+            ..
+        } = self.pane_layout
+        else {
             return;
         };
         let Some(other_pane_id) = other_split_pane_id(source_pane_id, first, second) else {
@@ -286,6 +293,11 @@ impl FileBrowser {
             first,
             second,
             active: source_pane_id,
+            first_portion: if axis == region.axis() {
+                first_portion
+            } else {
+                500
+            },
         };
 
         if let Some(source) = self.pane_by_id(source_pane_id).cloned() {
@@ -478,6 +490,7 @@ mod tests {
             first: BrowserPaneId::PRIMARY,
             second: BrowserPaneId(1),
             active: BrowserPaneId::PRIMARY,
+            first_portion: 500,
         };
         browser.panes = vec![
             pane_from_tab_for_test(BrowserPaneId::PRIMARY, left_tab),

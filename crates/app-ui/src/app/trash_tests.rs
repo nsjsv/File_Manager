@@ -156,6 +156,7 @@ fn completed_refresh_removes_unmounted_entries_and_selection_from_all_trash_pane
         first: primary_id,
         second: secondary_id,
         active: primary_id,
+        first_portion: 500,
     };
     browser.panes = vec![primary.clone(), secondary];
     browser.restore_pane_snapshot(primary);
@@ -199,6 +200,7 @@ fn completed_refresh_survives_initiating_tab_close_and_updates_other_trash_pane(
         first: primary_id,
         second: secondary_id,
         active: primary_id,
+        first_portion: 500,
     };
     browser.panes = vec![primary_trash.clone(), secondary_trash];
     browser.restore_pane_snapshot(primary_trash);

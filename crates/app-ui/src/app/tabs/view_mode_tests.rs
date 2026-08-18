@@ -777,6 +777,7 @@ fn activating_split_panes_preserves_each_pane_view_mode() {
         first: BrowserPaneId::PRIMARY,
         second: BrowserPaneId(1),
         active: BrowserPaneId::PRIMARY,
+        first_portion: 500,
     };
     browser.panes = vec![
         pane_from_tab_for_test(BrowserPaneId::PRIMARY, left_tab),

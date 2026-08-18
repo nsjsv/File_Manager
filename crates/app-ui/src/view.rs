@@ -53,8 +53,9 @@ use crate::app::panes::BrowserPaneView;
 use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::app::FileBrowser;
 use crate::appearance::{
-    app_content_style, drag_preview_style, icon_svg_style, selected_icon_svg_style,
-    selected_tab_item_style, tab_split_overlay_style, warning_icon_svg_style,
+    app_content_style, column_resize_divider_style, drag_preview_style, icon_svg_style,
+    selected_icon_svg_style, selected_tab_item_style, tab_split_overlay_style,
+    warning_icon_svg_style,
 };
 use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
@@ -374,23 +375,80 @@ fn panes_view(browser: &FileBrowser) -> Element<'_, Message> {
             first,
             second,
             ..
-        } => match axis {
-            SplitAxis::Horizontal => Row::new()
-                .spacing(0)
-                .push(pane_view(browser, first))
-                .push(pane_view(browser, second))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            SplitAxis::Vertical => Column::new()
-                .spacing(0)
-                .push(pane_view(browser, first))
-                .push(pane_view(browser, second))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-        },
+        } => {
+            let (first_portion, second_portion) = browser
+                .pane_layout
+                .effective_split_portions(browser.split_axis_extent(axis));
+            let divider = split_resize_divider(axis);
+            match axis {
+                SplitAxis::Horizontal => Row::new()
+                    .spacing(0)
+                    .push(
+                        container(pane_view(browser, first))
+                            .width(Length::FillPortion(first_portion)),
+                    )
+                    .push(divider)
+                    .push(
+                        container(pane_view(browser, second))
+                            .width(Length::FillPortion(second_portion)),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                SplitAxis::Vertical => Column::new()
+                    .spacing(0)
+                    .push(
+                        container(pane_view(browser, first))
+                            .height(Length::FillPortion(first_portion)),
+                    )
+                    .push(divider)
+                    .push(
+                        container(pane_view(browser, second))
+                            .height(Length::FillPortion(second_portion)),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+            }
+        }
     }
+}
+
+fn split_resize_divider(axis: SplitAxis) -> Element<'static, Message> {
+    let line: Element<'static, Message> = match axis {
+        SplitAxis::Horizontal => container(Space::new().width(Length::Fixed(1.0)))
+            .height(Length::Fill)
+            .style(column_resize_divider_style)
+            .into(),
+        SplitAxis::Vertical => container(Space::new().height(Length::Fixed(1.0)))
+            .width(Length::Fill)
+            .style(column_resize_divider_style)
+            .into(),
+    };
+    let divider: Element<'static, Message> = match axis {
+        SplitAxis::Horizontal => Row::new()
+            .push(Space::new().width(Length::Fill))
+            .push(line)
+            .push(Space::new().width(Length::Fill))
+            .width(Length::Fixed(crate::model::SPLIT_DIVIDER_WIDTH))
+            .height(Length::Fill)
+            .into(),
+        SplitAxis::Vertical => Column::new()
+            .push(Space::new().height(Length::Fill))
+            .push(line)
+            .push(Space::new().height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fixed(crate::model::SPLIT_DIVIDER_WIDTH))
+            .into(),
+    };
+    mouse_area(divider)
+        .on_press(Message::SplitResizeStarted)
+        .on_release(Message::DragSelectionFinished)
+        .interaction(match axis {
+            SplitAxis::Horizontal => iced::mouse::Interaction::ResizingHorizontally,
+            SplitAxis::Vertical => iced::mouse::Interaction::ResizingVertically,
+        })
+        .into()
 }
 
 fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Message> {
@@ -449,6 +507,7 @@ fn pane_navigation_content<'a>(
         browser.main_window_width,
         browser.sidebar_width,
         browser.pane_layout,
+        pane.id,
     ) {
         PaneNavigationLayout::SingleRow => {
             let navigation = Row::new()

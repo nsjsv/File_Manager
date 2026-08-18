@@ -7,7 +7,8 @@ use iced::Task;
 use super::FileBrowser;
 use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, ColumnBrowserViewport,
-    FileDragPhase, Message, NavigationMode, SplitRegion, TabDragMode, TabDragState, TabSplitTarget,
+    FileDragPhase, Message, NavigationMode, SplitAxis, SplitRegion, TabDragMode, TabDragState,
+    TabSplitTarget,
 };
 
 mod animation;
@@ -370,9 +371,21 @@ impl FileBrowser {
             BrowserPaneLayout::Single { .. } => {
                 self.split_single_pane_with_tab(source_pane_id, tab_id, region)
             }
-            BrowserPaneLayout::Split { first, second, .. } => {
-                self.move_tab_to_split_side(source_pane_id, tab_id, region, first, second)
-            }
+            BrowserPaneLayout::Split {
+                axis,
+                first,
+                second,
+                first_portion,
+                ..
+            } => self.move_tab_to_split_side(
+                source_pane_id,
+                tab_id,
+                region,
+                axis,
+                first,
+                second,
+                first_portion,
+            ),
         }
     }
 
@@ -399,6 +412,7 @@ impl FileBrowser {
             first,
             second,
             active: destination_id,
+            first_portion: 500,
         };
         self.restore_pane_snapshot(destination);
     }
@@ -408,8 +422,10 @@ impl FileBrowser {
         source_pane_id: BrowserPaneId,
         tab_id: usize,
         region: SplitRegion,
+        current_axis: SplitAxis,
         first: BrowserPaneId,
         second: BrowserPaneId,
+        current_first_portion: u16,
     ) {
         let current_destination = if region.places_dragged_first() {
             first
@@ -455,6 +471,11 @@ impl FileBrowser {
             first: layout_first,
             second: layout_second,
             active: destination_id,
+            first_portion: if current_axis == region.axis() {
+                current_first_portion
+            } else {
+                500
+            },
         };
 
         if let Some(destination) = self.pane_by_id(destination_id).cloned() {

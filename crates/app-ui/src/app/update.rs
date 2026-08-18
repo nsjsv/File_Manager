@@ -433,6 +433,7 @@ impl FileBrowser {
             Message::SidebarBookmarkReleased => self.finish_sidebar_bookmark_drag(),
             Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
             Message::SidebarResizeStarted => self.start_sidebar_resize_drag(),
+            Message::SplitResizeStarted => self.start_split_resize(self.cursor_position),
             Message::CursorMoved { window, position } => {
                 self.update_pointer_motion(window, position)
             }

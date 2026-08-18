@@ -307,6 +307,7 @@ fn pane_layout_assigns_one_outer_window_chrome_set() {
         first,
         second,
         active: first,
+        first_portion: 500,
     };
     assert_eq!(
         main_pane_window_chrome_role(horizontal, first),
@@ -322,6 +323,7 @@ fn pane_layout_assigns_one_outer_window_chrome_set() {
         first,
         second,
         active: second,
+        first_portion: 500,
     };
     assert_eq!(
         main_pane_window_chrome_role(vertical, first),

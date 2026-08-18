@@ -439,6 +439,7 @@ mod tests {
             first: BrowserPaneId::PRIMARY,
             second: BrowserPaneId(1),
             active: BrowserPaneId::PRIMARY,
+            first_portion: 500,
         };
         browser.panes = vec![
             pane_from_tab_for_test(BrowserPaneId::PRIMARY, active_tab),

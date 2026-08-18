@@ -143,7 +143,8 @@ impl FileBrowser {
                 ..
             } => {
                 let local_x = position.x - sidebar_width;
-                if local_x < content_width / 2.0 {
+                let boundary = self.pane_layout.split_divider_center(content_width);
+                if local_x < boundary {
                     Some(first)
                 } else {
                     Some(second)
@@ -155,7 +156,8 @@ impl FileBrowser {
                 second,
                 ..
             } => {
-                if position.y < content_height / 2.0 {
+                let boundary = self.pane_layout.split_divider_center(content_height);
+                if position.y < boundary {
                     Some(first)
                 } else {
                     Some(second)
@@ -259,12 +261,16 @@ impl FileBrowser {
     }
 
     pub(crate) fn pane_content_width(&self) -> f32 {
-        let content_width = (self.main_window_width - self.sidebar_width).max(1.0);
+        self.pane_content_width_for(self.active_pane_id())
+    }
+
+    pub(crate) fn pane_content_width_for(&self, pane_id: BrowserPaneId) -> f32 {
+        let content_width = self.split_content_width();
         match self.pane_layout {
             BrowserPaneLayout::Split {
                 axis: SplitAxis::Horizontal,
                 ..
-            } => content_width / 2.0,
+            } => self.pane_layout.pane_extent(pane_id, content_width),
             BrowserPaneLayout::Single { .. } | BrowserPaneLayout::Split { .. } => content_width,
         }
     }
@@ -280,7 +286,7 @@ impl FileBrowser {
             .filter(|state| state.directory == directory)
             .map(|state| state.viewport)
             .unwrap_or_default();
-        let pane_width = self.pane_content_width();
+        let pane_width = self.pane_content_width_for(pane_id);
         if viewport.width <= f32::EPSILON || (viewport.width - pane_width).abs() > 1.0 {
             viewport.width = pane_width;
         }
@@ -538,6 +544,58 @@ mod tests {
 
         let pane = browser.capture_active_pane_snapshot();
         assert!(Arc::ptr_eq(&browser.entries, &pane.entries));
+    }
+
+    #[test]
+    fn unequal_split_uses_same_boundary_for_hit_test_and_pane_width() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser.main_window_width = 1_000.0;
+        browser.main_window_height = 800.0;
+        browser.sidebar_width = 200.0;
+        browser.pane_layout = BrowserPaneLayout::Split {
+            axis: SplitAxis::Horizontal,
+            first: BrowserPaneId::PRIMARY,
+            second: BrowserPaneId(1),
+            active: BrowserPaneId::PRIMARY,
+            first_portion: 700,
+        };
+
+        assert_eq!(
+            browser.pane_id_at_position(Point::new(700.0, 400.0)),
+            Some(BrowserPaneId::PRIMARY)
+        );
+        assert_eq!(
+            browser.pane_id_at_position(Point::new(780.0, 400.0)),
+            Some(BrowserPaneId(1))
+        );
+        assert!(
+            browser.pane_content_width_for(BrowserPaneId::PRIMARY)
+                > browser.pane_content_width_for(BrowserPaneId(1))
+        );
+    }
+
+    #[test]
+    fn unequal_vertical_split_uses_shared_boundary_for_hit_test() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser.main_window_width = 1_000.0;
+        browser.main_window_height = 800.0;
+        browser.sidebar_width = 200.0;
+        browser.pane_layout = BrowserPaneLayout::Split {
+            axis: SplitAxis::Vertical,
+            first: BrowserPaneId::PRIMARY,
+            second: BrowserPaneId(1),
+            active: BrowserPaneId::PRIMARY,
+            first_portion: 300,
+        };
+
+        assert_eq!(
+            browser.pane_id_at_position(Point::new(600.0, 200.0)),
+            Some(BrowserPaneId::PRIMARY)
+        );
+        assert_eq!(
+            browser.pane_id_at_position(Point::new(600.0, 300.0)),
+            Some(BrowserPaneId(1))
+        );
     }
 
     #[test]

@@ -354,6 +354,7 @@ mod tests {
             first: primary,
             second: secondary,
             active: primary,
+            first_portion: 500,
         };
         browser.next_tab_id = 5;
 

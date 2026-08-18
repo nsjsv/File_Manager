@@ -90,6 +90,7 @@ fn cross_directory_move_invalidates_source_and_preserves_target_tab_tree() {
         first: BrowserPaneId::PRIMARY,
         second: source_pane_id,
         active: BrowserPaneId::PRIMARY,
+        first_portion: 500,
     };
     browser.apply_pane_browsing_snapshot(target_pane);
     let operation_directory = tempfile::tempdir().expect("create operation directory");
