@@ -15,6 +15,7 @@ url.workspace = true
 wayland-client = { version = "0.31.14", features = ["system"] }
 x11rb = "0.13.2"
 zbus.workspace = true
+wl-clipboard-rs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

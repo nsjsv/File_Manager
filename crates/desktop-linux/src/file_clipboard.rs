@@ -5,8 +5,8 @@ use std::process::{ExitStatus, Stdio};
 use std::string::FromUtf8Error;
 
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use wl_clipboard_rs::copy::{MimeSource, MimeType, Options as ClipboardOptions, Source};
 
 pub const GNOME_COPIED_FILES_MIME: &str = "x-special/gnome-copied-files";
 pub const URI_LIST_MIME: &str = "text/uri-list";
@@ -26,7 +26,6 @@ const TEXT_MIME_CANDIDATES: [&str; 5] = [
     "STRING",
 ];
 
-const WL_COPY: &str = "wl-copy";
 const WL_PASTE: &str = "wl-paste";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,12 +78,6 @@ pub enum FileClipboardError {
         #[source]
         source: std::io::Error,
     },
-    #[error("could not write clipboard payload to {command}: {source}")]
-    Write {
-        command: &'static str,
-        #[source]
-        source: std::io::Error,
-    },
     #[error("{command} failed with status {status}")]
     Failed {
         command: &'static str,
@@ -95,6 +88,16 @@ pub enum FileClipboardError {
         command: &'static str,
         #[source]
         source: FromUtf8Error,
+    },
+    #[error("could not serve multi-MIME clipboard data: {source}")]
+    Clipboard {
+        #[source]
+        source: wl_clipboard_rs::copy::Error,
+    },
+    #[error("clipboard worker did not complete: {source}")]
+    Worker {
+        #[source]
+        source: tokio::task::JoinError,
     },
     #[error("clipboard payload for {mime} is invalid: {source}")]
     InvalidPayload {
@@ -119,45 +122,29 @@ pub enum FileClipboardPayloadError {
 pub async fn write_file_clipboard(
     selection: FileClipboardSelection,
 ) -> Result<(), FileClipboardError> {
-    let payload = serialize_gnome_copied_files(&selection);
-    let mut child = Command::new(WL_COPY)
-        .arg("--type")
-        .arg(GNOME_COPIED_FILES_MIME)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|source| FileClipboardError::Spawn {
-            command: WL_COPY,
-            source,
-        })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(payload.as_bytes())
-            .await
-            .map_err(|source| FileClipboardError::Write {
-                command: WL_COPY,
-                source,
-            })?;
-    }
-
-    let status = child
-        .wait()
+    let sources = file_clipboard_mime_sources(&selection);
+    tokio::task::spawn_blocking(move || ClipboardOptions::new().copy_multi(sources))
         .await
-        .map_err(|source| FileClipboardError::Spawn {
-            command: WL_COPY,
-            source,
-        })?;
+        .map_err(|source| FileClipboardError::Worker { source })?
+        .map_err(|source| FileClipboardError::Clipboard { source })
+}
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(FileClipboardError::Failed {
-            command: WL_COPY,
-            status,
-        })
-    }
+fn file_clipboard_mime_sources(selection: &FileClipboardSelection) -> Vec<MimeSource> {
+    // URI 数据作为文本回退，终端请求 text/plain 时也能收到文件路径。
+    vec![
+        MimeSource {
+            mime_type: MimeType::Specific(URI_LIST_MIME.to_owned()),
+            source: Source::Bytes(
+                serialize_file_uri_list(&selection.paths)
+                    .into_bytes()
+                    .into(),
+            ),
+        },
+        MimeSource {
+            mime_type: MimeType::Specific(GNOME_COPIED_FILES_MIME.to_owned()),
+            source: Source::Bytes(serialize_gnome_copied_files(selection).into_bytes().into()),
+        },
+    ]
 }
 
 pub async fn read_file_clipboard() -> Result<Option<FileClipboardSelection>, FileClipboardError> {
@@ -525,6 +512,72 @@ mod tests {
         let payload = serialize_gnome_copied_files(&selection);
 
         assert_eq!(payload, "copy\nfile:///tmp/a%20b");
+    }
+
+    #[test]
+    fn file_clipboard_offers_uri_list_and_gnome_payloads() {
+        let selection = FileClipboardSelection::new(
+            FileClipboardOperation::Move,
+            vec![PathBuf::from("/tmp/a b")],
+        );
+
+        let sources = file_clipboard_mime_sources(&selection);
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            sources[0].mime_type,
+            MimeType::Specific(URI_LIST_MIME.to_owned())
+        );
+        assert_eq!(
+            sources[1].mime_type,
+            MimeType::Specific(GNOME_COPIED_FILES_MIME.to_owned())
+        );
+        assert!(matches!(
+            &sources[0].source,
+            Source::Bytes(bytes) if bytes.as_ref() == b"file:///tmp/a%20b"
+        ));
+        assert!(matches!(
+            &sources[1].source,
+            Source::Bytes(bytes) if bytes.as_ref() == b"cut\nfile:///tmp/a%20b"
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an interactive Wayland clipboard"]
+    async fn file_clipboard_writes_uri_list_and_gnome_mime_types() {
+        write_file_clipboard(FileClipboardSelection::new(
+            FileClipboardOperation::Copy,
+            vec![PathBuf::from("/tmp/clipboard file")],
+        ))
+        .await
+        .unwrap();
+
+        let mime_types = read_clipboard_mime_types().await.unwrap().unwrap();
+        assert!(mime_types.iter().any(|mime| mime == "text/plain"));
+        assert!(mime_types
+            .iter()
+            .any(|mime| mime == "text/plain;charset=utf-8"));
+        assert!(mime_types.iter().any(|mime| mime == "UTF8_STRING"));
+        assert!(mime_types.iter().any(|mime| mime == "TEXT"));
+        assert!(mime_types.iter().any(|mime| mime == "STRING"));
+        assert!(mime_types.iter().any(|mime| mime == URI_LIST_MIME));
+        assert!(mime_types
+            .iter()
+            .any(|mime| mime == GNOME_COPIED_FILES_MIME));
+        assert_eq!(
+            read_clipboard_text_payload("text/plain").await.unwrap(),
+            "file:///tmp/clipboard%20file"
+        );
+        assert_eq!(
+            read_clipboard_text_payload(URI_LIST_MIME).await.unwrap(),
+            "file:///tmp/clipboard%20file"
+        );
+        assert_eq!(
+            read_clipboard_text_payload(GNOME_COPIED_FILES_MIME)
+                .await
+                .unwrap(),
+            "copy\nfile:///tmp/clipboard%20file"
+        );
     }
 
     #[test]

@@ -37,6 +37,7 @@ tracing-journald = "0.3"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "env-filter", "fmt"] }
 url = "2.5"
 zbus = { version = "5.15", features = ["tokio"] }
+wl-clipboard-rs = "0.9.3"
 
 [profile.release]
 opt-level = 3
