@@ -13,11 +13,13 @@ use crate::model::{
 
 pub(crate) const HELP_TEXT: &str = "Usage: file-manager [OPTIONS] [PATH]...\n\nOpen local directories or reveal local files.\n\nArguments:\n  [PATH]...        Local directories or files to open\n\nOptions:\n  -h, --help       Print help\n  -V, --version    Print version\n";
 pub(crate) const VERSION_TEXT: &str = concat!("file-manager ", env!("CARGO_PKG_VERSION"), "\n");
+pub(crate) const RENDERER_PROBE_ARGUMENT: &str = "--renderer-probe";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CommandLineAction {
     Launch(ApplicationLaunchRequest),
     ActivationService,
+    RendererProbe,
     PrintHelp,
     PrintVersion,
 }
@@ -170,6 +172,7 @@ pub(crate) fn parse_arguments(
     let mut parser = lexopt::Parser::from_args(arguments);
     let mut path_arguments = Vec::new();
     let mut activation_service = false;
+    let mut renderer_probe = false;
     while let Some(argument) = parser
         .next()
         .map_err(|error| CommandLineError::Arguments(error.to_string()))?
@@ -178,6 +181,7 @@ pub(crate) fn parse_arguments(
             Short('h') | Long("help") => return Ok(CommandLineAction::PrintHelp),
             Short('V') | Long("version") => return Ok(CommandLineAction::PrintVersion),
             Long("activation-service") => activation_service = true,
+            Long("renderer-probe") => renderer_probe = true,
             Value(path) => path_arguments.push(path),
             unexpected => {
                 return Err(CommandLineError::Arguments(
@@ -185,6 +189,21 @@ pub(crate) fn parse_arguments(
                 ));
             }
         }
+    }
+
+    if activation_service && renderer_probe {
+        return Err(CommandLineError::Arguments(
+            "--activation-service and --renderer-probe cannot be used together".to_owned(),
+        ));
+    }
+
+    if renderer_probe {
+        if path_arguments.is_empty() {
+            return Ok(CommandLineAction::RendererProbe);
+        }
+        return Err(CommandLineError::Arguments(
+            "--renderer-probe does not accept path arguments".to_owned(),
+        ));
     }
 
     if activation_service {
@@ -253,7 +272,7 @@ mod tests {
 
     use super::{
         parse_arguments, ApplicationLaunchRequest, CommandLineAction, CommandLineError,
-        ExplicitWorkspace,
+        ExplicitWorkspace, HELP_TEXT,
     };
     use crate::model::{BrowserPaneId, BrowserPaneLayout, BrowserViewMode};
 
@@ -303,6 +322,36 @@ mod tests {
         )
         .expect_err("activation service must reject paths");
         assert!(matches!(error, CommandLineError::Arguments(_)));
+    }
+
+    #[test]
+    fn hidden_renderer_probe_rejects_extra_operands_and_other_hidden_modes() {
+        let root = TempDir::new().expect("create temp directory");
+
+        assert_eq!(
+            parse([OsString::from("--renderer-probe")], root.path()).expect("parse renderer probe"),
+            CommandLineAction::RendererProbe
+        );
+        let path_error = parse(
+            [
+                OsString::from("--renderer-probe"),
+                root.path().as_os_str().to_owned(),
+            ],
+            root.path(),
+        )
+        .expect_err("renderer probe must reject paths");
+        assert!(matches!(path_error, CommandLineError::Arguments(_)));
+
+        let mixed_mode_error = parse(
+            [
+                OsString::from("--renderer-probe"),
+                OsString::from("--activation-service"),
+            ],
+            root.path(),
+        )
+        .expect_err("renderer probe must reject the activation service mode");
+        assert!(matches!(mixed_mode_error, CommandLineError::Arguments(_)));
+        assert!(!HELP_TEXT.contains("renderer-probe"));
     }
 
     #[test]

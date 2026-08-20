@@ -139,7 +139,9 @@ fn loaded_user_config_updates_startup_view_mode() {
         user_config,
         state_database_path: PathBuf::from("/tmp/state.sqlite"),
         rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
-            StartupRenderingEnvironment::fast_default(),
+            StartupRenderingEnvironment::fast_default(
+                crate::startup_rendering::StartupRenderingBackend::Gl,
+            ),
         ),
     }));
 

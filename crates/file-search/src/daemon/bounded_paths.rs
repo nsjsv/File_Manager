@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 const CONSERVATIVE_PATH_ALLOCATION_BYTES: usize = 192;
 
 #[derive(Debug)]
 pub(super) struct BoundedPathSet {
-    paths: BTreeSet<PathBuf>,
+    paths: HashSet<Box<Path>>,
     estimated_bytes: usize,
     max_entries: usize,
     max_estimated_bytes: usize,
@@ -14,7 +14,7 @@ pub(super) struct BoundedPathSet {
 impl BoundedPathSet {
     pub(super) fn new(max_entries: usize, max_estimated_bytes: usize) -> Self {
         Self {
-            paths: BTreeSet::new(),
+            paths: HashSet::new(),
             estimated_bytes: 0,
             max_entries,
             max_estimated_bytes,
@@ -32,7 +32,7 @@ impl BoundedPathSet {
             return Err(());
         }
 
-        self.paths.insert(path);
+        self.paths.insert(path.into_boxed_path());
         self.estimated_bytes = next_estimated_bytes;
         Ok(())
     }
@@ -56,8 +56,8 @@ impl BoundedPathSet {
         true
     }
 
-    pub(super) fn iter(&self) -> impl Iterator<Item = &PathBuf> {
-        self.paths.iter()
+    pub(super) fn iter(&self) -> impl Iterator<Item = &Path> {
+        self.paths.iter().map(Box::as_ref)
     }
 
     pub(super) fn retain(&mut self, mut keep: impl FnMut(&Path) -> bool) {
@@ -65,7 +65,7 @@ impl BoundedPathSet {
             .paths
             .iter()
             .filter(|path| !keep(path))
-            .cloned()
+            .map(|path| path.to_path_buf())
             .collect::<Vec<_>>();
         for path in removed {
             self.remove(&path);
@@ -74,7 +74,10 @@ impl BoundedPathSet {
 
     pub(super) fn take_paths(&mut self) -> Vec<PathBuf> {
         self.estimated_bytes = 0;
-        std::mem::take(&mut self.paths).into_iter().collect()
+        std::mem::take(&mut self.paths)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
     }
 
     pub(super) fn len(&self) -> usize {
@@ -136,6 +139,27 @@ mod tests {
 
         assert_eq!(paths.len(), 78_710);
         assert!(paths.estimated_bytes() <= 32_000_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_keep_raw_identity() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let first = PathBuf::from(OsString::from_vec(b"/tmp/\x80".to_vec()));
+        let second = PathBuf::from(OsString::from_vec(b"/tmp/\x81".to_vec()));
+        let mut paths = BoundedPathSet::new(2, usize::MAX);
+
+        paths.insert(first.clone()).unwrap();
+        paths.insert(second.clone()).unwrap();
+
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&first));
+        assert!(paths.contains(&second));
+        assert!(paths.remove(&first));
+        assert!(!paths.contains(&first));
+        assert!(paths.contains(&second));
     }
 
     #[test]

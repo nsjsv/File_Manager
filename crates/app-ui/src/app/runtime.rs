@@ -16,6 +16,7 @@ use super::FileBrowser;
 use crate::command_line::ApplicationLaunchRequest;
 use crate::matugen_theme::{fallback_theme, read_matugen_theme_file, AppearanceMode};
 use crate::model::{Message, X11DndMessage};
+use crate::startup_rendering::StartupRenderingEnvironment;
 use crate::startup_trace;
 
 const DIRECTORY_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -27,6 +28,7 @@ pub(crate) fn run(
     application_launch_request: ApplicationLaunchRequest,
     file_manager_activation: Arc<DesktopActivationRuntime>,
     initial_desktop_activation: Option<desktop_linux::DesktopActivationEvent>,
+    startup_rendering_environment: StartupRenderingEnvironment,
 ) -> iced::Result {
     startup_trace::mark("iced_run_entered");
     iced::daemon(
@@ -35,6 +37,7 @@ pub(crate) fn run(
                 application_launch_request.clone(),
                 Arc::clone(&file_manager_activation),
                 initial_desktop_activation.clone(),
+                startup_rendering_environment.clone(),
             )
         },
         FileBrowser::update,

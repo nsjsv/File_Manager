@@ -91,6 +91,12 @@ fn main() -> std::process::ExitCode {
     let (application_launch_request, activation_service) = match action {
         command_line::CommandLineAction::Launch(request) => (Some(request), false),
         command_line::CommandLineAction::ActivationService => (None, true),
+        command_line::CommandLineAction::RendererProbe => {
+            return match startup_rendering::run_vulkan_renderer_probe() {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            };
+        }
         command_line::CommandLineAction::PrintHelp => {
             print!("{}", command_line::HELP_TEXT);
             return std::process::ExitCode::SUCCESS;
@@ -181,11 +187,12 @@ fn main() -> std::process::ExitCode {
         event = "application_started",
         "File Manager application started"
     );
-    startup_rendering::apply_fast_startup_environment();
+    let startup_rendering_environment = startup_rendering::apply_fast_startup_environment();
     match app::run(
         application_launch_request,
         activation_controller,
         initial_desktop_activation,
+        startup_rendering_environment,
     ) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

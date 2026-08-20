@@ -137,6 +137,7 @@ use crate::operation_history::FileOperationHistory;
 use crate::operation_queue::FileOperationQueue;
 use crate::shortcuts::ShortcutCaptureState;
 use crate::sidebar_devices::SidebarDeviceState;
+use crate::startup_rendering::StartupRenderingEnvironment;
 use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
@@ -262,6 +263,7 @@ pub(crate) struct FileBrowser {
     startup_directory_validation_generation: u64,
     pub(crate) rendering_gpu_preference: config::RenderingGpuPreference,
     pub(crate) renderer_restart_notice_visible: bool,
+    startup_rendering_environment: StartupRenderingEnvironment,
     pub(super) pending_renderer_restart_environment:
         Option<crate::startup_rendering::StartupRenderingEnvironment>,
     pub(crate) address_editing: Option<AddressEditingSession>,
@@ -398,6 +400,7 @@ impl FileBrowser {
         application_launch_request: ApplicationLaunchRequest,
         file_manager_activation: Arc<DesktopActivationRuntime>,
         initial_desktop_activation: Option<DesktopActivationEvent>,
+        startup_rendering_environment: StartupRenderingEnvironment,
     ) -> (Self, Task<Message>) {
         let (main_window, open_main_window) = window::open(main_window_settings());
         let user_config = config::ui_thread_startup_config();
@@ -406,6 +409,7 @@ impl FileBrowser {
             main_window,
             application_launch_request,
             Some(file_manager_activation),
+            startup_rendering_environment,
         );
 
         let open_main_window = open_main_window.then(|window_id| {
@@ -441,6 +445,9 @@ impl FileBrowser {
             window::Id::unique(),
             application_launch_request,
             None,
+            StartupRenderingEnvironment::fast_default(
+                crate::startup_rendering::StartupRenderingBackend::Gl,
+            ),
         )
     }
 
@@ -449,6 +456,7 @@ impl FileBrowser {
         main_window: window::Id,
         application_launch_request: ApplicationLaunchRequest,
         file_manager_activation: Option<Arc<DesktopActivationRuntime>>,
+        startup_rendering_environment: StartupRenderingEnvironment,
     ) -> (Self, Task<Message>) {
         startup_trace::mark_once("file_browser_new_started");
         let placeholder_dir = PathBuf::from("/");
@@ -594,6 +602,7 @@ impl FileBrowser {
             startup_directory_validation_generation: 0,
             rendering_gpu_preference: user_config.rendering_gpu_preference,
             renderer_restart_notice_visible: false,
+            startup_rendering_environment,
             pending_renderer_restart_environment: None,
             address_editing: None,
             address_bar_transition: None,
@@ -668,10 +677,11 @@ impl FileBrowser {
         browser.refresh_current_language();
         browser.refresh_column_width_reference_content_widths();
         startup_trace::mark_once("file_browser_new_ready");
+        let startup_rendering_environment = browser.startup_rendering_environment.clone();
         (
             browser,
             Task::batch([
-                startup_environment_command(),
+                startup_environment_command(startup_rendering_environment),
                 system_theme_command(),
                 ensure_search_service_command(initial_search_service_request),
             ]),

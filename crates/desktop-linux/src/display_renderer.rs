@@ -74,6 +74,15 @@ impl DisplayRendererGpu {
             hex_id_without_prefix(&self.device_id)
         )
     }
+
+    pub fn vulkan_loader_driver_select(&self) -> Option<&'static str> {
+        match self.vendor_id.as_str() {
+            "0x1002" | "0x1022" => Some("*amd*,*radeon*"),
+            "0x10de" => Some("*nvidia*"),
+            "0x8086" => Some("*intel*"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,9 +219,16 @@ fn drm_node_rank(node: &str, drm_class_root: &Path) -> u8 {
 
     if card_node
         .as_deref()
-        .is_some_and(|card| has_connected_connector(card, drm_class_root))
+        .is_some_and(|card| has_integrated_panel_connector(card, drm_class_root))
     {
         return 0;
+    }
+
+    if card_node
+        .as_deref()
+        .is_some_and(|card| has_connected_connector(card, drm_class_root))
+    {
+        return 1;
     }
 
     if node.starts_with("card")
@@ -220,21 +236,21 @@ fn drm_node_rank(node: &str, drm_class_root: &Path) -> u8 {
             .as_deref()
             .is_some_and(|card| has_boot_vga(card, drm_class_root))
     {
-        return 1;
+        return 2;
     }
 
     if node.starts_with("card") {
-        return 2;
+        return 3;
     }
 
     if card_node
         .as_deref()
         .is_some_and(|card| has_boot_vga(card, drm_class_root))
     {
-        return 3;
+        return 4;
     }
 
-    4
+    5
 }
 
 fn gpu_from_drm_node(node: &str, drm_class_root: &Path) -> Option<DisplayRendererGpu> {
@@ -420,6 +436,24 @@ mod tests {
     }
 
     #[test]
+    fn prefers_integrated_panel_over_external_connector() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let proc_root = temp_dir.path().join("proc");
+        let drm_root = temp_dir.path().join("drm");
+        create_compositor_fds(&proc_root, 100, "niri", &["card0", "card1"]);
+        create_drm_device(&drm_root, "card0", "card0", NVIDIA_VENDOR_ID, "0x28e0");
+        create_drm_device(&drm_root, "card1", "card1", AMD_VENDOR_ID, "0x15bf");
+        create_connected_connector(&drm_root, "card0-HDMI-A-1");
+        create_connected_connector(&drm_root, "card1-eDP-1");
+
+        let gpu = detect_display_renderer_gpu_at(&proc_root, &drm_root)
+            .expect("detect display renderer gpu");
+
+        assert_eq!(gpu.vendor_id, AMD_VENDOR_ID);
+        assert_eq!(gpu.device_id, "0x15bf");
+    }
+
+    #[test]
     fn prefers_boot_vga_card_over_render_node() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let proc_root = temp_dir.path().join("proc");
@@ -447,6 +481,26 @@ mod tests {
         );
 
         assert_eq!(gpu.mesa_vulkan_device_select(), "10de:28e0!");
+    }
+
+    #[test]
+    fn maps_gpu_vendor_to_loader_driver_filter() {
+        let nvidia =
+            DisplayRendererGpu::from_drm_ids(DisplayRendererGpuClass::Discrete, "0x10de", "0x28e0");
+        let amd = DisplayRendererGpu::from_drm_ids(
+            DisplayRendererGpuClass::Integrated,
+            "0x1002",
+            "0x15bf",
+        );
+        let unknown = DisplayRendererGpu::from_drm_ids(
+            DisplayRendererGpuClass::Integrated,
+            "0x1234",
+            "0x5678",
+        );
+
+        assert_eq!(nvidia.vulkan_loader_driver_select(), Some("*nvidia*"));
+        assert_eq!(amd.vulkan_loader_driver_select(), Some("*amd*,*radeon*"));
+        assert_eq!(unknown.vulkan_loader_driver_select(), None);
     }
 
     fn create_compositor_fd(proc_root: &Path, pid: u32, comm: &str, drm_node: &str) {

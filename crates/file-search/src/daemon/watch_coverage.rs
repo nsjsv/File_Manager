@@ -418,12 +418,13 @@ impl<Backend: DirectoryWatchBackend> DirectoryWatchCoverage<Backend> {
     }
 
     fn prune_scope(&mut self, scope: &Path) {
-        let registered_descendants = self
+        let mut registered_descendants = self
             .registered_directories
             .iter()
-            .filter(|directory| directory.as_path() == scope || directory.starts_with(scope))
-            .cloned()
+            .filter(|directory| **directory == *scope || directory.starts_with(scope))
+            .map(|directory| directory.to_path_buf())
             .collect::<Vec<_>>();
+        registered_descendants.sort_unstable();
         for registered_directory in registered_descendants.into_iter().rev() {
             let _ = self.backend.unwatch_directory(&registered_directory);
             self.registered_directories.remove(&registered_directory);
@@ -552,6 +553,7 @@ mod tests {
     struct RecordingBackend {
         watched: BTreeSet<PathBuf>,
         failing_paths: BTreeSet<PathBuf>,
+        unwatched: Vec<PathBuf>,
     }
 
     impl DirectoryWatchBackend for RecordingBackend {
@@ -566,6 +568,7 @@ mod tests {
         }
 
         fn unwatch_directory(&mut self, path: &Path) -> notify::Result<()> {
+            self.unwatched.push(path.to_path_buf());
             self.watched.remove(path);
             Ok(())
         }
@@ -596,6 +599,25 @@ mod tests {
         assert!(coverage.registered_directories.contains(directory.path()));
         assert!(coverage.registered_directories.contains(&visible));
         assert!(coverage.registered_directories.contains(&nested));
+    }
+
+    #[test]
+    fn pruning_unwatches_nested_directories_before_their_parent() {
+        let directory = tempdir().unwrap();
+        let child = directory.path().join("child");
+        let nested = child.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut coverage =
+            DirectoryWatchCoverage::new(RecordingBackend::default(), config_for(directory.path()));
+
+        coverage.register_roots();
+        coverage.register_snapshot_directories(vec![child.clone(), nested.clone()]);
+        coverage.prune_scope(directory.path());
+
+        assert_eq!(
+            coverage.backend.unwatched,
+            vec![nested, child, directory.path().to_path_buf()]
+        );
     }
 
     #[test]

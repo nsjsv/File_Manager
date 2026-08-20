@@ -28,7 +28,9 @@ fn startup_environment(
         user_config,
         state_database_path,
         rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
-            StartupRenderingEnvironment::fast_default(),
+            StartupRenderingEnvironment::fast_default(
+                crate::startup_rendering::StartupRenderingBackend::Gl,
+            ),
         ),
     }
 }

@@ -95,6 +95,18 @@ pub(crate) fn mark_runtime_logging_ready() {
     }
 }
 
+pub(crate) fn record_rendering_backend_selected(backend: &'static str) {
+    if current_trace().is_none() {
+        return;
+    }
+    tracing::info!(
+        target: "app_ui::startup",
+        event = "rendering_backend_selected",
+        backend,
+        "startup rendering backend selected"
+    );
+}
+
 pub(crate) fn record_directory_collection_hint_counts(
     produced: usize,
     accepted: usize,

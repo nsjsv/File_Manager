@@ -105,10 +105,13 @@ pub(crate) use x11_dnd::x11_dnd_window_handle_command;
 const PATH_SUGGESTION_LIMIT: usize = 6;
 const THUMBNAIL_REFRESH_DELAY: Duration = Duration::from_millis(400);
 
-pub(crate) fn startup_environment_command() -> Task<Message> {
-    Task::perform(load_startup_environment(), |startup_environment| {
-        Message::StartupEnvironmentLoaded(Box::new(startup_environment))
-    })
+pub(crate) fn startup_environment_command(
+    startup_rendering_environment: StartupRenderingEnvironment,
+) -> Task<Message> {
+    Task::perform(
+        load_startup_environment(startup_rendering_environment),
+        |startup_environment| Message::StartupEnvironmentLoaded(Box::new(startup_environment)),
+    )
 }
 
 pub(crate) fn sidebar_locations_command(
@@ -327,16 +330,21 @@ async fn load_trash(
         .map_err(|error| error.to_string())
 }
 
-async fn load_startup_environment() -> StartupEnvironment {
+async fn load_startup_environment(
+    startup_rendering_environment: StartupRenderingEnvironment,
+) -> StartupEnvironment {
     startup_trace::mark_once("startup_environment_started");
-    tokio::task::spawn_blocking(|| {
+    let fallback_rendering_environment = startup_rendering_environment.clone();
+    tokio::task::spawn_blocking(move || {
         let app_config = config::load_app_config();
         startup_trace::mark_once("startup_app_config_loaded");
         let user_config = config::load_user_config_for_app_config(app_config);
         startup_trace::mark_once("startup_user_config_loaded");
-        let rendering_environment_status = StartupRenderingEnvironmentStatus::for_loaded_config(
-            user_config.rendering_gpu_preference,
-        );
+        let rendering_environment_status =
+            StartupRenderingEnvironmentStatus::for_loaded_config_with_runtime(
+                user_config.rendering_gpu_preference,
+                &startup_rendering_environment,
+            );
         StartupEnvironment {
             home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
             system_language: crate::localization::detect_system_language(),
@@ -352,7 +360,7 @@ async fn load_startup_environment() -> StartupEnvironment {
         user_config: config::ui_thread_startup_config(),
         state_database_path: PathBuf::new(),
         rendering_environment_status: StartupRenderingEnvironmentStatus::ready(
-            StartupRenderingEnvironment::fast_default(),
+            fallback_rendering_environment,
         ),
     })
 }

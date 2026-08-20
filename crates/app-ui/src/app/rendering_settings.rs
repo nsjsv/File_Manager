@@ -16,9 +16,11 @@ impl FileBrowser {
 
         self.rendering_gpu_preference = preference;
         self.user_config.rendering_gpu_preference = preference;
-        self.pending_renderer_restart_environment = Some(
-            StartupRenderingEnvironment::without_display_probe(preference),
-        );
+        self.pending_renderer_restart_environment =
+            Some(StartupRenderingEnvironment::without_display_probe(
+                preference,
+                self.startup_rendering_environment.backend(),
+            ));
         self.renderer_restart_notice_visible = true;
         self.persist_app_config_command()
     }
@@ -48,6 +50,7 @@ impl FileBrowser {
 mod tests {
     use crate::app::FileBrowser;
     use crate::config::{self, RenderingGpuPreference};
+    use crate::startup_rendering::StartupRenderingBackend;
 
     #[test]
     fn selecting_gpu_preference_records_restart_environment() {
@@ -60,6 +63,13 @@ mod tests {
             RenderingGpuPreference::HighPerformanceGpu
         );
         assert!(browser.renderer_restart_notice_visible);
-        assert!(browser.pending_renderer_restart_environment.is_some());
+        assert_eq!(
+            browser
+                .pending_renderer_restart_environment
+                .as_ref()
+                .expect("pending renderer environment")
+                .backend(),
+            StartupRenderingBackend::Gl
+        );
     }
 }
