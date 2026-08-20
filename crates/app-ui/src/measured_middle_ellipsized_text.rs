@@ -252,7 +252,17 @@ fn fit_middle_ellipsized_by(
     ellipsis_kind: MiddleEllipsisKind,
     mut fits: impl FnMut(&str) -> bool,
 ) -> String {
-    if fits(content) {
+    if content.is_empty() {
+        return String::new();
+    }
+
+    let content_char_count = content.chars().count();
+    const DIRECT_MEASUREMENT_CHAR_LIMIT: usize = 256;
+
+    // Shaping the complete string is the dominant cost for long CJK names. For
+    // those names, search from short candidates instead of measuring the whole
+    // filename and then repeating the same expensive work in a binary search.
+    if content_char_count <= DIRECT_MEASUREMENT_CHAR_LIMIT && fits(content) {
         return content.to_owned();
     }
 
@@ -260,22 +270,38 @@ fn fit_middle_ellipsized_by(
         return String::new();
     }
 
-    let content_char_count = content.chars().count();
-    let mut lower = 0usize;
-    let mut upper = content_char_count.saturating_sub(1);
     let mut best = ELLIPSIS_MARKER.to_owned();
+    let mut lower = 0usize;
+    let mut upper = 1usize;
 
-    while lower <= upper {
+    while upper < content_char_count {
+        let candidate = ellipsis_kind.candidate(content, upper);
+        if !fits(&candidate) {
+            break;
+        }
+
+        best = candidate;
+        lower = upper;
+        upper = upper.saturating_mul(2);
+    }
+
+    if upper >= content_char_count {
+        upper = content_char_count;
+        let candidate = ellipsis_kind.candidate(content, upper);
+        if fits(&candidate) {
+            return candidate;
+        }
+    }
+
+    while lower + 1 < upper {
         let visible_chars = lower + (upper - lower) / 2;
         let candidate = ellipsis_kind.candidate(content, visible_chars);
 
         if fits(&candidate) {
             best = candidate;
-            lower = visible_chars + 1;
-        } else if visible_chars == 0 {
-            break;
+            lower = visible_chars;
         } else {
-            upper = visible_chars - 1;
+            upper = visible_chars;
         }
     }
 
@@ -641,6 +667,24 @@ mod tests {
         assert!(displayed.starts_with("abcde"));
         assert!(displayed.ends_with("op.rs"));
         assert!(displayed.contains(ELLIPSIS_MARKER));
+    }
+
+    #[test]
+    fn long_cjk_content_avoids_shaping_full_filename_candidates() {
+        let content = "界".repeat(10_000);
+        let mut measurement_count = 0;
+        let mut largest_candidate_chars = 0;
+        let displayed =
+            fit_middle_ellipsized_by(&content, MiddleEllipsisKind::FileName, |candidate| {
+                measurement_count += 1;
+                largest_candidate_chars = largest_candidate_chars.max(candidate.chars().count());
+                candidate.chars().count() <= 20
+            });
+
+        assert_eq!(displayed.chars().count(), 20);
+        assert!(displayed.contains(ELLIPSIS_MARKER));
+        assert!(measurement_count < 20);
+        assert!(largest_candidate_chars < 100);
     }
 
     #[test]
