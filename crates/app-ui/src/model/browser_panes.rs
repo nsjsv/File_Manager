@@ -255,10 +255,19 @@ pub(crate) struct IconGridViewport {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct DirectoryLoadingPlaceholder {
+    pub(crate) before_height: f32,
+    pub(crate) entries: Vec<DirectoryLoadingPlaceholderEntry>,
+    pub(crate) after_height: f32,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct DirectoryLoadingPlaceholderEntry {
     pub(crate) entry: DirectoryEntry,
     pub(crate) depth: usize,
     pub(crate) animation_progress: f32,
+    pub(crate) row_index: usize,
+    pub(crate) trailing_status_height: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -268,7 +277,7 @@ pub(crate) struct BrowserPane {
     pub(crate) is_trash_view: bool,
     pub(crate) entries: DirectoryEntrySnapshot,
     pub(crate) directory_discovery: Option<DirectoryDiscovery>,
-    pub(crate) directory_loading_placeholder_entries: Vec<DirectoryLoadingPlaceholderEntry>,
+    pub(crate) directory_loading_placeholder: Option<DirectoryLoadingPlaceholder>,
     pub(crate) trash_entries: Vec<TrashEntry>,
     pub(crate) selected: Option<PathBuf>,
     pub(crate) selected_paths: HashSet<PathBuf>,
@@ -375,8 +384,7 @@ impl BrowserPane {
         );
         Arc::make_mut(&mut self.entries)
             .retain(|entry| !entry.path.starts_with(unavailable_directory));
-        self.directory_loading_placeholder_entries
-            .retain(|placeholder| !placeholder.entry.path.starts_with(unavailable_directory));
+        self.directory_loading_placeholder = None;
         retain_optional_path_outside_subtree(&mut self.selected, unavailable_directory);
         self.selected_paths
             .retain(|path| !path.starts_with(unavailable_directory));
@@ -449,8 +457,10 @@ impl BrowserPane {
             &mut self.directory_order_phase,
         );
         migrate_directory_entries(Arc::make_mut(&mut self.entries).as_mut_slice(), migrations);
-        for placeholder in &mut self.directory_loading_placeholder_entries {
-            migrate_directory_entry(&mut placeholder.entry, migrations);
+        if let Some(placeholder) = &mut self.directory_loading_placeholder {
+            for placeholder_entry in &mut placeholder.entries {
+                migrate_directory_entry(&mut placeholder_entry.entry, migrations);
+            }
         }
         migrate_optional_path(&mut self.selected, migrations);
         migrate_path_set(&mut self.selected_paths, migrations);
@@ -461,9 +471,9 @@ impl BrowserPane {
     }
 
     fn invalidate_cached_directory_tree(&mut self) {
-        Arc::make_mut(&mut self.entries).clear();
+        self.entries = empty_directory_entry_snapshot();
         self.directory_discovery = None;
-        self.directory_loading_placeholder_entries.clear();
+        self.directory_loading_placeholder = None;
         self.selected = None;
         self.selected_paths.clear();
         self.selection_anchor = None;
@@ -592,7 +602,7 @@ impl BrowserTab {
     }
 
     fn invalidate_cached_directory_tree(&mut self) {
-        Arc::make_mut(&mut self.entries).clear();
+        self.entries = empty_directory_entry_snapshot();
         self.directory_discovery = None;
         self.selected = None;
         self.selected_paths.clear();
@@ -629,14 +639,18 @@ pub(crate) fn retain_direct_entry_selection(
     selected_paths: &mut HashSet<PathBuf>,
     selection_anchor: &mut Option<PathBuf>,
 ) {
+    if selected.is_none() && selected_paths.is_empty() && selection_anchor.is_none() {
+        return;
+    }
+
     let direct_paths = entries
         .iter()
-        .map(|entry| entry.path.clone())
+        .map(|entry| entry.path.as_path())
         .collect::<HashSet<_>>();
-    selected_paths.retain(|path| direct_paths.contains(path));
+    selected_paths.retain(|path| direct_paths.contains(path.as_path()));
     if !selected
         .as_ref()
-        .is_some_and(|path| direct_paths.contains(path))
+        .is_some_and(|path| direct_paths.contains(path.as_path()))
     {
         *selected = entries
             .iter()
@@ -646,7 +660,7 @@ pub(crate) fn retain_direct_entry_selection(
     }
     if selection_anchor
         .as_ref()
-        .is_some_and(|path| !direct_paths.contains(path))
+        .is_some_and(|path| !direct_paths.contains(path.as_path()))
     {
         *selection_anchor = None;
     }

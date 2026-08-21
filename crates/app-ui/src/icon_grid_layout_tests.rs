@@ -133,6 +133,14 @@ fn nested_panel_keeps_the_full_width_column_count() {
         .unwrap();
 
     assert_eq!(nested_columns, column_count_for_width(440.0, 96));
+    let matching = layout.interactive_paths_matching(&[
+        PathBuf::from("/workspace/root"),
+        PathBuf::from("/workspace/root/child"),
+        PathBuf::from("/workspace/missing"),
+    ]);
+    assert_eq!(matching.len(), 2);
+    assert!(matching.contains(Path::new("/workspace/root")));
+    assert!(matching.contains(Path::new("/workspace/root/child")));
 }
 
 #[test]
@@ -381,4 +389,26 @@ fn large_flat_directory_stays_one_compressed_segment() {
     let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 96, None);
 
     assert_eq!(layout.root().flow.len(), 1);
+}
+
+#[test]
+fn flat_layout_paths_and_membership_preserve_entry_identity() {
+    let entries = files("/workspace", 4);
+    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 96, None);
+
+    assert_eq!(
+        layout.interactive_entry_paths(),
+        entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>()
+    );
+    let matching = layout.interactive_paths_matching(&[
+        entries[1].path.clone(),
+        entries[3].path.clone(),
+        PathBuf::from("/workspace/missing"),
+    ]);
+    assert_eq!(matching.len(), 2);
+    assert!(matching.contains(&entries[1].path));
+    assert!(matching.contains(&entries[3].path));
 }

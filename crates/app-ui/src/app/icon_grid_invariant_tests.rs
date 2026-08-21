@@ -275,7 +275,7 @@ fn icon_navigation_does_not_snapshot_hidden_persistent_rows() {
         NavigationMode::RecordHistory,
     ));
 
-    assert!(browser.directory_loading_placeholder_entries.is_empty());
+    assert!(browser.directory_loading_placeholder.is_none());
 }
 
 #[test]

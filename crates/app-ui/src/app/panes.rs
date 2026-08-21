@@ -9,8 +9,8 @@ use super::FileBrowser;
 use crate::model::{
     displayed_address_directory, AddressEditingSession, BrowserPane, BrowserPaneId,
     BrowserPaneLayout, BrowserTab, BrowserViewMode, DirectoryCollectionPhase,
-    DirectoryLoadingPlaceholderEntry, ExpandedDirectory, FileDragState, IconGridViewport,
-    SplitAxis, SplitRegion,
+    DirectoryLoadingPlaceholder, ExpandedDirectory, FileDragState, IconGridViewport, SplitAxis,
+    SplitRegion,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -29,7 +29,7 @@ pub(crate) struct BrowserPaneView<'a> {
     pub(crate) is_trash_view: bool,
     pub(crate) entries: &'a [DirectoryEntry],
     pub(crate) directory_discovery: Option<&'a DirectoryDiscovery>,
-    pub(crate) directory_loading_placeholder_entries: &'a [DirectoryLoadingPlaceholderEntry],
+    pub(crate) directory_loading_placeholder: Option<&'a DirectoryLoadingPlaceholder>,
     pub(crate) selected: Option<&'a PathBuf>,
     pub(crate) selected_paths: &'a HashSet<PathBuf>,
     pub(crate) deepest_open_column_directory: Option<&'a PathBuf>,
@@ -176,7 +176,7 @@ impl FileBrowser {
                 is_trash_view: self.is_trash_view,
                 entries: &self.entries,
                 directory_discovery: self.directory_discovery.as_ref(),
-                directory_loading_placeholder_entries: &self.directory_loading_placeholder_entries,
+                directory_loading_placeholder: self.directory_loading_placeholder.as_ref(),
                 selected: self.selected.as_ref(),
                 selected_paths: &self.selected_paths,
                 deepest_open_column_directory: self.deepest_open_column_directory.as_ref(),
@@ -206,7 +206,7 @@ impl FileBrowser {
             is_trash_view: pane.is_trash_view,
             entries: &pane.entries,
             directory_discovery: pane.directory_discovery.as_ref(),
-            directory_loading_placeholder_entries: &pane.directory_loading_placeholder_entries,
+            directory_loading_placeholder: pane.directory_loading_placeholder.as_ref(),
             selected: pane.selected.as_ref(),
             selected_paths: &pane.selected_paths,
             deepest_open_column_directory: pane.deepest_open_column_directory.as_ref(),
@@ -398,9 +398,7 @@ impl FileBrowser {
             is_trash_view: self.is_trash_view,
             entries: self.entries.clone(),
             directory_discovery: self.directory_discovery.clone(),
-            directory_loading_placeholder_entries: self
-                .directory_loading_placeholder_entries
-                .clone(),
+            directory_loading_placeholder: self.directory_loading_placeholder.clone(),
             trash_entries: self.trash_entries.clone(),
             selected: self.selected.clone(),
             selected_paths: self.selected_paths.clone(),
@@ -440,7 +438,7 @@ impl FileBrowser {
         self.is_trash_view = pane.is_trash_view;
         self.entries = pane.entries;
         self.directory_discovery = pane.directory_discovery;
-        self.directory_loading_placeholder_entries = pane.directory_loading_placeholder_entries;
+        self.directory_loading_placeholder = pane.directory_loading_placeholder;
         self.trash_entries = pane.trash_entries;
         self.selected = pane.selected;
         self.selected_paths = pane.selected_paths;

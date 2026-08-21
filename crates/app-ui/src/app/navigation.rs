@@ -11,10 +11,11 @@ use crate::commands::{
     delayed_thumbnail_refresh_command, load_directory_command, load_expanded_directory_command,
 };
 use crate::model::{
-    trash_location_path, BrowserPaneId, BrowserViewMode, DirectoryCollectionPhase,
-    DirectoryExpansionLoadContext, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
-    DirectoryOrderPhase, ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
-    Message, NavigationMode,
+    empty_directory_entry_snapshot, trash_location_path, BrowserPaneId, BrowserViewMode,
+    DirectoryCollectionPhase, DirectoryExpansionLoadContext, DirectoryLoadRequest,
+    DirectoryLoadingPlaceholder, DirectoryLoadingPlaceholderEntry, DirectoryOrderPhase,
+    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, Message,
+    NavigationMode,
 };
 use crate::startup_trace;
 impl FileBrowser {
@@ -138,7 +139,7 @@ impl FileBrowser {
                 return Task::none();
             }
             Arc::make_mut(&mut pane.entries).extend(entries);
-            pane.directory_loading_placeholder_entries.clear();
+            pane.directory_loading_placeholder = None;
             return Task::none();
         }
 
@@ -150,7 +151,7 @@ impl FileBrowser {
             return Task::none();
         }
         Arc::make_mut(&mut self.entries).extend(entries);
-        self.directory_loading_placeholder_entries.clear();
+        self.directory_loading_placeholder = None;
         Task::none()
     }
 
@@ -210,7 +211,7 @@ impl FileBrowser {
                         &mut pane.selection_anchor,
                     );
                 }
-                pane.directory_loading_placeholder_entries.clear();
+                pane.directory_loading_placeholder = None;
                 pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
                 pane.directory_order_phase = order_phase;
                 pane.sync_active_tab_state();
@@ -240,7 +241,7 @@ impl FileBrowser {
         if self.view_mode == crate::model::BrowserViewMode::Icons {
             self.retain_icon_grid_visible_selection();
         }
-        self.directory_loading_placeholder_entries.clear();
+        self.directory_loading_placeholder = None;
         self.directory_collection_phase = DirectoryCollectionPhase::Ready;
         self.directory_order_phase = order_phase;
         self.clear_global_error();
@@ -265,7 +266,7 @@ impl FileBrowser {
     pub(super) fn navigate_to(&mut self, path: PathBuf, mode: NavigationMode) -> Task<Message> {
         self.cancel_expansion_follow_plans();
         let cancel_address_editing = self.cancel_address_editing();
-        let placeholder_entries = self.capture_directory_loading_placeholder_entries();
+        let loading_placeholder = self.capture_directory_loading_placeholder();
         if mode == NavigationMode::RecordHistory && !self.is_trash_view && path != self.current_dir
         {
             self.back_stack.push(self.current_dir.clone());
@@ -274,8 +275,8 @@ impl FileBrowser {
         self.clear_icon_grid_expansion();
         self.current_dir = path.clone();
         self.is_trash_view = false;
-        Arc::make_mut(&mut self.entries).clear();
-        self.directory_loading_placeholder_entries = placeholder_entries;
+        self.entries = empty_directory_entry_snapshot();
+        self.directory_loading_placeholder = loading_placeholder;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.cancel_active_expanded_directory_loads();
@@ -304,10 +305,10 @@ impl FileBrowser {
             .trash_refresh
             .snapshot()
             .map(|snapshot| snapshot.entries.clone());
-        let placeholder_entries = if cached_entries.is_some() {
-            Vec::new()
+        let loading_placeholder = if cached_entries.is_some() {
+            None
         } else {
-            self.capture_directory_loading_placeholder_entries()
+            self.capture_directory_loading_placeholder()
         };
         if mode == NavigationMode::RecordHistory && !self.is_trash_view {
             self.back_stack.push(self.current_dir.clone());
@@ -325,7 +326,7 @@ impl FileBrowser {
             .collect::<Vec<_>>()
             .into();
         self.directory_discovery = None;
-        self.directory_loading_placeholder_entries = placeholder_entries;
+        self.directory_loading_placeholder = loading_placeholder;
         self.deepest_open_column_directory = None;
         self.cancel_active_expanded_directory_loads();
         self.expanded_directories.clear();
@@ -374,7 +375,7 @@ impl FileBrowser {
     ) -> Task<Message> {
         if self.is_trash_view {
             self.clear_icon_grid_expansion();
-            self.directory_loading_placeholder_entries.clear();
+            self.directory_loading_placeholder = None;
             self.directory_collection_phase = if self.trash_refresh.snapshot().is_some() {
                 DirectoryCollectionPhase::Ready
             } else {
@@ -388,7 +389,7 @@ impl FileBrowser {
             return self.request_trash_snapshot_refresh();
         }
 
-        self.directory_loading_placeholder_entries.clear();
+        self.directory_loading_placeholder = None;
         self.directory_collection_phase = DirectoryCollectionPhase::Discovering;
         self.clear_global_error();
 
@@ -461,7 +462,7 @@ impl FileBrowser {
             return Task::none();
         };
 
-        pane.directory_loading_placeholder_entries.clear();
+        pane.directory_loading_placeholder = None;
         pane.directory_collection_phase = if pane.is_trash_view && has_trash_snapshot {
             DirectoryCollectionPhase::Ready
         } else {
@@ -608,20 +609,66 @@ impl FileBrowser {
         self.entry_for_path(path).map(|entry| entry.kind)
     }
 
-    fn capture_directory_loading_placeholder_entries(
-        &self,
-    ) -> Vec<DirectoryLoadingPlaceholderEntry> {
-        if self.view_mode != BrowserViewMode::List {
-            return Vec::new();
+    fn capture_directory_loading_placeholder(&self) -> Option<DirectoryLoadingPlaceholder> {
+        if self.view_mode != BrowserViewMode::List || self.entries.is_empty() {
+            return None;
         }
-        crate::visible_entries::visible_entries(&self.entries, &self.expanded_directories)
-            .into_iter()
-            .map(|visible_entry| DirectoryLoadingPlaceholderEntry {
+
+        let range = self
+            .column_viewports
+            .get(&self.current_dir)
+            .map(|viewport| {
+                crate::visible_entries::list_entry_range_for_viewport(
+                    &self.entries,
+                    &self.expanded_directories,
+                    crate::list_view::LIST_ROW_HEIGHT,
+                    crate::list_view::LIST_HEADER_HEIGHT,
+                    viewport.offset_y,
+                    viewport.height,
+                    crate::list_view::LIST_OVERSCAN_ROWS,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::visible_entries::initial_list_entry_range(
+                    &self.entries,
+                    &self.expanded_directories,
+                    crate::list_view::LIST_ROW_HEIGHT,
+                    crate::list_view::LIST_INITIAL_ROWS,
+                )
+            });
+        let entries = crate::visible_entries::visible_entries_in_range(
+            &self.entries,
+            &self.expanded_directories,
+            range.start,
+            range.end,
+        )
+        .into_iter()
+        .enumerate()
+        .map(
+            |(range_offset, visible_entry)| DirectoryLoadingPlaceholderEntry {
                 entry: visible_entry.entry.clone(),
                 depth: visible_entry.depth,
                 animation_progress: visible_entry.animation_progress,
-            })
-            .collect()
+                row_index: range.start + range_offset,
+                trailing_status_height: self
+                    .expanded_directories
+                    .get(&visible_entry.entry.path)
+                    .map(|expanded| {
+                        crate::visible_entries::visible_entry_status_row_height(
+                            expanded,
+                            crate::list_view::LIST_ROW_HEIGHT,
+                        )
+                    })
+                    .unwrap_or(0.0),
+            },
+        )
+        .collect();
+
+        Some(DirectoryLoadingPlaceholder {
+            before_height: range.before_height,
+            entries,
+            after_height: range.after_height,
+        })
     }
 
     fn clear_selection_context(&mut self) {
@@ -743,7 +790,9 @@ pub(super) fn display_entries_in_discovery_order(
 
 #[cfg(test)]
 mod tests {
-    use file_core::{discover_directory_with_progress, DirectoryMetadataAvailability, ScanOptions};
+    use file_core::{
+        discover_directory_with_progress, DirectoryMetadataAvailability, EntryMetadata, ScanOptions,
+    };
 
     use super::*;
 
@@ -807,5 +856,94 @@ mod tests {
             &committed_discovery.entries,
             &discovery_entries
         ));
+    }
+
+    #[test]
+    fn list_navigation_keeps_only_the_virtual_placeholder_range() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        let current_directory = PathBuf::from("/workspace/large");
+        let destination = PathBuf::from("/workspace");
+        browser.current_dir = current_directory.clone();
+        browser.view_mode = BrowserViewMode::List;
+        browser.directory_collection_phase = DirectoryCollectionPhase::Ready;
+        browser.entries = (0..5_000)
+            .map(|index| {
+                DirectoryEntry::new(
+                    current_directory.join(format!("entry-{index:04}-{}", "界".repeat(64))),
+                    FileKind::File,
+                    EntryMetadata::default(),
+                    false,
+                    false,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        let viewport = crate::thumbnail_cache::ColumnViewport {
+            offset_y: crate::list_view::LIST_HEADER_HEIGHT
+                + 2_500.0 * crate::list_view::LIST_ROW_HEIGHT,
+            height: 10.0 * crate::list_view::LIST_ROW_HEIGHT,
+        };
+        browser
+            .column_viewports
+            .insert(current_directory.clone(), viewport);
+        browser.sync_active_tab_state();
+        let previous_entries = Arc::clone(&browser.entries);
+        let expected_range = crate::visible_entries::list_entry_range_for_viewport(
+            &previous_entries,
+            &browser.expanded_directories,
+            crate::list_view::LIST_ROW_HEIGHT,
+            crate::list_view::LIST_HEADER_HEIGHT,
+            viewport.offset_y,
+            viewport.height,
+            crate::list_view::LIST_OVERSCAN_ROWS,
+        );
+
+        drop(browser.navigate_to(destination, NavigationMode::RecordHistory));
+
+        assert!(browser.entries.is_empty());
+        assert_eq!(browser.entries.capacity(), 0);
+        assert_eq!(previous_entries.len(), 5_000);
+        let placeholder = browser
+            .directory_loading_placeholder
+            .as_ref()
+            .expect("list navigation must retain visible placeholder rows");
+        assert_eq!(
+            placeholder.entries.len(),
+            expected_range.end - expected_range.start
+        );
+        assert!(placeholder.entries.len() < previous_entries.len());
+        assert_eq!(placeholder.before_height, expected_range.before_height);
+        assert_eq!(placeholder.after_height, expected_range.after_height);
+        assert_eq!(
+            placeholder.entries.first().map(|entry| entry.row_index),
+            Some(expected_range.start)
+        );
+        assert_eq!(
+            placeholder.entries.last().map(|entry| entry.row_index),
+            Some(expected_range.end - 1)
+        );
+        assert_eq!(
+            placeholder
+                .entries
+                .first()
+                .map(|entry| entry.entry.path.as_path()),
+            Some(previous_entries[expected_range.start].path.as_path())
+        );
+        let placeholder_height = placeholder.before_height
+            + placeholder
+                .entries
+                .iter()
+                .map(|entry| {
+                    crate::list_view::LIST_ROW_HEIGHT * entry.animation_progress.clamp(0.0, 1.0)
+                        + entry.trailing_status_height
+                })
+                .sum::<f32>()
+            + placeholder.after_height;
+        assert_eq!(
+            placeholder_height,
+            previous_entries.len() as f32 * crate::list_view::LIST_ROW_HEIGHT
+        );
     }
 }

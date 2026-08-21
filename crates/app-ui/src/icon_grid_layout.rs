@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use file_core::DirectoryEntry;
@@ -215,10 +215,26 @@ impl<'a> IconGridLayout<'a> {
     }
 
     pub(crate) fn interactive_entry_paths(&self) -> Vec<PathBuf> {
+        if let [IconGridFlowSegment::Rows(rows)] = self.root.flow.as_slice() {
+            return rows_entries(rows)
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+        }
         self.interactive_entry_geometry()
             .into_iter()
             .map(|entry| entry.entry.path.clone())
             .collect()
+    }
+
+    pub(crate) fn interactive_paths_matching(&self, paths: &[PathBuf]) -> HashSet<PathBuf> {
+        let candidates = paths
+            .iter()
+            .map(|path| path.as_path())
+            .collect::<HashSet<_>>();
+        let mut matches = HashSet::new();
+        collect_interactive_paths(&self.root, &candidates, &mut matches);
+        matches
     }
 
     pub(crate) fn keyboard_target(
@@ -528,6 +544,41 @@ fn collect_interactive_entries<'a>(
                     icon_edge,
                     collected,
                 );
+            }
+            IconGridFlowSegment::Band(_) => {}
+        }
+    }
+}
+
+fn rows_entries<'a>(rows: &'a IconGridRowsLayout<'a>) -> &'a [DirectoryEntry] {
+    let start = rows
+        .start_row
+        .saturating_mul(rows.column_count)
+        .min(rows.entries.len());
+    let end = rows
+        .end_row
+        .saturating_mul(rows.column_count)
+        .min(rows.entries.len())
+        .max(start);
+    &rows.entries[start..end]
+}
+
+fn collect_interactive_paths(
+    panel: &IconGridPanelLayout<'_>,
+    candidates: &HashSet<&Path>,
+    matches: &mut HashSet<PathBuf>,
+) {
+    for segment in &panel.flow {
+        match segment {
+            IconGridFlowSegment::Rows(rows) => {
+                for entry in rows_entries(rows) {
+                    if candidates.contains(entry.path.as_path()) {
+                        matches.insert(entry.path.clone());
+                    }
+                }
+            }
+            IconGridFlowSegment::Band(band) if band.interactive => {
+                collect_interactive_paths(&band.panel, candidates, matches);
             }
             IconGridFlowSegment::Band(_) => {}
         }

@@ -512,13 +512,46 @@ impl FileBrowser {
     }
 
     pub(super) fn retain_icon_grid_visible_selection(&mut self) {
+        if self.selected.is_none()
+            && self.selected_paths.is_empty()
+            && self.selection_anchor.is_none()
+            && self.drag_selection_anchor.is_none()
+            && self.pending_created_entry_rename.is_none()
+            && self.renaming.is_none()
+        {
+            return;
+        }
+
+        let mut tracked_paths = Vec::with_capacity(
+            self.selected_paths.len()
+                + usize::from(self.selected.is_some())
+                + usize::from(self.selection_anchor.is_some())
+                + usize::from(self.drag_selection_anchor.is_some())
+                + usize::from(self.pending_created_entry_rename.is_some())
+                + usize::from(self.renaming.is_some()),
+        );
+        if let Some(path) = &self.selected {
+            tracked_paths.push(path.clone());
+        }
+        tracked_paths.extend(self.selected_paths.iter().cloned());
+        if let Some(path) = &self.selection_anchor {
+            tracked_paths.push(path.clone());
+        }
+        if let Some(path) = &self.drag_selection_anchor {
+            tracked_paths.push(path.clone());
+        }
+        if let Some(path) = &self.pending_created_entry_rename {
+            tracked_paths.push(path.clone());
+        }
+        if let Some(path) = &self.renaming {
+            tracked_paths.push(path.clone());
+        }
+
         let visible_paths = self
             .pane_view(self.active_pane_id())
             .map(|pane| {
-                self.icon_grid_layout_for_pane(pane)
-                    .interactive_entry_paths()
-                    .into_iter()
-                    .collect::<HashSet<_>>()
+                let layout = self.icon_grid_layout_for_pane(pane);
+                layout.interactive_paths_matching(&tracked_paths)
             })
             .unwrap_or_else(|| {
                 self.entries

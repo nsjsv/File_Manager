@@ -521,7 +521,7 @@ fn browser_with_inactive_pane_image(
         is_trash_view: false,
         entries: vec![image_entry.clone()].into(),
         directory_discovery: None,
-        directory_loading_placeholder_entries: Vec::new(),
+        directory_loading_placeholder: None,
         trash_entries: Vec::new(),
         selected: None,
         selected_paths: HashSet::new(),

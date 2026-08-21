@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use file_core::{SortDirection, SortField};
 use iced::Task;
@@ -8,10 +7,10 @@ use iced::Task;
 use super::FileBrowser;
 use crate::commands::load_directory_command;
 use crate::model::{
-    BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserPaneSession, BrowserSessionSnapshot,
-    BrowserTabSession, ClassifiedStartupSession, ColumnBrowserViewport, DirectoryCollectionPhase,
-    DirectoryOrderPhase, Message, StartupSessionPlan, StartupSessionPlanRequest,
-    StartupSessionSource,
+    empty_directory_entry_snapshot, BrowserPane, BrowserPaneId, BrowserPaneLayout,
+    BrowserPaneSession, BrowserSessionSnapshot, BrowserTabSession, ClassifiedStartupSession,
+    ColumnBrowserViewport, DirectoryCollectionPhase, DirectoryOrderPhase, Message,
+    StartupSessionPlan, StartupSessionPlanRequest, StartupSessionSource,
 };
 use crate::thumbnail_cache::ColumnViewport;
 
@@ -103,8 +102,8 @@ impl FileBrowser {
     ) -> Task<Message> {
         self.current_dir = directory.clone();
         self.is_trash_view = false;
-        Arc::make_mut(&mut self.entries).clear();
-        self.directory_loading_placeholder_entries.clear();
+        self.entries = empty_directory_entry_snapshot();
+        self.directory_loading_placeholder = None;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
         self.expanded_directories.clear();
@@ -246,7 +245,7 @@ fn restored_pane_from_session(pane: BrowserPaneSession) -> Option<BrowserPane> {
         is_trash_view: active_tab.is_trash_view,
         entries: Vec::new().into(),
         directory_discovery: None,
-        directory_loading_placeholder_entries: Vec::new(),
+        directory_loading_placeholder: None,
         trash_entries: Vec::new(),
         selected: active_tab.selected,
         selected_paths: active_tab.selected_paths,

@@ -327,17 +327,19 @@ fn list_double_click_keeps_visible_placeholders_while_canonical_entries_load() {
     assert!(browser.expanded_directories.is_empty());
     assert_eq!(browser.selected, None);
     assert!(browser.selected_paths.is_empty());
-    assert_eq!(browser.directory_loading_placeholder_entries.len(), 2);
-    assert_eq!(
-        browser.directory_loading_placeholder_entries[0].entry.path,
-        directory
-    );
-    assert_eq!(browser.directory_loading_placeholder_entries[0].depth, 0);
-    assert_eq!(
-        browser.directory_loading_placeholder_entries[1].entry.path,
-        child
-    );
-    assert_eq!(browser.directory_loading_placeholder_entries[1].depth, 1);
+    let placeholder = browser
+        .directory_loading_placeholder
+        .as_ref()
+        .expect("list loading placeholder");
+    assert_eq!(placeholder.entries.len(), 2);
+    assert_eq!(placeholder.entries[0].entry.path, directory);
+    assert_eq!(placeholder.entries[0].depth, 0);
+    assert_eq!(placeholder.entries[0].row_index, 0);
+    assert_eq!(placeholder.entries[1].entry.path, child);
+    assert_eq!(placeholder.entries[1].depth, 1);
+    assert_eq!(placeholder.entries[1].row_index, 1);
+    assert_eq!(placeholder.before_height, 0.0);
+    assert_eq!(placeholder.after_height, 0.0);
 }
 
 #[test]

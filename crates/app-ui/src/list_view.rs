@@ -63,12 +63,15 @@ pub(crate) fn list_browser_view<'a>(
         pane.current_directory_content(),
         DirectoryContentAvailability::Pending
     ) {
-        for (row_index, placeholder) in pane
-            .directory_loading_placeholder_entries
-            .iter()
-            .enumerate()
-        {
-            rows = rows.push(list_placeholder_entry_row(browser, placeholder, row_index));
+        if let Some(placeholder) = pane.directory_loading_placeholder {
+            rows = rows.push(vertical_spacer(placeholder.before_height));
+            for placeholder_entry in &placeholder.entries {
+                rows = rows.push(list_placeholder_entry_row(browser, placeholder_entry));
+                if placeholder_entry.trailing_status_height > f32::EPSILON {
+                    rows = rows.push(vertical_spacer(placeholder_entry.trailing_status_height));
+                }
+            }
+            rows = rows.push(vertical_spacer(placeholder.after_height));
         }
     } else if pane.entries.is_empty() {
         rows = rows.push(list_message(if pane.is_trash_view {
@@ -447,7 +450,6 @@ fn list_entry_row<'a>(
 fn list_placeholder_entry_row<'a>(
     browser: &'a FileBrowser,
     placeholder: &'a DirectoryLoadingPlaceholderEntry,
-    row_index: usize,
 ) -> Element<'a, Message> {
     let entry = &placeholder.entry;
     let modifier = browser.file_entry_content_modifier(&entry.path);
@@ -465,7 +467,7 @@ fn list_placeholder_entry_row<'a>(
             .height(Length::Fixed(LIST_ROW_HEIGHT))
             .center_y(Length::Fixed(LIST_ROW_HEIGHT))
             .width(Length::Fill)
-            .style(list_row_style(placeholder.depth, row_index)),
+            .style(list_row_style(placeholder.depth, placeholder.row_index)),
     )
     .height(Length::Fixed(
         LIST_ROW_HEIGHT * placeholder.animation_progress.clamp(0.0, 1.0),

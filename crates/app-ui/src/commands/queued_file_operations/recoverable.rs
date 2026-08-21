@@ -323,7 +323,19 @@ pub(super) async fn run_queued_transfers(
     let prepared =
         match prepare_queued_transfer_records(records, &journal, &base_options, &controls).await {
             Ok(prepared) => prepared,
-            Err(error) => return recoverable_transfer_failure(mode, error, Vec::new()),
+            Err(error) => {
+                return settle_recoverable_transfer_failure(
+                    mode,
+                    error,
+                    Vec::new(),
+                    stored_task_id,
+                    task_id,
+                    output,
+                    &journal,
+                    &controls,
+                )
+                .await;
+            }
         };
     let progress_records = prepared
         .iter()
@@ -354,7 +366,17 @@ pub(super) async fn run_queued_transfers(
                 )
                 .await
                 {
-                    return recoverable_transfer_failure(mode, error, completed);
+                    return settle_recoverable_transfer_failure(
+                        mode,
+                        error,
+                        completed,
+                        stored_task_id,
+                        task_id,
+                        output,
+                        &journal,
+                        &controls,
+                    )
+                    .await;
                 }
                 if let Err(error) = run_not_applicable_record(
                     record,
@@ -369,7 +391,17 @@ pub(super) async fn run_queued_transfers(
                 )
                 .await
                 {
-                    return recoverable_transfer_failure(mode, error, completed);
+                    return settle_recoverable_transfer_failure(
+                        mode,
+                        error,
+                        completed,
+                        stored_task_id,
+                        task_id,
+                        output,
+                        &journal,
+                        &controls,
+                    )
+                    .await;
                 }
             }
         }
@@ -386,7 +418,17 @@ pub(super) async fn run_queued_transfers(
     )
     .await
     {
-        return recoverable_transfer_failure(mode, error, completed);
+        return settle_recoverable_transfer_failure(
+            mode,
+            error,
+            completed,
+            stored_task_id,
+            task_id,
+            output,
+            &journal,
+            &controls,
+        )
+        .await;
     }
 
     match mode {
@@ -608,6 +650,100 @@ async fn run_not_applicable_record(
     accept_recoverable_transfer_outcome(outcome, completed);
     send_file_operation_progress(output, task_id, batch_progress.complete_record(index)).await;
     Ok(())
+}
+
+async fn settle_recoverable_transfer_failure(
+    mode: QueuedTransferMode,
+    error: RecoverableTransferError,
+    completed_move_transfers: Vec<CompletedTransfer>,
+    stored_task_id: u64,
+    task_id: u64,
+    output: &mut IcedSender<Message>,
+    journal: &TaskQueueTransferJournal,
+    controls: &FileOperationControls,
+) -> FileOperationCompletion {
+    if !matches!(
+        &error,
+        RecoverableTransferError::FileOperation(FileError::Cancelled)
+    ) && !matches!(controls.checkpoint_now(), Err(FileError::Cancelled))
+    {
+        return recoverable_transfer_failure(mode, error, completed_move_transfers);
+    }
+
+    let records =
+        match load_recoverable_transfer_records(journal.store.clone(), stored_task_id).await {
+            Ok(records) => records,
+            Err(RecoverableRecordLoadError::Interrupted(load_error)) => {
+                return FileOperationCompletion::RecoveryInterrupted(
+                    load_error,
+                    completed_move_transfers,
+                );
+            }
+            Err(RecoverableRecordLoadError::Invalid(load_error)) => {
+                return FileOperationCompletion::RecoveryBlocked {
+                    error: load_error,
+                    completed_move_transfers,
+                };
+            }
+        };
+
+    let mut batch_progress = TransferBatchProgress::new(&records);
+    let settlement_options = FileTransferOptions::new(controls.clone());
+    let mut settled_completed = Vec::new();
+    let mut settlement_error = None;
+    for (record_index, record) in records.into_iter().enumerate() {
+        if durable_direct_move_commit(&record, None).is_some() {
+            send_durable_direct_move_commits(output, task_id, &[(record_index, record.clone())])
+                .await;
+        }
+        let settled = run_recoverable_record_with_progress(
+            record,
+            controls.clone(),
+            journal,
+            &settlement_options,
+            task_id,
+            output,
+            record_index,
+            &mut batch_progress,
+        )
+        .await;
+        send_durable_direct_move_commit_values(output, task_id, journal.take_durable_commits())
+            .await;
+        match settled {
+            Ok(outcome) => {
+                accept_recoverable_transfer_outcome(outcome, &mut settled_completed);
+                send_file_operation_progress(
+                    output,
+                    task_id,
+                    batch_progress.complete_record(record_index),
+                )
+                .await;
+            }
+            Err(RecoverableTransferError::FileOperation(FileError::Cancelled)) => {}
+            Err(record_error) => {
+                settlement_error.get_or_insert(record_error);
+            }
+        }
+    }
+
+    let error = match settlement_error {
+        Some(settlement_error)
+            if matches!(
+                &error,
+                RecoverableTransferError::FileOperation(FileError::Cancelled)
+            ) || matches!(
+                &settlement_error,
+                RecoverableTransferError::FileOperation(FileError::ApplicationStopping)
+                    | RecoverableTransferError::Journal { .. }
+                    | RecoverableTransferError::RecoveryRequired { .. }
+                    | RecoverableTransferError::RecoveryBlocked { .. }
+            ) =>
+        {
+            settlement_error
+        }
+        _ => error,
+    };
+    recoverable_transfer_failure(mode, error, settled_completed)
 }
 
 fn recoverable_transfer_failure(
@@ -853,6 +989,7 @@ mod recoverable_transfer_tests {
         run_recoverable_transfer_to_direct_move_intent, DirectMoveIntentBoundary,
     };
 
+    mod cancellation_terminalization;
     mod cross_filesystem_recovery;
     mod start_latency_harness;
 

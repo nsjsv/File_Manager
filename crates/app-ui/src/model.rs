@@ -58,11 +58,11 @@ pub(crate) use browser_panes::{
     empty_directory_entry_snapshot, retain_direct_entry_selection, BrowserPane, BrowserPaneId,
     BrowserPaneLayout, BrowserTab, BrowserViewMode, ColumnBrowserViewport,
     DirectoryCollectionPhase, DirectoryEntrySnapshot, DirectoryExpansionLoadContext,
-    DirectoryLoadFailure, DirectoryLoadRequest, DirectoryLoadingPlaceholderEntry,
-    DirectoryMetadataLoadContext, DirectoryMetadataLoadFailure, DirectoryMetadataLoadRequest,
-    DirectoryOrderPhase, ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
-    IconGridExpansionSessionId, IconGridViewport, ListExpansionFollowSessionId, SplitAxis,
-    SplitRegion,
+    DirectoryLoadFailure, DirectoryLoadRequest, DirectoryLoadingPlaceholder,
+    DirectoryLoadingPlaceholderEntry, DirectoryMetadataLoadContext, DirectoryMetadataLoadFailure,
+    DirectoryMetadataLoadRequest, DirectoryOrderPhase, ExpandedDirectory,
+    ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, IconGridExpansionSessionId,
+    IconGridViewport, ListExpansionFollowSessionId, SplitAxis, SplitRegion,
 };
 mod split_layout;
 pub(crate) use split_layout::{SPLIT_DIVIDER_WIDTH, SPLIT_PORTION_TOTAL};

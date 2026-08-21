@@ -18,7 +18,7 @@ fn pane_from_tab(pane_id: BrowserPaneId, tab: BrowserTab) -> BrowserPane {
         is_trash_view: tab.is_trash_view,
         entries: tab.entries.clone(),
         directory_discovery: tab.directory_discovery.clone(),
-        directory_loading_placeholder_entries: Vec::new(),
+        directory_loading_placeholder: None,
         trash_entries: tab.trash_entries.clone(),
         selected: tab.selected.clone(),
         selected_paths: tab.selected_paths.clone(),
@@ -82,7 +82,7 @@ fn opening_trash_projects_the_cached_snapshot_without_a_loading_placeholder() {
 
     assert!(browser.is_trash_view);
     assert!(!browser.directory_collection_phase.is_discovering());
-    assert!(browser.directory_loading_placeholder_entries.is_empty());
+    assert!(browser.directory_loading_placeholder.is_none());
     assert_eq!(browser.entries.len(), 1);
     assert_eq!(browser.entries[0].path, trash_path);
 }

@@ -205,27 +205,32 @@ pub(crate) fn entry_thumbnail_or_icon<'a>(
         return decorate_file_entry_icon(thumbnail, thumbnail_size, modifier);
     }
 
-    if !thumbnails::is_supported_thumbnail_path(&entry.path) {
-        let icon_size = density.icon_size();
-        let icon = entry_icon(entry, tone, density)
-            .opacity(modifier.opacity())
-            .into();
-        return decorate_file_entry_icon(icon, icon_size, modifier);
-    }
-
     let icon_size = density.icon_size();
-    container(decorate_file_entry_icon(
+    centered_file_entry_icon_slot(
         entry_icon(entry, tone, density)
             .opacity(modifier.opacity())
             .into(),
         icon_size,
+        thumbnail_size,
         modifier,
-    ))
-    .width(Length::Fixed(thumbnail_size))
-    .height(Length::Fixed(thumbnail_size))
-    .center_x(Length::Fixed(thumbnail_size))
-    .center_y(Length::Fixed(thumbnail_size))
-    .into()
+    )
+}
+
+fn centered_file_entry_icon_slot<'a, Renderer>(
+    content: Element<'a, Message, Theme, Renderer>,
+    icon_area_size: f32,
+    slot_size: f32,
+    modifier: FileEntryContentModifier,
+) -> Element<'a, Message, Theme, Renderer>
+where
+    Renderer: iced::advanced::Renderer + iced::advanced::svg::Renderer + 'a + 'static,
+{
+    container(decorate_file_entry_icon(content, icon_area_size, modifier))
+        .width(Length::Fixed(slot_size))
+        .height(Length::Fixed(slot_size))
+        .center_x(Length::Fixed(slot_size))
+        .center_y(Length::Fixed(slot_size))
+        .into()
 }
 
 pub(crate) fn file_entry_symbol_icon(
@@ -465,6 +470,30 @@ mod tests {
             (actual - expected).abs() < 0.001,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn list_fallback_icon_is_centered_in_the_thumbnail_sized_slot() {
+        let icon_size = FileEntryIconDensity::List.icon_size();
+        let slot_size = FileEntryIconDensity::List.thumbnail_size();
+        let body: Element<'_, Message, Theme, RecordingRenderer> = IconSymbol::File
+            .view(icon_size)
+            .style(icon_svg_style())
+            .into();
+        let slotted = centered_file_entry_icon_slot(
+            body,
+            icon_size,
+            slot_size,
+            FileEntryContentModifier::None,
+        );
+
+        let (bounds, renderer) = draw_element(slotted, Size::new(slot_size, slot_size));
+
+        assert_eq!(bounds.size(), Size::new(slot_size, slot_size));
+        assert_eq!(renderer.svgs.len(), 1);
+        let icon_bounds = renderer.svgs[0].bounds;
+        assert_eq!(icon_bounds.size(), Size::new(icon_size, icon_size));
+        assert_eq!(icon_bounds.center(), bounds.center());
     }
 
     #[test]

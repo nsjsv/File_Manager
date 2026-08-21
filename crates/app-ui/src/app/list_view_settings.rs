@@ -329,7 +329,7 @@ mod tests {
             is_trash_view: tab.is_trash_view,
             entries: tab.entries.clone(),
             directory_discovery: tab.directory_discovery.clone(),
-            directory_loading_placeholder_entries: Vec::new(),
+            directory_loading_placeholder: None,
             trash_entries: tab.trash_entries.clone(),
             selected: tab.selected.clone(),
             selected_paths: tab.selected_paths.clone(),

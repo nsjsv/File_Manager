@@ -635,7 +635,7 @@ mod tests {
             is_trash_view: false,
             entries,
             directory_discovery: None,
-            directory_loading_placeholder_entries: &[],
+            directory_loading_placeholder: None,
             selected,
             selected_paths,
             deepest_open_column_directory,

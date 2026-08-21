@@ -81,12 +81,12 @@ impl FileBrowser {
     fn finish_trash_views_loading(&mut self) {
         if self.is_trash_view {
             self.directory_collection_phase = DirectoryCollectionPhase::Ready;
-            self.directory_loading_placeholder_entries.clear();
+            self.directory_loading_placeholder = None;
         }
         for pane in &mut self.panes {
             if pane.is_trash_view {
                 pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
-                pane.directory_loading_placeholder_entries.clear();
+                pane.directory_loading_placeholder = None;
                 pane.sync_active_tab_state();
             }
         }
@@ -147,7 +147,7 @@ fn apply_trash_snapshot_to_pane(pane: &mut BrowserPane, entries: &[TrashEntry]) 
         &mut pane.selected_paths,
         &mut pane.selection_anchor,
     );
-    pane.directory_loading_placeholder_entries.clear();
+    pane.directory_loading_placeholder = None;
     pane.deepest_open_column_directory = None;
     for expanded in pane.expanded_directories.values_mut() {
         if let Some(cancellation) = expanded.load_cancel.take() {

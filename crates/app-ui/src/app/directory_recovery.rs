@@ -125,7 +125,7 @@ impl FileBrowser {
 
     fn finish_active_failed_directory_load(&mut self) {
         self.directory_collection_phase = DirectoryCollectionPhase::Ready;
-        self.directory_loading_placeholder_entries.clear();
+        self.directory_loading_placeholder = None;
         self.directory_load_cancel = None;
         self.sync_active_tab_state();
     }
@@ -165,7 +165,7 @@ impl FileBrowser {
 
 fn finish_failed_directory_load_for_pane(pane: &mut crate::model::BrowserPane) {
     pane.directory_collection_phase = DirectoryCollectionPhase::Ready;
-    pane.directory_loading_placeholder_entries.clear();
+    pane.directory_loading_placeholder = None;
     pane.directory_load_cancel = None;
     pane.sync_active_tab_state();
 }

@@ -60,15 +60,14 @@ pub(crate) fn list_entry_range_for_viewport(
     }
     let viewport_top = viewport_offset.max(0.0);
     let overscan_height = overscan_rows as f32 * row_height;
-    list_entry_height_range(
-        entries,
-        expanded_directories,
-        row_height,
-        ListEntryRangeLimit::Viewport {
-            top: (viewport_top - header_height - overscan_height).max(0.0),
-            bottom: (viewport_top + viewport_height - header_height).max(0.0) + overscan_height,
-        },
-    )
+    let limit = ListEntryRangeLimit::Viewport {
+        top: (viewport_top - header_height - overscan_height).max(0.0),
+        bottom: (viewport_top + viewport_height - header_height).max(0.0) + overscan_height,
+    };
+    if !has_visible_list_expansion(entries, expanded_directories) {
+        return flat_list_entry_height_range(entries.len(), row_height, limit);
+    }
+    list_entry_height_range(entries, expanded_directories, row_height, limit)
 }
 
 pub(crate) fn initial_list_entry_range(
@@ -80,12 +79,78 @@ pub(crate) fn initial_list_entry_range(
     if row_height <= f32::EPSILON || initial_rows == 0 {
         return VirtualRange::empty();
     }
-    list_entry_height_range(
-        entries,
-        expanded_directories,
-        row_height,
-        ListEntryRangeLimit::InitialRows(initial_rows),
-    )
+    let limit = ListEntryRangeLimit::InitialRows(initial_rows);
+    if !has_visible_list_expansion(entries, expanded_directories) {
+        return flat_list_entry_height_range(entries.len(), row_height, limit);
+    }
+    list_entry_height_range(entries, expanded_directories, row_height, limit)
+}
+
+fn has_visible_list_expansion(
+    entries: &[DirectoryEntry],
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+) -> bool {
+    let Some(root_parent) = entries.first().and_then(|entry| entry.path.parent()) else {
+        return false;
+    };
+
+    expanded_directories.iter().any(|(path, expanded)| {
+        (expanded.is_expanded || expanded.is_collapsing)
+            && list_expansion_path_is_visible(path, root_parent, expanded_directories)
+    })
+}
+
+fn list_expansion_path_is_visible(
+    path: &Path,
+    root_parent: &Path,
+    expanded_directories: &HashMap<PathBuf, ExpandedDirectory>,
+) -> bool {
+    // 折叠祖先留下的缓存节点不可见；沿父路径判断可见性，避免平面目录扫描全部条目。
+    let mut parent = path.parent();
+    while let Some(candidate) = parent {
+        if candidate == root_parent {
+            return true;
+        }
+        let Some(ancestor) = expanded_directories.get(candidate) else {
+            return false;
+        };
+        if !ancestor.is_expanded && !ancestor.is_collapsing {
+            return false;
+        }
+        if !matches!(ancestor.status, ExpandedDirectoryStatus::Loaded) {
+            return false;
+        }
+        parent = candidate.parent();
+    }
+    false
+}
+
+fn flat_list_entry_height_range(
+    entry_count: usize,
+    row_height: f32,
+    limit: ListEntryRangeLimit,
+) -> VirtualRange {
+    match limit {
+        ListEntryRangeLimit::InitialRows(rows) => {
+            let end = rows.min(entry_count);
+            VirtualRange {
+                start: 0,
+                end,
+                before_height: 0.0,
+                after_height: entry_count.saturating_sub(end) as f32 * row_height,
+            }
+        }
+        ListEntryRangeLimit::Viewport { top, bottom } => {
+            let start = ((top / row_height).floor().max(0.0) as usize).min(entry_count);
+            let end = ((bottom / row_height).ceil().max(0.0) as usize).min(entry_count);
+            VirtualRange {
+                start,
+                end: end.max(start),
+                before_height: start as f32 * row_height,
+                after_height: entry_count.saturating_sub(end.max(start)) as f32 * row_height,
+            }
+        }
+    }
 }
 
 pub(crate) fn list_entry_vertical_bounds(
@@ -95,6 +160,12 @@ pub(crate) fn list_entry_vertical_bounds(
     row_height: f32,
     header_height: f32,
 ) -> Option<(f32, f32)> {
+    if !has_visible_list_expansion(entries, expanded_directories) {
+        return entries
+            .iter()
+            .position(|entry| entry.path == path)
+            .map(|index| (header_height + index as f32 * row_height, row_height));
+    }
     let mut offset = header_height;
     let mut target = None;
     for_each_visible_entry(entries, expanded_directories, &mut |visible_entry| {
@@ -210,6 +281,7 @@ fn visit_visible_entry<'a>(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn visible_entries<'a>(
     entries: &'a [DirectoryEntry],
     expanded_directories: &'a HashMap<PathBuf, ExpandedDirectory>,
@@ -223,6 +295,21 @@ pub(crate) fn visible_entries_in_range<'a>(
     start: usize,
     end: usize,
 ) -> Vec<VisibleEntry<'a>> {
+    if !has_visible_list_expansion(entries, expanded_directories) {
+        let end = end.min(entries.len());
+        let start = start.min(end);
+        return entries
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|entry| VisibleEntry {
+                entry,
+                depth: 0,
+                animation_progress: 1.0,
+            })
+            .collect();
+    }
+
     if start >= end {
         return Vec::new();
     }
@@ -398,6 +485,91 @@ mod tests {
             false,
             false,
         )
+    }
+    #[test]
+    fn flat_list_fast_paths_preserve_range_slice_and_bounds() {
+        let root = PathBuf::from("/workspace");
+        let entries = (0..5)
+            .map(|index| test_entry(root.join(format!("item-{index}")), FileKind::File))
+            .collect::<Vec<_>>();
+        let expanded_directories = HashMap::new();
+        let range = list_entry_range_for_viewport(
+            &entries,
+            &expanded_directories,
+            10.0,
+            5.0,
+            30.0,
+            20.0,
+            0,
+        );
+        assert_eq!(range.start, 2);
+        assert_eq!(range.end, 5);
+        assert_eq!(range.before_height, 20.0);
+        assert_eq!(range.after_height, 0.0);
+        let visible =
+            visible_entries_in_range(&entries, &expanded_directories, range.start, range.end);
+        assert_eq!(visible.len(), 3);
+        assert_eq!(visible[0].entry.path, entries[2].path);
+        assert_eq!(visible[2].entry.path, entries[4].path);
+        assert_eq!(
+            list_entry_vertical_bounds(
+                &entries,
+                &expanded_directories,
+                &entries[3].path,
+                10.0,
+                5.0,
+            ),
+            Some((35.0, 10.0))
+        );
+    }
+
+    #[test]
+    fn active_loaded_expansion_uses_recursive_rows() {
+        let root = PathBuf::from("/workspace");
+        let directory = test_entry(root.join("directory"), FileKind::Directory);
+        let child = test_entry(directory.path.join("child.txt"), FileKind::File);
+        let sibling = test_entry(root.join("sibling.txt"), FileKind::File);
+        let entries = vec![directory.clone(), sibling];
+        let expanded_directories =
+            HashMap::from([(directory.path.clone(), expanded(vec![child.clone()], true))]);
+
+        let visible = visible_entries_in_range(&entries, &expanded_directories, 0, 3);
+
+        assert_eq!(
+            visible
+                .iter()
+                .map(|entry| entry.entry.path.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                directory.path,
+                child.path,
+                PathBuf::from("/workspace/sibling.txt")
+            ]
+        );
+    }
+
+    #[test]
+    fn collapsed_parent_hides_active_descendant_from_list_range() {
+        let root = PathBuf::from("/workspace");
+        let parent = test_entry(root.join("parent"), FileKind::Directory);
+        let child = test_entry(parent.path.join("child"), FileKind::Directory);
+        let nested = test_entry(child.path.join("nested.txt"), FileKind::File);
+        let sibling = test_entry(root.join("sibling.txt"), FileKind::File);
+        let entries = vec![parent.clone(), sibling.clone()];
+        let expanded_directories = HashMap::from([
+            (parent.path.clone(), expanded(vec![child.clone()], false)),
+            (child.path.clone(), expanded(vec![nested], true)),
+        ]);
+
+        let visible = visible_entries_in_range(&entries, &expanded_directories, 0, 2);
+
+        assert_eq!(
+            visible
+                .iter()
+                .map(|entry| entry.entry.path.clone())
+                .collect::<Vec<_>>(),
+            vec![parent.path, sibling.path]
+        );
     }
 
     fn expanded(entries: Vec<DirectoryEntry>, is_expanded: bool) -> ExpandedDirectory {
