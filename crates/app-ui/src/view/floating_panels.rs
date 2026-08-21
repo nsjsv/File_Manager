@@ -8,8 +8,8 @@ use desktop_linux::FileClipboardOperation;
 use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
-    context_menu_style, error_notification_style, transparent_button_style,
+    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
+    context_menu_item_button_style, context_menu_style, error_notification_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
@@ -279,7 +279,7 @@ fn open_with_application_list(
             ))
             .padding([7, 8])
             .width(Length::Fill)
-            .style(context_menu_button_style()),
+            .style(context_menu_item_button_style()),
         );
     }
 
@@ -426,7 +426,7 @@ fn list_column_visibility_button(column: &ListColumnConfig) -> Button<'static, M
     )
     .width(Length::Fixed(62.0))
     .height(Length::Fixed(LIST_COLUMN_VISIBILITY_BUTTON_HEIGHT))
-    .style(transparent_button_style());
+    .style(context_menu_item_button_style());
 
     if column.kind == ListColumnKind::Name {
         button
@@ -580,7 +580,7 @@ fn new_entry_menu_trigger() -> Element<'static, Message> {
             ))
             .width(Length::Fill)
             .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
-            .style(transparent_button_style()),
+            .style(context_menu_item_button_style()),
     )
     .on_enter(Message::FileContextMenuExpansionChanged(
         FileContextMenuExpansion::NewEntry,
@@ -688,7 +688,7 @@ fn menu_button(
         .on_press(message)
         .width(Length::Fill)
         .height(Length::Fixed(CONTEXT_MENU_ITEM_HEIGHT))
-        .style(transparent_button_style())
+        .style(context_menu_item_button_style())
 }
 
 fn menu_label(icon: IconSymbol, label: &'static str) -> Row<'static, Message> {

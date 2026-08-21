@@ -1,11 +1,11 @@
-use std::path::PathBuf;
-
 use file_core::{
     discover_directory_with_progress, DirectoryDiscovery, DirectoryDiscoveryBatch, FileError,
     ScanOptions,
 };
 use iced::futures::SinkExt;
 use iced::Task;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
@@ -13,7 +13,26 @@ use crate::model::{
 };
 use crate::startup_trace;
 
+const DIRECTORY_HINT_MIN_INTERVAL_MS: u64 = 16;
 const DIRECTORY_LOAD_CHANNEL_SIZE: usize = 8;
+
+#[derive(Debug, Default)]
+struct DirectoryHintThrottle {
+    last_emitted_at: Option<Instant>,
+}
+
+impl DirectoryHintThrottle {
+    fn should_emit(&mut self, now: Instant) -> bool {
+        let should_emit = self.last_emitted_at.is_none_or(|last_emitted_at| {
+            now.saturating_duration_since(last_emitted_at)
+                >= Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS)
+        });
+        if should_emit {
+            self.last_emitted_at = Some(now);
+        }
+        should_emit
+    }
+}
 
 pub(crate) fn load_directory_command(
     request: DirectoryLoadRequest,
@@ -105,9 +124,10 @@ async fn collect_directory_with_hints(
     startup_trace::mark_once("initial_directory_collection_started");
     let mut produced_hint_count = 0;
     let mut accepted_hint_count = 0;
+    let mut hint_throttle = DirectoryHintThrottle::default();
     let discovery = discover_directory_with_progress(path, options, cancellation, |batch| {
         produced_hint_count += 1;
-        if emit_hint(batch) {
+        if hint_throttle.should_emit(Instant::now()) && emit_hint(batch) {
             accepted_hint_count += 1;
         }
     })
@@ -189,5 +209,26 @@ mod tests {
         });
 
         assert!(matches!(failure, DirectoryLoadFailure::ReadFailed { .. }));
+    }
+    #[test]
+    fn hint_throttle_emits_immediately_and_after_interval() {
+        let start = Instant::now();
+        let mut throttle = DirectoryHintThrottle::default();
+
+        assert!(throttle.should_emit(start));
+        assert!(!throttle
+            .should_emit(start + Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS - 1)));
+        assert!(throttle.should_emit(start + Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS)));
+    }
+
+    #[test]
+    fn hint_throttle_does_not_emit_before_the_previous_hint() {
+        let start = Instant::now();
+        let mut throttle = DirectoryHintThrottle::default();
+
+        assert!(throttle.should_emit(start));
+        assert!(
+            !throttle.should_emit(start - Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS))
+        );
     }
 }

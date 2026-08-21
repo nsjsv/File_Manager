@@ -151,6 +151,30 @@ pub(crate) fn transparent_button_style() -> fn(&Theme, button::Status) -> button
 pub(crate) fn context_menu_button_style() -> fn(&Theme, button::Status) -> button::Style {
     surface_button_style
 }
+pub(crate) fn context_menu_item_button_style() -> fn(&Theme, button::Status) -> button::Style {
+    context_menu_item_button_style_for_status
+}
+
+fn context_menu_item_button_style_for_status(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let background = match status {
+        button::Status::Hovered => Some(Background::Color(button_hover_surface_color(theme))),
+        button::Status::Pressed => Some(Background::Color(button_pressed_surface_color(theme))),
+        button::Status::Active | button::Status::Disabled => None,
+    };
+
+    button::Style {
+        background,
+        text_color: if matches!(status, button::Status::Disabled) {
+            muted_text_color(theme)
+        } else {
+            base_text_color(theme)
+        },
+        ..button::Style::default()
+    }
+}
 
 pub(crate) fn auto_hide_scrollbar_style(
     visibility: ScrollbarVisibility,
@@ -693,6 +717,18 @@ mod tests {
                 hovered.background,
                 Some(Background::Color(colors.surface_container_high))
             );
+            let context_menu_active =
+                context_menu_item_button_style()(&theme, button::Status::Active);
+            assert!(context_menu_active.background.is_none());
+            assert_eq!(context_menu_active.border.width, 0.0);
+
+            let context_menu_hovered =
+                context_menu_item_button_style()(&theme, button::Status::Hovered);
+            assert_eq!(
+                context_menu_hovered.background,
+                Some(Background::Color(colors.surface_container_high))
+            );
+            assert_eq!(context_menu_hovered.border.width, 0.0);
 
             let error = error_notification_style(&theme);
             assert_eq!(

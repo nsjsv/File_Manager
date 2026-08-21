@@ -25,7 +25,7 @@ where
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MiddleEllipsisKind {
     GeneralText,
     FileName,
@@ -96,16 +96,80 @@ impl MeasuredMiddleEllipsizedText {
     }
 }
 
-struct MeasuredMiddleEllipsizedTextState<Paragraph> {
-    paragraph: Paragraph,
-    displayed_content: String,
+#[derive(Debug, Clone, PartialEq)]
+struct MeasuredTextLayoutKey<Font> {
+    content: String,
+    bounds: Size<f32>,
+    size: Pixels,
+    line_height: text::LineHeight,
+    font: Font,
+    shaping: text::Shaping,
+    wrapping: text::Wrapping,
+    align_x: text::Alignment,
+    ellipsis_kind: MiddleEllipsisKind,
 }
 
-impl<Paragraph: Default> Default for MeasuredMiddleEllipsizedTextState<Paragraph> {
+impl<Font: PartialEq> MeasuredTextLayoutKey<Font> {
+    fn new(
+        content: &str,
+        bounds: Size<f32>,
+        size: Pixels,
+        line_height: text::LineHeight,
+        font: Font,
+        shaping: text::Shaping,
+        wrapping: text::Wrapping,
+        align_x: text::Alignment,
+        ellipsis_kind: MiddleEllipsisKind,
+    ) -> Self {
+        Self {
+            content: content.to_owned(),
+            bounds,
+            size,
+            line_height,
+            font,
+            shaping,
+            wrapping,
+            align_x,
+            ellipsis_kind,
+        }
+    }
+
+    fn matches(
+        &self,
+        content: &str,
+        bounds: Size<f32>,
+        size: Pixels,
+        line_height: text::LineHeight,
+        font: Font,
+        shaping: text::Shaping,
+        wrapping: text::Wrapping,
+        align_x: text::Alignment,
+        ellipsis_kind: MiddleEllipsisKind,
+    ) -> bool {
+        self.content == content
+            && self.bounds == bounds
+            && self.size == size
+            && self.line_height == line_height
+            && self.font == font
+            && self.shaping == shaping
+            && self.wrapping == wrapping
+            && self.align_x == align_x
+            && self.ellipsis_kind == ellipsis_kind
+    }
+}
+
+struct MeasuredMiddleEllipsizedTextState<Paragraph, Font> {
+    paragraph: Paragraph,
+    displayed_content: String,
+    layout_key: Option<MeasuredTextLayoutKey<Font>>,
+}
+
+impl<Paragraph: Default, Font> Default for MeasuredMiddleEllipsizedTextState<Paragraph, Font> {
     fn default() -> Self {
         Self {
             paragraph: Paragraph::default(),
             displayed_content: String::new(),
+            layout_key: None,
         }
     }
 }
@@ -117,15 +181,19 @@ fn displayed_content_is_ellipsized(content: &str, displayed_content: &str) -> bo
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for MeasuredMiddleEllipsizedText
 where
     Renderer: text::Renderer,
+    Renderer::Font: 'static,
 {
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<MeasuredMiddleEllipsizedTextState<Renderer::Paragraph>>()
+        widget::tree::Tag::of::<
+            MeasuredMiddleEllipsizedTextState<Renderer::Paragraph, Renderer::Font>,
+        >()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(
-            MeasuredMiddleEllipsizedTextState::<Renderer::Paragraph>::default(),
-        )
+        widget::tree::State::new(MeasuredMiddleEllipsizedTextState::<
+            Renderer::Paragraph,
+            Renderer::Font,
+        >::default())
     }
 
     fn size(&self) -> Size<Length> {
@@ -143,7 +211,8 @@ where
     ) -> layout::Node {
         let text_state = tree
             .state
-            .downcast_mut::<MeasuredMiddleEllipsizedTextState<Renderer::Paragraph>>();
+            .downcast_mut::<MeasuredMiddleEllipsizedTextState<Renderer::Paragraph, Renderer::Font>>(
+            );
 
         layout::sized(limits, self.width, self.height, |limits| {
             let bounds = limits.max();
@@ -151,35 +220,61 @@ where
             let line_height = self.line_height;
             let shaping = shaping_for_content(&self.content);
             let display_bounds = Size::new(bounds.width, bounds.height);
-            let displayed_content = fit_middle_ellipsized_text::<Renderer>(
-                &self.content,
-                bounds.width,
-                bounds.height,
-                self.size,
-                line_height,
-                font,
-                shaping,
-                self.wrapping,
-                self.ellipsis_kind,
-            );
-
-            text_state.displayed_content = displayed_content;
-            text_state.paragraph = Renderer::Paragraph::with_text(text::Text {
-                content: text_state.displayed_content.as_str(),
-                bounds: display_bounds,
-                size: self.size,
-                line_height,
-                font,
-                align_x: self.align_x,
-                align_y: alignment::Vertical::Top,
-                shaping,
-                wrapping: self.wrapping,
+            let layout_key_matches = text_state.layout_key.as_ref().map_or(false, |key| {
+                key.matches(
+                    &self.content,
+                    display_bounds,
+                    self.size,
+                    line_height,
+                    font,
+                    shaping,
+                    self.wrapping,
+                    self.align_x,
+                    self.ellipsis_kind,
+                )
             });
+
+            if !layout_key_matches {
+                let displayed_content = fit_middle_ellipsized_text::<Renderer>(
+                    &self.content,
+                    bounds.width,
+                    bounds.height,
+                    self.size,
+                    line_height,
+                    font,
+                    shaping,
+                    self.wrapping,
+                    self.ellipsis_kind,
+                );
+
+                text_state.displayed_content = displayed_content;
+                text_state.paragraph = Renderer::Paragraph::with_text(text::Text {
+                    content: text_state.displayed_content.as_str(),
+                    bounds: display_bounds,
+                    size: self.size,
+                    line_height,
+                    font,
+                    align_x: self.align_x,
+                    align_y: alignment::Vertical::Top,
+                    shaping,
+                    wrapping: self.wrapping,
+                });
+                text_state.layout_key = Some(MeasuredTextLayoutKey::new(
+                    &self.content,
+                    display_bounds,
+                    self.size,
+                    line_height,
+                    font,
+                    shaping,
+                    self.wrapping,
+                    self.align_x,
+                    self.ellipsis_kind,
+                ));
+            }
 
             text_state.paragraph.min_bounds()
         })
     }
-
     fn draw(
         &self,
         tree: &widget::Tree,
@@ -192,7 +287,8 @@ where
     ) {
         let text_state = tree
             .state
-            .downcast_ref::<MeasuredMiddleEllipsizedTextState<Renderer::Paragraph>>();
+            .downcast_ref::<MeasuredMiddleEllipsizedTextState<Renderer::Paragraph, Renderer::Font>>(
+            );
         let bounds = layout.bounds();
 
         renderer.fill_paragraph(
@@ -203,7 +299,6 @@ where
         );
     }
 }
-
 fn paragraph_draw_anchor<Paragraph>(bounds: Rectangle, paragraph: &Paragraph) -> Point
 where
     Paragraph: text::Paragraph,
@@ -447,6 +542,7 @@ where
     Message: 'a,
     Theme: 'a,
     Renderer: text::Renderer + 'a,
+    Renderer::Font: 'static,
 {
     fn from(text: MeasuredMiddleEllipsizedText) -> Self {
         Element::new(text)
@@ -454,298 +550,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        displayed_content_is_ellipsized, fit_middle_ellipsized_by, fit_middle_ellipsized_text,
-        measured_text_fits, middle_ellipsized_candidate, middle_ellipsized_filename_candidate,
-        shaping_for_content, MeasuredMiddleEllipsizedText, MeasuredMiddleEllipsizedTextState,
-        MiddleEllipsisKind, ELLIPSIS_MARKER,
-    };
-    use crate::icon_grid_geometry::{
-        ICON_GRID_LABEL_HEIGHT, ICON_GRID_LABEL_LINE_HEIGHT_PX, ICON_GRID_LABEL_SIZE,
-    };
-    use iced::advanced::text::{self, Paragraph as _};
-    use iced::advanced::{image, layout, mouse, renderer, widget::Tree, Layout};
-    use iced::{
-        Background, Color, Element, Font, Length, Pixels, Point, Rectangle, Size, Theme,
-        Transformation,
-    };
-
-    #[derive(Default)]
-    struct RecordingRenderer {
-        paragraph_positions: Vec<Point>,
-    }
-
-    impl iced::advanced::Renderer for RecordingRenderer {
-        fn start_layer(&mut self, _bounds: Rectangle) {}
-
-        fn end_layer(&mut self) {}
-
-        fn start_transformation(&mut self, _transformation: Transformation) {}
-
-        fn end_transformation(&mut self) {}
-
-        fn fill_quad(&mut self, _quad: renderer::Quad, _background: impl Into<Background>) {}
-
-        fn reset(&mut self, _new_bounds: Rectangle) {}
-
-        fn allocate_image(
-            &mut self,
-            _handle: &image::Handle,
-            _callback: impl FnOnce(Result<image::Allocation, image::Error>) + Send + 'static,
-        ) {
-            panic!("measured text draw must not allocate images");
-        }
-    }
-
-    impl text::Renderer for RecordingRenderer {
-        type Font = Font;
-        type Paragraph = <iced::Renderer as text::Renderer>::Paragraph;
-        type Editor = <iced::Renderer as text::Renderer>::Editor;
-
-        const ICON_FONT: Font = <iced::Renderer as text::Renderer>::ICON_FONT;
-        const CHECKMARK_ICON: char = <iced::Renderer as text::Renderer>::CHECKMARK_ICON;
-        const ARROW_DOWN_ICON: char = <iced::Renderer as text::Renderer>::ARROW_DOWN_ICON;
-        const SCROLL_UP_ICON: char = <iced::Renderer as text::Renderer>::SCROLL_UP_ICON;
-        const SCROLL_DOWN_ICON: char = <iced::Renderer as text::Renderer>::SCROLL_DOWN_ICON;
-        const SCROLL_LEFT_ICON: char = <iced::Renderer as text::Renderer>::SCROLL_LEFT_ICON;
-        const SCROLL_RIGHT_ICON: char = <iced::Renderer as text::Renderer>::SCROLL_RIGHT_ICON;
-        const ICED_LOGO: char = <iced::Renderer as text::Renderer>::ICED_LOGO;
-
-        fn default_font(&self) -> Font {
-            Font::default()
-        }
-
-        fn default_size(&self) -> Pixels {
-            Pixels(16.0)
-        }
-
-        fn fill_paragraph(
-            &mut self,
-            _paragraph: &Self::Paragraph,
-            position: Point,
-            _color: Color,
-            _clip_bounds: Rectangle,
-        ) {
-            self.paragraph_positions.push(position);
-        }
-
-        fn fill_editor(
-            &mut self,
-            _editor: &Self::Editor,
-            _position: Point,
-            _color: Color,
-            _clip_bounds: Rectangle,
-        ) {
-            panic!("measured text draw must not fill an editor");
-        }
-
-        fn fill_text(
-            &mut self,
-            _text: text::Text<String, Font>,
-            _position: Point,
-            _color: Color,
-            _clip_bounds: Rectangle,
-        ) {
-            panic!("measured text draw must not fill uncached text");
-        }
-    }
-
-    fn recorded_widget_draw(align_x: text::Alignment) -> (Rectangle, Size, Point) {
-        let widget = MeasuredMiddleEllipsizedText::new("short.txt")
-            .size(ICON_GRID_LABEL_SIZE)
-            .line_height(text::LineHeight::Absolute(Pixels(
-                ICON_GRID_LABEL_LINE_HEIGHT_PX,
-            )))
-            .wrapping(text::Wrapping::WordOrGlyph)
-            .width(Length::Fill)
-            .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT))
-            .align_x(align_x);
-        let mut element: Element<'_, (), Theme, RecordingRenderer> = widget.into();
-        let mut tree = Tree::new(element.as_widget());
-        let mut renderer = RecordingRenderer::default();
-        let limits = layout::Limits::new(Size::ZERO, Size::new(128.0, ICON_GRID_LABEL_HEIGHT));
-        let node = element
-            .as_widget_mut()
-            .layout(&mut tree, &renderer, &limits)
-            .move_to(Point::new(10.0, 20.0));
-        let bounds = node.bounds();
-        let viewport = bounds;
-
-        element.as_widget().draw(
-            &tree,
-            &mut renderer,
-            &Theme::Light,
-            &renderer::Style::default(),
-            Layout::new(&node),
-            mouse::Cursor::Unavailable,
-            &viewport,
-        );
-
-        let paragraph = &tree
-            .state
-            .downcast_ref::<MeasuredMiddleEllipsizedTextState<
-                <RecordingRenderer as text::Renderer>::Paragraph,
-            >>()
-            .paragraph;
-        assert_eq!(renderer.paragraph_positions.len(), 1);
-
-        (
-            bounds,
-            paragraph.min_bounds(),
-            renderer.paragraph_positions[0],
-        )
-    }
-
-    #[test]
-    fn widget_draw_passes_the_aligned_anchor_to_fill_paragraph() {
-        let (center_bounds, center_min_bounds, center_position) =
-            recorded_widget_draw(text::Alignment::Center);
-        assert_eq!(
-            center_position,
-            center_bounds.anchor(
-                center_min_bounds,
-                text::Alignment::Center,
-                iced::alignment::Vertical::Top,
-            )
-        );
-        assert!(center_position.x > center_bounds.x);
-
-        let (left_bounds, _, left_position) = recorded_widget_draw(text::Alignment::Left);
-        assert_eq!(left_position, left_bounds.position());
-    }
-
-    #[test]
-    fn tooltip_eligibility_matches_actual_displayed_content() {
-        assert!(!displayed_content_is_ellipsized("short.txt", "short.txt"));
-        assert!(displayed_content_is_ellipsized(
-            "very-long-file-name.txt",
-            "very...name.txt"
-        ));
-    }
-
-    #[test]
-    fn candidate_preserves_start_and_end() {
-        assert_eq!(
-            middle_ellipsized_candidate("very-long-name.rs", 8),
-            "very...e.rs"
-        );
-    }
-
-    #[test]
-    fn candidate_keeps_whole_content_when_visible_chars_fit() {
-        assert_eq!(middle_ellipsized_candidate("short", 5), "short");
-    }
-
-    #[test]
-    fn candidate_handles_multibyte_characters() {
-        assert_eq!(
-            middle_ellipsized_candidate("项目文件夹名称", 4),
-            "项目...名称"
-        );
-    }
-
-    #[test]
-    fn filename_candidate_preserves_the_complete_extension() {
-        let candidate = middle_ellipsized_filename_candidate("archive-name.longextension", 18);
-
-        assert!(candidate.starts_with("arch"));
-        assert!(candidate.ends_with(".longextension"));
-        assert!(candidate.contains(ELLIPSIS_MARKER));
-    }
-
-    #[test]
-    fn fixed_three_line_fit_keeps_the_longest_measured_candidate() {
-        let content = "abcdefghijklmnop.rs";
-        let three_line_capacity = 13;
-        let displayed =
-            fit_middle_ellipsized_by(content, MiddleEllipsisKind::FileName, |candidate| {
-                candidate.chars().count() <= three_line_capacity
-            });
-
-        assert_eq!(displayed.chars().count(), three_line_capacity);
-        assert!(displayed.starts_with("abcde"));
-        assert!(displayed.ends_with("op.rs"));
-        assert!(displayed.contains(ELLIPSIS_MARKER));
-    }
-
-    #[test]
-    fn long_cjk_content_avoids_shaping_full_filename_candidates() {
-        let content = "界".repeat(10_000);
-        let mut measurement_count = 0;
-        let mut largest_candidate_chars = 0;
-        let displayed =
-            fit_middle_ellipsized_by(&content, MiddleEllipsisKind::FileName, |candidate| {
-                measurement_count += 1;
-                largest_candidate_chars = largest_candidate_chars.max(candidate.chars().count());
-                candidate.chars().count() <= 20
-            });
-
-        assert_eq!(displayed.chars().count(), 20);
-        assert!(displayed.contains(ELLIPSIS_MARKER));
-        assert!(measurement_count < 20);
-        assert!(largest_candidate_chars < 100);
-    }
-
-    #[test]
-    fn fixed_three_line_fit_keeps_content_that_renderer_reports_as_fitting() {
-        let content = "three-line-name.rs";
-
-        assert_eq!(
-            fit_middle_ellipsized_by(content, MiddleEllipsisKind::GeneralText, |candidate| {
-                candidate == content
-            }),
-            content
-        );
-    }
-
-    #[test]
-    fn wrapped_fit_uses_renderer_measurement_to_stay_within_three_lines() {
-        let content = "very-long-file-name-with-many-segments-that-needs-four-lines.rs";
-        let width = 96.0;
-        let size = Pixels(ICON_GRID_LABEL_SIZE);
-        let line_height = text::LineHeight::Absolute(Pixels(ICON_GRID_LABEL_LINE_HEIGHT_PX));
-        let height = ICON_GRID_LABEL_HEIGHT;
-        let font = iced::Font::default();
-        let shaping = shaping_for_content(content);
-        let wrapping = text::Wrapping::WordOrGlyph;
-
-        assert!(!measured_text_fits::<iced::Renderer>(
-            content,
-            width,
-            height,
-            size,
-            line_height,
-            font,
-            shaping,
-            wrapping,
-        ));
-
-        let displayed = fit_middle_ellipsized_text::<iced::Renderer>(
-            content,
-            width,
-            height,
-            size,
-            line_height,
-            font,
-            shaping,
-            wrapping,
-            MiddleEllipsisKind::FileName,
-        );
-
-        assert!(displayed.starts_with('v'));
-        assert!(displayed.contains(ELLIPSIS_MARKER));
-        assert!(displayed.ends_with(".rs"));
-        assert!(displayed_content_is_ellipsized(content, &displayed));
-        assert!(measured_text_fits::<iced::Renderer>(
-            &displayed,
-            width,
-            height,
-            size,
-            line_height,
-            font,
-            shaping,
-            wrapping,
-        ));
-    }
-}
+#[path = "measured_middle_ellipsized_text_tests.rs"]
+mod tests;

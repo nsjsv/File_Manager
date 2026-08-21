@@ -51,6 +51,7 @@ impl<Message> EllipsizedTextTooltip<'_, Message> {
                     .state
                     .downcast_ref::<MeasuredMiddleEllipsizedTextState<
                         <iced::Renderer as text::Renderer>::Paragraph,
+                        <iced::Renderer as text::Renderer>::Font,
                     >>();
 
                 displayed_content_is_ellipsized(&self.content, &state.displayed_content)
