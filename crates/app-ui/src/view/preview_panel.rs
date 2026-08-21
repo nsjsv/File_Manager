@@ -8,9 +8,10 @@ use iced::widget::{
 use iced::{Alignment, Element, Length};
 
 use crate::animated_image_preview::AnimatedImagePreview;
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
+    app_content_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
     navigation_icon_button_style, preview_window_panel_style,
 };
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
@@ -18,7 +19,8 @@ use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSy
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
     PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion,
-    ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    ScrollbarViewport, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
+    VideoPreviewPlaybackStatus,
 };
 use crate::operation_progress::remote_preview_download_panel;
 use crate::typography::{localized_text, readable_text};
@@ -60,9 +62,13 @@ pub(crate) fn view_preview_window<'a>(
     video_preview: Option<&'a VideoPreviewPlayback>,
     operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
+    directory_scrollbar_viewport: Option<ScrollbarViewport>,
     archive_scrollbar_visibility: ScrollbarVisibility,
+    archive_scrollbar_viewport: Option<ScrollbarViewport>,
     document_scrollbar_visibility: ScrollbarVisibility,
+    document_scrollbar_viewport: Option<ScrollbarViewport>,
     markdown_scrollbar_visibility: ScrollbarVisibility,
+    markdown_scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     preview
         .map(|preview| {
@@ -74,9 +80,13 @@ pub(crate) fn view_preview_window<'a>(
                 video_preview,
                 operation_progress_animation_frame,
                 directory_scrollbar_visibility,
+                directory_scrollbar_viewport,
                 archive_scrollbar_visibility,
+                archive_scrollbar_viewport,
                 document_scrollbar_visibility,
+                document_scrollbar_viewport,
                 markdown_scrollbar_visibility,
+                markdown_scrollbar_viewport,
             )
         })
         .unwrap_or_else(|| {
@@ -92,9 +102,13 @@ fn preview_panel<'a>(
     video_preview: Option<&'a VideoPreviewPlayback>,
     operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
+    directory_scrollbar_viewport: Option<ScrollbarViewport>,
     archive_scrollbar_visibility: ScrollbarVisibility,
+    archive_scrollbar_viewport: Option<ScrollbarViewport>,
     document_scrollbar_visibility: ScrollbarVisibility,
+    document_scrollbar_viewport: Option<ScrollbarViewport>,
     markdown_scrollbar_visibility: ScrollbarVisibility,
+    markdown_scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
     let panel = match preview {
@@ -102,9 +116,12 @@ fn preview_panel<'a>(
         PreviewState::DownloadingRemoteFile(download) => {
             remote_preview_download_panel(download, operation_progress_animation_frame)
         }
-        PreviewState::Ready(PreviewContent::Directory { entries, .. }) => {
-            directory_preview_panel(entries, scroll_height, directory_scrollbar_visibility)
-        }
+        PreviewState::Ready(PreviewContent::Directory { entries, .. }) => directory_preview_panel(
+            entries,
+            scroll_height,
+            directory_scrollbar_visibility,
+            directory_scrollbar_viewport,
+        ),
         PreviewState::Ready(PreviewContent::Text {
             path,
             rendered,
@@ -118,12 +135,21 @@ fn preview_panel<'a>(
             text_preview_document.filter(|document| document.path() == path.as_path()),
             scroll_height,
             markdown_scrollbar_visibility,
+            markdown_scrollbar_viewport,
         ),
-        PreviewState::Ready(PreviewContent::Archive { entries, .. }) => {
-            archive_preview_panel(entries, scroll_height, archive_scrollbar_visibility)
-        }
+        PreviewState::Ready(PreviewContent::Archive { entries, .. }) => archive_preview_panel(
+            entries,
+            scroll_height,
+            archive_scrollbar_visibility,
+            archive_scrollbar_viewport,
+        ),
         PreviewState::Ready(PreviewContent::PagedDocument(document)) => {
-            return document_preview_panel(document, size, document_scrollbar_visibility);
+            return document_preview_panel(
+                document,
+                size,
+                document_scrollbar_visibility,
+                document_scrollbar_viewport,
+            );
         }
         PreviewState::Ready(PreviewContent::Image {
             handle,
@@ -184,36 +210,60 @@ fn directory_preview_panel(
     entries: &[PreviewTreeEntry],
     scroll_height: f32,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Column<'static, Message> {
     let listing = preview_tree_listing(entries, "Empty directory");
     let scroll_region = ScrollbarRegion::PreviewDirectory;
+    let scroller = scrollable(smooth_scroll_content(listing, scroll_region.clone()))
+        .id(smooth_scroll_id(&scroll_region))
+        .direction(enhanced_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
+        ))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
+        .height(Length::Fixed(scroll_height))
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |_| {
+            Message::PreviewDirectoryScrolled
+        }));
+    let scroller = enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
 
-    column![
-        scrollable(smooth_scroll_content(listing, scroll_region.clone()))
-            .id(smooth_scroll_id(&scroll_region))
-            .direction(preview_scroll_direction(scrollbar_visibility))
-            .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(scroll_height))
-            .on_scroll(|_| Message::PreviewDirectoryScrolled),
-    ]
+    column![scroller]
 }
 
 fn archive_preview_panel(
     entries: &[PreviewTreeEntry],
     scroll_height: f32,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Column<'static, Message> {
     let listing = preview_tree_listing(entries, "Empty archive");
     let scroll_region = ScrollbarRegion::PreviewArchive;
+    let scroller = scrollable(smooth_scroll_content(listing, scroll_region.clone()))
+        .id(smooth_scroll_id(&scroll_region))
+        .direction(enhanced_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
+        ))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
+        .height(Length::Fixed(scroll_height))
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |_| {
+            Message::PreviewArchiveScrolled
+        }));
+    let scroller = enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
 
-    column![
-        scrollable(smooth_scroll_content(listing, scroll_region.clone()))
-            .id(smooth_scroll_id(&scroll_region))
-            .direction(preview_scroll_direction(scrollbar_visibility))
-            .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(scroll_height))
-            .on_scroll(|_| Message::PreviewArchiveScrolled),
-    ]
+    column![scroller]
 }
 
 fn preview_tree_listing(
@@ -761,10 +811,4 @@ fn video_volume_slider(
 ) -> iced::widget::Slider<'static, f32, Message> {
     let volume = playback.map(|playback| playback.volume).unwrap_or(1.0);
     slider(0.0..=1.0, volume, Message::VideoPreviewVolumeChanged).step(AUDIO_VOLUME_SLIDER_STEP)
-}
-
-fn preview_scroll_direction(
-    scrollbar_visibility: ScrollbarVisibility,
-) -> iced::widget::scrollable::Direction {
-    auto_hide_vertical_scrollbar_direction(scrollbar_visibility, 6.0)
 }

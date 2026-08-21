@@ -3,7 +3,9 @@ use iced::{Element, Length};
 
 use crate::app::FileBrowser;
 use crate::formatting::format_system_time;
-use crate::model::{ApplicationLogLevel, Message, ScrollbarRegion, ScrollbarVisibility};
+use crate::model::{
+    ApplicationLogLevel, Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility,
+};
 use crate::typography::readable_text;
 
 use super::auxiliary_window_layout::auxiliary_detail_scroller;
@@ -13,6 +15,7 @@ use super::settings_group::{info_setting_row, settings_group, SETTINGS_GROUP_SPA
 pub(super) fn application_logs_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let mut content = column![settings_group(
         "Display level",
@@ -63,6 +66,7 @@ pub(super) fn application_logs_settings_detail(
         content,
         ScrollbarRegion::Settings,
         scrollbar_visibility,
+        scrollbar_viewport,
         Message::SettingsScrolled,
     )
 }

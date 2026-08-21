@@ -1,12 +1,13 @@
 use iced::widget::{button, container, row, scrollable, Button, Column};
 use iced::{Element, Length};
 
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    app_content_style, auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
+    app_content_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
     selected_sidebar_item_style, sidebar_style, transparent_button_style,
 };
-use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
+use crate::model::{Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility};
 use crate::typography::readable_text;
 
 use super::sidebar_panel::sidebar_floating_panel_margin;
@@ -61,17 +62,27 @@ pub(super) fn auxiliary_detail_scroller<'a>(
     content: Column<'a, Message>,
     scroll_region: ScrollbarRegion,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
     scroll_message: Message,
 ) -> Element<'a, Message> {
     let content = container(content).padding(18).width(Length::Fill);
     let scroller = scrollable(smooth_scroll_content(content, scroll_region.clone()))
         .id(smooth_scroll_id(&scroll_region))
-        .direction(auto_hide_vertical_scrollbar_direction(
+        .direction(enhanced_vertical_scrollbar_direction(
             scrollbar_visibility,
             6.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .on_scroll(move |_| scroll_message.clone());
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), move |_| {
+            scroll_message.clone()
+        }));
+    let scroller = enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
 
     container(scroller)
         .width(Length::Fill)

@@ -5,12 +5,13 @@ use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, R
 use iced::{Alignment, Element, Length};
 
 use crate::app::panes::{BrowserPaneView, DirectoryContentAvailability};
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content_with_shift, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
-    auto_hide_vertical_scrollbar_direction, column_browser_style, column_panel_style,
-    column_resize_divider_style,
+    column_browser_style, column_panel_style, column_resize_divider_style,
+    enhanced_horizontal_scrollbar_direction, enhanced_scrollbar_style,
+    enhanced_vertical_scrollbar_direction,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
 use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
@@ -111,7 +112,6 @@ pub(crate) fn column_browser_view<'a>(
     if scroll_spacer_width > f32::EPSILON {
         columns = columns.push(end_scroll_spacer(scroll_spacer_width));
     }
-
     let scrollbar_region = ScrollbarRegion::ColumnBrowser(pane.id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let column_content: Element<'_, Message> = scrollable(smooth_scroll_content_with_shift(
@@ -120,19 +120,29 @@ pub(crate) fn column_browser_view<'a>(
         browser.smooth_scroll_shift_pressed(),
     ))
     .id(column_browser_scroll_id(pane.id))
-    .direction(auto_hide_horizontal_scrollbar_direction(
+    .direction(enhanced_horizontal_scrollbar_direction(
         scrollbar_visibility,
         8.0,
     ))
-    .style(auto_hide_scrollbar_style(scrollbar_visibility))
+    .style(enhanced_scrollbar_style(scrollbar_visibility))
     .width(Length::Fill)
     .height(Length::Fill)
-    .on_scroll(move |viewport| {
-        let offset = viewport.absolute_offset();
-        let bounds = viewport.bounds();
-        Message::ColumnBrowserScrolled(pane.id, offset.x, bounds.width)
-    })
+    .on_scroll(scrollbar_on_scroll(
+        scrollbar_region.clone(),
+        move |viewport: scrollable::Viewport| {
+            let offset = viewport.absolute_offset();
+            let bounds = viewport.bounds();
+            Message::ColumnBrowserScrolled(pane.id, offset.x, bounds.width)
+        },
+    ))
     .into();
+    let column_content = enhanced_scrollbar(
+        column_content,
+        scrollbar_visibility,
+        browser.scrollbar_viewport_for(&scrollbar_region),
+        ScrollbarAxis::Horizontal,
+        8.0,
+    );
     let column_content = if sidebar_underlay_width > f32::EPSILON {
         translated_with_width_overflow(
             column_content,
@@ -263,17 +273,28 @@ fn directory_column<'a>(
         browser.smooth_scroll_shift_pressed(),
     ))
     .id(smooth_scroll_id(&scrollbar_region))
-    .direction(auto_hide_vertical_scrollbar_direction(
+    .direction(enhanced_vertical_scrollbar_direction(
         scrollbar_visibility,
         8.0,
     ))
+    .width(Length::Fill)
     .height(Length::Fill)
-    .style(auto_hide_scrollbar_style(scrollbar_visibility))
-    .on_scroll(move |viewport| {
-        let offset = viewport.absolute_offset();
-        let bounds = viewport.bounds();
-        Message::ColumnScrolled(pane.id, scroll_directory.clone(), offset.y, bounds.height)
-    });
+    .style(enhanced_scrollbar_style(scrollbar_visibility))
+    .on_scroll(scrollbar_on_scroll(
+        scrollbar_region.clone(),
+        move |viewport: scrollable::Viewport| {
+            let offset = viewport.absolute_offset();
+            let bounds = viewport.bounds();
+            Message::ColumnScrolled(pane.id, scroll_directory.clone(), offset.y, bounds.height)
+        },
+    ));
+    let column_scroll = enhanced_scrollbar(
+        column_scroll,
+        scrollbar_visibility,
+        browser.scrollbar_viewport_for(&scrollbar_region),
+        ScrollbarAxis::Vertical,
+        8.0,
+    );
 
     let column = container(column_scroll)
         .width(Length::Fixed(browser.column_width(column_index)))

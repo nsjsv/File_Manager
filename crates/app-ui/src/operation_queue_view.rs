@@ -1,11 +1,12 @@
 use iced::widget::{button, column, container, progress_bar, row, scrollable, svg, Svg};
 use iced::{Alignment, Element, Length};
 
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_button_style,
-    context_menu_style, error_notification_style, operation_queue_indicator_button_style,
-    path_suggestion_item_style,
+    context_menu_button_style, context_menu_style, enhanced_scrollbar_style,
+    enhanced_vertical_scrollbar_direction, error_notification_style,
+    operation_queue_indicator_button_style, path_suggestion_item_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
@@ -53,6 +54,7 @@ pub(crate) fn operation_queue_indicator(
 pub(crate) fn operation_queue_panel(
     queue: &FileOperationQueue,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<crate::model::ScrollbarViewport>,
     animation_frame: u8,
 ) -> Element<'_, Message> {
     let mut header = row![readable_text("Tasks").size(16).width(Length::Fill)]
@@ -83,19 +85,25 @@ pub(crate) fn operation_queue_panel(
     }
 
     let scroll_region = ScrollbarRegion::OperationQueue;
-    let content = column![
-        header,
-        scrollable(smooth_scroll_content(tasks, scroll_region.clone()))
-            .id(smooth_scroll_id(&scroll_region))
-            .direction(auto_hide_vertical_scrollbar_direction(
-                scrollbar_visibility,
-                6.0,
-            ))
-            .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(TASK_LIST_MAX_HEIGHT))
-            .on_scroll(|_| Message::OperationQueueScrolled),
-    ]
-    .spacing(10);
+    let scroller = scrollable(smooth_scroll_content(tasks, scroll_region.clone()))
+        .id(smooth_scroll_id(&scroll_region))
+        .direction(enhanced_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
+        ))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
+        .height(Length::Fixed(TASK_LIST_MAX_HEIGHT))
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |_| {
+            Message::OperationQueueScrolled
+        }));
+    let scroller = enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
+    let content = column![header, scroller].spacing(10);
 
     container(content)
         .padding(12)

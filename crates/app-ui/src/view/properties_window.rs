@@ -17,7 +17,7 @@ use crate::model::{
     FilePropertiesDirectoryContentsState, FilePropertiesLoadState, FilePropertiesMessage,
     FilePropertiesPermissionAccess, FilePropertiesPermissionClass, FilePropertiesPermissionUpdate,
     FilePropertiesPermissions, FilePropertiesPresentation, FilePropertiesSnapshot,
-    FilePropertiesState, Message, ScrollbarRegion, ScrollbarVisibility,
+    FilePropertiesState, Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility,
 };
 use crate::typography::{localized_text, readable_text};
 
@@ -34,6 +34,7 @@ const PERMISSION_PRIVILEGE_WIDTH: f32 = 184.0;
 pub(crate) fn view_properties_window(
     properties: Option<&FilePropertiesState>,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let Some(properties) = properties else {
         return auxiliary_window_message("No properties are available.");
@@ -43,11 +44,14 @@ pub(crate) fn view_properties_window(
     match &properties.load_state {
         FilePropertiesLoadState::Loading => properties_loading_view(target_label),
         FilePropertiesLoadState::LoadingAggregate(snapshot) => {
-            aggregate_properties_loading_view(snapshot, scrollbar_visibility)
+            aggregate_properties_loading_view(snapshot, scrollbar_visibility, scrollbar_viewport)
         }
-        FilePropertiesLoadState::Loaded(presentation) => {
-            properties_split_view(properties, presentation, scrollbar_visibility)
-        }
+        FilePropertiesLoadState::Loaded(presentation) => properties_split_view(
+            properties,
+            presentation,
+            scrollbar_visibility,
+            scrollbar_viewport,
+        ),
         FilePropertiesLoadState::Failed(error) => properties_error_view(target_label, error),
     }
 }
@@ -81,10 +85,11 @@ fn properties_loading_view(target_label: String) -> Element<'static, Message> {
 fn aggregate_properties_loading_view(
     snapshot: &FilePropertiesAggregateSnapshot,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let content = column![
         readable_text("Calculating...").size(13),
-        aggregate_properties_information_detail(snapshot, scrollbar_visibility),
+        aggregate_properties_information_detail(snapshot, scrollbar_visibility, scrollbar_viewport),
     ]
     .spacing(8)
     .padding(16)
@@ -119,20 +124,28 @@ fn properties_split_view<'a>(
     properties: &'a FilePropertiesState,
     presentation: &'a FilePropertiesPresentation,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     let sidebar = properties_category_sidebar(properties.selected_category);
     let detail = match properties.selected_category {
         FilePropertiesCategory::Information => match presentation {
             FilePropertiesPresentation::Single(snapshot) => {
-                properties_information_detail(snapshot, scrollbar_visibility)
+                properties_information_detail(snapshot, scrollbar_visibility, scrollbar_viewport)
             }
             FilePropertiesPresentation::Aggregate(snapshot) => {
-                aggregate_properties_information_detail(snapshot, scrollbar_visibility)
+                aggregate_properties_information_detail(
+                    snapshot,
+                    scrollbar_visibility,
+                    scrollbar_viewport,
+                )
             }
         },
-        FilePropertiesCategory::Permissions => {
-            properties_permissions_detail(properties, presentation, scrollbar_visibility)
-        }
+        FilePropertiesCategory::Permissions => properties_permissions_detail(
+            properties,
+            presentation,
+            scrollbar_visibility,
+            scrollbar_viewport,
+        ),
     };
 
     auxiliary_split_window(sidebar, detail)
@@ -165,6 +178,7 @@ fn properties_category_button(
 fn properties_information_detail(
     snapshot: &FilePropertiesSnapshot,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let icon = file_entry_icon_symbol(snapshot.kind, snapshot.name.as_os_str());
     let header = row![
@@ -231,12 +245,14 @@ fn properties_information_detail(
     properties_detail_scroller(
         column![header, details].spacing(22).width(Length::Fill),
         scrollbar_visibility,
+        scrollbar_viewport,
     )
 }
 
 fn aggregate_properties_information_detail(
     snapshot: &FilePropertiesAggregateSnapshot,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let header = row![
         themed_icon(IconSymbol::File, IconTone::Normal, PROPERTIES_ICON_SIZE),
@@ -278,6 +294,7 @@ fn aggregate_properties_information_detail(
     properties_detail_scroller(
         column![header, details].spacing(22).width(Length::Fill),
         scrollbar_visibility,
+        scrollbar_viewport,
     )
 }
 
@@ -334,6 +351,7 @@ fn properties_permissions_detail<'a>(
     properties: &'a FilePropertiesState,
     presentation: &'a FilePropertiesPresentation,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     let displayed_permissions =
         displayed_permissions(presentation.permissions(), &properties.permission_update);
@@ -363,7 +381,11 @@ fn properties_permissions_detail<'a>(
         content = content.push(status);
     }
 
-    properties_detail_scroller(content.width(Length::Fill), scrollbar_visibility)
+    properties_detail_scroller(
+        content.width(Length::Fill),
+        scrollbar_visibility,
+        scrollbar_viewport,
+    )
 }
 
 fn permissions_header(permissions: Option<FilePropertiesPermissions>) -> Element<'static, Message> {
@@ -391,11 +413,13 @@ fn permissions_header(permissions: Option<FilePropertiesPermissions>) -> Element
 fn properties_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     auxiliary_detail_scroller(
         content,
         ScrollbarRegion::Properties,
         scrollbar_visibility,
+        scrollbar_viewport,
         Message::PropertiesScrolled,
     )
 }

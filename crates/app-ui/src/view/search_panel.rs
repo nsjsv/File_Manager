@@ -8,10 +8,11 @@ use iced::widget::{
 use iced::{Alignment, Element, Length};
 
 use crate::anchored_popup::anchored_popup;
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_style,
+    context_menu_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
     list_panel_style, list_row_style, navigation_icon_button_style, navigation_text_input_style,
     path_suggestion_item_style, path_suggestions_style, selected_row_style,
     transparent_button_style,
@@ -170,10 +171,19 @@ fn search_history_panel(browser: &FileBrowser) -> Element<'_, Message> {
     let visibility = browser.scrollbar_visibility_for(&region);
     let history = scrollable(smooth_scroll_content(history, region.clone()))
         .id(smooth_scroll_id(&region))
-        .direction(auto_hide_vertical_scrollbar_direction(visibility, 6.0))
-        .style(auto_hide_scrollbar_style(visibility))
-        .on_scroll(|_| Message::SearchHistoryScrolled)
+        .direction(enhanced_vertical_scrollbar_direction(visibility, 6.0))
+        .style(enhanced_scrollbar_style(visibility))
+        .on_scroll(scrollbar_on_scroll(region.clone(), |_| {
+            Message::SearchHistoryScrolled
+        }))
         .height(Length::Shrink);
+    let history = enhanced_scrollbar(
+        history,
+        visibility,
+        browser.scrollbar_viewport_for(&region),
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
 
     mouse_area(
         container(history)
@@ -274,14 +284,24 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
     let visibility = browser.scrollbar_visibility_for(&region);
     let results = scrollable(smooth_scroll_content(rows, region.clone()))
         .id(smooth_scroll_id(&region))
-        .direction(auto_hide_vertical_scrollbar_direction(visibility, 8.0))
-        .style(auto_hide_scrollbar_style(visibility))
+        .direction(enhanced_vertical_scrollbar_direction(visibility, 8.0))
+        .style(enhanced_scrollbar_style(visibility))
         .width(Length::Fill)
         .height(Length::Fill)
-        .on_scroll(|viewport| Message::SearchResultsScrolled {
-            offset_y: viewport.absolute_offset().y,
-            viewport_height: viewport.bounds().height,
-        });
+        .on_scroll(scrollbar_on_scroll(region.clone(), |viewport| {
+            let offset = viewport.absolute_offset();
+            Message::SearchResultsScrolled {
+                offset_y: offset.y,
+                viewport_height: viewport.bounds().height,
+            }
+        }));
+    let results = enhanced_scrollbar(
+        results,
+        visibility,
+        browser.scrollbar_viewport_for(&region),
+        ScrollbarAxis::Vertical,
+        8.0,
+    );
 
     let mut content = Column::new().push(search_workspace_toolbar(browser));
     if workspace.content_search_is_degraded() {

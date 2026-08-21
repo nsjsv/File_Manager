@@ -211,6 +211,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             element: batch_rename_panel(
                 batch_rename,
                 browser.scrollbar_visibility_for(&ScrollbarRegion::BatchRenamePreview),
+                browser.scrollbar_viewport_for(&ScrollbarRegion::BatchRenamePreview),
             ),
             placement: FloatingPlacement::Center,
         });
@@ -254,6 +255,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             element: open_with_panel(
                 open_with,
                 browser.scrollbar_visibility_for(&ScrollbarRegion::OpenWithApplications),
+                browser.scrollbar_viewport_for(&ScrollbarRegion::OpenWithApplications),
             ),
             placement: FloatingPlacement::Center,
         });
@@ -319,6 +321,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             element: operation_queue_panel(
                 &browser.operation_queue,
                 browser.scrollbar_visibility_for(&ScrollbarRegion::OperationQueue),
+                browser.scrollbar_viewport_for(&ScrollbarRegion::OperationQueue),
                 browser.operation_progress_animation_frame,
             ),
             placement: FloatingPlacement::BottomLeft {

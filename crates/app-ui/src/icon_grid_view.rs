@@ -9,10 +9,11 @@ use iced::widget::{
 use iced::{Alignment, Element, Length};
 
 use crate::app::panes::{BrowserPaneView, DirectoryContentAvailability};
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, context_menu_style,
+    context_menu_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
     icon_grid_expansion_panel_style, icon_svg_style, list_panel_style,
     navigation_icon_button_style,
 };
@@ -82,23 +83,32 @@ pub(crate) fn icon_grid_view<'a>(
             )
         }
     };
-
     let scrollbar_region = ScrollbarRegion::PaneIcons(pane_id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let grid_scroll = scrollable(smooth_scroll_content(content, scrollbar_region.clone()))
         .id(smooth_scroll_id(&scrollbar_region))
-        .direction(auto_hide_vertical_scrollbar_direction(
+        .direction(enhanced_vertical_scrollbar_direction(
             scrollbar_visibility,
             8.0,
         ))
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
-        .on_scroll(move |viewport| {
-            let offset = viewport.absolute_offset();
-            let bounds = viewport.bounds();
-            Message::IconGridScrolled(pane_id, offset.y, bounds.width, bounds.height)
-        });
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
+        .on_scroll(scrollbar_on_scroll(
+            scrollbar_region.clone(),
+            move |viewport: scrollable::Viewport| {
+                let offset = viewport.absolute_offset();
+                let bounds = viewport.bounds();
+                Message::IconGridScrolled(pane_id, offset.y, bounds.width, bounds.height)
+            },
+        ));
+    let grid_scroll = enhanced_scrollbar(
+        grid_scroll,
+        scrollbar_visibility,
+        browser.scrollbar_viewport_for(&scrollbar_region),
+        ScrollbarAxis::Vertical,
+        8.0,
+    );
 
     mouse_area(
         container(grid_scroll)

@@ -11,7 +11,9 @@ use crate::appearance::context_menu_button_style;
 use crate::config::{StartupLocationPolicy, UiLanguageSetting};
 use crate::icons::{rotated_chevron_right_view, IconSymbol};
 use crate::matugen_theme::{ColorSchemeFamily, ColorSchemePreset, ContrastWarnings, ThemeMode};
-use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, SettingsCategory};
+use crate::model::{
+    Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility, SettingsCategory,
+};
 use crate::typography::{localized_text, readable_text};
 
 use super::application_logs::application_logs_settings_detail;
@@ -95,20 +97,35 @@ fn settings_category_button(
 }
 
 fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
-    let scrollbar_visibility = browser.scrollbar_visibility_for(&ScrollbarRegion::Settings);
+    let scrollbar_region = ScrollbarRegion::Settings;
+    let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
+    let scrollbar_viewport = browser.scrollbar_viewport_for(&scrollbar_region);
     match browser.selected_settings_category {
-        SettingsCategory::General => general_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Appearance => appearance_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Files => files_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Search => search_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Shortcuts => shortcut_settings_detail(browser, scrollbar_visibility),
-        SettingsCategory::Logs => application_logs_settings_detail(browser, scrollbar_visibility),
+        SettingsCategory::General => {
+            general_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
+        SettingsCategory::Appearance => {
+            appearance_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
+        SettingsCategory::Files => {
+            files_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
+        SettingsCategory::Search => {
+            search_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
+        SettingsCategory::Shortcuts => {
+            shortcut_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
+        SettingsCategory::Logs => {
+            application_logs_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
     }
 }
 
 fn general_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let mut rows = vec![
         labeled_setting_row("Language", language_setting_dropdown(browser)),
@@ -127,12 +144,14 @@ fn general_settings_detail(
             .spacing(SETTINGS_GROUP_SPACING)
             .width(Length::Fill),
         scrollbar_visibility,
+        scrollbar_viewport,
     )
 }
 
 fn appearance_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
@@ -158,12 +177,14 @@ fn appearance_settings_detail(
         .spacing(SETTINGS_GROUP_SPACING)
         .width(Length::Fill),
         scrollbar_visibility,
+        scrollbar_viewport,
     )
 }
 
 fn files_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
@@ -204,29 +225,34 @@ fn files_settings_detail(
         .spacing(SETTINGS_GROUP_SPACING)
         .width(Length::Fill),
         scrollbar_visibility,
+        scrollbar_viewport,
     )
 }
 
 fn shortcut_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![shortcut_settings_section(browser)]
             .spacing(SETTINGS_GROUP_SPACING)
             .width(Length::Fill),
         scrollbar_visibility,
+        scrollbar_viewport,
     )
 }
 
 fn settings_detail_scroller<'a>(
     content: Column<'a, Message>,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     auxiliary_detail_scroller(
         content,
         ScrollbarRegion::Settings,
         scrollbar_visibility,
+        scrollbar_viewport,
         Message::SettingsScrolled,
     )
 }

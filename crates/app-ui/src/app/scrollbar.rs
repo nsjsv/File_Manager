@@ -1,17 +1,35 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use iced::Task;
+use iced::time::{Duration as IcedDuration, Instant as IcedInstant};
+use iced::widget::{canvas, container, scrollable, Stack};
+use iced::{
+    alignment::{Horizontal, Vertical},
+    mouse, Element, Length, Point, Rectangle, Size, Task, Theme,
+};
 
 use super::runtime::scrollbar_auto_hide_command;
 use super::FileBrowser;
 use crate::animation::{ease_out_cubic, elapsed_fraction as scrollbar_animation_progress};
-use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility};
+use crate::matugen_theme::ui_colors;
+use crate::model::{
+    Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility, SCROLLBAR_HOVER_WIDTH,
+    SCROLLBAR_MIN_THUMB_LENGTH,
+};
 
 pub(super) const SCROLLBAR_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 
 const SCROLLBAR_REVEAL_DURATION: Duration = Duration::from_millis(96);
 const SCROLLBAR_HIDE_DURATION: Duration = Duration::from_millis(300);
 const SCROLLBAR_MIN_REVEAL_OPACITY: f32 = 0.12;
+const SCROLLBAR_HOVER_DURATION: IcedDuration = IcedDuration::from_millis(140);
+const SCROLLBAR_HOVER_FRAME_INTERVAL: IcedDuration = IcedDuration::from_millis(16);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
+}
 
 #[derive(Debug, Clone, Copy)]
 enum ScrollbarAnimation {
@@ -31,6 +49,7 @@ pub(crate) struct ScrollbarState {
     visibility: ScrollbarVisibility,
     auto_hide_generation: u64,
     animation: Option<ScrollbarAnimation>,
+    viewport_by_region: HashMap<ScrollbarRegion, ScrollbarViewport>,
 }
 
 impl Default for ScrollbarState {
@@ -40,6 +59,7 @@ impl Default for ScrollbarState {
             visibility: ScrollbarVisibility::Hidden,
             auto_hide_generation: 0,
             animation: None,
+            viewport_by_region: HashMap::new(),
         }
     }
 }
@@ -55,6 +75,21 @@ impl FileBrowser {
         } else {
             ScrollbarVisibility::Hidden
         }
+    }
+
+    pub(crate) fn scrollbar_viewport_for(
+        &self,
+        region: &ScrollbarRegion,
+    ) -> Option<ScrollbarViewport> {
+        self.scrollbar.viewport_by_region.get(region).copied()
+    }
+
+    pub(super) fn remember_scrollbar_viewport(
+        &mut self,
+        region: ScrollbarRegion,
+        viewport: ScrollbarViewport,
+    ) {
+        self.scrollbar.viewport_by_region.insert(region, viewport);
     }
 
     pub(super) fn show_scrollbars_temporarily(&mut self, region: ScrollbarRegion) -> Task<Message> {
@@ -124,6 +159,267 @@ impl FileBrowser {
 
         Task::none()
     }
+}
+
+pub(crate) fn scrollbar_on_scroll(
+    region: ScrollbarRegion,
+    event: impl Fn(scrollable::Viewport) -> Message + 'static,
+) -> impl Fn(scrollable::Viewport) -> Message {
+    move |viewport| {
+        let absolute_offset = viewport.absolute_offset();
+        let bounds = viewport.bounds();
+        let content_bounds = viewport.content_bounds();
+        Message::ScrollbarViewportChanged {
+            region: region.clone(),
+            viewport: ScrollbarViewport {
+                offset_x: absolute_offset.x,
+                offset_y: absolute_offset.y,
+                viewport_width: bounds.width,
+                viewport_height: bounds.height,
+                content_width: content_bounds.width,
+                content_height: content_bounds.height,
+            },
+            event: Box::new(event(viewport)),
+        }
+    }
+}
+
+pub(crate) fn enhanced_scrollbar<'a>(
+    scrollable: impl Into<Element<'a, Message>>,
+    visibility: ScrollbarVisibility,
+    viewport: Option<ScrollbarViewport>,
+    axis: ScrollbarAxis,
+    base_width: f32,
+) -> Element<'a, Message> {
+    let max_width = base_width.max(SCROLLBAR_HOVER_WIDTH);
+    let base: Element<'a, Message> = scrollable.into();
+    let overlay = canvas::Canvas::new(ScrollbarOverlay {
+        visibility,
+        viewport,
+        axis,
+        base_width,
+    });
+    let overlay: Element<'a, Message> = match axis {
+        ScrollbarAxis::Vertical => {
+            container(overlay.width(Length::Fixed(max_width)).height(Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Right)
+                .into()
+        }
+        ScrollbarAxis::Horizontal => {
+            container(overlay.width(Length::Fill).height(Length::Fixed(max_width)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_y(Vertical::Bottom)
+                .into()
+        }
+    };
+
+    // 视觉层不参与命中测试，避免覆盖 Scrollable 原生的轨道点击和拖动区域。
+    Stack::with_children([base, overlay])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+#[derive(Debug)]
+struct ScrollbarOverlay {
+    visibility: ScrollbarVisibility,
+    viewport: Option<ScrollbarViewport>,
+    axis: ScrollbarAxis,
+    base_width: f32,
+}
+
+#[derive(Debug, Default)]
+struct ScrollbarOverlayState {
+    hovered: bool,
+    pressed: bool,
+    expansion: f32,
+    animation_started_at: Option<IcedInstant>,
+    animation_initial: f32,
+}
+
+impl canvas::Program<Message> for ScrollbarOverlay {
+    type State = ScrollbarOverlayState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let interactive = self.visibility.opacity() > f32::EPSILON
+            && self
+                .viewport
+                .is_some_and(|viewport| scrollbar_has_overflow(self.axis, viewport));
+        let cursor_over_track = cursor.is_over(bounds);
+        let hovered = interactive && cursor_over_track;
+        let button_pressed = matches!(
+            event,
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+        );
+        let button_released = matches!(
+            event,
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+        );
+        if button_pressed && interactive && cursor_over_track {
+            state.pressed = true;
+        } else if button_released {
+            state.pressed = false;
+        }
+        let now = IcedInstant::now();
+
+        let expanded = hovered || state.pressed;
+        if state.hovered != expanded {
+            state.hovered = expanded;
+            state.animation_initial = state.expansion;
+            state.animation_started_at = Some(now);
+        }
+
+        let Some(started_at) = state.animation_started_at else {
+            return None;
+        };
+
+        let progress = (now.saturating_duration_since(started_at).as_secs_f32()
+            / SCROLLBAR_HOVER_DURATION.as_secs_f32())
+        .clamp(0.0, 1.0);
+        let target = if state.hovered { 1.0 } else { 0.0 };
+        state.expansion =
+            state.animation_initial + (target - state.animation_initial) * ease_out_cubic(progress);
+
+        if progress >= 1.0 {
+            state.expansion = target;
+            state.animation_started_at = None;
+            None
+        } else {
+            Some(canvas::Action::request_redraw_at(
+                now + SCROLLBAR_HOVER_FRAME_INTERVAL,
+            ))
+        }
+    }
+
+    // 底层 Scrollable 必须继续接收鼠标事件，Canvas 只承担动画视觉。
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        mouse::Interaction::default()
+    }
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &iced::Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let Some(viewport) = self.viewport else {
+            return vec![frame.into_geometry()];
+        };
+        if self.visibility.opacity() <= f32::EPSILON {
+            return vec![frame.into_geometry()];
+        }
+
+        let Some(thumb_bounds) = scrollbar_thumb_bounds(
+            self.axis,
+            viewport,
+            bounds.size(),
+            self.base_width,
+            state.expansion,
+        ) else {
+            return vec![frame.into_geometry()];
+        };
+
+        let radius = (thumb_bounds.width.min(thumb_bounds.height) / 2.0).into();
+        let thumb = canvas::Path::rounded_rectangle(
+            Point::new(thumb_bounds.x, thumb_bounds.y),
+            thumb_bounds.size(),
+            radius,
+        );
+        let opacity = (self.visibility.opacity() + if state.hovered { 0.18 } else { 0.0 }).min(1.0);
+        let color = iced::Color {
+            a: 0.42 * opacity,
+            ..ui_colors(theme).on_surface
+        };
+        frame.fill(&thumb, color);
+
+        vec![frame.into_geometry()]
+    }
+}
+
+fn scrollbar_has_overflow(axis: ScrollbarAxis, viewport: ScrollbarViewport) -> bool {
+    match axis {
+        ScrollbarAxis::Vertical => viewport.content_height > viewport.viewport_height,
+        ScrollbarAxis::Horizontal => viewport.content_width > viewport.viewport_width,
+    }
+}
+
+fn scrollbar_thumb_bounds(
+    axis: ScrollbarAxis,
+    viewport: ScrollbarViewport,
+    track_size: Size,
+    base_width: f32,
+    expansion: f32,
+) -> Option<Rectangle> {
+    let (offset, viewport_extent, content_extent, track_length) = match axis {
+        ScrollbarAxis::Vertical => (
+            viewport.offset_y,
+            viewport.viewport_height,
+            viewport.content_height,
+            track_size.height,
+        ),
+        ScrollbarAxis::Horizontal => (
+            viewport.offset_x,
+            viewport.viewport_width,
+            viewport.content_width,
+            track_size.width,
+        ),
+    };
+    if !offset.is_finite()
+        || !viewport_extent.is_finite()
+        || !content_extent.is_finite()
+        || !track_length.is_finite()
+        || viewport_extent <= 0.0
+        || content_extent <= viewport_extent
+        || track_length <= 0.0
+    {
+        return None;
+    }
+
+    let ratio = (viewport_extent / content_extent).clamp(0.0, 1.0);
+    let thumb_length = (track_length * ratio)
+        .max(SCROLLBAR_MIN_THUMB_LENGTH.min(track_length))
+        .min(track_length);
+    let maximum_offset = (content_extent - viewport_extent).max(0.0);
+    let scroll_progress = if maximum_offset > f32::EPSILON {
+        (offset.clamp(0.0, maximum_offset) / maximum_offset).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let thumb_offset = scroll_progress * (track_length - thumb_length).max(0.0);
+    let thickness =
+        base_width + (SCROLLBAR_HOVER_WIDTH - base_width).max(0.0) * expansion.clamp(0.0, 1.0);
+
+    Some(match axis {
+        ScrollbarAxis::Vertical => Rectangle {
+            x: ((track_size.width - thickness) / 2.0).max(0.0),
+            y: thumb_offset,
+            width: thickness.min(track_size.width),
+            height: thumb_length,
+        },
+        ScrollbarAxis::Horizontal => Rectangle {
+            x: thumb_offset,
+            y: ((track_size.height - thickness) / 2.0).max(0.0),
+            width: thumb_length,
+            height: thickness.min(track_size.height),
+        },
+    })
 }
 
 fn advance_scrollbar_reveal(
@@ -250,5 +546,128 @@ mod tests {
             browser.scrollbar_visibility_for(&ScrollbarRegion::Sidebar),
             ScrollbarVisibility::Hidden
         );
+    }
+
+    #[test]
+    fn vertical_thumb_keeps_minimum_length_and_maps_scroll_ends() {
+        let track_size = Size::new(8.0, 600.0);
+        let content_height = 600_000.0;
+        let viewport_height = 600.0;
+        let top_viewport = ScrollbarViewport {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 8.0,
+            viewport_height,
+            content_width: 8.0,
+            content_height,
+        };
+        let bottom_viewport = ScrollbarViewport {
+            offset_y: content_height - viewport_height,
+            ..top_viewport
+        };
+
+        let top =
+            scrollbar_thumb_bounds(ScrollbarAxis::Vertical, top_viewport, track_size, 8.0, 0.0)
+                .expect("overflowing content must produce a thumb");
+        let bottom = scrollbar_thumb_bounds(
+            ScrollbarAxis::Vertical,
+            bottom_viewport,
+            track_size,
+            8.0,
+            0.0,
+        )
+        .expect("overflowing content must produce a thumb");
+
+        assert_eq!(top.height, SCROLLBAR_MIN_THUMB_LENGTH);
+        assert_eq!(top.y, 0.0);
+        assert!((bottom.y + bottom.height - track_size.height).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn horizontal_thumb_uses_bounded_minimum_length() {
+        let viewport = ScrollbarViewport {
+            offset_x: 2_000.0,
+            offset_y: 0.0,
+            viewport_width: 800.0,
+            viewport_height: 8.0,
+            content_width: 800_000.0,
+            content_height: 8.0,
+        };
+
+        let thumb = scrollbar_thumb_bounds(
+            ScrollbarAxis::Horizontal,
+            viewport,
+            Size::new(800.0, 8.0),
+            8.0,
+            0.0,
+        )
+        .expect("overflowing content must produce a thumb");
+
+        assert_eq!(thumb.width, SCROLLBAR_MIN_THUMB_LENGTH);
+        assert!(thumb.x > 0.0);
+        assert!(thumb.x + thumb.width < 800.0);
+    }
+
+    #[test]
+    fn thumb_is_not_drawn_without_overflow() {
+        let viewport = ScrollbarViewport {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 800.0,
+            viewport_height: 600.0,
+            content_width: 800.0,
+            content_height: 600.0,
+        };
+
+        assert!(scrollbar_thumb_bounds(
+            ScrollbarAxis::Vertical,
+            viewport,
+            Size::new(8.0, 600.0),
+            8.0,
+            0.0,
+        )
+        .is_none());
+        assert!(scrollbar_thumb_bounds(
+            ScrollbarAxis::Horizontal,
+            viewport,
+            Size::new(800.0, 8.0),
+            8.0,
+            0.0,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn hover_expansion_changes_only_thumb_thickness() {
+        let viewport = ScrollbarViewport {
+            offset_x: 0.0,
+            offset_y: 300.0,
+            viewport_width: 8.0,
+            viewport_height: 600.0,
+            content_width: 8.0,
+            content_height: 6_000.0,
+        };
+        let narrow = scrollbar_thumb_bounds(
+            ScrollbarAxis::Vertical,
+            viewport,
+            Size::new(14.0, 600.0),
+            8.0,
+            0.0,
+        )
+        .expect("overflowing content must produce a thumb");
+        let expanded = scrollbar_thumb_bounds(
+            ScrollbarAxis::Vertical,
+            viewport,
+            Size::new(14.0, 600.0),
+            8.0,
+            1.0,
+        )
+        .expect("overflowing content must produce a thumb");
+
+        assert_eq!(narrow.height, expanded.height);
+        assert_eq!(narrow.width, 8.0);
+        assert_eq!(narrow.x, 3.0);
+        assert_eq!(expanded.width, SCROLLBAR_HOVER_WIDTH);
+        assert_eq!(expanded.x, 0.0);
     }
 }

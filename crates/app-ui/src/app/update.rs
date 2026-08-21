@@ -779,6 +779,14 @@ impl FileBrowser {
             Message::SmoothScrollWheel(region, delta) => {
                 self.handle_smooth_scroll_wheel(region, delta)
             }
+            Message::ScrollbarViewportChanged {
+                region,
+                viewport,
+                event,
+            } => {
+                self.remember_scrollbar_viewport(region, viewport);
+                self.update(*event)
+            }
             Message::ScrollbarAutoHideElapsed(generation) => {
                 self.start_global_scrollbar_hide(generation);
                 Task::none()

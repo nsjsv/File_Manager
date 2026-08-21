@@ -6,10 +6,11 @@ use iced::{Alignment, Element, Length};
 use desktop_linux::FileClipboardOperation;
 
 use crate::app::archive_creation::ArchiveCreationMessage;
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction,
-    context_menu_item_button_style, context_menu_style, error_notification_style,
+    context_menu_item_button_style, context_menu_style, enhanced_scrollbar_style,
+    enhanced_vertical_scrollbar_direction, error_notification_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
@@ -17,7 +18,7 @@ use crate::model::{
     BatchRenameMessage, BrowserPaneId, ContextMenuState, DestructiveActionConfirmation,
     FileContextMenuExpansion, FileContextMenuState, FileDropPrompt, FilePropertiesMessage,
     ListColumnConfig, ListColumnKind, ListViewPreferences, Message, ScrollbarRegion,
-    ScrollbarVisibility, SearchContextMenuState, SearchEntryTypePreset,
+    ScrollbarViewport, ScrollbarVisibility, SearchContextMenuState, SearchEntryTypePreset,
     SidebarBookmarkContextMenuState,
 };
 use crate::open_with::OpenWithState;
@@ -183,6 +184,7 @@ pub(super) fn file_drop_operation_panel(prompt: &FileDropPrompt) -> Element<'_, 
 pub(super) fn open_with_panel(
     state: &OpenWithState,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'static, Message> {
     let path_label = format_middle_ellipsized_text(
         state.path().to_string_lossy().as_ref(),
@@ -219,7 +221,11 @@ pub(super) fn open_with_panel(
         }
         OpenWithState::Ready { .. } => {
             content = content
-                .push(open_with_application_list(state, scrollbar_visibility))
+                .push(open_with_application_list(
+                    state,
+                    scrollbar_visibility,
+                    scrollbar_viewport,
+                ))
                 .push(
                     checkbox(state.set_default_selected())
                         .label(crate::localization::translate_current(
@@ -248,6 +254,7 @@ pub(super) fn open_with_panel(
 fn open_with_application_list(
     state: &OpenWithState,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'static, Message> {
     let mut applications = Column::new().spacing(4);
     for application in state.applications() {
@@ -284,17 +291,26 @@ fn open_with_application_list(
     }
 
     let scroll_region = ScrollbarRegion::OpenWithApplications;
-    scrollable(smooth_scroll_content(applications, scroll_region.clone()))
+    let scroller = scrollable(smooth_scroll_content(applications, scroll_region.clone()))
         .id(smooth_scroll_id(&scroll_region))
-        .direction(auto_hide_vertical_scrollbar_direction(
+        .direction(enhanced_vertical_scrollbar_direction(
             scrollbar_visibility,
             6.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
         .height(Length::Fixed(OPEN_WITH_APPLICATION_LIST_HEIGHT))
         .width(Length::Fill)
-        .on_scroll(|_| Message::OpenWithApplicationsScrolled)
-        .into()
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |_| {
+            Message::OpenWithApplicationsScrolled
+        }));
+
+    enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        6.0,
+    )
 }
 
 fn action_label(icon: IconSymbol, label: &'static str, size: f32) -> Row<'static, Message> {

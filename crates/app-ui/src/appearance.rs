@@ -26,7 +26,7 @@ pub(crate) use list_header::{
 
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::matugen_theme::{ui_colors, AppearanceMode};
-use crate::model::ScrollbarVisibility;
+use crate::model::{ScrollbarVisibility, SCROLLBAR_HOVER_WIDTH};
 
 pub(crate) fn app_content_style(theme: &Theme) -> container::Appearance {
     let colors = ui_colors(theme);
@@ -176,24 +176,38 @@ fn context_menu_item_button_style_for_status(
     }
 }
 
-pub(crate) fn auto_hide_scrollbar_style(
+pub(crate) fn enhanced_scrollbar_style(
     visibility: ScrollbarVisibility,
 ) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style + Clone {
-    move |theme, status| mac_scrollbar_style(theme, status, visibility)
+    move |theme, status| {
+        let mut style = mac_scrollbar_style(theme, status, visibility);
+        // 保留 Iced 的命中区域和拖动状态机，避免与 Canvas 滑块绘制两套视觉反馈。
+        style.vertical_rail.scroller.background = Background::Color(Color::TRANSPARENT);
+        style.vertical_rail.scroller.border = Border::default();
+        style.horizontal_rail.scroller.background = Background::Color(Color::TRANSPARENT);
+        style.horizontal_rail.scroller.border = Border::default();
+        style
+    }
 }
 
-pub(crate) fn auto_hide_vertical_scrollbar_direction(
+pub(crate) fn enhanced_vertical_scrollbar_direction(
     visibility: ScrollbarVisibility,
     width: f32,
 ) -> scrollable::Direction {
-    scrollable::Direction::Vertical(auto_hide_scrollbar_properties(visibility, width))
+    scrollable::Direction::Vertical(auto_hide_scrollbar_properties(
+        visibility,
+        width.max(SCROLLBAR_HOVER_WIDTH),
+    ))
 }
 
-pub(crate) fn auto_hide_horizontal_scrollbar_direction(
+pub(crate) fn enhanced_horizontal_scrollbar_direction(
     visibility: ScrollbarVisibility,
     width: f32,
 ) -> scrollable::Direction {
-    scrollable::Direction::Horizontal(auto_hide_scrollbar_properties(visibility, width))
+    scrollable::Direction::Horizontal(auto_hide_scrollbar_properties(
+        visibility,
+        width.max(SCROLLBAR_HOVER_WIDTH),
+    ))
 }
 
 fn auto_hide_scrollbar_properties(

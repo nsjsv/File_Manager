@@ -14,9 +14,13 @@ impl FileBrowser {
             self.video_preview.as_ref(),
             self.operation_progress_animation_frame,
             self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDirectory),
+            self.scrollbar_viewport_for(&ScrollbarRegion::PreviewDirectory),
             self.scrollbar_visibility_for(&ScrollbarRegion::PreviewArchive),
+            self.scrollbar_viewport_for(&ScrollbarRegion::PreviewArchive),
             self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDocument),
+            self.scrollbar_viewport_for(&ScrollbarRegion::PreviewDocument),
             self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
+            self.scrollbar_viewport_for(&ScrollbarRegion::MarkdownPreview),
         )
     }
 }

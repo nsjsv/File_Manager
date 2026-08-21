@@ -2,9 +2,12 @@ use iced::widget::{container, row, scrollable, Column, Space};
 use iced::{Alignment, Element, Font, Length};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
-use crate::appearance::{auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction};
-use crate::model::{Message, ScrollbarRegion, ScrollbarVisibility, TextPreviewLineLimitNotice};
+use crate::appearance::{enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction};
+use crate::model::{
+    Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility, TextPreviewLineLimitNotice,
+};
 use crate::typography::{localized_text, readable_text};
 
 const MARKDOWN_BODY_TEXT_SIZE: u32 = 14;
@@ -19,6 +22,7 @@ pub(super) fn markdown_preview_body(
     line_limit_notice: Option<TextPreviewLineLimitNotice>,
     scroll_height: f32,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'static, Message> {
     let blocks = markdown_preview_blocks(markdown);
     let mut content = Column::new()
@@ -37,16 +41,16 @@ pub(super) fn markdown_preview_body(
     }
 
     let scroll_region = ScrollbarRegion::MarkdownPreview;
-    scrollable(smooth_scroll_content(content, scroll_region.clone()))
+    let scroller = scrollable(smooth_scroll_content(content, scroll_region.clone()))
         .id(smooth_scroll_id(&scroll_region))
-        .direction(auto_hide_vertical_scrollbar_direction(
+        .direction(enhanced_vertical_scrollbar_direction(
             scrollbar_visibility,
             MARKDOWN_SCROLLBAR_WIDTH,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
         .height(Length::Fixed(scroll_height))
         .width(Length::Fill)
-        .on_scroll(|viewport| {
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |viewport| {
             let offset = viewport.absolute_offset();
             let bounds = viewport.bounds();
             let content_bounds = viewport.content_bounds();
@@ -55,8 +59,15 @@ pub(super) fn markdown_preview_body(
                 viewport_height: bounds.height,
                 content_height: content_bounds.height,
             }
-        })
-        .into()
+        }));
+
+    enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        MARKDOWN_SCROLLBAR_WIDTH,
+    )
 }
 
 fn markdown_block_view(block: MarkdownBlock) -> Element<'static, Message> {

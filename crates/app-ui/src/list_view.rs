@@ -5,10 +5,11 @@ use iced::widget::{container, mouse_area, row, scrollable, text_input, Column, R
 use iced::{Alignment, Element, Length};
 
 use crate::app::panes::{BrowserPaneView, DirectoryContentAvailability};
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, icon_svg_style,
+    enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction, icon_svg_style,
     list_header_cell_style, list_header_reorder_indicator_style, list_header_style,
     list_panel_style, list_row_style, ListHeaderCellVisualState,
 };
@@ -142,23 +143,32 @@ pub(crate) fn list_browser_view<'a>(
         }
         rows = rows.push(vertical_spacer(range.after_height));
     }
-
     let scrollbar_region = ScrollbarRegion::PaneList(pane.id);
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let list_scroll = scrollable(smooth_scroll_content(rows, scrollbar_region.clone()))
         .id(smooth_scroll_id(&scrollbar_region))
-        .direction(auto_hide_vertical_scrollbar_direction(
+        .direction(enhanced_vertical_scrollbar_direction(
             scrollbar_visibility,
             8.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
         .width(Length::Fill)
         .height(Length::Fill)
-        .on_scroll(move |viewport| {
-            let offset = viewport.absolute_offset();
-            let bounds = viewport.bounds();
-            Message::ListScrolled(pane.id, offset.y, bounds.height)
-        });
+        .on_scroll(scrollbar_on_scroll(
+            scrollbar_region.clone(),
+            move |viewport: scrollable::Viewport| {
+                let offset = viewport.absolute_offset();
+                let bounds = viewport.bounds();
+                Message::ListScrolled(pane.id, offset.y, bounds.height)
+            },
+        ));
+    let list_scroll = enhanced_scrollbar(
+        list_scroll,
+        scrollbar_visibility,
+        browser.scrollbar_viewport_for(&scrollbar_region),
+        ScrollbarAxis::Vertical,
+        8.0,
+    );
 
     mouse_area(
         container(list_scroll)

@@ -12,9 +12,9 @@ use crate::appearance::{
 use crate::formatting::{format_file_size, format_middle_ellipsized_text, format_system_time};
 use crate::icons::IconSymbol;
 use crate::model::{
-    Message, ScrollbarRegion, ScrollbarVisibility, SearchEndpointState, SearchPathEntryKind,
-    SearchServiceDiagnosticKind, SearchServiceIncident, SearchServiceIncidentState,
-    SearchServiceRecoveryAction, SearchServiceRecoveryState,
+    Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility, SearchEndpointState,
+    SearchPathEntryKind, SearchServiceDiagnosticKind, SearchServiceIncident,
+    SearchServiceIncidentState, SearchServiceRecoveryAction, SearchServiceRecoveryState,
 };
 use crate::typography::{localized_text, readable_text};
 
@@ -29,6 +29,7 @@ use super::{themed_icon, IconTone};
 pub(super) fn search_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let content = column![
         settings_group("Indexed locations", indexed_location_rows(browser)),
@@ -46,6 +47,7 @@ pub(super) fn search_settings_detail(
         content,
         ScrollbarRegion::Settings,
         scrollbar_visibility,
+        scrollbar_viewport,
         Message::SettingsScrolled,
     )
 }

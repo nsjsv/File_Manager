@@ -195,6 +195,18 @@ pub(crate) enum ScrollbarRegion {
     PreviewDocument,
     MarkdownPreview,
 }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ScrollbarViewport {
+    pub(crate) offset_x: f32,
+    pub(crate) offset_y: f32,
+    pub(crate) viewport_width: f32,
+    pub(crate) viewport_height: f32,
+    pub(crate) content_width: f32,
+    pub(crate) content_height: f32,
+}
+
+pub(crate) const SCROLLBAR_HOVER_WIDTH: f32 = 14.0;
+pub(crate) const SCROLLBAR_MIN_THUMB_LENGTH: f32 = 28.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StartupDirectoryValidationRequest {
@@ -575,6 +587,11 @@ pub(crate) enum Message {
     RendererRestartRequested,
     RendererRestartNoticeDismissed,
     SmoothScrollWheel(ScrollbarRegion, mouse::ScrollDelta),
+    ScrollbarViewportChanged {
+        region: ScrollbarRegion,
+        viewport: ScrollbarViewport,
+        event: Box<Message>,
+    },
     ScrollbarAutoHideElapsed(u64),
     WindowChromeAnimationTick,
     SidebarScrolled,

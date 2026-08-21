@@ -2,8 +2,8 @@ use iced::widget::{column, text_editor, Column};
 use iced::Element;
 
 use crate::model::{
-    MarkdownPreviewMode, Message, ScrollbarVisibility, TextPreviewDocument, TextPreviewFormat,
-    TextPreviewLineLimitNotice,
+    MarkdownPreviewMode, Message, ScrollbarViewport, ScrollbarVisibility, TextPreviewDocument,
+    TextPreviewFormat, TextPreviewLineLimitNotice,
 };
 use crate::text_preview_viewer::text_preview_viewer;
 use crate::typography::{localized_text, readable_text};
@@ -23,6 +23,7 @@ pub(super) fn text_preview_panel<'a>(
     document: Option<&'a TextPreviewDocument>,
     scroll_height: f32,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Column<'a, Message> {
     let line_limit_notice = document
         .and_then(TextPreviewDocument::line_limit_notice)
@@ -45,6 +46,7 @@ pub(super) fn text_preview_panel<'a>(
             line_limit_notice,
             body_height,
             scrollbar_visibility,
+            scrollbar_viewport,
         ),
     };
 
@@ -102,13 +104,13 @@ fn text_preview_external_notice_is_visible(
             .unwrap_or(false)
     })
 }
-
 fn markdown_text_preview_body<'a>(
     rendered: &'a str,
     document: Option<&'a TextPreviewDocument>,
     line_limit_notice: Option<TextPreviewLineLimitNotice>,
     scroll_height: f32,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     let Some(document) = document else {
         return readable_text("Text preview is not ready").size(14).into();
@@ -122,6 +124,7 @@ fn markdown_text_preview_body<'a>(
             line_limit_notice,
             body_height,
             scrollbar_visibility,
+            scrollbar_viewport,
         ),
         MarkdownPreviewMode::Raw => plain_text_preview_body(Some(document), body_height),
     };

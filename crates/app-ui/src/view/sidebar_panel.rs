@@ -3,10 +3,11 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Padding};
 
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, hovered_sidebar_item_style,
+    enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction, hovered_sidebar_item_style,
     navigation_icon_button_style, selected_sidebar_item_style, sidebar_bookmark_drop_slot_style,
     sidebar_style,
 };
@@ -88,13 +89,22 @@ pub(crate) fn sidebar_view(browser: &FileBrowser) -> Element<'_, Message> {
     let scrollbar_visibility = browser.scrollbar_visibility_for(&scrollbar_region);
     let sidebar_scroller = scrollable(smooth_scroll_content(sidebar, scrollbar_region.clone()))
         .id(smooth_scroll_id(&scrollbar_region))
-        .direction(auto_hide_vertical_scrollbar_direction(
+        .direction(enhanced_vertical_scrollbar_direction(
             scrollbar_visibility,
             6.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
         .height(Length::Fill)
-        .on_scroll(|_| Message::SidebarScrolled);
+        .on_scroll(scrollbar_on_scroll(scrollbar_region.clone(), |_| {
+            Message::SidebarScrolled
+        }));
+    let sidebar_scroller = enhanced_scrollbar(
+        sidebar_scroller,
+        scrollbar_visibility,
+        browser.scrollbar_viewport_for(&scrollbar_region),
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
     let sidebar_content_panel = container(sidebar_scroller)
         .width(Length::Fill)
         .height(Length::Fill);

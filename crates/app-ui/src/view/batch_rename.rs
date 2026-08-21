@@ -1,13 +1,14 @@
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
+use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, pick_list, row, scrollable, text_input,
     Column, Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
-use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    auto_hide_scrollbar_style, auto_hide_vertical_scrollbar_direction, base_text_color,
-    context_menu_style, dragged_row_style, muted_text_color, path_suggestion_item_style,
+    base_text_color, context_menu_style, dragged_row_style, enhanced_scrollbar_style,
+    enhanced_vertical_scrollbar_direction, muted_text_color, path_suggestion_item_style,
     subtle_border_color,
 };
 use crate::formatting::format_middle_ellipsized_text;
@@ -16,7 +17,7 @@ use crate::model::{
     BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode, BatchRenameMessage,
     BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass, BatchRenameRemoveMode,
     BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode, BatchRenameSortMode,
-    BatchRenameState, Message, ScrollbarRegion, ScrollbarVisibility,
+    BatchRenameState, Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility,
 };
 use crate::typography::{localized_text, readable_text};
 
@@ -28,10 +29,10 @@ use super::option_controls::{
 const BATCH_RENAME_PANEL_WIDTH: f32 = 720.0;
 const BATCH_RENAME_PREVIEW_HEIGHT: f32 = 240.0;
 const BATCH_RENAME_PATH_MAX_CHARS: usize = 38;
-
 pub(super) fn batch_rename_panel(
     state: &BatchRenameState,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let header = row![
         readable_text("Batch Rename").size(16).width(Length::Fill),
@@ -44,7 +45,7 @@ pub(super) fn batch_rename_panel(
         header,
         rule_panel_selector(state),
         active_rule_controls(state),
-        preview_rows(state, scrollbar_visibility),
+        preview_rows(state, scrollbar_visibility, scrollbar_viewport),
         action_row(state),
     ]
     .spacing(12)
@@ -577,6 +578,7 @@ fn case_controls(state: &BatchRenameState) -> Element<'_, Message> {
 fn preview_rows(
     state: &BatchRenameState,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let mut rows = Column::new().spacing(4);
     let dragging_active = state.dragging_preview_source().is_some();
@@ -595,20 +597,28 @@ fn preview_rows(
     }
 
     let scroll_region = ScrollbarRegion::BatchRenamePreview;
-    column![
-        section_title("Preview"),
-        scrollable(smooth_scroll_content(rows, scroll_region.clone()))
-            .id(smooth_scroll_id(&scroll_region))
-            .direction(auto_hide_vertical_scrollbar_direction(
-                scrollbar_visibility,
-                6.0,
-            ))
-            .style(auto_hide_scrollbar_style(scrollbar_visibility))
-            .height(Length::Fixed(BATCH_RENAME_PREVIEW_HEIGHT))
-            .on_scroll(|_| Message::BatchRenamePreviewScrolled),
-    ]
-    .spacing(6)
-    .into()
+    let scroller = scrollable(smooth_scroll_content(rows, scroll_region.clone()))
+        .id(smooth_scroll_id(&scroll_region))
+        .direction(enhanced_vertical_scrollbar_direction(
+            scrollbar_visibility,
+            6.0,
+        ))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
+        .height(Length::Fixed(BATCH_RENAME_PREVIEW_HEIGHT))
+        .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |_| {
+            Message::BatchRenamePreviewScrolled
+        }));
+    let scroller = enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Vertical,
+        6.0,
+    );
+
+    column![section_title("Preview"), scroller]
+        .spacing(6)
+        .into()
 }
 
 fn preview_row<'a>(

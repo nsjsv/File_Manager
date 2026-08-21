@@ -40,7 +40,7 @@ mod properties;
 mod remote_mounts;
 mod rendering_settings;
 mod runtime;
-mod scrollbar;
+pub(crate) mod scrollbar;
 mod search;
 mod search_paths;
 mod selection;
@@ -864,6 +864,7 @@ impl FileBrowser {
             let content = view_properties_window(
                 self.properties.as_ref(),
                 self.scrollbar_visibility_for(&ScrollbarRegion::Properties),
+                self.scrollbar_viewport_for(&ScrollbarRegion::Properties),
             );
             self.view_with_window_chrome(window, "Properties", content)
         } else if self.preview_window == Some(window) {

@@ -19,7 +19,7 @@ repository = ""
 blake3 = "1.8.5"
 chrono = "0.4.44"
 dirs = "5.0"
-iced = { version = "0.14", default-features = false, features = ["tokio", "advanced", "advanced-shaping", "svg", "image", "x11", "wayland", "fira-sans", "wgpu"] }
+iced = { version = "0.14", default-features = false, features = ["tokio", "advanced", "advanced-shaping", "canvas", "svg", "image", "x11", "wayland", "fira-sans", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["avif-native", "bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }
 lexopt = "0.3.1"
 notify = "6.1"

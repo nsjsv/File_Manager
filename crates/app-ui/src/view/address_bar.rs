@@ -8,10 +8,11 @@ use iced::{mouse, Background, Color, Element, Event, Length, Point, Rectangle, S
 
 use crate::anchored_popup::anchored_popup;
 use crate::app::panes::BrowserPaneView;
+use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::app::FileBrowser;
 use crate::appearance::{
-    address_bar_style, auto_hide_horizontal_scrollbar_direction, auto_hide_scrollbar_style,
+    address_bar_style, enhanced_horizontal_scrollbar_direction, enhanced_scrollbar_style,
     navigation_text_input_style, path_suggestion_item_style, path_suggestions_style,
     selected_path_suggestion_item_style, transparent_button_style,
 };
@@ -25,8 +26,8 @@ use crate::measured_middle_ellipsized_text::{
 };
 use crate::model::{
     allocate_breadcrumb_widths, breadcrumb_segments, BreadcrumbSegment, BreadcrumbSegmentKind,
-    BrowserPaneId, FileDropTarget, Message, ScrollbarRegion, ScrollbarVisibility,
-    TRASH_LOCATION_LABEL,
+    BrowserPaneId, FileDropTarget, Message, ScrollbarRegion, ScrollbarViewport,
+    ScrollbarVisibility, TRASH_LOCATION_LABEL,
 };
 use crate::typography::readable_text;
 use crate::view::{icon_tone_style, themed_icon, IconTone};
@@ -152,6 +153,7 @@ fn breadcrumb_layer<'a>(
             opacity,
             viewport_size.width,
             scrollbar_visibility,
+            browser.scrollbar_viewport_for(&region),
             active_drop_target.clone(),
             registers_drop_targets,
         )
@@ -167,6 +169,7 @@ fn breadcrumb_scrollable<'a>(
     opacity: f32,
     viewport_width: f32,
     scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_viewport: Option<ScrollbarViewport>,
     active_drop_target: Option<PathBuf>,
     registers_drop_targets: bool,
 ) -> Element<'a, Message> {
@@ -181,21 +184,29 @@ fn breadcrumb_scrollable<'a>(
     );
     let scroller = scrollable(smooth_scroll_content(breadcrumbs, region.clone()))
         .id(smooth_scroll_id(&region))
-        .direction(auto_hide_horizontal_scrollbar_direction(
+        .direction(enhanced_horizontal_scrollbar_direction(
             scrollbar_visibility,
             8.0,
         ))
-        .style(auto_hide_scrollbar_style(scrollbar_visibility))
+        .style(enhanced_scrollbar_style(scrollbar_visibility))
         .width(Length::Fill)
         .height(Length::Fixed(ADDRESS_BAR_HEIGHT))
-        .on_scroll(move |_| Message::AddressBarScrolled(pane_id));
+        .on_scroll(scrollbar_on_scroll(region.clone(), move |_| {
+            Message::AddressBarScrolled(pane_id)
+        }));
     let scroller: Element<'a, Message> = if registers_drop_targets {
         track_breadcrumb_viewport(scroller, pane_id)
     } else {
         scroller.into()
     };
 
-    scroller
+    enhanced_scrollbar(
+        scroller,
+        scrollbar_visibility,
+        scrollbar_viewport,
+        ScrollbarAxis::Horizontal,
+        8.0,
+    )
 }
 
 fn elastic_breadcrumbs<'a>(
