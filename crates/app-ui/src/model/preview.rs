@@ -222,6 +222,39 @@ pub(crate) enum PreviewWindowProfile {
     Audio,
     Video,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewWindowControlsVisibility {
+    Hidden,
+    Visible,
+}
+
+impl PreviewWindowControlsVisibility {
+    pub(crate) const REVEAL_HEIGHT: f32 = 64.0;
+
+    pub(crate) fn from_cursor_y(cursor_y: f32) -> Self {
+        if cursor_y <= Self::REVEAL_HEIGHT {
+            Self::Visible
+        } else {
+            Self::Hidden
+        }
+    }
+
+    pub(crate) fn is_visible(self) -> bool {
+        self == Self::Visible
+    }
+}
+
+#[cfg(test)]
+mod controls_tests {
+    use super::PreviewWindowControlsVisibility;
+
+    #[test]
+    fn controls_are_visible_only_inside_top_reveal_region() {
+        assert!(PreviewWindowControlsVisibility::from_cursor_y(0.0).is_visible());
+        assert!(PreviewWindowControlsVisibility::from_cursor_y(64.0).is_visible());
+        assert!(!PreviewWindowControlsVisibility::from_cursor_y(64.1).is_visible());
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreviewTreeEntry {

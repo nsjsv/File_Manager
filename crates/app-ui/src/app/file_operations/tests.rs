@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use file_search::SearchScope;
@@ -9,6 +10,7 @@ use crate::model::{
     ListDirectorySummary, SplitAxis,
 };
 use crate::operation_history::FileOperationOutcome;
+use crate::shortcuts::FileSelectionDirection;
 use crate::thumbnail_cache::ColumnViewport;
 
 fn remember_summary(browser: &mut FileBrowser, path: &std::path::Path, count: usize, size: u64) {
@@ -756,6 +758,69 @@ fn failed_move_migrates_paths_for_completed_transfers_only() {
             .and_then(|task| task.error.as_deref()),
         Some("second transfer failed")
     );
+}
+
+#[test]
+fn successful_trash_focuses_next_entry_after_keyboard_selection() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let first = PathBuf::from("/workspace/first.txt");
+    let deleted = PathBuf::from("/workspace/deleted.txt");
+    let next = PathBuf::from("/workspace/next.txt");
+    browser.current_dir = PathBuf::from("/workspace");
+    browser.view_mode = crate::model::BrowserViewMode::Columns;
+    browser.directory_collection_phase = crate::model::DirectoryCollectionPhase::Ready;
+    browser.entries = vec![
+        file_core::DirectoryEntry::new(
+            first.clone(),
+            file_core::FileKind::File,
+            file_core::EntryMetadata::default(),
+            false,
+            false,
+            false,
+        ),
+        file_core::DirectoryEntry::new(
+            deleted.clone(),
+            file_core::FileKind::File,
+            file_core::EntryMetadata::default(),
+            false,
+            false,
+            false,
+        ),
+        file_core::DirectoryEntry::new(
+            next.clone(),
+            file_core::FileKind::File,
+            file_core::EntryMetadata::default(),
+            false,
+            false,
+            false,
+        ),
+    ]
+    .into();
+
+    browser.select_path(first);
+    drop(browser.move_file_selection(FileSelectionDirection::Down));
+    assert_eq!(browser.selected, Some(deleted.clone()));
+
+    assert!(browser
+        .operation_queue
+        .enqueue(QueuedFileOperation::Trash {
+            paths: vec![deleted.clone()],
+        })
+        .error()
+        .is_none());
+    let task_id = browser.operation_queue.tasks().last().unwrap().id;
+
+    drop(browser.accept_file_operation_finished(
+        task_id,
+        FileOperationCompletion::Succeeded(FileOperationOutcome::Trash {
+            paths: vec![deleted],
+            entries: Vec::new(),
+            tracking_warnings: Vec::new(),
+        }),
+    ));
+
+    assert_eq!(browser.selected, Some(next.clone()));
+    assert_eq!(browser.selected_paths, HashSet::from([next]));
 }
 
 #[test]

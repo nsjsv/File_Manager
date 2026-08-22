@@ -639,6 +639,58 @@ impl FileBrowser {
         }
         paths
     }
+    pub(super) fn focus_after_removed_file_operation_paths(
+        &mut self,
+        removed_paths: &[PathBuf],
+    ) -> Task<Message> {
+        let Some(selected) = self.selected.clone() else {
+            return Task::none();
+        };
+        if !Self::path_is_removed_by_file_operation(&selected, removed_paths) {
+            return Task::none();
+        }
+
+        let paths = match self.view_mode {
+            BrowserViewMode::Columns => {
+                let directory = selected
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.current_dir.clone());
+                self.entry_paths_in_directory(&directory)
+            }
+            BrowserViewMode::Icons | BrowserViewMode::List => self.visible_entry_paths(),
+        };
+        let Some(selected_index) = paths.iter().position(|path| path == &selected) else {
+            self.clear_file_selection();
+            self.clear_preview();
+            return Task::none();
+        };
+
+        let target = paths
+            .iter()
+            .skip(selected_index + 1)
+            .chain(paths[..selected_index].iter().rev())
+            .find(|path| !Self::path_is_removed_by_file_operation(path.as_path(), removed_paths))
+            .cloned();
+        let Some(target) = target else {
+            self.clear_file_selection();
+            self.clear_preview();
+            return Task::none();
+        };
+
+        if self.view_mode == BrowserViewMode::Icons {
+            let target_directory = self.entry_parent_directory(&target);
+            if let Some(state) = self.icon_grid_expansion.as_mut() {
+                state.set_selection_directory(&target_directory);
+            }
+        }
+        self.select_path_from_keyboard(target)
+    }
+    fn path_is_removed_by_file_operation(path: &Path, removed_paths: &[PathBuf]) -> bool {
+        removed_paths
+            .iter()
+            .any(|removed| path == removed || path.starts_with(removed))
+    }
 
     pub(super) fn active_file_selection(&self) -> Vec<PathBuf> {
         self.active_search_selection()

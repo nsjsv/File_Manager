@@ -110,10 +110,7 @@ fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> 
 }
 
 fn preview_window_size_for_content(content_size: PreviewSize) -> Size {
-    Size::new(
-        content_size.width,
-        content_size.height + WINDOW_TOP_BAR_HEIGHT,
-    )
+    Size::new(content_size.width, content_size.height)
 }
 
 fn preview_content_size_from_window(
@@ -121,13 +118,7 @@ fn preview_content_size_from_window(
     width: f32,
     height: f32,
 ) -> PreviewSize {
-    clamp_preview_size_to_minimum(
-        profile,
-        PreviewSize {
-            width,
-            height: (height - WINDOW_TOP_BAR_HEIGHT).max(1.0),
-        },
-    )
+    clamp_preview_size_to_minimum(profile, PreviewSize { width, height })
 }
 
 pub(super) fn default_preview_size(profile: PreviewWindowProfile) -> PreviewSize {
@@ -417,6 +408,7 @@ impl FileBrowser {
     pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
         self.preview_window_profile = profile;
         self.preview_size = default_preview_size(profile);
+        self.preview_window_controls = crate::model::PreviewWindowControlsVisibility::Hidden;
         let size = clamp_preview_size_to_minimum(profile, self.preview_size);
         self.pending_preview_resize = Some(size);
         if let Some(window) = self.preview_window {
@@ -468,6 +460,7 @@ impl FileBrowser {
         size: PreviewSize,
     ) -> Task<Message> {
         self.preview_window_profile = profile;
+        self.preview_window_controls = crate::model::PreviewWindowControlsVisibility::Hidden;
         self.preview_size = clamp_preview_size_to_minimum(profile, size);
         self.pending_preview_resize = Some(self.preview_size);
 
@@ -502,6 +495,7 @@ impl FileBrowser {
     pub(super) fn close_preview_window(&mut self) -> Task<Message> {
         self.clear_preview();
         self.pending_preview_resize = None;
+        self.preview_window_controls = crate::model::PreviewWindowControlsVisibility::Hidden;
         let Some(window) = self.preview_window.take() else {
             return Task::none();
         };

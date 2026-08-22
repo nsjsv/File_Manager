@@ -9,8 +9,9 @@ use iced_runtime::Action;
 use super::*;
 use crate::config;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, LoadedOperationStore, Message, SplitAxis,
-    WindowChromeLayout, WindowFrameState, WINDOW_TOP_BAR_HEIGHT,
+    BrowserPaneId, BrowserPaneLayout, BrowserViewMode, LoadedOperationStore, Message, PreviewSize,
+    PreviewWindowControlsVisibility, SplitAxis, WindowChromeLayout, WindowFrameState,
+    WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::operation_history::FileOperationCompletion;
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
@@ -184,13 +185,57 @@ fn auxiliary_windows_keep_one_content_size_across_global_chrome_layouts() {
         let content_size = default_preview_size(PreviewWindowProfile::Regular);
         let preview = preview_window_settings(PreviewWindowProfile::Regular, content_size);
         assert_close(preview.size.width, content_size.width);
-        assert_close(
-            preview.size.height,
-            content_size.height + WINDOW_TOP_BAR_HEIGHT,
-        );
+        assert_close(preview.size.height, content_size.height);
     }
 }
 
+#[test]
+fn preview_resize_uses_the_full_client_area_without_chrome_offset() {
+    let profile = PreviewWindowProfile::Image;
+    let expected = PreviewSize {
+        width: 900.0,
+        height: 700.0,
+    };
+
+    let actual = preview_content_size_from_window(profile, expected.width, expected.height);
+
+    assert_close(actual.width, expected.width);
+    assert_close(actual.height, expected.height);
+}
+
+#[test]
+fn preview_controls_follow_only_the_preview_window_top_region() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let preview_window = window::Id::unique();
+    browser.preview_window = Some(preview_window);
+
+    drop(browser.update(Message::CursorMoved {
+        window: preview_window,
+        position: iced::Point::new(8.0, PreviewWindowControlsVisibility::REVEAL_HEIGHT),
+    }));
+    assert_eq!(
+        browser.preview_window_controls,
+        PreviewWindowControlsVisibility::Visible
+    );
+
+    drop(browser.update(Message::CursorMoved {
+        window: browser.main_window,
+        position: iced::Point::new(8.0, 8.0),
+    }));
+    assert_eq!(
+        browser.preview_window_controls,
+        PreviewWindowControlsVisibility::Visible
+    );
+
+    drop(browser.update(Message::CursorMoved {
+        window: preview_window,
+        position: iced::Point::new(8.0, PreviewWindowControlsVisibility::REVEAL_HEIGHT + 1.0),
+    }));
+    assert_eq!(
+        browser.preview_window_controls,
+        PreviewWindowControlsVisibility::Hidden
+    );
+}
 #[test]
 fn maximized_observation_is_isolated_and_removed_when_window_closes() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());

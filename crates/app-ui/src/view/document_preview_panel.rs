@@ -4,8 +4,7 @@ use iced::{Alignment, ContentFit, Element, Length};
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    app_content_style, document_page_style, enhanced_scrollbar_style,
-    enhanced_vertical_scrollbar_direction, preview_window_panel_style,
+    document_page_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
 };
 use crate::document_preview::{
     document_viewport_height, DocumentPageView, DocumentPreviewMessage, PagedDocumentPreview,
@@ -13,7 +12,6 @@ use crate::document_preview::{
 use crate::model::{Message, PreviewSize, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility};
 use crate::typography::localized_text;
 
-const DOCUMENT_PANEL_PADDING: f32 = 14.0;
 const DOCUMENT_SCROLLBAR_WIDTH: f32 = 6.0;
 const DOCUMENT_PAGE_GAP: f32 = 12.0;
 const DOCUMENT_STATUS_TEXT_SIZE: u32 = 13;
@@ -97,15 +95,5 @@ pub(super) fn document_preview_panel(
         ScrollbarAxis::Vertical,
         DOCUMENT_SCROLLBAR_WIDTH,
     );
-    let surface = container(scroller)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(DOCUMENT_PANEL_PADDING)
-        .style(preview_window_panel_style);
-
-    container(surface)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(app_content_style)
-        .into()
+    scroller.into()
 }

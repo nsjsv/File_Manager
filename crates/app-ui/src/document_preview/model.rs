@@ -12,7 +12,6 @@ use super::resources::{
 use super::{DocumentPreviewFormat, DocumentPreviewWorkspace};
 
 pub(crate) const MAX_DOCUMENT_PAGES: usize = 10_000;
-const DOCUMENT_PANEL_PADDING: f32 = 14.0;
 const DOCUMENT_PAGE_SIDE_MARGIN: f32 = 12.0;
 const DOCUMENT_PAGE_GAP: f32 = 12.0;
 
@@ -595,11 +594,11 @@ struct ScrollAnchor {
 }
 
 pub(crate) fn document_page_width(preview_width: f32) -> f32 {
-    (preview_width - 2.0 * (DOCUMENT_PANEL_PADDING + DOCUMENT_PAGE_SIDE_MARGIN)).max(1.0)
+    (preview_width - 2.0 * DOCUMENT_PAGE_SIDE_MARGIN).max(1.0)
 }
 
 pub(crate) fn document_viewport_height(preview_height: f32) -> f32 {
-    (preview_height - 2.0 * DOCUMENT_PANEL_PADDING).max(1.0)
+    preview_height.max(1.0)
 }
 
 fn wanted_page_range(

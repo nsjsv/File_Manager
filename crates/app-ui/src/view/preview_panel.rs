@@ -12,7 +12,7 @@ use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAx
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     app_content_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
-    navigation_icon_button_style, preview_window_panel_style,
+    navigation_icon_button_style, preview_media_style,
 };
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
@@ -26,11 +26,10 @@ use crate::operation_progress::remote_preview_download_panel;
 use crate::typography::{localized_text, readable_text};
 
 use super::{
-    auxiliary_window_message, document_preview_panel::document_preview_panel, icon_tone_style,
+    document_preview_panel::document_preview_panel, icon_tone_style,
     text_preview_panel::text_preview_panel, themed_icon, IconTone,
 };
 
-const PREVIEW_PANEL_PADDING_RESERVED_HEIGHT: f32 = 28.0;
 const PREVIEW_MIN_SCROLL_HEIGHT: f32 = 160.0;
 const PREVIEW_ICON_SIZE: f32 = 16.0;
 const PREVIEW_ENTRY_NAME_MAX_CHARS: usize = 48;
@@ -90,7 +89,11 @@ pub(crate) fn view_preview_window<'a>(
             )
         })
         .unwrap_or_else(|| {
-            auxiliary_window_message("Select a file and press Space to load preview")
+            preview_surface(
+                localized_text("Select a file and press Space to load preview")
+                    .size(14)
+                    .into(),
+            )
         })
 }
 
@@ -111,17 +114,18 @@ fn preview_panel<'a>(
     markdown_scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
-    let panel = match preview {
-        PreviewState::Loading(_) => column![readable_text("Loading preview...").size(14)],
+    let panel: Element<'a, Message> = match preview {
+        PreviewState::Loading(_) => column![readable_text("Loading preview...").size(14)].into(),
         PreviewState::DownloadingRemoteFile(download) => {
-            remote_preview_download_panel(download, operation_progress_animation_frame)
+            remote_preview_download_panel(download, operation_progress_animation_frame).into()
         }
         PreviewState::Ready(PreviewContent::Directory { entries, .. }) => directory_preview_panel(
             entries,
             scroll_height,
             directory_scrollbar_visibility,
             directory_scrollbar_viewport,
-        ),
+        )
+        .into(),
         PreviewState::Ready(PreviewContent::Text {
             path,
             rendered,
@@ -136,35 +140,35 @@ fn preview_panel<'a>(
             scroll_height,
             markdown_scrollbar_visibility,
             markdown_scrollbar_viewport,
-        ),
+        )
+        .into(),
         PreviewState::Ready(PreviewContent::Archive { entries, .. }) => archive_preview_panel(
             entries,
             scroll_height,
             archive_scrollbar_visibility,
             archive_scrollbar_viewport,
+        )
+        .into(),
+        PreviewState::Ready(PreviewContent::PagedDocument(document)) => document_preview_panel(
+            document,
+            size,
+            document_scrollbar_visibility,
+            document_scrollbar_viewport,
         ),
-        PreviewState::Ready(PreviewContent::PagedDocument(document)) => {
-            return document_preview_panel(
-                document,
-                size,
-                document_scrollbar_visibility,
-                document_scrollbar_viewport,
-            );
-        }
         PreviewState::Ready(PreviewContent::Image {
             handle,
             width,
             height,
             ..
-        }) => return image_preview_panel(handle, *width, *height, size),
+        }) => image_preview_panel(handle, *width, *height, size),
         PreviewState::Ready(PreviewContent::AnimatedImage(preview)) => {
-            return animated_image_preview_panel(preview, size)
+            animated_image_preview_panel(preview, size)
         }
         PreviewState::Ready(PreviewContent::Audio {
             path,
             duration,
             len,
-        }) => audio_preview_panel(path, *duration, *len, audio_preview),
+        }) => audio_preview_panel(path, *duration, *len, audio_preview).into(),
         PreviewState::Ready(PreviewContent::Video {
             path,
             frame,
@@ -172,30 +176,23 @@ fn preview_panel<'a>(
             height,
             duration,
             ..
-        }) => {
-            return video_preview_panel(
-                path,
-                frame.as_ref(),
-                *width,
-                *height,
-                *duration,
-                video_preview,
-                size,
-            )
-        }
-        PreviewState::Error(error) => column![localized_text(error).size(14)],
-    }
-    .spacing(6);
+        }) => video_preview_panel(
+            path,
+            frame.as_ref(),
+            *width,
+            *height,
+            *duration,
+            video_preview,
+            size,
+        ),
+        PreviewState::Error(error) => localized_text(error).size(14).into(),
+    };
 
-    let content = panel.height(Length::Fill);
+    preview_surface(panel)
+}
 
-    let preview_surface = container(content)
-        .padding(14)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(preview_window_panel_style);
-
-    container(preview_surface)
+fn preview_surface<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    container(content)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(app_content_style)
@@ -203,7 +200,7 @@ fn preview_panel<'a>(
 }
 
 fn preview_scroll_height(size: PreviewSize) -> f32 {
-    (size.height - PREVIEW_PANEL_PADDING_RESERVED_HEIGHT).max(PREVIEW_MIN_SCROLL_HEIGHT)
+    size.height.max(PREVIEW_MIN_SCROLL_HEIGHT)
 }
 
 fn directory_preview_panel(
@@ -399,6 +396,7 @@ fn image_preview_panel(
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
+        .style(preview_media_style)
         .into()
 }
 
@@ -422,12 +420,12 @@ fn animated_image_preview_panel(
         image_height,
     ));
 
-    let mut content = column![container(frames)
+    let image_surface = container(frames)
         .width(Length::Fill)
         .height(Length::Fixed(image_height))
-        .center_x(Length::Fill),]
-    .spacing(8)
-    .align_x(Alignment::Center);
+        .center_x(Length::Fill)
+        .style(preview_media_style);
+    let mut content = column![image_surface].spacing(8).align_x(Alignment::Center);
 
     if let Some(controls) = animated_image_controls(preview, size, image_width) {
         content = content.push(controls);
@@ -690,6 +688,7 @@ fn video_preview_panel(
         .height(Length::Fixed(frame_height))
         .center_x(Length::Fill)
         .center_y(Length::Fixed(frame_height))
+        .style(preview_media_style)
         .into();
     let controls = video_controls(playback, duration, frame_width);
 

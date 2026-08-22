@@ -15,6 +15,7 @@ pub(crate) use document_preview::document_page_style;
 pub(crate) use icon_grid::icon_grid_expansion_panel_style;
 pub(crate) use navigation_input::{address_bar_style, navigation_text_input_style};
 pub(crate) use window_chrome::{
+    floating_window_close_button_style, floating_window_control_button_style,
     window_close_button_style, window_control_button_style, window_title_bar_style,
     window_top_bar_style,
 };
@@ -278,21 +279,17 @@ pub(crate) fn preview_panel_style(theme: &Theme) -> container::Appearance {
         ..container::Appearance::default()
     }
 }
-
-pub(crate) fn preview_window_panel_style(theme: &Theme) -> container::Appearance {
-    let colors = ui_colors(theme);
+pub(crate) fn preview_media_style(_theme: &Theme) -> container::Appearance {
     container::Appearance {
-        background: Some(Background::Color(colors.surface_container_low)),
-        text_color: Some(colors.on_surface),
-        border: Border {
-            color: subtle_border_color(theme),
-            width: 1.0,
-            radius: 14.0.into(),
-        },
+        background: Some(Background::Color(Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        })),
         ..container::Appearance::default()
     }
 }
-
 pub(crate) fn error_notification_style(theme: &Theme) -> container::Appearance {
     let colors = ui_colors(theme);
     container::Appearance {
@@ -766,6 +763,23 @@ mod tests {
                 switch_off.background,
                 Some(Background::Color(colors.on_surface))
             );
+        }
+    }
+
+    #[test]
+    fn preview_media_surface_is_opaque_black_without_border() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let style = preview_media_style(&theme);
+            assert_eq!(
+                style.background,
+                Some(Background::Color(Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                }))
+            );
+            assert_eq!(style.border, Border::default());
         }
     }
 }

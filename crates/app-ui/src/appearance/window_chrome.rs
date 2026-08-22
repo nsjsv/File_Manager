@@ -65,6 +65,56 @@ pub(crate) fn window_close_button_style(theme: &Theme, status: button::Status) -
         ..button::Style::default()
     }
 }
+pub(crate) fn floating_window_control_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let colors = ui_colors(theme);
+    let background = match status {
+        button::Status::Active => colors.surface_container_high,
+        button::Status::Hovered => colors.surface_container_highest,
+        button::Status::Pressed => colors.surface_container,
+        button::Status::Disabled => colors.surface_container_low,
+    };
+    button::Style {
+        background: Some(Background::Color(with_opacity(background, 0.9))),
+        text_color: colors.on_surface,
+        border: Border {
+            radius: 6.0.into(),
+            ..Border::default()
+        },
+        ..button::Style::default()
+    }
+}
+
+pub(crate) fn floating_window_close_button_style(
+    theme: &Theme,
+    status: button::Status,
+) -> button::Style {
+    let colors = ui_colors(theme);
+    let (background, text_color) = match status {
+        button::Status::Active => (colors.surface_container_high, colors.on_surface),
+        button::Status::Hovered => (colors.error, colors.on_error),
+        button::Status::Pressed => (colors.error_container, colors.on_error_container),
+        button::Status::Disabled => (colors.surface_container_low, colors.on_surface),
+    };
+    button::Style {
+        background: Some(Background::Color(with_opacity(background, 0.9))),
+        text_color,
+        border: Border {
+            radius: 6.0.into(),
+            ..Border::default()
+        },
+        ..button::Style::default()
+    }
+}
+
+fn with_opacity(color: Color, opacity: f32) -> Color {
+    Color {
+        a: opacity,
+        ..color
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -105,6 +155,28 @@ mod tests {
 
             assert!(active.background.is_none());
             assert!(hovered.background.is_some());
+        }
+    }
+    #[test]
+    fn floating_controls_keep_surface_feedback_and_close_danger_state() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let active = floating_window_control_button_style(&theme, button::Status::Active);
+            let hovered = floating_window_control_button_style(&theme, button::Status::Hovered);
+            let pressed = floating_window_control_button_style(&theme, button::Status::Pressed);
+            assert!(active.background.is_some());
+            assert!(hovered.background.is_some());
+            assert!(pressed.background.is_some());
+            assert_eq!(active.border.width, 0.0);
+
+            let close = floating_window_close_button_style(&theme, button::Status::Hovered);
+            assert_eq!(
+                close.background,
+                Some(Background::Color(with_opacity(
+                    ui_colors(&theme).error,
+                    0.9,
+                )))
+            );
+            assert_eq!(close.text_color, ui_colors(&theme).on_error);
         }
     }
 }

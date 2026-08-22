@@ -1,7 +1,7 @@
 use super::FileBrowser;
 use iced::{window, Point, Task};
 
-use crate::model::Message;
+use crate::model::{Message, PreviewWindowControlsVisibility};
 
 impl FileBrowser {
     pub(super) fn clear_pointer_driven_interaction_state(&mut self) {
@@ -45,6 +45,11 @@ impl FileBrowser {
         window: window::Id,
         position: Point,
     ) -> Task<Message> {
+        if self.preview_window == Some(window) {
+            self.preview_window_controls =
+                PreviewWindowControlsVisibility::from_cursor_y(position.y);
+            return Task::none();
+        }
         if window != self.main_window {
             return Task::none();
         }

@@ -156,6 +156,12 @@ impl FileBrowser {
             }
             None => Task::none(),
         };
+        let deletion_focus_task = if completed_successfully {
+            self.focus_after_file_operation_removal(completed_operation.as_ref())
+        } else {
+            Task::none()
+        };
+
         let path_migration_task = self.migrate_paths_after_file_operation(&completion);
         if completed_successfully {
             if let Some(removed_paths) =
@@ -202,6 +208,7 @@ impl FileBrowser {
             Task::none()
         };
         Task::batch([
+            deletion_focus_task,
             desktop_notification_task,
             path_migration_task,
             search_refresh_task,
@@ -441,6 +448,32 @@ impl FileBrowser {
             }
         }
         self.continue_file_operation_persistence()
+    }
+    fn focus_after_file_operation_removal(
+        &mut self,
+        operation: Option<&QueuedFileOperation>,
+    ) -> Task<Message> {
+        if self.search_workspace.is_some() {
+            return Task::none();
+        }
+        let Some(operation) = operation else {
+            return Task::none();
+        };
+        match operation {
+            QueuedFileOperation::Trash { paths }
+            | QueuedFileOperation::DeletePermanently { paths } => {
+                self.focus_after_removed_file_operation_paths(paths)
+            }
+            QueuedFileOperation::DeleteTrashEntries { entries }
+            | QueuedFileOperation::Restore { entries } => {
+                let removed_paths = entries
+                    .iter()
+                    .map(|entry| entry.trash_path.clone())
+                    .collect::<Vec<_>>();
+                self.focus_after_removed_file_operation_paths(&removed_paths)
+            }
+            _ => Task::none(),
+        }
     }
 }
 

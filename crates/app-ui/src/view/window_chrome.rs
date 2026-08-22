@@ -3,18 +3,19 @@ use iced::widget::{button, container, mouse_area, tooltip, Column, Row, Space, S
 use iced::{mouse, window, Element, Length};
 
 use crate::appearance::{
-    context_menu_style, window_close_button_style, window_control_button_style,
-    window_title_bar_style, window_top_bar_style,
+    context_menu_style, floating_window_close_button_style, floating_window_control_button_style,
+    window_close_button_style, window_control_button_style, window_title_bar_style,
+    window_top_bar_style,
 };
 use crate::icons::IconSymbol;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, Message, SplitAxis, WindowChromeLayout, WindowControlKind,
-    WindowControlSide, WindowControlsConfig, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
-    WINDOW_TOP_BAR_HEIGHT,
+    BrowserPaneId, BrowserPaneLayout, Message, PreviewWindowControlsVisibility, SplitAxis,
+    WindowChromeLayout, WindowControlKind, WindowControlSide, WindowControlsConfig,
+    WindowFrameState, WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT,
 };
-use crate::typography::{localized_text, readable_text};
 
 use super::{themed_icon, window_drag_region::window_drag_region, IconTone};
+use crate::typography::{localized_text, readable_text};
 
 const WINDOW_CONTROL_WIDTH: f32 = 36.0;
 const WINDOW_CONTROL_HEIGHT: f32 = 32.0;
@@ -111,11 +112,48 @@ pub(crate) fn main_pane_window_chrome_role(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowControlPresentation {
+    Standard,
+    Floating,
+}
+
 pub(crate) fn window_control_group(
     config: &WindowControlsConfig,
     side: WindowControlSide,
     window: window::Id,
     frame_state: WindowFrameState,
+) -> Element<'static, Message> {
+    window_control_group_with_presentation(
+        config,
+        side,
+        window,
+        frame_state,
+        WindowControlPresentation::Standard,
+    )
+}
+
+pub(crate) fn floating_window_control_group(
+    config: &WindowControlsConfig,
+    side: WindowControlSide,
+    window: window::Id,
+    frame_state: WindowFrameState,
+) -> Element<'static, Message> {
+    window_control_group_with_presentation(
+        config,
+        side,
+        window,
+        frame_state,
+        WindowControlPresentation::Floating,
+    )
+}
+
+fn window_control_group_with_presentation(
+    config: &WindowControlsConfig,
+    side: WindowControlSide,
+    window: window::Id,
+    frame_state: WindowFrameState,
+    presentation: WindowControlPresentation,
 ) -> Element<'static, Message> {
     let mut controls = Row::new()
         .spacing(WINDOW_CONTROL_SPACING)
@@ -124,7 +162,12 @@ pub(crate) fn window_control_group(
         .placements_on(side)
         .filter(|placement| placement.visibility().is_visible())
     {
-        controls = controls.push(window_control_button(placement.kind(), window, frame_state));
+        controls = controls.push(window_control_button(
+            placement.kind(),
+            window,
+            frame_state,
+            presentation,
+        ));
     }
     controls.into()
 }
@@ -133,6 +176,7 @@ fn window_control_button(
     kind: WindowControlKind,
     window: window::Id,
     frame_state: WindowFrameState,
+    presentation: WindowControlPresentation,
 ) -> Element<'static, Message> {
     let (icon, label, message) = match kind {
         WindowControlKind::Minimize => (
@@ -158,10 +202,15 @@ fn window_control_button(
             Message::AuxiliaryWindowCloseRequested(window),
         ),
     };
-    let style = if kind == WindowControlKind::Close {
-        window_close_button_style
-    } else {
-        window_control_button_style
+    let style = match (presentation, kind) {
+        (WindowControlPresentation::Floating, WindowControlKind::Close) => {
+            floating_window_close_button_style
+        }
+        (WindowControlPresentation::Floating, _) => floating_window_control_button_style,
+        (WindowControlPresentation::Standard, WindowControlKind::Close) => {
+            window_close_button_style
+        }
+        (WindowControlPresentation::Standard, _) => window_control_button_style,
     };
     let control = button(themed_icon(
         icon,
@@ -217,6 +266,49 @@ pub(crate) fn auxiliary_window_content_without_title<'a>(
     frame_state: WindowFrameState,
 ) -> Element<'a, Message> {
     auxiliary_window_content("", String::new(), content, config, window, frame_state)
+}
+pub(crate) fn floating_preview_window_content<'a>(
+    content: Element<'a, Message>,
+    config: &WindowControlsConfig,
+    window: window::Id,
+    frame_state: WindowFrameState,
+    controls_visibility: PreviewWindowControlsVisibility,
+) -> Element<'a, Message> {
+    let drag_surface = window_drag_region(
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT))
+            .into(),
+        window,
+    );
+    let mut layer = Stack::with_children([content, drag_surface])
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    if controls_visibility.is_visible() {
+        let controls = Row::new()
+            .spacing(10)
+            .padding([8, 8])
+            .align_y(iced::Alignment::Center)
+            .push(floating_window_control_group(
+                config,
+                WindowControlSide::Left,
+                window,
+                frame_state,
+            ))
+            .push(Space::new().width(Length::Fill))
+            .push(floating_window_control_group(
+                config,
+                WindowControlSide::Right,
+                window,
+                frame_state,
+            ))
+            .width(Length::Fill)
+            .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT));
+        layer = layer.push(controls);
+    }
+
+    layer.into()
 }
 
 fn window_content_with_top_bar<'a>(

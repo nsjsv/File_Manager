@@ -126,10 +126,10 @@ use crate::model::{
     DirectoryOrderPhase, ExpandedDirectory, FileDragState, FileDropPrompt, FileDropSessionState,
     FilePropertiesState, IconGridExpansionState, IconGridViewport, ListColumnKind, Message,
     PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowProfile, ScrollbarRegion, SearchServiceState, SelectionMarquee, SettingsCategory,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
-    StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
-    TrashRefreshState, VideoPreviewPlayback,
+    PreviewWindowControlsVisibility, PreviewWindowProfile, ScrollbarRegion, SearchServiceState,
+    SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarLocation, StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument,
+    TransferConflictState, TrashRefreshState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -142,10 +142,9 @@ use crate::startup_trace;
 use crate::thumbnail_cache::{ColumnViewport, ThumbnailCache};
 use crate::video_preview::video_preview_subscription;
 use crate::view::{
-    auxiliary_window_content, view_browser, view_properties_window, view_settings_window,
-    window_resize_frame,
+    auxiliary_window_content, floating_preview_window_content, view_browser,
+    view_properties_window, view_settings_window, window_resize_frame,
 };
-
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
@@ -196,6 +195,7 @@ pub(crate) struct FileBrowser {
     pub(crate) preview_size: PreviewSize,
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
+    preview_window_controls: PreviewWindowControlsVisibility,
     main_window: window::Id,
     maximized_windows: HashSet<window::Id>,
     wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
@@ -527,6 +527,7 @@ impl FileBrowser {
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
+            preview_window_controls: PreviewWindowControlsVisibility::Hidden,
             main_window,
             maximized_windows: HashSet::new(),
             wayland_dnd: None,
@@ -868,7 +869,15 @@ impl FileBrowser {
             );
             self.view_with_window_chrome(window, "Properties", content)
         } else if self.preview_window == Some(window) {
-            self.view_with_window_chrome(window, "Preview", self.preview_window_content())
+            let frame_state = self.window_frame_state(window);
+            let content = floating_preview_window_content(
+                self.preview_window_content(),
+                &self.user_config.window_controls,
+                window,
+                frame_state,
+                self.preview_window_controls,
+            );
+            window_resize_frame(content, window, frame_state)
         } else if window == self.main_window {
             startup_trace::mark_once("first_main_window_view");
             if !self.directory_collection_phase.is_discovering()

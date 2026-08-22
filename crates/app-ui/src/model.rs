@@ -113,10 +113,10 @@ pub(crate) use properties::{
 mod preview;
 pub(crate) use preview::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, PreviewContent, PreviewSize, PreviewState,
-    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowProfile,
-    RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
-    RemotePreviewDownload, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
-    VideoPreviewSeekCompletion,
+    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowControlsVisibility,
+    PreviewWindowProfile, RemotePreviewCacheFinished, RemotePreviewCacheMessage,
+    RemotePreviewCacheProgress, RemotePreviewDownload, VideoPreviewFrame, VideoPreviewPlayback,
+    VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
