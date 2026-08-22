@@ -2,9 +2,10 @@ use std::fmt;
 
 use desktop_linux::{TerminalEmulator, TERMINAL_EMULATOR_OPTIONS};
 use iced::widget::{
-    button, column, container, pick_list, row, svg, text, text_input, Button, Column, Space, Svg,
+    button, column, container, pick_list, row, stack, svg, text, text_input, Button, Column, Space,
+    Svg,
 };
-use iced::{Alignment, Element, Length, Theme};
+use iced::{window, Alignment, Element, Length, Theme};
 
 use crate::app::FileBrowser;
 use crate::appearance::context_menu_button_style;
@@ -17,8 +18,10 @@ use crate::model::{
 use crate::typography::{localized_text, readable_text};
 
 use super::application_logs::application_logs_settings_detail;
+use super::auxiliary_window_content_without_title;
 use super::auxiliary_window_layout::{
-    auxiliary_detail_scroller, auxiliary_sidebar, auxiliary_sidebar_button, auxiliary_split_window,
+    auxiliary_detail_scroller, auxiliary_detail_surface_with_sidebar_space,
+    auxiliary_full_height_sidebar, auxiliary_sidebar_button,
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
 use super::network_settings::{max_preview_file_size_row, network_thumbnails_row};
@@ -69,20 +72,33 @@ impl fmt::Display for StartupLocationPickOption {
     }
 }
 
-pub(crate) fn view_settings_window(browser: &FileBrowser) -> Element<'_, Message> {
-    let categories = settings_category_sidebar(browser.selected_settings_category);
-    let detail = settings_category_detail(browser);
-
-    auxiliary_split_window(categories, detail)
+pub(crate) fn view_settings_window(
+    browser: &FileBrowser,
+    window: window::Id,
+) -> Element<'_, Message> {
+    let sidebar = settings_category_sidebar(browser.selected_settings_category);
+    let detail = auxiliary_detail_surface_with_sidebar_space(settings_category_detail(browser));
+    let frame_state = browser.window_frame_state(window);
+    let window_content = auxiliary_window_content_without_title(
+        detail,
+        &browser.user_config().window_controls,
+        window,
+        frame_state,
+    );
+    let content = stack![window_content, sidebar]
+        .width(Length::Fill)
+        .height(Length::Fill);
+    super::window_resize_frame(content.into(), window, frame_state)
 }
 
 fn settings_category_sidebar(selected: SettingsCategory) -> Element<'static, Message> {
-    let mut categories = Column::new().spacing(4);
+    let mut categories = Column::new()
+        .push(readable_text("Settings").size(16))
+        .spacing(4);
     for category in SettingsCategory::ALL {
         categories = categories.push(settings_category_button(category, selected));
     }
-
-    auxiliary_sidebar(categories)
+    auxiliary_full_height_sidebar(categories)
 }
 
 fn settings_category_button(

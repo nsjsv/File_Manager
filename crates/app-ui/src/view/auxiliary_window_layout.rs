@@ -1,4 +1,4 @@
-use iced::widget::{button, container, row, scrollable, Button, Column};
+use iced::widget::{button, container, row, scrollable, Button, Column, Space};
 use iced::{Element, Length};
 
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
@@ -24,6 +24,21 @@ pub(super) fn auxiliary_split_window<'a>(
         .style(app_content_style)
         .into()
 }
+pub(super) fn auxiliary_detail_surface_with_sidebar_space<'a>(
+    detail: Element<'a, Message>,
+) -> Element<'a, Message> {
+    container(
+        row![
+            Space::new().width(Length::Fixed(AUXILIARY_SIDEBAR_WIDTH)),
+            detail,
+        ]
+        .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(app_content_style)
+    .into()
+}
 
 pub(super) fn auxiliary_sidebar<'a>(content: Column<'a, Message>) -> Element<'a, Message> {
     let sidebar = container(content.padding(14))
@@ -33,6 +48,24 @@ pub(super) fn auxiliary_sidebar<'a>(content: Column<'a, Message>) -> Element<'a,
 
     container(sidebar)
         .padding(sidebar_floating_panel_margin())
+        .width(Length::Fixed(AUXILIARY_SIDEBAR_WIDTH))
+        .height(Length::Fill)
+        .into()
+}
+
+pub(super) fn auxiliary_full_height_sidebar<'a>(
+    content: Column<'a, Message>,
+) -> Element<'a, Message> {
+    let sidebar = container(content.padding(14))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(sidebar_style);
+    let mut margin = sidebar_floating_panel_margin();
+    margin.top = 0.0;
+    margin.bottom = 0.0;
+
+    container(sidebar)
+        .padding(margin)
         .width(Length::Fixed(AUXILIARY_SIDEBAR_WIDTH))
         .height(Length::Fill)
         .into()

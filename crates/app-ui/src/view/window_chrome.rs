@@ -210,6 +210,15 @@ pub(crate) fn auxiliary_window_content<'a>(
     }
 }
 
+pub(crate) fn auxiliary_window_content_without_title<'a>(
+    content: Element<'a, Message>,
+    config: &WindowControlsConfig,
+    window: window::Id,
+    frame_state: WindowFrameState,
+) -> Element<'a, Message> {
+    auxiliary_window_content("", String::new(), content, config, window, frame_state)
+}
+
 fn window_content_with_top_bar<'a>(
     title: &'static str,
     content: Element<'a, Message>,

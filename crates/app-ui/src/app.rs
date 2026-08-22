@@ -859,7 +859,7 @@ impl FileBrowser {
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.settings_window == Some(window) {
-            self.view_with_window_chrome(window, "Settings", view_settings_window(self))
+            view_settings_window(self, window)
         } else if self.properties_window == Some(window) {
             let content = view_properties_window(
                 self.properties.as_ref(),
