@@ -60,12 +60,8 @@ pub(super) fn auxiliary_full_height_sidebar<'a>(
         .width(Length::Fill)
         .height(Length::Fill)
         .style(sidebar_style);
-    let mut margin = sidebar_floating_panel_margin();
-    margin.top = 0.0;
-    margin.bottom = 0.0;
-
     container(sidebar)
-        .padding(margin)
+        .padding(sidebar_floating_panel_margin())
         .width(Length::Fixed(AUXILIARY_SIDEBAR_WIDTH))
         .height(Length::Fill)
         .into()
