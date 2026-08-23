@@ -113,10 +113,10 @@ pub(crate) use properties::{
 mod preview;
 pub(crate) use preview::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, PreviewContent, PreviewSize, PreviewState,
-    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowControlsVisibility,
-    PreviewWindowProfile, RemotePreviewCacheFinished, RemotePreviewCacheMessage,
-    RemotePreviewCacheProgress, RemotePreviewDownload, VideoPreviewFrame, VideoPreviewPlayback,
-    VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
+    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowChromeState, PreviewWindowProfile,
+    RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
+    RemotePreviewDownload, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    VideoPreviewSeekCompletion, PREVIEW_WINDOW_CHROME_HIDE_DURATION,
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;
@@ -400,6 +400,9 @@ pub(crate) enum Message {
         window: window::Id,
         position: Point,
     },
+    CursorLeft {
+        window: window::Id,
+    },
     ColumnBrowserCursorEntered(BrowserPaneId),
     ColumnBrowserCursorExited(BrowserPaneId),
     ColumnEntryBoundsMeasured(Vec<ColumnEntryBounds>),
@@ -438,6 +441,10 @@ pub(crate) enum Message {
     WindowPointerPressed {
         window: window::Id,
         button: mouse::Button,
+        status: event::Status,
+    },
+    WindowPointerReleased {
+        window: window::Id,
         status: event::Status,
     },
     AddressEditingRequested(BrowserPaneId),
@@ -594,6 +601,7 @@ pub(crate) enum Message {
     },
     ScrollbarAutoHideElapsed(u64),
     WindowChromeAnimationTick,
+    PreviewWindowInitialChromeElapsed(u64),
     SidebarScrolled,
     SettingsScrolled,
     PropertiesScrolled,

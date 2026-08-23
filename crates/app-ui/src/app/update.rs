@@ -437,6 +437,15 @@ impl FileBrowser {
             Message::CursorMoved { window, position } => {
                 self.update_pointer_motion(window, position)
             }
+            Message::CursorLeft { window } => {
+                if self.preview_window == Some(window) {
+                    self.cancel_preview_window_initial_chrome_hide();
+                    if !self.preview_window_drag_active {
+                        self.preview_window_chrome.start_hide();
+                    }
+                }
+                Task::none()
+            }
             Message::ColumnBrowserCursorEntered(pane_id) => {
                 if self.file_drag.is_none() {
                     self.activate_pane(pane_id);
@@ -506,7 +515,13 @@ impl FileBrowser {
             Message::ShortcutCaptureStarted(binding_id) => self.start_shortcut_capture(binding_id),
             Message::ShortcutCaptureCanceled => self.cancel_shortcut_capture(),
             Message::ShortcutBindingReset(binding_id) => self.reset_shortcut_binding(binding_id),
-            Message::DragSelectionFinished => self.finish_pointer_drag_interactions(),
+            Message::WindowPointerReleased { window, status } => match status {
+                iced::event::Status::Captured => self.finish_tab_drag_from_captured_release(window),
+                iced::event::Status::Ignored => self.finish_pointer_drag_interactions(window),
+            },
+            Message::DragSelectionFinished => {
+                self.finish_pointer_drag_interactions(self.main_window)
+            }
             Message::DismissFloating => self.dismiss_floating(),
             Message::ArchiveCreation(message) => self.handle_archive_creation_message(message),
             Message::ArchiveExtraction(message) => self.handle_archive_extraction_message(message),
@@ -792,6 +807,10 @@ impl FileBrowser {
                 Task::none()
             }
             Message::WindowChromeAnimationTick => self.advance_window_animation_frame(),
+            Message::PreviewWindowInitialChromeElapsed(generation) => {
+                self.hide_preview_window_initial_chrome(generation);
+                Task::none()
+            }
             Message::SidebarScrolled => self.show_scrollbars_temporarily(Region::Sidebar),
             Message::SettingsScrolled => self.show_scrollbars_temporarily(Region::Settings),
             Message::PropertiesScrolled => self.show_scrollbars_temporarily(Region::Properties),
@@ -867,7 +886,9 @@ impl FileBrowser {
                 self.reorder_dragged_tab(pane_id, tab_id);
                 Task::none()
             }
-            Message::TabDragFinished => self.finish_tab_drag_from_captured_release(),
+            Message::TabDragFinished => {
+                self.finish_tab_drag_from_captured_release(self.main_window)
+            }
             Message::TabFileDropEntered(id, tab) => self.accept_tab_file_drop_entered(id, tab),
             Message::TabFileDropExited(id, tab) => self.accept_tab_file_drop_exited(id, tab),
             Message::TabFileDropReleased(id, tab) => self.accept_tab_file_drop_released(id, tab),

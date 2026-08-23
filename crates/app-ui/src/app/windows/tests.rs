@@ -10,7 +10,7 @@ use super::*;
 use crate::config;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, BrowserViewMode, LoadedOperationStore, Message, PreviewSize,
-    PreviewWindowControlsVisibility, SplitAxis, WindowChromeLayout, WindowFrameState,
+    PreviewWindowChromeState, SplitAxis, WindowChromeLayout, WindowFrameState,
     WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::operation_history::FileOperationCompletion;
@@ -211,31 +211,101 @@ fn preview_controls_follow_only_the_preview_window_top_region() {
 
     drop(browser.update(Message::CursorMoved {
         window: preview_window,
-        position: iced::Point::new(8.0, PreviewWindowControlsVisibility::REVEAL_HEIGHT),
+        position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT),
     }));
-    assert_eq!(
-        browser.preview_window_controls,
-        PreviewWindowControlsVisibility::Visible
-    );
+    assert!(browser.preview_window_chrome.target_is_visible());
 
     drop(browser.update(Message::CursorMoved {
         window: browser.main_window,
         position: iced::Point::new(8.0, 8.0),
     }));
-    assert_eq!(
-        browser.preview_window_controls,
-        PreviewWindowControlsVisibility::Visible
-    );
+    assert!(browser.preview_window_chrome.target_is_visible());
 
     drop(browser.update(Message::CursorMoved {
         window: preview_window,
-        position: iced::Point::new(8.0, PreviewWindowControlsVisibility::REVEAL_HEIGHT + 1.0),
+        position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT + 1.0),
     }));
-    assert_eq!(
-        browser.preview_window_controls,
-        PreviewWindowControlsVisibility::Hidden
-    );
+    assert!(!browser.preview_window_chrome.target_is_visible());
+
+    drop(browser.update(Message::CursorMoved {
+        window: preview_window,
+        position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT),
+    }));
+    assert!(browser.preview_window_chrome.target_is_visible());
+    drop(browser.update(Message::CursorLeft {
+        window: browser.main_window,
+    }));
+    assert!(browser.preview_window_chrome.target_is_visible());
+
+    drop(browser.update(Message::CursorLeft {
+        window: preview_window,
+    }));
+    assert!(!browser.preview_window_chrome.target_is_visible());
 }
+
+#[test]
+fn initial_preview_chrome_hides_only_without_pointer_interaction() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let preview_window = window::Id::unique();
+
+    browser.preview_window = Some(preview_window);
+    drop(browser.start_preview_window_initial_chrome());
+    let initial_generation = browser.preview_window_initial_chrome_generation;
+    browser.hide_preview_window_initial_chrome(initial_generation);
+    assert!(!browser.preview_window_chrome.target_is_visible());
+
+    drop(browser.start_preview_window_initial_chrome());
+    let stale_generation = browser.preview_window_initial_chrome_generation;
+    drop(browser.update(Message::CursorMoved {
+        window: preview_window,
+        position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT),
+    }));
+    browser.hide_preview_window_initial_chrome(stale_generation);
+    assert!(browser.preview_window_chrome.target_is_visible());
+}
+
+#[test]
+fn preview_controls_stay_visible_while_the_window_is_dragged() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let preview_window = window::Id::unique();
+    browser.preview_window = Some(preview_window);
+    browser.preview_window_chrome.start_reveal();
+
+    drop(browser.update(Message::WindowDragRequested(preview_window)));
+    drop(browser.update(Message::CursorMoved {
+        window: preview_window,
+        position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT + 1.0),
+    }));
+    drop(browser.update(Message::CursorLeft {
+        window: preview_window,
+    }));
+    assert!(browser.preview_window_chrome.target_is_visible());
+
+    drop(browser.update(Message::WindowPointerReleased {
+        window: preview_window,
+        status: iced::event::Status::Captured,
+    }));
+    drop(browser.update(Message::CursorMoved {
+        window: preview_window,
+        position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT + 1.0),
+    }));
+    assert!(!browser.preview_window_chrome.target_is_visible());
+}
+
+#[test]
+fn preview_window_opens_with_controls_visible() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+    drop(browser.open_image_preview_window_for_dimensions(748, 499));
+
+    assert!(browser.preview_window_chrome.target_is_visible());
+    assert_close(browser.preview_size.width, 748.0);
+    assert_close(browser.preview_size.height, 499.0);
+
+    drop(browser.close_preview_window());
+    assert!(!browser.preview_window_chrome.target_is_visible());
+}
+
 #[test]
 fn maximized_observation_is_isolated_and_removed_when_window_closes() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());

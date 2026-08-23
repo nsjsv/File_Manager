@@ -4,12 +4,12 @@ use iced::{mouse, window, Element, Length};
 
 use crate::appearance::{
     context_menu_style, floating_window_close_button_style, floating_window_control_button_style,
-    window_close_button_style, window_control_button_style, window_title_bar_style,
-    window_top_bar_style,
+    preview_window_top_gradient_style, window_close_button_style, window_control_button_style,
+    window_title_bar_style, window_top_bar_style,
 };
 use crate::icons::IconSymbol;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, Message, PreviewWindowControlsVisibility, SplitAxis,
+    BrowserPaneId, BrowserPaneLayout, Message, PreviewWindowChromeState, SplitAxis,
     WindowChromeLayout, WindowControlKind, WindowControlSide, WindowControlsConfig,
     WindowFrameState, WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT,
 };
@@ -112,10 +112,10 @@ pub(crate) fn main_pane_window_chrome_role(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 enum WindowControlPresentation {
     Standard,
-    Floating,
+    Floating { opacity: f32 },
 }
 
 pub(crate) fn window_control_group(
@@ -138,13 +138,16 @@ pub(crate) fn floating_window_control_group(
     side: WindowControlSide,
     window: window::Id,
     frame_state: WindowFrameState,
+    opacity: f32,
 ) -> Element<'static, Message> {
     window_control_group_with_presentation(
         config,
         side,
         window,
         frame_state,
-        WindowControlPresentation::Floating,
+        WindowControlPresentation::Floating {
+            opacity: opacity.clamp(0.0, 1.0),
+        },
     )
 }
 
@@ -202,21 +205,28 @@ fn window_control_button(
             Message::AuxiliaryWindowCloseRequested(window),
         ),
     };
-    let style = match (presentation, kind) {
-        (WindowControlPresentation::Floating, WindowControlKind::Close) => {
-            floating_window_close_button_style
-        }
-        (WindowControlPresentation::Floating, _) => floating_window_control_button_style,
-        (WindowControlPresentation::Standard, WindowControlKind::Close) => {
-            window_close_button_style
-        }
-        (WindowControlPresentation::Standard, _) => window_control_button_style,
-    };
-    let control = button(themed_icon(
-        icon,
-        IconTone::Normal,
-        WINDOW_CONTROL_ICON_SIZE,
-    ))
+    let (style, opacity): (fn(&iced::Theme, button::Status) -> button::Style, f32) =
+        match (presentation, kind) {
+            (WindowControlPresentation::Floating { opacity }, WindowControlKind::Close) => {
+                (floating_window_close_button_style, opacity)
+            }
+            (WindowControlPresentation::Floating { opacity }, _) => {
+                (floating_window_control_button_style, opacity)
+            }
+            (WindowControlPresentation::Standard, WindowControlKind::Close) => {
+                (window_close_button_style, 1.0)
+            }
+            (WindowControlPresentation::Standard, _) => (window_control_button_style, 1.0),
+        };
+    let control = button(
+        themed_icon(icon, IconTone::Normal, WINDOW_CONTROL_ICON_SIZE).style(
+            move |theme, status| {
+                let mut style = super::icon_tone_style(IconTone::Normal)(theme, status);
+                style.color = style.color.map(|color| color.scale_alpha(opacity));
+                style
+            },
+        ),
+    )
     .on_press(message)
     .padding([
         WINDOW_CONTROL_VERTICAL_PADDING,
@@ -224,7 +234,14 @@ fn window_control_button(
     ])
     .width(Length::Fixed(WINDOW_CONTROL_WIDTH))
     .height(Length::Fixed(WINDOW_CONTROL_HEIGHT))
-    .style(style);
+    .style(move |theme, status| {
+        let mut style = style(theme, status);
+        style.background = style
+            .background
+            .map(|background| background.scale_alpha(opacity));
+        style.text_color = style.text_color.scale_alpha(opacity);
+        style
+    });
 
     tooltip(
         control,
@@ -267,25 +284,16 @@ pub(crate) fn auxiliary_window_content_without_title<'a>(
 ) -> Element<'a, Message> {
     auxiliary_window_content("", String::new(), content, config, window, frame_state)
 }
+
 pub(crate) fn floating_preview_window_content<'a>(
     content: Element<'a, Message>,
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
-    controls_visibility: PreviewWindowControlsVisibility,
+    chrome_opacity: f32,
 ) -> Element<'a, Message> {
-    let drag_surface = window_drag_region(
-        container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT))
-            .into(),
-        window,
-    );
-    let mut layer = Stack::with_children([content, drag_surface])
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-    if controls_visibility.is_visible() {
+    let chrome_opacity = chrome_opacity.clamp(0.0, 1.0);
+    let top_bar: Element<'a, Message> = if chrome_opacity > f32::EPSILON {
         let controls = Row::new()
             .spacing(10)
             .padding([8, 8])
@@ -295,6 +303,7 @@ pub(crate) fn floating_preview_window_content<'a>(
                 WindowControlSide::Left,
                 window,
                 frame_state,
+                chrome_opacity,
             ))
             .push(Space::new().width(Length::Fill))
             .push(floating_window_control_group(
@@ -302,13 +311,31 @@ pub(crate) fn floating_preview_window_content<'a>(
                 WindowControlSide::Right,
                 window,
                 frame_state,
+                chrome_opacity,
             ))
             .width(Length::Fill)
-            .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT));
-        layer = layer.push(controls);
-    }
+            .height(Length::Fixed(PreviewWindowChromeState::REVEAL_HEIGHT));
+        let gradient = container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |theme| preview_window_top_gradient_style(theme, chrome_opacity));
 
-    layer.into()
+        Stack::with_children([gradient.into(), controls.into()])
+            .width(Length::Fill)
+            .height(Length::Fixed(PreviewWindowChromeState::REVEAL_HEIGHT))
+            .into()
+    } else {
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(PreviewWindowChromeState::REVEAL_HEIGHT))
+            .into()
+    };
+    let drag_surface = window_drag_region(top_bar, window);
+
+    Stack::with_children([content, drag_surface])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn window_content_with_top_bar<'a>(

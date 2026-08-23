@@ -149,11 +149,14 @@ impl FileBrowser {
         ])
     }
 
-    pub(in crate::app) fn finish_tab_drag_from_captured_release(&mut self) -> Task<Message> {
+    pub(in crate::app) fn finish_tab_drag_from_captured_release(
+        &mut self,
+        window: iced::window::Id,
+    ) -> Task<Message> {
         if self.file_drop_session.is_some() {
             Task::none()
         } else {
-            self.finish_pointer_drag_interactions()
+            self.finish_pointer_drag_interactions(window)
         }
     }
 

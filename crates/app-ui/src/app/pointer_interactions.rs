@@ -1,7 +1,7 @@
 use super::FileBrowser;
 use iced::{window, Point, Task};
 
-use crate::model::{Message, PreviewWindowControlsVisibility};
+use crate::model::Message;
 
 impl FileBrowser {
     pub(super) fn clear_pointer_driven_interaction_state(&mut self) {
@@ -22,10 +22,13 @@ impl FileBrowser {
         self.hovered_list_header_column = None;
     }
 
-    pub(super) fn finish_pointer_drag_interactions(&mut self) -> Task<Message> {
+    pub(super) fn finish_pointer_drag_interactions(&mut self, window: window::Id) -> Task<Message> {
         self.finish_tab_drag();
         self.finish_pane_drag();
         self.finish_batch_rename_preview_drag();
+        if self.preview_window == Some(window) && self.preview_window_drag_active {
+            self.preview_window_drag_active = false;
+        }
         Task::batch([
             self.finish_sidebar_bookmark_drag(),
             self.finish_sidebar_resize_drag_command(),
@@ -46,8 +49,10 @@ impl FileBrowser {
         position: Point,
     ) -> Task<Message> {
         if self.preview_window == Some(window) {
-            self.preview_window_controls =
-                PreviewWindowControlsVisibility::from_cursor_y(position.y);
+            self.cancel_preview_window_initial_chrome_hide();
+            if !self.preview_window_drag_active {
+                self.preview_window_chrome.update_for_cursor_y(position.y);
+            }
             return Task::none();
         }
         if window != self.main_window {

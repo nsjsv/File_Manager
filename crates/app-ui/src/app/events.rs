@@ -51,6 +51,10 @@ pub(super) fn global_event_message(
         });
     }
 
+    if matches!(&event, Event::Mouse(mouse::Event::CursorLeft)) {
+        return Some(Message::CursorLeft { window });
+    }
+
     if let Some(message) = pointer_pressed_message(&event, status, window) {
         return Some(message);
     }
@@ -58,9 +62,8 @@ pub(super) fn global_event_message(
     if matches!(
         &event,
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-    ) && matches!(status, event::Status::Captured)
-    {
-        return Some(Message::TabDragFinished);
+    ) {
+        return Some(Message::WindowPointerReleased { window, status });
     }
 
     if matches!(status, event::Status::Captured) {
@@ -68,9 +71,6 @@ pub(super) fn global_event_message(
     }
 
     match event {
-        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-            Some(Message::DragSelectionFinished)
-        }
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Back)) => Some(Message::Back),
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Forward)) => Some(Message::Forward),
         _ => None,
@@ -177,12 +177,19 @@ mod tests {
     }
 
     #[test]
-    fn captured_left_release_finishes_tab_drag() {
+    fn captured_left_release_reports_source_window_and_status() {
+        let window = window::Id::unique();
         let event = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
 
-        let message = route_event(event, event::Status::Captured);
+        let message = route_event_with_window(event, event::Status::Captured, window);
 
-        assert!(matches!(message, Some(Message::TabDragFinished)));
+        assert!(matches!(
+            message,
+            Some(Message::WindowPointerReleased {
+                window: received_window,
+                status: event::Status::Captured,
+            }) if received_window == window
+        ));
     }
 
     #[test]
@@ -203,6 +210,21 @@ mod tests {
         assert_eq!(received_window, window);
         assert_eq!(received.x, position.x);
         assert_eq!(received.y, position.y);
+    }
+
+    #[test]
+    fn cursor_left_routes_to_window_message() {
+        let window = window::Id::unique();
+        let event = Event::Mouse(mouse::Event::CursorLeft);
+
+        let message = route_event_with_window(event, event::Status::Ignored, window);
+
+        assert!(matches!(
+            message,
+            Some(Message::CursorLeft {
+                window: received_window
+            }) if received_window == window
+        ));
     }
 
     #[test]

@@ -222,37 +222,206 @@ pub(crate) enum PreviewWindowProfile {
     Audio,
     Video,
 }
+const PREVIEW_WINDOW_CHROME_REVEAL_DURATION: Duration = Duration::from_millis(160);
+pub(crate) const PREVIEW_WINDOW_CHROME_HIDE_DURATION: Duration = Duration::from_millis(220);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PreviewWindowControlsVisibility {
+enum PreviewWindowChromeTarget {
     Hidden,
     Visible,
 }
 
-impl PreviewWindowControlsVisibility {
-    pub(crate) const REVEAL_HEIGHT: f32 = 64.0;
-
-    pub(crate) fn from_cursor_y(cursor_y: f32) -> Self {
-        if cursor_y <= Self::REVEAL_HEIGHT {
+impl PreviewWindowChromeTarget {
+    fn from_cursor_y(cursor_y: f32) -> Self {
+        if cursor_y <= PreviewWindowChromeState::REVEAL_HEIGHT {
             Self::Visible
         } else {
             Self::Hidden
         }
     }
 
-    pub(crate) fn is_visible(self) -> bool {
-        self == Self::Visible
+    fn opacity(self) -> f32 {
+        match self {
+            Self::Hidden => 0.0,
+            Self::Visible => 1.0,
+        }
+    }
+
+    fn duration(self) -> Duration {
+        match self {
+            Self::Hidden => PREVIEW_WINDOW_CHROME_HIDE_DURATION,
+            Self::Visible => PREVIEW_WINDOW_CHROME_REVEAL_DURATION,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PreviewWindowChromeAnimation {
+    started_at: Instant,
+    initial_opacity: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PreviewWindowChromeState {
+    target: PreviewWindowChromeTarget,
+    opacity: f32,
+    animation: Option<PreviewWindowChromeAnimation>,
+}
+
+impl Default for PreviewWindowChromeState {
+    fn default() -> Self {
+        Self {
+            target: PreviewWindowChromeTarget::Hidden,
+            opacity: 0.0,
+            animation: None,
+        }
+    }
+}
+
+impl PreviewWindowChromeState {
+    pub(crate) const REVEAL_HEIGHT: f32 = 64.0;
+
+    pub(crate) fn start_reveal(&mut self) {
+        self.retarget_at(PreviewWindowChromeTarget::Visible, Instant::now());
+    }
+
+    pub(crate) fn start_hide(&mut self) {
+        self.retarget_at(PreviewWindowChromeTarget::Hidden, Instant::now());
+    }
+
+    pub(crate) fn update_for_cursor_y(&mut self, cursor_y: f32) {
+        self.retarget_at(
+            PreviewWindowChromeTarget::from_cursor_y(cursor_y),
+            Instant::now(),
+        );
+    }
+
+    pub(crate) fn reset_hidden(&mut self) {
+        *self = Self::default();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn target_is_visible(self) -> bool {
+        self.target == PreviewWindowChromeTarget::Visible
+    }
+
+    pub(crate) fn opacity(self) -> f32 {
+        self.opacity.clamp(0.0, 1.0)
+    }
+
+    pub(crate) fn is_animating(self) -> bool {
+        self.animation.is_some()
+    }
+
+    pub(crate) fn advance(&mut self) {
+        self.advance_at(Instant::now());
+    }
+
+    fn retarget_at(&mut self, target: PreviewWindowChromeTarget, now: Instant) {
+        if self.target == target {
+            return;
+        }
+
+        self.opacity = self.opacity_at(now);
+        self.target = target;
+        if (self.opacity - target.opacity()).abs() <= f32::EPSILON {
+            self.animation = None;
+        } else {
+            self.animation = Some(PreviewWindowChromeAnimation {
+                started_at: now,
+                initial_opacity: self.opacity,
+            });
+        }
+    }
+
+    fn advance_at(&mut self, now: Instant) {
+        let Some(animation) = self.animation else {
+            return;
+        };
+        let progress = crate::animation::elapsed_fraction_at(
+            animation.started_at,
+            now,
+            self.target.duration(),
+        );
+        self.opacity = animation.initial_opacity
+            + (self.target.opacity() - animation.initial_opacity)
+                * crate::animation::ease_out_cubic(progress);
+        if progress >= 1.0 {
+            self.opacity = self.target.opacity();
+            self.animation = None;
+        }
+    }
+
+    fn opacity_at(self, now: Instant) -> f32 {
+        let Some(animation) = self.animation else {
+            return self.opacity;
+        };
+        let progress = crate::animation::elapsed_fraction_at(
+            animation.started_at,
+            now,
+            self.target.duration(),
+        );
+        animation.initial_opacity
+            + (self.target.opacity() - animation.initial_opacity)
+                * crate::animation::ease_out_cubic(progress)
     }
 }
 
 #[cfg(test)]
-mod controls_tests {
-    use super::PreviewWindowControlsVisibility;
+mod preview_window_chrome_tests {
+    use super::*;
 
     #[test]
-    fn controls_are_visible_only_inside_top_reveal_region() {
-        assert!(PreviewWindowControlsVisibility::from_cursor_y(0.0).is_visible());
-        assert!(PreviewWindowControlsVisibility::from_cursor_y(64.0).is_visible());
-        assert!(!PreviewWindowControlsVisibility::from_cursor_y(64.1).is_visible());
+    fn cursor_y_targets_only_the_top_reveal_region() {
+        assert_eq!(
+            PreviewWindowChromeTarget::from_cursor_y(0.0),
+            PreviewWindowChromeTarget::Visible
+        );
+        assert_eq!(
+            PreviewWindowChromeTarget::from_cursor_y(64.0),
+            PreviewWindowChromeTarget::Visible
+        );
+        assert_eq!(
+            PreviewWindowChromeTarget::from_cursor_y(64.1),
+            PreviewWindowChromeTarget::Hidden
+        );
+    }
+
+    #[test]
+    fn chrome_fades_in_and_out_over_the_configured_durations() {
+        let started_at = Instant::now();
+        let mut chrome = PreviewWindowChromeState::default();
+
+        chrome.retarget_at(PreviewWindowChromeTarget::Visible, started_at);
+        chrome.advance_at(started_at + Duration::from_millis(80));
+        assert!(chrome.opacity() > 0.0 && chrome.opacity() < 1.0);
+        chrome.advance_at(started_at + PREVIEW_WINDOW_CHROME_REVEAL_DURATION);
+        assert_eq!(chrome.opacity(), 1.0);
+        assert!(!chrome.is_animating());
+
+        let hiding_at = started_at + PREVIEW_WINDOW_CHROME_REVEAL_DURATION;
+        chrome.retarget_at(PreviewWindowChromeTarget::Hidden, hiding_at);
+        chrome.advance_at(hiding_at + Duration::from_millis(110));
+        assert!(chrome.opacity() > 0.0 && chrome.opacity() < 1.0);
+        chrome.advance_at(hiding_at + PREVIEW_WINDOW_CHROME_HIDE_DURATION);
+        assert_eq!(chrome.opacity(), 0.0);
+        assert!(!chrome.is_animating());
+    }
+
+    #[test]
+    fn reversing_a_fade_keeps_the_current_opacity() {
+        let started_at = Instant::now();
+        let mut chrome = PreviewWindowChromeState::default();
+        chrome.retarget_at(PreviewWindowChromeTarget::Visible, started_at);
+
+        let reversed_at = started_at + Duration::from_millis(80);
+        chrome.advance_at(reversed_at);
+        let opacity_before_reverse = chrome.opacity();
+        chrome.retarget_at(PreviewWindowChromeTarget::Hidden, reversed_at);
+
+        assert_eq!(chrome.opacity(), opacity_before_reverse);
+        chrome.advance_at(reversed_at + Duration::from_millis(20));
+        assert!(chrome.opacity() < opacity_before_reverse);
     }
 }
 

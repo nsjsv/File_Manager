@@ -260,7 +260,7 @@ mod tests {
 
         drop(browser.start_window_control_reorder(WindowControlKind::Close));
         drop(browser.enter_window_control_reorder_target(WindowControlKind::Minimize));
-        drop(browser.finish_pointer_drag_interactions());
+        drop(browser.finish_pointer_drag_interactions(browser.main_window));
         assert_eq!(
             kinds_on(&browser, WindowControlSide::Right),
             vec![

@@ -16,8 +16,8 @@ pub(crate) use icon_grid::icon_grid_expansion_panel_style;
 pub(crate) use navigation_input::{address_bar_style, navigation_text_input_style};
 pub(crate) use window_chrome::{
     floating_window_close_button_style, floating_window_control_button_style,
-    window_close_button_style, window_control_button_style, window_title_bar_style,
-    window_top_bar_style,
+    preview_window_top_gradient_style, window_close_button_style, window_control_button_style,
+    window_title_bar_style, window_top_bar_style,
 };
 
 pub(crate) use list_header::{

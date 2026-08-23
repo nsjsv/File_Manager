@@ -3,12 +3,3 @@
 .idea/
 .vscode/Trellis Instructions
 .macos-kvm
-
-.ace-tool/
-.cursor
-.agents
-.claude
-.codex
-.pi
-.trellis
-.pi-subagents

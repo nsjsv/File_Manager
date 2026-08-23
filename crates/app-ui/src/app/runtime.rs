@@ -15,7 +15,7 @@ use super::events::system_theme;
 use super::FileBrowser;
 use crate::command_line::ApplicationLaunchRequest;
 use crate::matugen_theme::{fallback_theme, read_matugen_theme_file, AppearanceMode};
-use crate::model::{Message, X11DndMessage};
+use crate::model::{Message, X11DndMessage, PREVIEW_WINDOW_CHROME_HIDE_DURATION};
 use crate::startup_rendering::StartupRenderingEnvironment;
 use crate::startup_trace;
 
@@ -387,6 +387,16 @@ pub(super) fn scrollbar_auto_hide_command(generation: u64) -> Task<Message> {
             generation
         },
         Message::ScrollbarAutoHideElapsed,
+    )
+}
+
+pub(super) fn preview_window_initial_chrome_command(generation: u64) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::time::sleep(PREVIEW_WINDOW_CHROME_HIDE_DURATION).await;
+            generation
+        },
+        Message::PreviewWindowInitialChromeElapsed,
     )
 }
 

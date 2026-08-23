@@ -14,6 +14,18 @@ pub(crate) fn window_top_bar_style(theme: &Theme) -> container::Style {
     }
 }
 
+pub(crate) fn preview_window_top_gradient_style(_theme: &Theme, opacity: f32) -> container::Style {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let gradient = iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
+        .add_stop(0.0, Color::BLACK.scale_alpha(0.9 * opacity))
+        .add_stop(1.0, Color::TRANSPARENT);
+
+    container::Style {
+        background: Some(Background::Gradient(gradient.into())),
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn window_title_bar_style(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(window_chrome_background(theme))),
@@ -130,6 +142,31 @@ mod tests {
             assert_eq!(title_bar.text_color, top_bar.text_color);
             assert_eq!(top_bar.border.width, 0.0);
             assert_eq!(title_bar.border.width, 1.0);
+        }
+    }
+
+    #[test]
+    fn preview_window_top_gradient_fades_from_black_to_transparent() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let style = preview_window_top_gradient_style(&theme, 1.0);
+            let Some(Background::Gradient(iced::Gradient::Linear(gradient))) = style.background
+            else {
+                panic!("expected a linear preview window top gradient");
+            };
+            let stops: Vec<_> = gradient.stops.into_iter().flatten().collect();
+
+            assert_eq!(stops.len(), 2);
+            assert_eq!(stops[0].offset, 0.0);
+            assert_eq!(stops[1].offset, 1.0);
+            assert_eq!(
+                stops[0].color,
+                Color {
+                    a: 0.9,
+                    ..Color::BLACK
+                }
+            );
+            assert_eq!(stops[1].color, Color::TRANSPARENT);
+            assert_eq!(gradient.angle, iced::Radians(std::f32::consts::PI));
         }
     }
 

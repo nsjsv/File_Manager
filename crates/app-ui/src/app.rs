@@ -126,7 +126,7 @@ use crate::model::{
     DirectoryOrderPhase, ExpandedDirectory, FileDragState, FileDropPrompt, FileDropSessionState,
     FilePropertiesState, IconGridExpansionState, IconGridViewport, ListColumnKind, Message,
     PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize, PreviewState,
-    PreviewWindowControlsVisibility, PreviewWindowProfile, ScrollbarRegion, SearchServiceState,
+    PreviewWindowChromeState, PreviewWindowProfile, ScrollbarRegion, SearchServiceState,
     SelectionMarquee, SettingsCategory, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
     SidebarLocation, StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument,
     TransferConflictState, TrashRefreshState, VideoPreviewPlayback,
@@ -195,7 +195,9 @@ pub(crate) struct FileBrowser {
     pub(crate) preview_size: PreviewSize,
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
-    preview_window_controls: PreviewWindowControlsVisibility,
+    preview_window_chrome: PreviewWindowChromeState,
+    preview_window_drag_active: bool,
+    preview_window_initial_chrome_generation: u64,
     main_window: window::Id,
     maximized_windows: HashSet<window::Id>,
     wayland_dnd: Option<wayland_dnd::WaylandDndRuntime>,
@@ -368,6 +370,7 @@ impl FileBrowser {
     }
 
     pub(crate) fn advance_window_animation_frame(&mut self) -> Task<Message> {
+        self.preview_window_chrome.advance();
         Task::batch([
             self.advance_smooth_scroll_animation(),
             self.advance_scrollbar_animation(),
@@ -527,7 +530,9 @@ impl FileBrowser {
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
-            preview_window_controls: PreviewWindowControlsVisibility::Hidden,
+            preview_window_chrome: PreviewWindowChromeState::default(),
+            preview_window_drag_active: false,
+            preview_window_initial_chrome_generation: 0,
             main_window,
             maximized_windows: HashSet::new(),
             wayland_dnd: None,
@@ -797,7 +802,8 @@ impl FileBrowser {
             );
         }
 
-        if self.scrollbar_animation_is_active()
+        if self.preview_window_chrome.is_animating()
+            || self.scrollbar_animation_is_active()
             || self.smooth_scroll_animation_is_active()
             || self.address_bar_transition_is_active()
             || self.tab_bar_reveal_animation_is_active()
@@ -875,7 +881,7 @@ impl FileBrowser {
                 &self.user_config.window_controls,
                 window,
                 frame_state,
-                self.preview_window_controls,
+                self.preview_window_chrome.opacity(),
             );
             window_resize_frame(content, window, frame_state)
         } else if window == self.main_window {

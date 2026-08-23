@@ -3,6 +3,7 @@ use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
 use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
+use crate::app::runtime::preview_window_initial_chrome_command;
 use crate::model::{
     Message, PreviewSize, PreviewWindowProfile, SettingsCategory, WINDOW_TOP_BAR_HEIGHT,
 };
@@ -407,22 +408,25 @@ impl FileBrowser {
 
     pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
         self.preview_window_profile = profile;
+        self.preview_window_drag_active = false;
         self.preview_size = default_preview_size(profile);
-        self.preview_window_controls = crate::model::PreviewWindowControlsVisibility::Hidden;
+        let initial_chrome = self.start_preview_window_initial_chrome();
         let size = clamp_preview_size_to_minimum(profile, self.preview_size);
+
         self.pending_preview_resize = Some(size);
         if let Some(window) = self.preview_window {
             self.focused_window = window;
             return Task::batch([
                 window::resize(window, preview_window_size_for_content(size)),
                 window::gain_focus(window),
+                initial_chrome,
             ]);
         }
 
         let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
-        command.discard()
+        Task::batch([command.discard(), initial_chrome])
     }
 
     pub(super) fn handle_captured_preview_shortcut(&mut self) -> Task<Message> {
@@ -460,7 +464,8 @@ impl FileBrowser {
         size: PreviewSize,
     ) -> Task<Message> {
         self.preview_window_profile = profile;
-        self.preview_window_controls = crate::model::PreviewWindowControlsVisibility::Hidden;
+        self.preview_window_drag_active = false;
+        let initial_chrome = self.start_preview_window_initial_chrome();
         self.preview_size = clamp_preview_size_to_minimum(profile, size);
         self.pending_preview_resize = Some(self.preview_size);
 
@@ -474,7 +479,7 @@ impl FileBrowser {
         let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
-        Task::batch([close_command, command.discard()])
+        Task::batch([close_command, command.discard(), initial_chrome])
     }
 
     pub(super) fn fit_preview_window_to_video_frame(
@@ -491,11 +496,30 @@ impl FileBrowser {
             video_preview_size_from_frame(width, height),
         )
     }
+    fn start_preview_window_initial_chrome(&mut self) -> Task<Message> {
+        self.cancel_preview_window_initial_chrome_hide();
+        self.preview_window_chrome.start_reveal();
+        preview_window_initial_chrome_command(self.preview_window_initial_chrome_generation)
+    }
+
+    pub(super) fn cancel_preview_window_initial_chrome_hide(&mut self) {
+        self.preview_window_initial_chrome_generation = self
+            .preview_window_initial_chrome_generation
+            .wrapping_add(1);
+    }
+
+    pub(super) fn hide_preview_window_initial_chrome(&mut self, generation: u64) {
+        if generation == self.preview_window_initial_chrome_generation {
+            self.preview_window_chrome.start_hide();
+        }
+    }
 
     pub(super) fn close_preview_window(&mut self) -> Task<Message> {
         self.clear_preview();
         self.pending_preview_resize = None;
-        self.preview_window_controls = crate::model::PreviewWindowControlsVisibility::Hidden;
+        self.preview_window_drag_active = false;
+        self.cancel_preview_window_initial_chrome_hide();
+        self.preview_window_chrome.reset_hidden();
         let Some(window) = self.preview_window.take() else {
             return Task::none();
         };
