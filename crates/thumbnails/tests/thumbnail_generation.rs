@@ -1,3 +1,4 @@
+use image::ImageEncoder;
 use std::path::Path;
 
 use thumbnails::{
@@ -215,6 +216,26 @@ async fn load_image_dimensions_reads_source_size() {
 }
 
 #[tokio::test]
+async fn dimensions_and_thumbnail_honor_exif_rotation() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("rotated.jpg");
+    let output = dir.path().join("rotated-thumbnail.png");
+    write_exif_rotated_jpeg(&source, 4, 2);
+
+    let dimensions = load_image_dimensions(&source).await.unwrap();
+    let thumbnail = generate_image_thumbnail(&source, &output, ThumbnailOptions { max_edge: 64 })
+        .await
+        .unwrap();
+
+    assert_eq!(dimensions, (2, 4));
+    assert!(thumbnail.height > thumbnail.width);
+    assert_eq!(
+        image::image_dimensions(&thumbnail.output).unwrap(),
+        (thumbnail.width, thumbnail.height)
+    );
+}
+
+#[tokio::test]
 async fn load_image_dimensions_reads_svg_size() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.svg");
@@ -292,4 +313,18 @@ fn write_sized_svg_image(path: &Path, width: u32, height: u32) {
         ),
     )
     .unwrap();
+}
+
+fn write_exif_rotated_jpeg(path: &Path, width: u32, height: u32) {
+    let pixels = vec![127; width as usize * height as usize * 3];
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new(std::fs::File::create(path).unwrap());
+    encoder
+        .set_exif_metadata(vec![
+            b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0,
+            0,
+        ])
+        .unwrap();
+    encoder
+        .write_image(&pixels, width, height, image::ExtendedColorType::Rgb8)
+        .unwrap();
 }

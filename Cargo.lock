@@ -161,6 +161,7 @@ dependencies = [
  "regex",
  "resvg",
  "rodio",
+ "roxmltree",
  "rusqlite",
  "rustix 1.1.4",
  "serde",

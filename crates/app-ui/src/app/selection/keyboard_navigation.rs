@@ -421,25 +421,26 @@ impl FileBrowser {
 
     fn open_preview(&mut self) -> Task<Message> {
         self.context_menu = None;
+        let close_window_command = self.close_preview_window();
 
         let Some(path) = self.selected.clone() else {
             let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
             self.clear_preview();
             self.preview = Some(PreviewState::Error("Select an item to preview".to_owned()));
-            return window_command;
+            return close_window_command.chain(window_command);
         };
 
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
         if kind == FileKind::File {
             if let Some(command) = self.reject_oversized_file_preview(&path) {
-                return command;
+                return close_window_command.chain(command);
             }
         }
         if kind == FileKind::File && self.path_is_remote_mount(&path) {
-            return self.start_remote_preview_download(path);
+            return close_window_command.chain(self.start_remote_preview_download(path));
         }
 
-        self.open_preview_for_resolved_path(path, kind)
+        close_window_command.chain(self.open_preview_for_resolved_path(path, kind))
     }
 
     pub(in crate::app) fn open_preview_for_resolved_path(
@@ -463,32 +464,27 @@ impl FileBrowser {
             && !is_video_preview
             && !is_animated_image_preview;
         if is_animated_image_preview {
-            let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.clear_global_error();
             let generation = self.next_animated_image_preview_generation();
             return Task::batch([
-                close_window_command,
                 animated_image_preview_command(path, generation),
                 self.request_browser_session_save(),
             ]);
         }
         if is_image_preview {
-            let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.clear_global_error();
+            let generation = self.next_original_image_preview_generation();
             return Task::batch([
-                close_window_command,
-                image_preview_dimensions_command(path),
+                image_preview_dimensions_command(path, generation),
                 self.request_browser_session_save(),
             ]);
         }
         if is_video_preview {
-            let close_window_command = self.close_preview_window();
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.clear_global_error();
             return Task::batch([
-                close_window_command,
                 preview_command(
                     path,
                     kind,

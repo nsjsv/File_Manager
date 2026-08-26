@@ -65,10 +65,10 @@ pub(crate) use network_connections::{
 };
 mod preview;
 pub(crate) use preview::{
-    animated_image_preview_command, image_preview_dimensions_command, preview_command,
-    preview_directory_children_command, remote_preview_cache_command, start_audio_preview_command,
-    start_video_preview_audio_command, text_preview_chunk_command, video_preview_frame_command,
-    video_preview_metadata_command,
+    animated_image_preview_command, image_preview_dimensions_command,
+    original_image_preview_command, preview_command, preview_directory_children_command,
+    remote_preview_cache_command, start_audio_preview_command, start_video_preview_audio_command,
+    text_preview_chunk_command, video_preview_frame_command, video_preview_metadata_command,
 };
 mod properties;
 pub(crate) use properties::{

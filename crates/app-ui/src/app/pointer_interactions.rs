@@ -28,6 +28,11 @@ impl FileBrowser {
         self.finish_batch_rename_preview_drag();
         if self.preview_window == Some(window) && self.preview_window_drag_active {
             self.preview_window_drag_active = false;
+            if let Some(pointer_y) = self.preview_window_pointer_y {
+                self.preview_window_chrome.update_for_cursor_y(pointer_y);
+            } else {
+                self.preview_window_chrome.start_hide();
+            }
         }
         Task::batch([
             self.finish_sidebar_bookmark_drag(),
@@ -50,6 +55,7 @@ impl FileBrowser {
     ) -> Task<Message> {
         if self.preview_window == Some(window) {
             self.cancel_preview_window_initial_chrome_hide();
+            self.preview_window_pointer_y = Some(position.y);
             if !self.preview_window_drag_active {
                 self.preview_window_chrome.update_for_cursor_y(position.y);
             }

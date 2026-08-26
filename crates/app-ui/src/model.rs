@@ -112,10 +112,11 @@ pub(crate) use properties::{
 };
 mod preview;
 pub(crate) use preview::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, PreviewContent, PreviewSize, PreviewState,
-    PreviewTreeDirectoryChildren, PreviewTreeEntry, PreviewWindowChromeState, PreviewWindowProfile,
-    RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
-    RemotePreviewDownload, VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, PreviewContent,
+    PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry,
+    PreviewWindowChromeState, PreviewWindowProfile, RemotePreviewCacheFinished,
+    RemotePreviewCacheMessage, RemotePreviewCacheProgress, RemotePreviewDownload,
+    VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
     VideoPreviewSeekCompletion, PREVIEW_WINDOW_CHROME_HIDE_DURATION,
 };
 mod settings;
@@ -298,6 +299,12 @@ pub(crate) enum Message {
     DocumentPreview(DocumentPreviewMessage),
     RemotePreviewCache(RemotePreviewCacheMessage),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
+    OriginalImagePreviewLoaded(
+        PathBuf,
+        u64,
+        Result<crate::original_image_preview::OriginalImagePreview, String>,
+    ),
+    RetryImagePreview(PathBuf),
     FileProperties(FilePropertiesMessage),
     PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
     TextPreviewAction {
@@ -316,7 +323,7 @@ pub(crate) enum Message {
         content_height: f32,
     },
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
-    ImagePreviewDimensionsLoaded(PathBuf, Result<(u32, u32), String>),
+    ImagePreviewDimensionsLoaded(PathBuf, u64, Result<(u32, u32), String>),
     AnimatedImageFrameLoaded(AnimatedImageFrame),
     AnimatedImagePreviewFinished(PathBuf, u64),
     AnimatedImagePreviewFailed(PathBuf, u64, String),
@@ -421,6 +428,10 @@ pub(crate) enum Message {
     ShortcutCaptureCanceled,
     ShortcutBindingReset(ShortcutBindingId),
     DragSelectionFinished,
+    GlobalErrorNotificationElapsed(u64),
+    GlobalErrorNotificationPointerEntered(u64),
+    GlobalErrorNotificationPointerExited(u64),
+    GlobalErrorNotificationDismissed(u64),
     DismissFloating,
     ArchiveCreation(ArchiveCreationMessage),
     ArchiveExtraction(ArchiveExtractionMessage),

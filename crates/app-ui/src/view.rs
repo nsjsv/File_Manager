@@ -290,9 +290,9 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         });
     }
 
-    if let Some(error) = browser.current_error() {
+    if let Some((error, generation)) = browser.current_error_notification() {
         floating.push(FloatingContent {
-            element: error_notification_panel(error),
+            element: error_notification_panel(error, generation),
             placement: FloatingPlacement::At(iced::Point::new(
                 browser.sidebar_width + ERROR_NOTIFICATION_CONTENT_OFFSET_X,
                 ERROR_NOTIFICATION_FLOAT_Y,

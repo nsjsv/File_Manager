@@ -23,6 +23,7 @@ pub(crate) struct AnimatedImageFrame {
     pub(crate) path: PathBuf,
     pub(crate) generation: u64,
     pub(crate) position: Duration,
+    pub(crate) delay: Duration,
     pub(crate) handle: iced_image::Handle,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -136,9 +137,8 @@ impl AnimatedImagePreview {
         self.is_seeking = true;
         self.is_finished = false;
     }
-
-    pub(crate) fn commit_seek(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
+    pub(crate) fn commit_seek(&mut self, generation: u64) {
+        self.generation = generation;
         self.stream_start_position = self.position;
         self.previous_frame = None;
         self.is_seeking = false;
@@ -223,6 +223,14 @@ fn decode_animated_image_first_frame(
     )
 }
 
+fn animated_image_frame_deadline(
+    started_at: time::Instant,
+    cycle_start_position: Duration,
+    frame: &AnimatedImageFrame,
+) -> time::Instant {
+    started_at + frame.position.saturating_sub(cycle_start_position) + frame.delay
+}
+
 async fn stream_animated_image_preview(
     path: PathBuf,
     generation: u64,
@@ -247,20 +255,28 @@ async fn stream_animated_image_preview(
 
         let started_at = time::Instant::now();
         let mut sent_any_frame = false;
+        let mut last_frame_deadline = None;
         while let Some(frame) = frame_receiver.recv().await {
             sent_any_frame = true;
-            let offset = frame.position.saturating_sub(cycle_start_position);
-            time::sleep_until(started_at + offset).await;
+            let frame_started_at = started_at + frame.position.saturating_sub(cycle_start_position);
+            let frame_deadline =
+                animated_image_frame_deadline(started_at, cycle_start_position, &frame);
+
+            time::sleep_until(frame_started_at).await;
             output
                 .send(Message::AnimatedImageFrameLoaded(frame))
                 .await
                 .map_err(|_| "animated image preview window was closed".to_owned())?;
+            last_frame_deadline = Some(frame_deadline);
         }
 
         decoder_task
             .await
             .map_err(|error| format!("could not decode animated image preview: {error}"))??;
 
+        if let Some(deadline) = last_frame_deadline {
+            time::sleep_until(deadline).await;
+        }
         if !sent_any_frame {
             return Ok(());
         }
@@ -304,6 +320,7 @@ fn decode_first_animated_image_frame_at(
             path.to_path_buf(),
             generation,
             frame_position,
+            delay,
             decoded_frame,
         )?);
         break;
@@ -345,6 +362,7 @@ fn decode_animated_image_frames_into_channel(
             path.to_path_buf(),
             generation,
             frame_position,
+            delay,
             decoded_frame,
         )?;
         if frame_sender.blocking_send(frame).is_err() {
@@ -420,6 +438,7 @@ impl AnimatedImageFrame {
         path: PathBuf,
         generation: u64,
         position: Duration,
+        delay: Duration,
         decoded_frame: image::Frame,
     ) -> Result<Self, String> {
         let rgba_buffer = decoded_frame.into_buffer();
@@ -431,6 +450,7 @@ impl AnimatedImageFrame {
             path,
             generation,
             position,
+            delay,
             handle: iced_image::Handle::from_rgba(width, height, rgba_buffer.into_raw()),
             width,
             height,
@@ -504,11 +524,31 @@ mod tests {
     }
 
     #[test]
+    fn animated_image_last_frame_deadline_includes_its_delay() {
+        let started_at = time::Instant::now();
+        let frame = AnimatedImageFrame {
+            path: PathBuf::from("/tmp/sample.gif"),
+            generation: 1,
+            position: Duration::from_millis(40),
+            delay: Duration::from_millis(30),
+            handle: iced_image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            width: 1,
+            height: 1,
+        };
+
+        assert_eq!(
+            animated_image_frame_deadline(started_at, Duration::ZERO, &frame),
+            started_at + Duration::from_millis(70)
+        );
+    }
+
+    #[test]
     fn animated_image_preview_accepts_streamed_frame_without_storing_history() {
         let first_frame = AnimatedImageFrame {
             path: PathBuf::from("/tmp/sample.gif"),
             generation: 1,
             position: Duration::ZERO,
+            delay: Duration::from_millis(20),
             handle: iced_image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
             width: 1,
             height: 1,
@@ -517,6 +557,7 @@ mod tests {
             path: PathBuf::from("/tmp/sample.gif"),
             generation: 1,
             position: Duration::from_millis(20),
+            delay: Duration::from_millis(20),
             handle: iced_image::Handle::from_rgba(1, 1, vec![255, 0, 0, 255]),
             width: 1,
             height: 1,
@@ -537,11 +578,12 @@ mod tests {
     }
 
     #[test]
-    fn animated_image_preview_seek_restarts_stream_generation() {
+    fn animated_image_preview_seek_consumes_external_stream_generation() {
         let first_frame = AnimatedImageFrame {
             path: PathBuf::from("/tmp/sample.gif"),
             generation: 1,
             position: Duration::ZERO,
+            delay: Duration::from_millis(20),
             handle: iced_image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
             width: 1,
             height: 1,
@@ -558,7 +600,7 @@ mod tests {
         preview.seek_to_position(Duration::from_millis(60));
         assert!(!preview.is_playing());
 
-        preview.commit_seek();
+        preview.commit_seek(2);
 
         assert_eq!(preview.generation(), 2);
         assert_eq!(preview.stream_start_position(), Duration::from_millis(60));
@@ -575,6 +617,7 @@ mod tests {
             PathBuf::from("/tmp/sample.gif"),
             1,
             Duration::ZERO,
+            Duration::from_millis(20),
             frame,
         )
         .expect("decoded frame");

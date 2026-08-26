@@ -8,9 +8,13 @@ use crate::app::FileBrowser;
 use crate::model::{Message, PreviewContent, PreviewState};
 
 impl FileBrowser {
-    pub(in crate::app) fn next_animated_image_preview_generation(&mut self) -> u64 {
+    pub(super) fn invalidate_animated_image_preview(&mut self) {
         self.animated_image_preview_generation =
             self.animated_image_preview_generation.wrapping_add(1);
+    }
+
+    pub(in crate::app) fn next_animated_image_preview_generation(&mut self) -> u64 {
+        self.invalidate_animated_image_preview();
         self.animated_image_preview_generation
     }
 
@@ -150,13 +154,21 @@ impl FileBrowser {
     }
 
     pub(in crate::app) fn commit_animated_image_preview_seek(&mut self) -> Task<Message> {
+        if !matches!(
+            self.preview,
+            Some(PreviewState::Ready(PreviewContent::AnimatedImage(_)))
+        ) {
+            return Task::none();
+        }
+
+        let generation = self.next_animated_image_preview_generation();
         let Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) =
             self.preview.as_mut()
         else {
             return Task::none();
         };
 
-        preview.commit_seek();
+        preview.commit_seek(generation);
         Task::none()
     }
 }

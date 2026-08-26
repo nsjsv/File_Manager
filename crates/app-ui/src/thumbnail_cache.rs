@@ -132,14 +132,14 @@ impl ThumbnailCache {
         request: ThumbnailRequest,
         purpose: ThumbnailPurpose,
         priority: ThumbnailPriority,
-    ) {
+    ) -> bool {
         self.enqueue_request_with_scope(
             request,
             purpose,
             priority,
             ThumbnailLoadPolicy::LoadOrGenerate,
             None,
-        );
+        )
     }
 
     pub(crate) fn enqueue_cached_request(
@@ -208,13 +208,13 @@ impl ThumbnailCache {
         priority: ThumbnailPriority,
         load_policy: ThumbnailLoadPolicy,
         scope: Option<ThumbnailScope>,
-    ) {
+    ) -> bool {
         if self.request_is_inside_cache_dir(&request) {
-            return;
+            return false;
         }
         let key = request.key();
         if !self.thumbnail_can_be_queued(&key, load_policy) {
-            return;
+            return self.inflight.get(&key) == Some(&ThumbnailPurpose::Preview);
         }
 
         let work = ThumbnailWork {
@@ -230,11 +230,12 @@ impl ThumbnailCache {
             } else if existing.scope.is_none() {
                 existing.scope = work.scope;
             }
-            return;
+            return true;
         }
 
         self.queued.insert(key.clone(), work);
         self.queue_order.push_back(key);
+        true
     }
 
     pub(crate) fn take_next_batch(&mut self) -> Vec<ThumbnailWork> {

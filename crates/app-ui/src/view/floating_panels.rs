@@ -10,7 +10,7 @@ use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAx
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
     context_menu_item_button_style, context_menu_style, enhanced_scrollbar_style,
-    enhanced_vertical_scrollbar_direction, error_notification_style,
+    enhanced_vertical_scrollbar_direction, error_notification_style, navigation_icon_button_style,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
@@ -45,21 +45,34 @@ const CONTEXT_MENU_PADDING: f32 = 8.0;
 const CONTEXT_MENU_ITEM_SPACING: f32 = 4.0;
 const CONTEXT_MENU_ITEM_HEIGHT: f32 = 28.0;
 const LIST_COLUMN_VISIBILITY_BUTTON_HEIGHT: f32 = 28.0;
-pub(super) fn error_notification_panel(error: &str) -> Element<'_, Message> {
+pub(super) fn error_notification_panel(error: &str, generation: u64) -> Element<'_, Message> {
     let message = crate::localization::translate_current(error);
     let message = format_middle_ellipsized_text(&message, ERROR_NOTIFICATION_MAX_CHARS);
+    let close_button = button(themed_icon(IconSymbol::Close, IconTone::Normal, 13.0))
+        .on_press(Message::GlobalErrorNotificationDismissed(generation))
+        .padding(4)
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0))
+        .style(navigation_icon_button_style());
     let content = row![
         themed_icon(IconSymbol::TriangleAlert, IconTone::Warning, MENU_ICON_SIZE),
         readable_text(message).size(13).width(Length::Fill),
+        close_button,
     ]
     .spacing(8)
     .align_y(Alignment::Center);
 
-    container(content)
-        .padding([10, 12])
-        .width(Length::Fixed(ERROR_NOTIFICATION_FLOAT_WIDTH))
-        .style(error_notification_style)
-        .into()
+    mouse_area(
+        container(content)
+            .padding([10, 12])
+            .width(Length::Fixed(ERROR_NOTIFICATION_FLOAT_WIDTH))
+            .style(error_notification_style),
+    )
+    .on_enter(Message::GlobalErrorNotificationPointerEntered(generation))
+    .on_exit(Message::GlobalErrorNotificationPointerExited(generation))
+    .on_press(Message::GlobalErrorNotificationDismissed(generation))
+    .interaction(iced::mouse::Interaction::Pointer)
+    .into()
 }
 
 pub(super) fn destructive_action_confirmation_panel(

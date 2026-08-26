@@ -249,7 +249,7 @@ fn video_preview_initial_fit_max_size() -> Size {
     )
 }
 
-fn image_preview_size_from_dimensions(width: u32, height: u32) -> PreviewSize {
+pub(super) fn image_preview_size_from_dimensions(width: u32, height: u32) -> PreviewSize {
     let max_size = image_preview_initial_fit_max_size();
     let image_width = width as f32;
     let image_height = height as f32;
@@ -407,23 +407,33 @@ impl FileBrowser {
     }
 
     pub(super) fn ensure_preview_window(&mut self, profile: PreviewWindowProfile) -> Task<Message> {
+        let size = clamp_preview_size_to_minimum(profile, default_preview_size(profile));
         self.preview_window_profile = profile;
-        self.preview_window_drag_active = false;
-        self.preview_size = default_preview_size(profile);
-        let initial_chrome = self.start_preview_window_initial_chrome();
-        let size = clamp_preview_size_to_minimum(profile, self.preview_size);
-
+        self.preview_size = size;
         self.pending_preview_resize = Some(size);
+
         if let Some(window) = self.preview_window {
             self.focused_window = window;
-            return Task::batch([
-                window::resize(window, preview_window_size_for_content(size)),
-                window::gain_focus(window),
-                initial_chrome,
-            ]);
+            let initial_chrome = self.start_preview_window_initial_chrome();
+            let min_size = preview_min_size(profile);
+            let resize = window::set_min_size(
+                window,
+                Some(preview_window_size_for_content(PreviewSize {
+                    width: min_size.width,
+                    height: min_size.height,
+                })),
+            )
+            .chain(window::resize(
+                window,
+                preview_window_size_for_content(size),
+            ));
+            return Task::batch([resize, window::gain_focus(window), initial_chrome]);
         }
 
-        let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
+        self.preview_window_drag_active = false;
+        self.preview_window_pointer_y = None;
+        let initial_chrome = self.start_preview_window_initial_chrome();
+        let (window, command) = window::open(preview_window_settings(profile, size));
         self.preview_window = Some(window);
         self.focused_window = window;
         Task::batch([command.discard(), initial_chrome])
@@ -445,41 +455,57 @@ impl FileBrowser {
         if width == 0 || height == 0 {
             return self.open_image_preview_error_window();
         }
-        self.recreate_preview_window(
+        self.update_preview_window(
             PreviewWindowProfile::Image,
             image_preview_size_from_dimensions(width, height),
         )
     }
 
-    pub(super) fn open_image_preview_error_window(&mut self) -> Task<Message> {
-        self.recreate_preview_window(
+    pub(super) fn open_image_preview_window_with_default_size(&mut self) -> Task<Message> {
+        self.update_preview_window(
             PreviewWindowProfile::Image,
             default_preview_size(PreviewWindowProfile::Image),
         )
     }
 
-    fn recreate_preview_window(
+    pub(super) fn open_image_preview_error_window(&mut self) -> Task<Message> {
+        self.open_image_preview_window_with_default_size()
+    }
+
+    fn update_preview_window(
         &mut self,
         profile: PreviewWindowProfile,
         size: PreviewSize,
     ) -> Task<Message> {
         self.preview_window_profile = profile;
-        self.preview_window_drag_active = false;
-        let initial_chrome = self.start_preview_window_initial_chrome();
         self.preview_size = clamp_preview_size_to_minimum(profile, size);
         self.pending_preview_resize = Some(self.preview_size);
 
-        let close_command = if let Some(window) = self.preview_window.take() {
-            self.clear_closed_window_focus(window);
-            window::close(window)
-        } else {
-            Task::none()
-        };
+        if let Some(window) = self.preview_window {
+            self.focused_window = window;
+            let min_size = preview_min_size(profile);
+            let initial_chrome = self.start_preview_window_initial_chrome();
+            let resize = window::set_min_size(
+                window,
+                Some(preview_window_size_for_content(PreviewSize {
+                    width: min_size.width,
+                    height: min_size.height,
+                })),
+            )
+            .chain(window::resize(
+                window,
+                preview_window_size_for_content(self.preview_size),
+            ));
+            return Task::batch([resize, window::gain_focus(window), initial_chrome]);
+        }
 
+        self.preview_window_drag_active = false;
+        self.preview_window_pointer_y = None;
+        let initial_chrome = self.start_preview_window_initial_chrome();
         let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
-        Task::batch([close_command, command.discard(), initial_chrome])
+        Task::batch([command.discard(), initial_chrome])
     }
 
     pub(super) fn fit_preview_window_to_video_frame(
@@ -491,7 +517,7 @@ impl FileBrowser {
             return Task::none();
         }
 
-        self.recreate_preview_window(
+        self.update_preview_window(
             PreviewWindowProfile::Video,
             video_preview_size_from_frame(width, height),
         )
@@ -518,6 +544,7 @@ impl FileBrowser {
         self.clear_preview();
         self.pending_preview_resize = None;
         self.preview_window_drag_active = false;
+        self.preview_window_pointer_y = None;
         self.cancel_preview_window_initial_chrome_hide();
         self.preview_window_chrome.reset_hidden();
         let Some(window) = self.preview_window.take() else {
@@ -594,6 +621,9 @@ impl FileBrowser {
 
         if window != self.main_window {
             return Task::none();
+        }
+        if button == mouse::Button::Left {
+            self.clear_global_error();
         }
 
         if self.preview_window == Some(self.focused_window) {

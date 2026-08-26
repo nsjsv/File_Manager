@@ -436,13 +436,13 @@ mod tests {
     #[test]
     fn notification_publish_failure_does_not_replace_global_error() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        browser.error = Some("existing error".to_owned());
+        browser.show_global_error("existing error");
 
         drop(
             browser
                 .accept_desktop_notification_published(Err("notify-send unavailable".to_owned())),
         );
 
-        assert_eq!(browser.error.as_deref(), Some("existing error"));
+        assert_eq!(browser.current_error(), Some("existing error"));
     }
 }

@@ -645,7 +645,7 @@ fn source_terminal_only_clears_matching_source_state() {
             .and_then(|drag| drag.native_dnd.session_id()),
         Some(active_source_id)
     );
-    assert!(browser.error.is_none());
+    assert!(browser.current_error().is_none());
     assert!(browser.drag_selection_anchor.is_some());
 
     drop(

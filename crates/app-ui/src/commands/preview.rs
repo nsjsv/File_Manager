@@ -12,6 +12,7 @@ use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
 use crate::model::{
     Message, RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
 };
+use crate::original_image_preview::load_original_image_preview;
 use crate::preview::{load_directory_preview_children, load_preview};
 use crate::remote_preview_cache::{cache_remote_preview_file, RemotePreviewCacheRequest};
 use crate::text_preview::TextPreviewChunkRequest;
@@ -74,11 +75,25 @@ pub(crate) fn preview_directory_children_command(
     )
 }
 
-pub(crate) fn image_preview_dimensions_command(path: PathBuf) -> Task<Message> {
+pub(crate) fn image_preview_dimensions_command(path: PathBuf, generation: u64) -> Task<Message> {
     let image_path = path.clone();
     Task::perform(load_image_dimensions(path), move |dimensions| {
-        Message::ImagePreviewDimensionsLoaded(image_path.clone(), dimensions)
+        Message::ImagePreviewDimensionsLoaded(image_path.clone(), generation, dimensions)
     })
+}
+
+pub(crate) fn original_image_preview_command(
+    path: PathBuf,
+    generation: u64,
+    max_file_bytes: u64,
+    placeholder_handle: Option<iced::widget::image::Handle>,
+    cancellation: CancellationToken,
+) -> Task<Message> {
+    let image_path = path.clone();
+    Task::perform(
+        load_original_image_preview(path, max_file_bytes, cancellation, placeholder_handle),
+        move |outcome| Message::OriginalImagePreviewLoaded(image_path.clone(), generation, outcome),
+    )
 }
 
 async fn download_remote_preview_with_progress(

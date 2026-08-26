@@ -206,7 +206,7 @@ fn office_prepare_failure_stays_local_and_never_falls_back_to_text() {
         Some(PreviewState::Error(ref error)) if error.contains("Office document")
     ));
     assert!(browser.text_preview_document.is_none());
-    assert!(browser.error.is_none());
+    assert!(browser.current_error().is_none());
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn page_failure_stays_local_and_does_not_touch_global_error() {
         )),
     );
 
-    assert!(browser.error.is_none());
+    assert!(browser.current_error().is_none());
     assert!(matches!(
         browser.active_document_preview_mut().unwrap().page_view(0),
         DocumentPageView::Error(_)

@@ -58,6 +58,7 @@ mod operation_progress;
 mod operation_queue;
 mod operation_queue_display;
 mod operation_queue_view;
+mod original_image_preview;
 mod preview;
 mod remote_preview_cache;
 mod runtime_logging;
@@ -80,6 +81,9 @@ mod visible_entries;
 mod wayland_drag_icon;
 
 fn main() -> std::process::ExitCode {
+    // 限制 glibc 的线程 arena 数量，避免预览关闭后的分配页长期滞留。
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    let _ = unsafe { libc::mallopt(libc::M_ARENA_MAX, 1) };
     let action = match command_line::parse_process_arguments() {
         Ok(action) => action,
         Err(error) => {

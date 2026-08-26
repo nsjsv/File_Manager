@@ -111,6 +111,10 @@ impl FileBrowser {
             Message::AnimatedImagePreviewLoaded(path, generation, preview_outcome) => {
                 self.accept_animated_image_preview_loaded(path, generation, preview_outcome)
             }
+            Message::OriginalImagePreviewLoaded(path, generation, outcome) => {
+                self.accept_original_image_preview(path, generation, outcome)
+            }
+            Message::RetryImagePreview(path) => self.retry_image_preview(path),
             Message::FileProperties(properties_message) => {
                 self.accept_file_properties_message(properties_message)
             }
@@ -141,8 +145,8 @@ impl FileBrowser {
                 }
                 Task::none()
             }
-            Message::ImagePreviewDimensionsLoaded(path, dimensions_outcome) => {
-                self.accept_image_preview_dimensions(path, dimensions_outcome)
+            Message::ImagePreviewDimensionsLoaded(path, generation, dimensions_outcome) => {
+                self.accept_image_preview_dimensions(path, generation, dimensions_outcome)
             }
             Message::AnimatedImageFrameLoaded(frame) => self.accept_animated_image_frame(frame),
             Message::AnimatedImagePreviewFinished(path, generation) => {
@@ -440,6 +444,7 @@ impl FileBrowser {
             Message::CursorLeft { window } => {
                 if self.preview_window == Some(window) {
                     self.cancel_preview_window_initial_chrome_hide();
+                    self.preview_window_pointer_y = None;
                     if !self.preview_window_drag_active {
                         self.preview_window_chrome.start_hide();
                     }
@@ -521,6 +526,22 @@ impl FileBrowser {
             },
             Message::DragSelectionFinished => {
                 self.finish_pointer_drag_interactions(self.main_window)
+            }
+            Message::GlobalErrorNotificationElapsed(generation) => {
+                self.expire_global_error_notification(generation);
+                Task::none()
+            }
+            Message::GlobalErrorNotificationPointerEntered(generation) => {
+                self.pause_global_error_notification(generation);
+                Task::none()
+            }
+            Message::GlobalErrorNotificationPointerExited(generation) => {
+                self.resume_global_error_notification(generation);
+                Task::none()
+            }
+            Message::GlobalErrorNotificationDismissed(generation) => {
+                self.dismiss_global_error_notification(generation);
+                Task::none()
             }
             Message::DismissFloating => self.dismiss_floating(),
             Message::ArchiveCreation(message) => self.handle_archive_creation_message(message),

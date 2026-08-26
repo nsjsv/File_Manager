@@ -748,7 +748,7 @@ fn mount_failure_sets_global_error_and_entry_error() {
     drop(command);
 
     assert_eq!(
-        browser.error.as_deref(),
+        browser.current_error(),
         Some("Could not connect network location: authentication failed")
     );
     assert!(matches!(

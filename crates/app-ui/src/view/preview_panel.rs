@@ -2,8 +2,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use iced::widget::{
-    button, column, container, image, mouse_area, row, scrollable, slider, Button, Column, Space,
-    Stack,
+    button, column, container, image, mouse_area, row, scrollable, slider, svg, Button, Column,
+    Space, Stack,
 };
 use iced::{Alignment, Element, Length};
 
@@ -17,8 +17,8 @@ use crate::appearance::{
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::model::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewSize,
-    PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, Message, PreviewContent,
+    PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion,
     ScrollbarViewport, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
     VideoPreviewPlaybackStatus,
 };
@@ -155,12 +155,28 @@ fn preview_panel<'a>(
             document_scrollbar_visibility,
             document_scrollbar_viewport,
         ),
-        PreviewState::Ready(PreviewContent::Image {
-            handle,
-            width,
-            height,
-            ..
-        }) => image_preview_panel(handle, *width, *height, size),
+        PreviewState::Ready(PreviewContent::Image(content)) => match content {
+            ImagePreviewContent::Thumbnail {
+                handle,
+                width,
+                height,
+                ..
+            } => image_preview_panel(handle, *width, *height, size),
+            ImagePreviewContent::OriginalRaster {
+                raster_handle,
+                placeholder_handle,
+                width,
+                height,
+            } => {
+                raster_image_preview_panel(placeholder_handle, raster_handle, *width, *height, size)
+            }
+            ImagePreviewContent::OriginalSvg {
+                handle,
+                width,
+                height,
+                ..
+            } => svg_preview_panel(handle, *width, *height, size),
+        },
         PreviewState::Ready(PreviewContent::AnimatedImage(preview)) => {
             animated_image_preview_panel(preview, size)
         }
@@ -185,7 +201,14 @@ fn preview_panel<'a>(
             video_preview,
             size,
         ),
-        PreviewState::Error(error) => localized_text(error).size(14).into(),
+        PreviewState::Error(error) => column![localized_text(error).size(14)].into(),
+        PreviewState::ImageError { path, error } => column![
+            localized_text(error).size(14),
+            button(localized_text("Retry")).on_press(Message::RetryImagePreview(path.clone())),
+        ]
+        .spacing(10)
+        .align_x(Alignment::Center)
+        .into(),
     };
 
     preview_surface(panel)
@@ -398,6 +421,57 @@ fn image_preview_panel(
         .center_y(Length::Fill)
         .style(preview_media_style)
         .into()
+}
+
+fn raster_image_preview_panel(
+    placeholder_handle: &image::Handle,
+    raster_handle: &image::Handle,
+    width: u32,
+    height: u32,
+    size: PreviewSize,
+) -> Element<'static, Message> {
+    let (image_width, image_height) = image_preview_size(size, width, height);
+    let image = image::Image::new(raster_handle.clone())
+        .width(Length::Fixed(image_width))
+        .height(Length::Fixed(image_height))
+        .content_fit(iced::ContentFit::Contain);
+    let placeholder = image::Image::new(placeholder_handle.clone())
+        .width(Length::Fixed(image_width))
+        .height(Length::Fixed(image_height))
+        .content_fit(iced::ContentFit::Contain);
+    let images = Stack::new()
+        .width(Length::Fixed(image_width))
+        .height(Length::Fixed(image_height))
+        .push(placeholder)
+        .push(image);
+    container(images)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(preview_media_style)
+        .into()
+}
+
+fn svg_preview_panel(
+    handle: &svg::Handle,
+    width: u32,
+    height: u32,
+    size: PreviewSize,
+) -> Element<'static, Message> {
+    let (render_width, render_height) = image_preview_size(size, width, height);
+    container(
+        svg::Svg::new(handle.clone())
+            .width(Length::Fixed(render_width))
+            .height(Length::Fixed(render_height))
+            .content_fit(iced::ContentFit::Contain),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .style(preview_media_style)
+    .into()
 }
 
 fn animated_image_preview_panel(

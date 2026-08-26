@@ -10,14 +10,17 @@ use crate::commands::{
     video_preview_metadata_command,
 };
 use crate::model::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, Message, PreviewContent, PreviewState,
-    PreviewWindowProfile, TextPreviewDocument, VideoPreviewFrame, VideoPreviewPlayback,
-    VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, Message, PreviewContent,
+    PreviewState, PreviewWindowProfile, TextPreviewDocument, VideoPreviewFrame,
+    VideoPreviewPlayback, VideoPreviewPlaybackStatus, VideoPreviewSeekCompletion,
 };
-
 mod animated_image;
 mod document;
+mod original_image;
 mod remote_cache;
+pub(super) use original_image::PendingOriginalImagePreview;
+#[cfg(test)]
+mod tests;
 mod text;
 mod tree;
 
@@ -515,12 +518,42 @@ impl FileBrowser {
     }
 
     pub(super) fn clear_preview(&mut self) {
+        self.invalidate_animated_image_preview();
+        self.invalidate_original_image_preview();
         self.cancel_document_preview();
         self.cancel_remote_preview_download();
         self.text_preview_document = None;
         self.clear_audio_preview();
         self.clear_video_preview();
-        self.preview = None;
+        let preview = self.preview.take();
+        if let Some(PreviewState::Ready(PreviewContent::Image(
+            ImagePreviewContent::OriginalRaster {
+                raster_handle,
+                placeholder_handle,
+                ..
+            },
+        ))) = preview
+        {
+            Self::release_original_raster_handles(raster_handle, placeholder_handle);
+        }
+    }
+
+    fn release_original_raster_handles(
+        raster_handle: image::Handle,
+        placeholder_handle: image::Handle,
+    ) {
+        let release = move || {
+            drop((raster_handle, placeholder_handle));
+            // glibc 默认可能保留大块已释放堆页，连续预览会把这些保留页表现为 RSS 泄漏。
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            let _ = unsafe { libc::malloc_trim(0) };
+        };
+        // 原图 RGBA 缓冲区可能很大，不能让释放最后一个句柄阻塞 UI 更新线程。
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let _ = runtime.spawn_blocking(release);
+        } else {
+            release();
+        }
     }
 
     fn start_audio_preview_playback(&mut self, path: PathBuf) -> Task<Message> {

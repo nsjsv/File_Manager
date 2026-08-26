@@ -273,8 +273,7 @@ mod tests {
         assert!(browser.user_preferences_save_in_flight);
         assert!(browser.pending_user_preferences_save.is_none());
         assert!(browser
-            .error
-            .as_deref()
+            .current_error()
             .is_some_and(|error| error.contains("read-only")));
     }
 }

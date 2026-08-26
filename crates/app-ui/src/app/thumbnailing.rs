@@ -8,20 +8,17 @@ use super::{FileBrowser, PaneIconGridViewport};
 use crate::commands::thumbnail_batch_command;
 use crate::model::{
     sanitized_application_log_detail, BrowserPane, BrowserPaneId, BrowserViewMode,
-    IconGridViewport, Message, PreviewContent, PreviewState, ScrollbarRegion,
+    IconGridViewport, Message, ScrollbarRegion,
 };
 use crate::thumbnail_cache::{
-    request_for_entry, request_for_transfer_conflict_path, ColumnViewport, ThumbnailHandleEntry,
-    ThumbnailLoadOutcome, ThumbnailLoadPolicy, ThumbnailLoadResult, ThumbnailPriority,
-    ThumbnailPurpose, ThumbnailScope, COLUMN_THUMBNAIL_EDGE, LIST_THUMBNAIL_EDGE,
-    PREVIEW_THUMBNAIL_MAX_EDGE, TRANSFER_CONFLICT_THUMBNAIL_EDGE,
+    request_for_entry, request_for_transfer_conflict_path, ColumnViewport, ThumbnailLoadOutcome,
+    ThumbnailLoadPolicy, ThumbnailLoadResult, ThumbnailPriority, ThumbnailPurpose, ThumbnailScope,
+    COLUMN_THUMBNAIL_EDGE, LIST_THUMBNAIL_EDGE, TRANSFER_CONFLICT_THUMBNAIL_EDGE,
 };
 use crate::virtual_range::initial_virtual_range;
 
 const OVERSCAN_ROWS: usize = 28;
 const INITIAL_THUMBNAIL_ROWS: usize = OVERSCAN_ROWS * 2 + 1;
-const PREVIEW_THUMBNAIL_MIN_EDGE: u32 = 512;
-const PREVIEW_RESIZE_EXTRA_PIXELS: u32 = 128;
 
 impl FileBrowser {
     pub(super) fn schedule_thumbnail_refresh(&mut self) -> Task<Message> {
@@ -128,122 +125,9 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn request_preview_thumbnail_for_entry(
-        &mut self,
-        entry: DirectoryEntry,
-    ) -> Task<Message> {
-        let max_edge = self.preview_thumbnail_edge();
-        let Some(request) = request_for_entry(&entry, max_edge) else {
-            tracing::debug!(
-                target: "app_ui::preview",
-                path = ?entry.path,
-                max_edge,
-                "preview thumbnail request skipped"
-            );
-            return Task::none();
-        };
-
-        if let Some(ready) = self.thumbnail_cache.ready_for_request(&request).cloned() {
-            tracing::debug!(
-                target: "app_ui::preview",
-                path = ?entry.path,
-                max_edge,
-                "preview thumbnail ready from cache"
-            );
-            self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
-                entry.path, ready,
-            )));
-            return Task::none();
-        }
-
-        tracing::debug!(
-            target: "app_ui::preview",
-            path = ?entry.path,
-            max_edge,
-            "preview thumbnail queued"
-        );
-        self.thumbnail_cache.enqueue_request(
-            request,
-            ThumbnailPurpose::Preview,
-            ThumbnailPriority::Preview,
-        );
-        self.pump_thumbnail_queue()
-    }
-
-    pub(super) fn refresh_preview_thumbnail_for_size(&mut self) -> Task<Message> {
-        let Some((path, max_edge)) = self.preview.as_ref().and_then(|preview| match preview {
-            PreviewState::Ready(PreviewContent::Image { path, max_edge, .. }) => {
-                Some((path.clone(), *max_edge))
-            }
-            _ => None,
-        }) else {
-            return Task::none();
-        };
-        let desired_edge = self.preview_thumbnail_edge();
-        if desired_edge <= max_edge + PREVIEW_RESIZE_EXTRA_PIXELS {
-            tracing::debug!(
-                target: "app_ui::preview",
-                path = ?path,
-                current_max_edge = max_edge,
-                desired_edge,
-                "preview thumbnail refresh skipped"
-            );
-            return Task::none();
-        }
-
-        let Some(entry) = self.entry_for_path(&path).cloned() else {
-            return Task::none();
-        };
-        self.preview = Some(PreviewState::Loading(path));
-        self.request_preview_thumbnail_for_entry(entry)
-    }
-
     pub(super) fn schedule_transfer_conflict_thumbnails(&mut self) -> Task<Message> {
         self.enqueue_current_transfer_conflict_thumbnail_requests();
         self.pump_thumbnail_queue()
-    }
-
-    pub(super) fn accept_image_preview_dimensions(
-        &mut self,
-        path: PathBuf,
-        dimensions: Result<(u32, u32), String>,
-    ) -> Task<Message> {
-        let active_preview_loading = self.is_active_preview_loading(&path);
-        if !active_preview_loading {
-            return Task::none();
-        }
-        let (width, height) = match dimensions {
-            Ok((width, height)) if width > 0 && height > 0 => (width, height),
-            Ok(_) => {
-                self.preview = Some(PreviewState::Error(
-                    "Image preview has invalid dimensions".to_owned(),
-                ));
-                return self.open_image_preview_error_window();
-            }
-            Err(error) => {
-                self.preview = Some(PreviewState::Error(error));
-                return self.open_image_preview_error_window();
-            }
-        };
-        tracing::debug!(
-            target: "app_ui::preview",
-            path = ?path,
-            width,
-            height,
-            "image preview dimensions accepted"
-        );
-
-        let Some(entry) = self.entry_for_path(&path).cloned() else {
-            self.preview = Some(PreviewState::Error(
-                "Selected item is no longer available".to_owned(),
-            ));
-            return self.open_image_preview_error_window();
-        };
-
-        Task::batch([
-            self.open_image_preview_window_for_dimensions(width, height),
-            self.request_preview_thumbnail_for_entry(entry),
-        ])
     }
 
     pub(super) fn accept_thumbnail_batch(
@@ -269,18 +153,21 @@ impl FileBrowser {
                     );
                     let is_current_request =
                         self.is_current_thumbnail_request(&outcome.work.request);
-                    let source = thumbnail.source.clone();
-                    let active_preview_loading = self.is_active_preview_loading(&source);
                     if !is_current_request {
+                        if outcome.work.purpose == ThumbnailPurpose::Preview {
+                            commands.push(
+                                self.accept_preview_thumbnail_unavailable(&outcome.work.request),
+                            );
+                        }
                         continue;
                     }
                     let ready = self
                         .thumbnail_cache
                         .insert_ready(thumbnail, outcome.work.request.max_edge);
-                    if outcome.work.purpose == ThumbnailPurpose::Preview && active_preview_loading {
-                        self.preview = Some(PreviewState::Ready(thumbnail_preview_content(
-                            source, ready,
-                        )));
+                    if outcome.work.purpose == ThumbnailPurpose::Preview {
+                        commands.push(
+                            self.accept_preview_thumbnail_ready(&outcome.work.request, ready),
+                        );
                     }
                 }
                 ThumbnailLoadResult::CacheMiss => {
@@ -290,6 +177,10 @@ impl FileBrowser {
                         purpose = ?outcome.work.purpose,
                         "cached thumbnail missed"
                     );
+                    if outcome.work.purpose == ThumbnailPurpose::Preview {
+                        commands
+                            .push(self.accept_preview_thumbnail_unavailable(&outcome.work.request));
+                    }
                 }
                 ThumbnailLoadResult::Failed(error) => {
                     let log_error = sanitized_application_log_detail(&error);
@@ -301,15 +192,9 @@ impl FileBrowser {
                         "thumbnail batch item failed"
                     );
                     self.thumbnail_cache.mark_failure(key);
-                    let is_current_request =
-                        self.is_current_thumbnail_request(&outcome.work.request);
-                    let active_preview_loading =
-                        self.is_active_preview_loading(&outcome.work.request.source);
-                    if outcome.work.purpose == ThumbnailPurpose::Preview
-                        && active_preview_loading
-                        && is_current_request
-                    {
-                        self.preview = Some(PreviewState::Error(error));
+                    if outcome.work.purpose == ThumbnailPurpose::Preview {
+                        commands
+                            .push(self.accept_preview_thumbnail_unavailable(&outcome.work.request));
                     }
                 }
             }
@@ -684,15 +569,6 @@ impl FileBrowser {
             .and_then(|pane| pane.column_viewports.get(directory).copied())
     }
 
-    fn preview_thumbnail_edge(&self) -> u32 {
-        self.preview_size
-            .width
-            .max(self.preview_size.height)
-            .ceil()
-            .max(PREVIEW_THUMBNAIL_MIN_EDGE as f32)
-            .min(PREVIEW_THUMBNAIL_MAX_EDGE as f32) as u32
-    }
-
     fn is_current_thumbnail_request(&self, request: &ThumbnailRequest) -> bool {
         self.entry_for_path(&request.source)
             .is_some_and(|entry| thumbnail_request_matches_entry(entry, request))
@@ -704,13 +580,6 @@ impl FileBrowser {
                 .transfer_conflict
                 .as_ref()
                 .is_some_and(|state| thumbnail_request_matches_transfer_conflict(state, request))
-    }
-
-    fn is_active_preview_loading(&self, path: &Path) -> bool {
-        matches!(
-            &self.preview,
-            Some(PreviewState::Loading(loading_path)) if loading_path == path
-        )
     }
 
     fn active_entry_thumbnail_edge(&self) -> u32 {
@@ -795,13 +664,3 @@ fn thumbnail_scope_for_pane_directory(pane_id: BrowserPaneId, directory: &Path) 
 
 #[cfg(test)]
 mod tests;
-
-fn thumbnail_preview_content(path: PathBuf, ready: ThumbnailHandleEntry) -> PreviewContent {
-    PreviewContent::Image {
-        path,
-        handle: ready.handle,
-        width: ready.width,
-        height: ready.height,
-        max_edge: ready.max_edge,
-    }
-}

@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(browser.operation_queue.tasks().len(), 0);
         assert!(browser.destructive_action_confirmation.is_none());
         assert_eq!(
-            browser.error.as_deref(),
+            browser.current_error(),
             Some("Delete local and remote items separately so local files can use Trash")
         );
     }

@@ -21,6 +21,7 @@ libc = "0.2"
 lexopt.workspace = true
 pulldown-cmark = "0.13.4"
 regex = "1.12.3"
+roxmltree = "0.20.0"
 resvg.workspace = true
 rodio = "0.22.2"
 rustix.workspace = true

@@ -218,30 +218,23 @@ fn window_control_button(
             }
             (WindowControlPresentation::Standard, _) => (window_control_button_style, 1.0),
         };
-    let control = button(
-        themed_icon(icon, IconTone::Normal, WINDOW_CONTROL_ICON_SIZE).style(
-            move |theme, status| {
-                let mut style = super::icon_tone_style(IconTone::Normal)(theme, status);
-                style.color = style.color.map(|color| color.scale_alpha(opacity));
+    let control =
+        button(themed_icon(icon, IconTone::Normal, WINDOW_CONTROL_ICON_SIZE).opacity(opacity))
+            .on_press(message)
+            .padding([
+                WINDOW_CONTROL_VERTICAL_PADDING,
+                WINDOW_CONTROL_HORIZONTAL_PADDING,
+            ])
+            .width(Length::Fixed(WINDOW_CONTROL_WIDTH))
+            .height(Length::Fixed(WINDOW_CONTROL_HEIGHT))
+            .style(move |theme, status| {
+                let mut style = style(theme, status);
+                style.background = style
+                    .background
+                    .map(|background| background.scale_alpha(opacity));
+                style.text_color = style.text_color.scale_alpha(opacity);
                 style
-            },
-        ),
-    )
-    .on_press(message)
-    .padding([
-        WINDOW_CONTROL_VERTICAL_PADDING,
-        WINDOW_CONTROL_HORIZONTAL_PADDING,
-    ])
-    .width(Length::Fixed(WINDOW_CONTROL_WIDTH))
-    .height(Length::Fixed(WINDOW_CONTROL_HEIGHT))
-    .style(move |theme, status| {
-        let mut style = style(theme, status);
-        style.background = style
-            .background
-            .map(|background| background.scale_alpha(opacity));
-        style.text_color = style.text_color.scale_alpha(opacity);
-        style
-    });
+            });
 
     tooltip(
         control,
@@ -296,7 +289,12 @@ pub(crate) fn floating_preview_window_content<'a>(
     let top_bar: Element<'a, Message> = if chrome_opacity > f32::EPSILON {
         let controls = Row::new()
             .spacing(10)
-            .padding([8, 8])
+            .padding(iced::Padding {
+                top: 6.0,
+                right: 8.0,
+                bottom: 10.0,
+                left: 8.0,
+            })
             .align_y(iced::Alignment::Center)
             .push(floating_window_control_group(
                 config,

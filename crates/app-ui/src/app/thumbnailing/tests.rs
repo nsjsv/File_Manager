@@ -7,9 +7,6 @@ use file_core::{
 };
 
 use super::*;
-use crate::animated_image_preview::{
-    AnimatedImageFrame, AnimatedImagePlayback, AnimatedImagePreview,
-};
 use crate::config::ui_thread_startup_config;
 use crate::model::{
     BrowserPaneLayout, BrowserTab, ExpandedDirectory, ExpandedDirectoryStatus,
@@ -446,60 +443,6 @@ fn transfer_conflict_thumbnail_requests_are_queued() {
     assert!(batch
         .iter()
         .all(|work| work.purpose == ThumbnailPurpose::TransferConflict));
-}
-
-#[test]
-fn preview_thumbnail_refresh_skips_same_edge_window_resize() {
-    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
-    let image_entry = image_entry("/workspace/vector.svg");
-    browser.entries = vec![image_entry.clone()].into();
-    browser.preview_size = crate::model::PreviewSize {
-        width: 640.0,
-        height: 480.0,
-    };
-    browser.preview = Some(PreviewState::Ready(PreviewContent::Image {
-        path: image_entry.path.clone(),
-        handle: iced::widget::image::Handle::from_path("/tmp/vector-thumb.png"),
-        width: 320,
-        height: 240,
-        max_edge: 640,
-    }));
-
-    let command = browser.refresh_preview_thumbnail_for_size();
-
-    assert_eq!(command.units(), 0);
-}
-
-#[test]
-fn preview_thumbnail_refresh_skips_animated_image_preview() {
-    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
-    browser.preview_size = crate::model::PreviewSize {
-        width: 1400.0,
-        height: 1000.0,
-    };
-    let animated_path = PathBuf::from("/workspace/loop.gif");
-    let first_frame = AnimatedImageFrame {
-        path: animated_path.clone(),
-        generation: 1,
-        position: std::time::Duration::ZERO,
-        handle: iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
-        width: 1,
-        height: 1,
-    };
-    browser.preview = Some(PreviewState::Ready(PreviewContent::AnimatedImage(
-        AnimatedImagePreview::new(
-            animated_path,
-            first_frame,
-            1,
-            Some(std::time::Duration::from_millis(40)),
-            AnimatedImagePlayback::Animated,
-        )
-        .expect("animated image preview"),
-    )));
-
-    let command = browser.refresh_preview_thumbnail_for_size();
-
-    assert_eq!(command.units(), 0);
 }
 
 fn browser_with_inactive_image_pane() -> (FileBrowser, BrowserPaneId, PathBuf, DirectoryEntry) {

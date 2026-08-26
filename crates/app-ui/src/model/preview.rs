@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use file_core::{DirectoryEntry, FileKind};
-use iced::widget::image;
+use iced::widget::{image, svg};
 
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::audio_preview::AudioPreviewRuntime;
@@ -15,6 +15,7 @@ pub(crate) enum PreviewState {
     Loading(PathBuf),
     DownloadingRemoteFile(RemotePreviewDownload),
     Ready(PreviewContent),
+    ImageError { path: PathBuf, error: String },
     Error(String),
 }
 
@@ -92,13 +93,7 @@ pub(crate) enum PreviewContent {
         entries: Vec<PreviewTreeEntry>,
     },
     PagedDocument(Box<PagedDocumentPreview>),
-    Image {
-        path: PathBuf,
-        handle: image::Handle,
-        width: u32,
-        height: u32,
-        max_edge: u32,
-    },
+    Image(ImagePreviewContent),
     AnimatedImage(AnimatedImagePreview),
     Audio {
         path: PathBuf,
@@ -111,6 +106,28 @@ pub(crate) enum PreviewContent {
         width: u32,
         height: u32,
         duration: Option<Duration>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ImagePreviewContent {
+    Thumbnail {
+        path: PathBuf,
+        handle: image::Handle,
+        width: u32,
+        height: u32,
+        max_edge: u32,
+    },
+    OriginalRaster {
+        raster_handle: image::Handle,
+        placeholder_handle: image::Handle,
+        width: u32,
+        height: u32,
+    },
+    OriginalSvg {
+        handle: svg::Handle,
+        width: u32,
+        height: u32,
     },
 }
 

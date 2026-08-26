@@ -172,7 +172,7 @@ fn stale_runtime_failure_does_not_replace_current_runtime() {
             .map(|runtime| runtime.controller.id()),
         Some(current_id)
     );
-    assert!(browser.error.is_none());
+    assert!(browser.current_error().is_none());
 }
 
 #[test]

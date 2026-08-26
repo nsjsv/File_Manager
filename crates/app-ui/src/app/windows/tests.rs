@@ -40,6 +40,8 @@ enum ObservedResizeDirection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObservedWindowAction {
+    Open(window::Id),
+    Close(window::Id),
     Minimize(window::Id),
     ToggleMaximize(window::Id),
     QueryMaximized(window::Id),
@@ -55,6 +57,13 @@ async fn observed_window_actions(task: Task<Message>) -> Vec<ObservedWindowActio
     let mut actions = Vec::new();
     while let Some(action) = stream.next().await {
         match action {
+            Action::Window(iced_runtime::window::Action::Open(window, _, sender)) => {
+                sender.send(window).expect("send opened window id");
+                actions.push(ObservedWindowAction::Open(window));
+            }
+            Action::Window(iced_runtime::window::Action::Close(window)) => {
+                actions.push(ObservedWindowAction::Close(window));
+            }
             Action::Window(iced_runtime::window::Action::Minimize(window, true)) => {
                 actions.push(ObservedWindowAction::Minimize(window));
             }
@@ -265,6 +274,28 @@ fn initial_preview_chrome_hides_only_without_pointer_interaction() {
 }
 
 #[test]
+fn main_window_left_click_clears_global_error_for_captured_and_ignored_events() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let main_window = browser.main_window;
+
+    browser.show_global_error("captured failure");
+    drop(browser.update(Message::WindowPointerPressed {
+        window: main_window,
+        button: iced::mouse::Button::Left,
+        status: iced::event::Status::Captured,
+    }));
+    assert_eq!(browser.current_error(), None);
+
+    browser.show_global_error("ignored failure");
+    drop(browser.update(Message::WindowPointerPressed {
+        window: main_window,
+        button: iced::mouse::Button::Left,
+        status: iced::event::Status::Ignored,
+    }));
+    assert_eq!(browser.current_error(), None);
+}
+
+#[test]
 fn preview_controls_stay_visible_while_the_window_is_dragged() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let preview_window = window::Id::unique();
@@ -290,6 +321,26 @@ fn preview_controls_stay_visible_while_the_window_is_dragged() {
         position: iced::Point::new(8.0, PreviewWindowChromeState::REVEAL_HEIGHT + 1.0),
     }));
     assert!(!browser.preview_window_chrome.target_is_visible());
+}
+
+#[tokio::test]
+async fn image_dimension_update_reuses_existing_preview_window() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let preview_window = window::Id::unique();
+    browser.preview_window = Some(preview_window);
+
+    let actions =
+        observed_window_actions(browser.open_image_preview_window_for_dimensions(1600, 900)).await;
+
+    assert_eq!(browser.preview_window, Some(preview_window));
+    assert_eq!(browser.focused_window, preview_window);
+    assert_eq!(browser.preview_window_profile, PreviewWindowProfile::Image);
+    assert!(actions.iter().all(|action| {
+        !matches!(
+            action,
+            ObservedWindowAction::Open(_) | ObservedWindowAction::Close(_)
+        )
+    }));
 }
 
 #[test]

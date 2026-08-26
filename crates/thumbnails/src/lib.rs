@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use image::{metadata::Orientation, ImageDecoder};
 use thiserror::Error;
 use tokio::fs;
 
 mod svg;
 
 const CACHE_FORMAT_EXTENSION: &str = "png";
-const THUMBNAILER_VERSION: u8 = 3;
+const THUMBNAILER_VERSION: u8 = 4;
 const VIDEO_THUMBNAIL_SEEK_TIME: &str = "00:00:01";
 const VIDEO_THUMBNAILER_DETAIL_CHAR_LIMIT: usize = 1_000;
 const THUMBNAIL_NORMAL_DIR: &str = "normal";
@@ -388,10 +389,10 @@ fn load_image_dimensions_blocking(source: PathBuf) -> Result<(u32, u32), Thumbna
         return svg::load_svg_dimensions(&source);
     }
 
-    image::image_dimensions(&source).map_err(|source_error| ThumbnailError::ReadImage {
-        path: source,
-        source: source_error,
-    })
+    let mut decoder = open_raster_decoder(&source)?;
+    let dimensions = decoder.dimensions();
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    Ok(oriented_image_dimensions(dimensions, orientation))
 }
 
 async fn cached_thumbnail_dimensions(path: PathBuf) -> Result<(u32, u32), ThumbnailError> {
@@ -462,17 +463,9 @@ fn generate_cached_image_thumbnail_blocking(
         return finish_cached_thumbnail(key, source, temporary_output, output, width, height);
     }
 
-    let image = image::ImageReader::open(&source)
-        .map_err(|source_error| ThumbnailError::ReadImage {
-            path: source.clone(),
-            source: image::ImageError::IoError(source_error),
-        })?
-        .decode()
-        .map_err(|source_error| ThumbnailError::ReadImage {
-            path: source.clone(),
-            source: source_error,
-        })?;
-    let thumbnail = image.thumbnail(request.max_edge, request.max_edge);
+    let (image, orientation) = decode_raster_with_orientation(&source)?;
+    let mut thumbnail = image.thumbnail(request.max_edge, request.max_edge);
+    thumbnail.apply_orientation(orientation);
     let width = thumbnail.width();
     let height = thumbnail.height();
 
@@ -562,17 +555,9 @@ fn generate_image_thumbnail_blocking(
         });
     }
 
-    let image = image::ImageReader::open(&source)
-        .map_err(|source_error| ThumbnailError::ReadImage {
-            path: source.clone(),
-            source: image::ImageError::IoError(source_error),
-        })?
-        .decode()
-        .map_err(|source_error| ThumbnailError::ReadImage {
-            path: source.clone(),
-            source: source_error,
-        })?;
-    let thumbnail = image.thumbnail(options.max_edge, options.max_edge);
+    let (image, orientation) = decode_raster_with_orientation(&source)?;
+    let mut thumbnail = image.thumbnail(options.max_edge, options.max_edge);
+    thumbnail.apply_orientation(orientation);
     let width = thumbnail.width();
     let height = thumbnail.height();
 
@@ -589,6 +574,63 @@ fn generate_image_thumbnail_blocking(
         width,
         height,
     })
+}
+
+fn open_raster_decoder(source: &Path) -> Result<impl ImageDecoder, ThumbnailError> {
+    image::ImageReader::open(source)
+        .map_err(|source_error| ThumbnailError::ReadImage {
+            path: source.to_path_buf(),
+            source: image::ImageError::IoError(source_error),
+        })?
+        .into_decoder()
+        .map_err(|source_error| ThumbnailError::ReadImage {
+            path: source.to_path_buf(),
+            source: source_error,
+        })
+}
+
+fn decode_raster_with_orientation(
+    source: &Path,
+) -> Result<(image::DynamicImage, Orientation), ThumbnailError> {
+    let mut decoder = open_raster_decoder(source)?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut limits = image::Limits::default();
+    limits
+        .reserve(decoder.total_bytes())
+        .map_err(|source_error| ThumbnailError::ReadImage {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
+    decoder
+        .set_limits(limits)
+        .map_err(|source_error| ThumbnailError::ReadImage {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
+    let image = image::DynamicImage::from_decoder(decoder).map_err(|source_error| {
+        ThumbnailError::ReadImage {
+            path: source.to_path_buf(),
+            source: source_error,
+        }
+    })?;
+    Ok((image, orientation))
+}
+
+pub fn oriented_image_dimensions(
+    (width, height): (u32, u32),
+    orientation: Orientation,
+) -> (u32, u32) {
+    if matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    ) {
+        (height, width)
+    } else {
+        (width, height)
+    }
 }
 
 fn run_video_thumbnailer(

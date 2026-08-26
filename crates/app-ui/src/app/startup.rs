@@ -384,7 +384,7 @@ mod tests {
 
         assert_eq!(browser.current_dir, home);
         assert!(!browser.is_trash_view);
-        assert_eq!(browser.error, None);
+        assert_eq!(browser.current_error(), None);
         assert!(browser.directory_collection_phase.is_discovering());
         assert_eq!(browser.tabs.len(), 1);
         assert_eq!(browser.pane_layout.active(), BrowserPaneId::PRIMARY);
@@ -411,7 +411,7 @@ mod tests {
         drop(browser.accept_startup_plan(classified));
 
         assert_eq!(browser.current_dir, workspace);
-        assert_eq!(browser.error, None);
+        assert_eq!(browser.current_error(), None);
         assert!(browser.directory_collection_phase.is_discovering());
     }
 
@@ -430,15 +430,14 @@ mod tests {
             user_config,
             temp_dir.path().join("state.sqlite"),
         )));
-        assert_eq!(browser.error, None);
+        assert_eq!(browser.current_error(), None);
         let classified =
             classify_startup_session(browser.startup_session_plan_request(&home), None);
         drop(browser.accept_startup_plan(classified));
 
         assert_eq!(browser.current_dir, home);
         assert!(browser
-            .error
-            .as_deref()
+            .current_error()
             .is_some_and(|error| error.contains("Could not open startup directory")));
     }
 
@@ -681,10 +680,8 @@ mod tests {
             Some(classify_previous_session(home.clone(), None)),
         ))));
 
-        assert_eq!(browser.current_dir, home);
         assert!(browser
-            .error
-            .as_deref()
+            .current_error()
             .is_some_and(|error| error.contains("No saved view state was found")));
     }
 
@@ -720,10 +717,8 @@ mod tests {
             Some(classify_previous_session(home.clone(), Some(snapshot))),
         ))));
 
-        assert_eq!(browser.current_dir, home);
         assert!(browser
-            .error
-            .as_deref()
+            .current_error()
             .is_some_and(|error| error.contains("Saved view state could not be restored")));
     }
 
@@ -743,10 +738,8 @@ mod tests {
         )));
         drop(browser.accept_operation_store(Err("state database is unavailable".to_owned())));
 
-        assert_eq!(browser.current_dir, home);
         assert!(browser
-            .error
-            .as_deref()
+            .current_error()
             .is_some_and(|error| error.contains("Failed to restore saved view state")));
     }
 

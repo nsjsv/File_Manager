@@ -91,6 +91,7 @@ use crate::app::archive_creation::ArchiveCreationState;
 use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
+use crate::app::preview_state::PendingOriginalImagePreview;
 use crate::app::runtime::{
     desktop_activation_subscription, directory_watch_subscription, matugen_theme_subscription,
     sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
@@ -184,6 +185,9 @@ pub(crate) struct FileBrowser {
     remote_preview_download_cancel: Option<tokio_util::sync::CancellationToken>,
     pub(crate) text_preview_document: Option<TextPreviewDocument>,
     animated_image_preview_generation: u64,
+    original_image_preview_generation: u64,
+    original_image_preview_cancel: Option<tokio_util::sync::CancellationToken>,
+    pending_original_image_preview: Option<PendingOriginalImagePreview>,
     remote_preview_download_generation: u64,
     text_preview_generation: u64,
     directory_load_generation: u64,
@@ -197,6 +201,7 @@ pub(crate) struct FileBrowser {
     preview_window_profile: PreviewWindowProfile,
     preview_window_chrome: PreviewWindowChromeState,
     preview_window_drag_active: bool,
+    preview_window_pointer_y: Option<f32>,
     preview_window_initial_chrome_generation: u64,
     main_window: window::Id,
     maximized_windows: HashSet<window::Id>,
@@ -290,7 +295,8 @@ pub(crate) struct FileBrowser {
     rename_input_history: file_operations::RenameInputHistory,
     pub(crate) directory_collection_phase: DirectoryCollectionPhase,
     pub(crate) directory_order_phase: DirectoryOrderPhase,
-    error: Option<String>,
+    global_error_notification: Option<global_error::GlobalErrorNotification>,
+    next_global_error_notification_generation: u64,
     pub(crate) application_logs: ApplicationLogViewState,
     system_language: UiLanguage,
     pub(crate) cursor_position: Point,
@@ -519,6 +525,9 @@ impl FileBrowser {
             remote_preview_download_cancel: None,
             text_preview_document: None,
             animated_image_preview_generation: 0,
+            original_image_preview_generation: 0,
+            original_image_preview_cancel: None,
+            pending_original_image_preview: None,
             remote_preview_download_generation: 0,
             text_preview_generation: 0,
             directory_load_generation: 0,
@@ -532,6 +541,7 @@ impl FileBrowser {
             preview_window_profile: PreviewWindowProfile::Regular,
             preview_window_chrome: PreviewWindowChromeState::default(),
             preview_window_drag_active: false,
+            preview_window_pointer_y: None,
             preview_window_initial_chrome_generation: 0,
             main_window,
             maximized_windows: HashSet::new(),
@@ -635,7 +645,8 @@ impl FileBrowser {
                 field: options.sort_field,
                 direction: options.sort_direction,
             },
-            error: None,
+            global_error_notification: None,
+            next_global_error_notification_generation: 0,
             application_logs: ApplicationLogViewState::new(
                 crate::runtime_logging::journald_initialization_warning(),
             ),
@@ -715,6 +726,13 @@ impl FileBrowser {
         }
 
         let mut subscriptions = vec![event::listen_with(global_event_message)];
+        if let Some((generation, remaining)) = self.global_error_notification_countdown() {
+            subscriptions.push(
+                time::every(remaining)
+                    .with(generation)
+                    .map(|(generation, _)| Message::GlobalErrorNotificationElapsed(generation)),
+            );
+        }
         subscriptions.push(sidebar_device_refresh_subscription());
         if let Some(path) = config::matugen_theme_file_path() {
             subscriptions.push(matugen_theme_subscription(path));
