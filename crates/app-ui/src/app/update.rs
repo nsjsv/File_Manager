@@ -445,6 +445,7 @@ impl FileBrowser {
                 if self.preview_window == Some(window) {
                     self.cancel_preview_window_initial_chrome_hide();
                     self.preview_window_pointer_y = None;
+                    self.preview_window_bottom_controls.start_hide();
                     if !self.preview_window_drag_active {
                         self.preview_window_chrome.start_hide();
                     }

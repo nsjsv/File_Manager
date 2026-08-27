@@ -117,7 +117,7 @@ pub(crate) use preview::{
     PreviewWindowChromeState, PreviewWindowProfile, RemotePreviewCacheFinished,
     RemotePreviewCacheMessage, RemotePreviewCacheProgress, RemotePreviewDownload,
     VideoPreviewFrame, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
-    VideoPreviewSeekCompletion, PREVIEW_WINDOW_CHROME_HIDE_DURATION,
+    VideoPreviewSeekCompletion, PREVIEW_WINDOW_INITIAL_CONTROLS_DURATION,
 };
 mod settings;
 pub(crate) use settings::SettingsCategory;

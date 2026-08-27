@@ -30,8 +30,10 @@ impl FileBrowser {
             self.preview_window_drag_active = false;
             if let Some(pointer_y) = self.preview_window_pointer_y {
                 self.preview_window_chrome.update_for_cursor_y(pointer_y);
+                self.refresh_preview_window_bottom_controls();
             } else {
                 self.preview_window_chrome.start_hide();
+                self.preview_window_bottom_controls.start_hide();
             }
         }
         Task::batch([
@@ -56,6 +58,7 @@ impl FileBrowser {
         if self.preview_window == Some(window) {
             self.cancel_preview_window_initial_chrome_hide();
             self.preview_window_pointer_y = Some(position.y);
+            self.refresh_preview_window_bottom_controls();
             if !self.preview_window_drag_active {
                 self.preview_window_chrome.update_for_cursor_y(position.y);
             }

@@ -5,7 +5,8 @@ use iced::{event, mouse, window, Rectangle, Size, Task};
 use super::FileBrowser;
 use crate::app::runtime::preview_window_initial_chrome_command;
 use crate::model::{
-    Message, PreviewSize, PreviewWindowProfile, SettingsCategory, WINDOW_TOP_BAR_HEIGHT,
+    Message, PreviewContent, PreviewSize, PreviewState, PreviewWindowProfile, SettingsCategory,
+    WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::view::{address_input_id, rename_input_id};
 
@@ -24,7 +25,7 @@ const DEFAULT_AUDIO_PREVIEW_HEIGHT: f32 = 168.0;
 const MIN_AUDIO_PREVIEW_WIDTH: f32 = 560.0;
 const MIN_AUDIO_PREVIEW_HEIGHT: f32 = 136.0;
 const DEFAULT_VIDEO_PREVIEW_WIDTH: f32 = 748.0;
-const DEFAULT_VIDEO_PREVIEW_HEIGHT: f32 = 589.0;
+const DEFAULT_VIDEO_PREVIEW_HEIGHT: f32 = 501.0;
 const MIN_VIDEO_PREVIEW_WIDTH: f32 = 360.0;
 const MIN_VIDEO_PREVIEW_HEIGHT: f32 = 320.0;
 const VIDEO_PREVIEW_INITIAL_FIT_MAX_WIDTH: f32 = 1080.0;
@@ -43,7 +44,6 @@ const MAIN_WINDOW_APP_ID: &str = "file-manager";
 const SETTINGS_WINDOW_APP_ID: &str = "file-manager-settings";
 const PROPERTIES_WINDOW_APP_ID: &str = "file-manager-properties";
 const PREVIEW_WINDOW_APP_ID: &str = "file-manager-preview";
-const VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT: f32 = 88.0;
 const PREVIEW_RESIZE_MATCH_TOLERANCE: f32 = 1.0;
 
 pub(super) fn main_window_settings() -> window::Settings {
@@ -263,18 +263,38 @@ pub(super) fn image_preview_size_from_dimensions(width: u32, height: u32) -> Pre
     }
 }
 
+fn animated_image_preview_size_from_dimensions(width: u32, height: u32) -> PreviewSize {
+    let min_size = preview_min_size(PreviewWindowProfile::Image);
+    let image_width = width as f32;
+    let image_height = height as f32;
+    let scale_to_maximum = (IMAGE_PREVIEW_INITIAL_FIT_MAX_WIDTH / image_width)
+        .min(IMAGE_PREVIEW_INITIAL_FIT_MAX_HEIGHT / image_height);
+    let scale_to_minimum = (min_size.width / image_width).max(min_size.height / image_height);
+    if scale_to_minimum > scale_to_maximum {
+        return PreviewSize {
+            width: min_size.width,
+            height: min_size.height,
+        };
+    }
+
+    let scale = scale_to_minimum.max(scale_to_maximum.min(1.0));
+    PreviewSize {
+        width: image_width * scale,
+        height: image_height * scale,
+    }
+}
+
 fn video_preview_size_from_frame(width: u32, height: u32) -> PreviewSize {
     let max_size = video_preview_initial_fit_max_size();
-    let max_frame_height = (max_size.height - VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT).max(1.0);
     let frame_width = width as f32;
     let frame_height = height as f32;
     let scale = (max_size.width / frame_width)
-        .min(max_frame_height / frame_height)
+        .min(max_size.height / frame_height)
         .min(1.0);
 
     PreviewSize {
         width: frame_width * scale,
-        height: frame_height * scale + VIDEO_PREVIEW_WINDOW_CONTROL_HEIGHT,
+        height: frame_height * scale,
     }
 }
 
@@ -413,6 +433,7 @@ impl FileBrowser {
         self.pending_preview_resize = Some(size);
 
         if let Some(window) = self.preview_window {
+            self.reset_preview_window_bottom_controls();
             self.focused_window = window;
             let initial_chrome = self.start_preview_window_initial_chrome();
             let min_size = preview_min_size(profile);
@@ -432,6 +453,7 @@ impl FileBrowser {
 
         self.preview_window_drag_active = false;
         self.preview_window_pointer_y = None;
+        self.reset_preview_window_bottom_controls();
         let initial_chrome = self.start_preview_window_initial_chrome();
         let (window, command) = window::open(preview_window_settings(profile, size));
         self.preview_window = Some(window);
@@ -460,6 +482,16 @@ impl FileBrowser {
             image_preview_size_from_dimensions(width, height),
         )
     }
+    pub(super) fn open_animated_image_preview_window_for_dimensions(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Task<Message> {
+        self.update_preview_window(
+            PreviewWindowProfile::Image,
+            animated_image_preview_size_from_dimensions(width, height),
+        )
+    }
 
     pub(super) fn open_image_preview_window_with_default_size(&mut self) -> Task<Message> {
         self.update_preview_window(
@@ -482,6 +514,7 @@ impl FileBrowser {
         self.pending_preview_resize = Some(self.preview_size);
 
         if let Some(window) = self.preview_window {
+            self.reset_preview_window_bottom_controls();
             self.focused_window = window;
             let min_size = preview_min_size(profile);
             let initial_chrome = self.start_preview_window_initial_chrome();
@@ -501,11 +534,39 @@ impl FileBrowser {
 
         self.preview_window_drag_active = false;
         self.preview_window_pointer_y = None;
+        self.reset_preview_window_bottom_controls();
         let initial_chrome = self.start_preview_window_initial_chrome();
         let (window, command) = window::open(preview_window_settings(profile, self.preview_size));
         self.preview_window = Some(window);
         self.focused_window = window;
         Task::batch([command.discard(), initial_chrome])
+    }
+
+    fn preview_window_has_bottom_media_controls(&self) -> bool {
+        match self.preview.as_ref() {
+            Some(PreviewState::Ready(PreviewContent::Video { .. })) => true,
+            Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview))) => {
+                preview.playback_duration().is_some()
+            }
+            _ => false,
+        }
+    }
+
+    fn reset_preview_window_bottom_controls(&mut self) {
+        self.preview_window_bottom_controls.reset_hidden();
+        self.refresh_preview_window_bottom_controls();
+    }
+
+    pub(super) fn refresh_preview_window_bottom_controls(&mut self) {
+        if !self.preview_window_has_bottom_media_controls() {
+            self.preview_window_bottom_controls.reset_hidden();
+            return;
+        }
+
+        if let Some(pointer_y) = self.preview_window_pointer_y {
+            self.preview_window_bottom_controls
+                .update_for_bottom_cursor_y(pointer_y, self.preview_size.height);
+        }
     }
 
     pub(super) fn fit_preview_window_to_video_frame(
@@ -522,9 +583,15 @@ impl FileBrowser {
             video_preview_size_from_frame(width, height),
         )
     }
+
     fn start_preview_window_initial_chrome(&mut self) -> Task<Message> {
         self.cancel_preview_window_initial_chrome_hide();
         self.preview_window_chrome.start_reveal();
+        if self.preview_window_has_bottom_media_controls() {
+            self.preview_window_bottom_controls.start_reveal();
+        } else {
+            self.preview_window_bottom_controls.reset_hidden();
+        }
         preview_window_initial_chrome_command(self.preview_window_initial_chrome_generation)
     }
 
@@ -535,8 +602,17 @@ impl FileBrowser {
     }
 
     pub(super) fn hide_preview_window_initial_chrome(&mut self, generation: u64) {
-        if generation == self.preview_window_initial_chrome_generation {
-            self.preview_window_chrome.start_hide();
+        if generation != self.preview_window_initial_chrome_generation {
+            return;
+        }
+        self.preview_window_chrome.start_hide();
+
+        if !self.preview_window_has_bottom_media_controls() {
+            self.preview_window_bottom_controls.reset_hidden();
+        } else if self.preview_window_pointer_y.is_some() {
+            self.refresh_preview_window_bottom_controls();
+        } else {
+            self.preview_window_bottom_controls.start_hide();
         }
     }
 
@@ -547,6 +623,7 @@ impl FileBrowser {
         self.preview_window_pointer_y = None;
         self.cancel_preview_window_initial_chrome_hide();
         self.preview_window_chrome.reset_hidden();
+        self.preview_window_bottom_controls.reset_hidden();
         let Some(window) = self.preview_window.take() else {
             return Task::none();
         };
@@ -810,6 +887,7 @@ impl FileBrowser {
             } else {
                 self.preview_size = resized_size;
             }
+            self.refresh_preview_window_bottom_controls();
             tracing::debug!(
                 target: "app_ui::preview",
                 window = ?window,

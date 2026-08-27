@@ -241,6 +241,7 @@ pub(crate) enum PreviewWindowProfile {
 }
 const PREVIEW_WINDOW_CHROME_REVEAL_DURATION: Duration = Duration::from_millis(160);
 pub(crate) const PREVIEW_WINDOW_CHROME_HIDE_DURATION: Duration = Duration::from_millis(220);
+pub(crate) const PREVIEW_WINDOW_INITIAL_CONTROLS_DURATION: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewWindowChromeTarget {
@@ -311,6 +312,15 @@ impl PreviewWindowChromeState {
             PreviewWindowChromeTarget::from_cursor_y(cursor_y),
             Instant::now(),
         );
+    }
+    pub(crate) fn update_for_bottom_cursor_y(&mut self, cursor_y: f32, window_height: f32) {
+        let reveal_start = (window_height - Self::REVEAL_HEIGHT).max(0.0);
+        let target = if cursor_y >= reveal_start && cursor_y <= window_height {
+            PreviewWindowChromeTarget::Visible
+        } else {
+            PreviewWindowChromeTarget::Hidden
+        };
+        self.retarget_at(target, Instant::now());
     }
 
     pub(crate) fn reset_hidden(&mut self) {
@@ -402,6 +412,28 @@ mod preview_window_chrome_tests {
             PreviewWindowChromeTarget::from_cursor_y(64.1),
             PreviewWindowChromeTarget::Hidden
         );
+    }
+    #[test]
+    fn bottom_cursor_y_targets_only_the_bottom_reveal_region() {
+        let mut chrome = PreviewWindowChromeState::default();
+
+        chrome.update_for_bottom_cursor_y(636.0, 700.0);
+        assert!(chrome.target_is_visible());
+
+        chrome.update_for_bottom_cursor_y(635.9, 700.0);
+        assert!(!chrome.target_is_visible());
+
+        chrome.update_for_bottom_cursor_y(700.1, 700.0);
+        assert!(!chrome.target_is_visible());
+    }
+
+    #[test]
+    fn bottom_cursor_y_reveals_the_entire_small_window() {
+        let mut chrome = PreviewWindowChromeState::default();
+
+        chrome.update_for_bottom_cursor_y(0.0, 40.0);
+
+        assert!(chrome.target_is_visible());
     }
 
     #[test]

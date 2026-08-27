@@ -1,18 +1,20 @@
 use std::path::Path;
 use std::time::Duration;
 
+use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
     button, column, container, image, mouse_area, row, scrollable, slider, svg, Button, Column,
     Space, Stack,
 };
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Element, Length, Theme};
 
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
-    app_content_style, enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction,
-    navigation_icon_button_style, preview_media_style,
+    app_content_style, base_text_color, enhanced_scrollbar_style,
+    enhanced_vertical_scrollbar_direction, navigation_icon_button_style, preview_media_style,
+    preview_window_bottom_gradient_style,
 };
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
@@ -45,11 +47,11 @@ const AUDIO_PROGRESS_SLIDER_STEP_SECONDS: f32 = 0.05;
 const AUDIO_VOLUME_SLIDER_WIDTH: f32 = 100.0;
 const AUDIO_VOLUME_SLIDER_STEP: f32 = 0.01;
 const VIDEO_PREVIEW_CONTROL_HEIGHT: f32 = 88.0;
-const VIDEO_PROGRESS_SLIDER_PORTION: u16 = 3;
+const VIDEO_PROGRESS_SLIDER_PORTION: u16 = 4;
 const VIDEO_VOLUME_SLIDER_PORTION: u16 = 1;
 const VIDEO_CONTROL_SLIDER_GAP: f32 = 14.0;
 const VIDEO_VOLUME_ICON_GAP: f32 = 6.0;
-const ANIMATED_IMAGE_CONTROL_RESERVED_HEIGHT: f32 = 58.0;
+const VIDEO_CONTROL_HORIZONTAL_PADDING: u16 = 16;
 const ANIMATED_IMAGE_CONTROL_SIDE_PADDING: f32 = 28.0;
 const ANIMATED_IMAGE_MIN_CONTROL_WIDTH: f32 = 220.0;
 
@@ -59,6 +61,7 @@ pub(crate) fn view_preview_window<'a>(
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
+    preview_bottom_controls_opacity: f32,
     operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
     directory_scrollbar_viewport: Option<ScrollbarViewport>,
@@ -77,6 +80,7 @@ pub(crate) fn view_preview_window<'a>(
                 size,
                 audio_preview,
                 video_preview,
+                preview_bottom_controls_opacity,
                 operation_progress_animation_frame,
                 directory_scrollbar_visibility,
                 directory_scrollbar_viewport,
@@ -103,6 +107,7 @@ fn preview_panel<'a>(
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
+    preview_bottom_controls_opacity: f32,
     operation_progress_animation_frame: u8,
     directory_scrollbar_visibility: ScrollbarVisibility,
     directory_scrollbar_viewport: Option<ScrollbarViewport>,
@@ -178,7 +183,7 @@ fn preview_panel<'a>(
             } => svg_preview_panel(handle, *width, *height, size),
         },
         PreviewState::Ready(PreviewContent::AnimatedImage(preview)) => {
-            animated_image_preview_panel(preview, size)
+            animated_image_preview_panel(preview, size, preview_bottom_controls_opacity)
         }
         PreviewState::Ready(PreviewContent::Audio {
             path,
@@ -200,6 +205,7 @@ fn preview_panel<'a>(
             *duration,
             video_preview,
             size,
+            preview_bottom_controls_opacity,
         ),
         PreviewState::Error(error) => column![localized_text(error).size(14)].into(),
         PreviewState::ImageError { path, error } => column![
@@ -477,9 +483,9 @@ fn svg_preview_panel(
 fn animated_image_preview_panel(
     preview: &AnimatedImagePreview,
     size: PreviewSize,
+    preview_bottom_controls_opacity: f32,
 ) -> Element<'static, Message> {
-    let (image_width, image_height) =
-        animated_image_preview_size(size, preview.width(), preview.height());
+    let (image_width, image_height) = image_preview_size(size, preview.width(), preview.height());
     let mut frames = Stack::new()
         .width(Length::Fixed(image_width))
         .height(Length::Fixed(image_height));
@@ -494,22 +500,49 @@ fn animated_image_preview_panel(
         image_height,
     ));
 
-    let image_surface = container(frames)
-        .width(Length::Fill)
-        .height(Length::Fixed(image_height))
-        .center_x(Length::Fill)
-        .style(preview_media_style);
-    let mut content = column![image_surface].spacing(8).align_x(Alignment::Center);
-
-    if let Some(controls) = animated_image_controls(preview, size, image_width) {
-        content = content.push(controls);
-    }
-
-    container(content)
+    let frame_view: Element<'static, Message> = container(frames)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
+        .style(preview_media_style)
+        .into();
+    let effective_opacity =
+        animated_image_controls_opacity_for_preview(preview, preview_bottom_controls_opacity);
+
+    if effective_opacity <= f32::EPSILON {
+        return frame_view;
+    }
+
+    let Some(controls) = animated_image_controls(preview, size, image_width, effective_opacity)
+    else {
+        return frame_view;
+    };
+    let gradient: Element<'static, Message> = container(Space::new())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |theme| preview_window_bottom_gradient_style(theme, effective_opacity))
+        .into();
+    let controls: Element<'static, Message> = container(controls)
+        .width(Length::Fill)
+        .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+        .center_x(Length::Fill)
+        .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+        .into();
+    let bottom_controls: Element<'static, Message> = container(
+        Stack::with_children([gradient, controls])
+            .width(Length::Fill)
+            .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(Horizontal::Center)
+    .align_y(Vertical::Bottom)
+    .into();
+
+    Stack::with_children([frame_view, bottom_controls])
+        .width(Length::Fill)
+        .height(Length::Fill)
         .into()
 }
 
@@ -517,34 +550,52 @@ fn animated_image_controls(
     preview: &AnimatedImagePreview,
     size: PreviewSize,
     image_width: f32,
+    opacity: f32,
 ) -> Option<Element<'static, Message>> {
     let duration = preview.playback_duration()?;
-
+    let opacity = opacity.clamp(0.0, 1.0);
     let width = animated_image_control_width(size, image_width);
-    let mut controls = Column::new()
-        .spacing(4)
-        .align_x(Alignment::Center)
-        .width(Length::Fixed(width));
-
     let position = preview.playback_position().min(duration);
     let duration_seconds = duration
         .as_secs_f32()
         .max(AUDIO_PROGRESS_SLIDER_STEP_SECONDS);
     let position_seconds = position.as_secs_f32().min(duration_seconds);
-    controls = controls.push(
-        slider(
-            0.0..=duration_seconds,
-            position_seconds,
-            Message::AnimatedImageSeekRequested,
-        )
-        .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
-        .on_release(Message::AnimatedImageSeekCommitted)
-        .width(Length::Fixed(width)),
-    );
-    controls =
-        controls.push(readable_text(animated_image_position_text(position, duration)).size(12));
+    let progress_slider = slider(
+        0.0..=duration_seconds,
+        position_seconds,
+        Message::AnimatedImageSeekRequested,
+    )
+    .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
+    .on_release(Message::AnimatedImageSeekCommitted)
+    .width(Length::Fixed(width))
+    .style(move |theme, status| faded_video_slider_style(theme, status, opacity));
+    let position_text = readable_text(animated_image_position_text(position, duration))
+        .size(12)
+        .style(move |theme| iced::widget::text::Style {
+            color: Some(base_text_color(theme).scale_alpha(opacity)),
+        });
+    let controls = column![position_text, progress_slider]
+        .spacing(4)
+        .align_x(Alignment::Center)
+        .width(Length::Fixed(width));
 
-    Some(controls.into())
+    Some(
+        container(controls)
+            .padding([0, VIDEO_CONTROL_HORIZONTAL_PADDING])
+            .width(Length::Fixed(width))
+            .into(),
+    )
+}
+
+fn animated_image_controls_opacity_for_preview(
+    preview: &AnimatedImagePreview,
+    opacity: f32,
+) -> f32 {
+    if preview.is_seeking() {
+        1.0
+    } else {
+        opacity.clamp(0.0, 1.0)
+    }
 }
 
 fn animated_image_position_text(position: Duration, duration: Duration) -> String {
@@ -568,12 +619,6 @@ fn preview_image_frame(
 fn image_preview_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
     let max_width = size.width.max(1.0);
     let max_height = size.height.max(1.0);
-    scaled_media_size(max_width, max_height, width, height)
-}
-
-fn animated_image_preview_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
-    let max_width = size.width.max(1.0);
-    let max_height = (size.height - ANIMATED_IMAGE_CONTROL_RESERVED_HEIGHT).max(1.0);
     scaled_media_size(max_width, max_height, width, height)
 }
 
@@ -741,9 +786,12 @@ fn video_preview_panel(
     duration: Option<Duration>,
     playback: Option<&VideoPreviewPlayback>,
     size: PreviewSize,
+    preview_bottom_controls_opacity: f32,
 ) -> Element<'static, Message> {
     let playback = playback.filter(|playback| playback.path.as_path() == path);
     let (frame_width, frame_height) = video_frame_size(size, width, height);
+    let effective_opacity =
+        video_controls_opacity_for_playback(playback, preview_bottom_controls_opacity);
     let frame_content: Element<'static, Message> = if let Some(frame) = frame {
         image::Image::new(frame.clone())
             .width(Length::Fixed(frame_width))
@@ -759,35 +807,63 @@ fn video_preview_panel(
     };
     let frame_view: Element<'static, Message> = container(frame_content)
         .width(Length::Fill)
-        .height(Length::Fixed(frame_height))
+        .height(Length::Fill)
         .center_x(Length::Fill)
-        .center_y(Length::Fixed(frame_height))
+        .center_y(Length::Fill)
         .style(preview_media_style)
         .into();
-    let controls = video_controls(playback, duration, frame_width);
 
-    container(
-        column![
-            frame_view,
-            container(controls)
-                .width(Length::Fill)
-                .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
-                .center_x(Length::Fill)
-                .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
-        ]
+    if effective_opacity <= f32::EPSILON {
+        return frame_view;
+    }
+
+    let gradient: Element<'static, Message> = container(Space::new())
         .width(Length::Fill)
-        .height(Length::Fill),
+        .height(Length::Fill)
+        .style(move |theme| preview_window_bottom_gradient_style(theme, effective_opacity))
+        .into();
+    let controls: Element<'static, Message> = container(video_controls(
+        playback,
+        duration,
+        frame_width,
+        effective_opacity,
+    ))
+    .width(Length::Fill)
+    .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+    .center_x(Length::Fill)
+    .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+    .into();
+    let bottom_controls: Element<'static, Message> = container(
+        Stack::with_children([gradient, controls])
+            .width(Length::Fill)
+            .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
+    .align_x(Horizontal::Center)
+    .align_y(Vertical::Bottom)
+    .into();
+
+    Stack::with_children([frame_view, bottom_controls])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn video_controls_opacity_for_playback(
+    playback: Option<&VideoPreviewPlayback>,
+    opacity: f32,
+) -> f32 {
+    if playback.map_or(false, |playback| playback.seek_completion.is_some()) {
+        1.0
+    } else {
+        opacity.clamp(0.0, 1.0)
+    }
 }
 
 fn video_frame_size(size: PreviewSize, width: u32, height: u32) -> (f32, f32) {
     let max_width = size.width.max(1.0);
-    let max_height = (size.height - VIDEO_PREVIEW_CONTROL_HEIGHT).max(1.0);
+    let max_height = size.height.max(1.0);
     scaled_media_size(max_width, max_height, width, height)
 }
 
@@ -807,24 +883,29 @@ fn scaled_media_size(max_width: f32, max_height: f32, width: u32, height: u32) -
     (frame_width.max(1.0), frame_height.max(1.0))
 }
 
-fn video_primary_button(playback: Option<&VideoPreviewPlayback>) -> Button<'static, Message> {
+fn video_primary_button(
+    playback: Option<&VideoPreviewPlayback>,
+    opacity: f32,
+) -> Button<'static, Message> {
     let icon = match playback.map(|playback| playback.status) {
         Some(VideoPreviewPlaybackStatus::Playing) => IconSymbol::Pause,
         _ => IconSymbol::Play,
     };
-    button(themed_icon(icon, IconTone::Normal, AUDIO_CONTROL_ICON_SIZE))
+    button(faded_video_icon(icon, AUDIO_CONTROL_ICON_SIZE, opacity))
         .on_press(Message::VideoPreviewPlaybackToggled)
         .padding(8)
         .width(Length::Fixed(AUDIO_CONTROL_BUTTON_SIZE))
         .height(Length::Fixed(AUDIO_CONTROL_BUTTON_SIZE))
-        .style(navigation_icon_button_style())
+        .style(move |theme, status| faded_video_button_style(theme, status, opacity))
 }
 
 fn video_controls(
     playback: Option<&VideoPreviewPlayback>,
     duration: Option<Duration>,
     width: f32,
+    opacity: f32,
 ) -> Element<'static, Message> {
+    let opacity = opacity.clamp(0.0, 1.0);
     let position = playback
         .map(|playback| playback.position)
         .unwrap_or(Duration::ZERO);
@@ -835,44 +916,53 @@ fn video_controls(
         .max(1.0);
     let position_seconds = position.as_secs_f32().min(duration_seconds);
 
+    let progress_slider = slider(
+        0.0..=duration_seconds,
+        position_seconds,
+        Message::VideoPreviewSeekRequested,
+    )
+    .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
+    .on_release(Message::VideoPreviewSeekCommitted)
+    .width(Length::FillPortion(VIDEO_PROGRESS_SLIDER_PORTION))
+    .style(move |theme, status| faded_video_slider_style(theme, status, opacity));
     let slider_row = row![
-        slider(
-            0.0..=duration_seconds,
-            position_seconds,
-            Message::VideoPreviewSeekRequested,
-        )
-        .step(AUDIO_PROGRESS_SLIDER_STEP_SECONDS)
-        .on_release(Message::VideoPreviewSeekCommitted)
-        .width(Length::FillPortion(VIDEO_PROGRESS_SLIDER_PORTION)),
-        container(video_volume_control(playback))
+        progress_slider,
+        container(video_volume_control(playback, opacity))
             .width(Length::FillPortion(VIDEO_VOLUME_SLIDER_PORTION)),
     ]
     .spacing(VIDEO_CONTROL_SLIDER_GAP)
-    .width(Length::Fixed(width))
+    .width(Length::Fill)
     .align_y(Alignment::Center);
 
-    column![
-        row![
-            video_primary_button(playback),
-            readable_text(audio_position_text(position, duration)).size(12),
+    container(
+        column![
+            row![
+                video_primary_button(playback, opacity),
+                readable_text(audio_position_text(position, duration))
+                    .size(12)
+                    .style(move |theme| iced::widget::text::Style {
+                        color: Some(base_text_color(theme).scale_alpha(opacity)),
+                    }),
+            ]
+            .spacing(AUDIO_TIMELINE_CONTROL_GAP)
+            .align_y(Alignment::Center),
+            slider_row,
         ]
-        .spacing(AUDIO_TIMELINE_CONTROL_GAP)
-        .align_y(Alignment::Center),
-        slider_row,
-    ]
-    .spacing(8)
+        .spacing(8)
+        .width(Length::Fixed(width)),
+    )
+    .padding([0, VIDEO_CONTROL_HORIZONTAL_PADDING])
     .width(Length::Fixed(width))
     .into()
 }
 
-fn video_volume_control(playback: Option<&VideoPreviewPlayback>) -> Element<'static, Message> {
+fn video_volume_control(
+    playback: Option<&VideoPreviewPlayback>,
+    opacity: f32,
+) -> Element<'static, Message> {
     row![
-        themed_icon(
-            IconSymbol::Volume2,
-            IconTone::Normal,
-            AUDIO_CONTROL_ICON_SIZE
-        ),
-        video_volume_slider(playback).width(Length::Fill),
+        faded_video_icon(IconSymbol::Volume2, AUDIO_CONTROL_ICON_SIZE, opacity),
+        video_volume_slider(playback, opacity).width(Length::Fill),
     ]
     .spacing(VIDEO_VOLUME_ICON_GAP)
     .align_y(Alignment::Center)
@@ -881,7 +971,121 @@ fn video_volume_control(playback: Option<&VideoPreviewPlayback>) -> Element<'sta
 
 fn video_volume_slider(
     playback: Option<&VideoPreviewPlayback>,
+    opacity: f32,
 ) -> iced::widget::Slider<'static, f32, Message> {
     let volume = playback.map(|playback| playback.volume).unwrap_or(1.0);
-    slider(0.0..=1.0, volume, Message::VideoPreviewVolumeChanged).step(AUDIO_VOLUME_SLIDER_STEP)
+    slider(0.0..=1.0, volume, Message::VideoPreviewVolumeChanged)
+        .step(AUDIO_VOLUME_SLIDER_STEP)
+        .style(move |theme, status| faded_video_slider_style(theme, status, opacity))
+}
+
+fn faded_video_icon(symbol: IconSymbol, size: f32, opacity: f32) -> Element<'static, Message> {
+    themed_icon(symbol, IconTone::Normal, size)
+        .opacity(opacity.clamp(0.0, 1.0))
+        .into()
+}
+
+fn faded_video_button_style(
+    theme: &Theme,
+    status: iced::widget::button::Status,
+    opacity: f32,
+) -> iced::widget::button::Style {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let mut style = navigation_icon_button_style()(theme, status);
+    style.background = style
+        .background
+        .map(|background| background.scale_alpha(opacity));
+    style.text_color = style.text_color.scale_alpha(opacity);
+    style.border.color = style.border.color.scale_alpha(opacity);
+    style
+}
+
+fn faded_video_slider_style(
+    theme: &Theme,
+    status: iced::widget::slider::Status,
+    opacity: f32,
+) -> iced::widget::slider::Style {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let mut style = iced::widget::slider::default(theme, status);
+    style.rail.backgrounds = (
+        style.rail.backgrounds.0.scale_alpha(opacity),
+        style.rail.backgrounds.1.scale_alpha(opacity),
+    );
+    style.rail.border.color = style.rail.border.color.scale_alpha(opacity);
+    style.handle.background = style.handle.background.scale_alpha(opacity);
+    style.handle.border_color = style.handle.border_color.scale_alpha(opacity);
+    style
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePlayback};
+    use crate::model::VideoPreviewSeekCompletion;
+    use std::path::PathBuf;
+
+    #[test]
+    fn seek_keeps_video_controls_visible_until_commit() {
+        let mut playback =
+            VideoPreviewPlayback::playing(PathBuf::from("clip.mp4"), Some(Duration::from_secs(10)));
+
+        assert_eq!(
+            video_controls_opacity_for_playback(Some(&playback), 0.0),
+            0.0
+        );
+
+        playback.seek_completion = Some(VideoPreviewSeekCompletion::StayPaused);
+        assert_eq!(
+            video_controls_opacity_for_playback(Some(&playback), 0.0),
+            1.0
+        );
+
+        playback.seek_completion = None;
+        assert_eq!(
+            video_controls_opacity_for_playback(Some(&playback), 0.25),
+            0.25
+        );
+    }
+
+    #[test]
+    fn seeking_keeps_animated_image_controls_visible_until_commit() {
+        let first_frame = AnimatedImageFrame {
+            path: PathBuf::from("animation.gif"),
+            generation: 1,
+            position: Duration::ZERO,
+            delay: Duration::from_millis(20),
+            handle: image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            width: 1,
+            height: 1,
+        };
+        let mut preview = AnimatedImagePreview::new(
+            PathBuf::from("animation.gif"),
+            first_frame,
+            1,
+            Some(Duration::from_secs(10)),
+            AnimatedImagePlayback::Animated,
+        )
+        .expect("animated preview");
+
+        assert_eq!(
+            animated_image_controls_opacity_for_preview(&preview, 0.0),
+            0.0
+        );
+        assert_eq!(
+            animated_image_controls_opacity_for_preview(&preview, 0.25),
+            0.25
+        );
+
+        preview.seek_to_position(Duration::from_secs(3));
+        assert_eq!(
+            animated_image_controls_opacity_for_preview(&preview, 0.0),
+            1.0
+        );
+
+        preview.commit_seek(2);
+        assert_eq!(
+            animated_image_controls_opacity_for_preview(&preview, 0.0),
+            0.0
+        );
+    }
 }

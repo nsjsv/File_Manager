@@ -118,6 +118,9 @@ impl AnimatedImagePreview {
     pub(crate) fn is_playing(&self) -> bool {
         self.playback == AnimatedImagePlayback::Animated && !self.is_seeking && !self.is_finished
     }
+    pub(crate) fn is_seeking(&self) -> bool {
+        self.is_seeking
+    }
 
     pub(crate) fn accept_frame(&mut self, frame: AnimatedImageFrame) {
         self.previous_frame = Some(self.current_frame.clone());

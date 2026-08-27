@@ -200,6 +200,7 @@ pub(crate) struct FileBrowser {
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
     preview_window_chrome: PreviewWindowChromeState,
+    preview_window_bottom_controls: PreviewWindowChromeState,
     preview_window_drag_active: bool,
     preview_window_pointer_y: Option<f32>,
     preview_window_initial_chrome_generation: u64,
@@ -377,6 +378,7 @@ impl FileBrowser {
 
     pub(crate) fn advance_window_animation_frame(&mut self) -> Task<Message> {
         self.preview_window_chrome.advance();
+        self.preview_window_bottom_controls.advance();
         Task::batch([
             self.advance_smooth_scroll_animation(),
             self.advance_scrollbar_animation(),
@@ -540,6 +542,7 @@ impl FileBrowser {
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
             preview_window_chrome: PreviewWindowChromeState::default(),
+            preview_window_bottom_controls: PreviewWindowChromeState::default(),
             preview_window_drag_active: false,
             preview_window_pointer_y: None,
             preview_window_initial_chrome_generation: 0,
@@ -821,6 +824,7 @@ impl FileBrowser {
         }
 
         if self.preview_window_chrome.is_animating()
+            || self.preview_window_bottom_controls.is_animating()
             || self.scrollbar_animation_is_active()
             || self.smooth_scroll_animation_is_active()
             || self.address_bar_transition_is_active()
@@ -895,7 +899,7 @@ impl FileBrowser {
         } else if self.preview_window == Some(window) {
             let frame_state = self.window_frame_state(window);
             let content = floating_preview_window_content(
-                self.preview_window_content(),
+                self.preview_window_content(self.preview_window_bottom_controls.opacity()),
                 &self.user_config.window_controls,
                 window,
                 frame_state,

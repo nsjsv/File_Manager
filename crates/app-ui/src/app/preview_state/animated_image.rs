@@ -52,7 +52,7 @@ impl FileBrowser {
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview)));
                 self.clear_global_error();
-                self.open_image_preview_window_for_dimensions(width, height)
+                self.open_animated_image_preview_window_for_dimensions(width, height)
             }
             Err(error) => {
                 self.text_preview_document = None;
