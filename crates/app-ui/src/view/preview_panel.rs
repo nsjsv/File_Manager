@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, image, mouse_area, row, scrollable, slider, svg, Button, Column,
-    Space, Stack,
+    button, column, container, image, mouse_area, progress_bar, row, scrollable, slider, svg,
+    Button, Column, Space, Stack,
 };
-use iced::{Alignment, Element, Length, Theme};
+use iced::{Alignment, Background, Border, Element, Length, Theme};
 
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
@@ -18,6 +18,7 @@ use crate::appearance::{
 };
 use crate::formatting::{format_duration, format_file_size, format_middle_ellipsized_text};
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
+use crate::matugen_theme::ui_colors;
 use crate::model::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, Message, PreviewContent,
     PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion,
@@ -54,6 +55,7 @@ const VIDEO_VOLUME_ICON_GAP: f32 = 6.0;
 const VIDEO_CONTROL_HORIZONTAL_PADDING: u16 = 16;
 const ANIMATED_IMAGE_CONTROL_SIDE_PADDING: f32 = 28.0;
 const ANIMATED_IMAGE_MIN_CONTROL_WIDTH: f32 = 220.0;
+const MINI_PROGRESS_BAR_HEIGHT: f32 = 3.0;
 
 pub(crate) fn view_preview_window<'a>(
     preview: Option<&'a PreviewState>,
@@ -510,40 +512,46 @@ fn animated_image_preview_panel(
     let effective_opacity =
         animated_image_controls_opacity_for_preview(preview, preview_bottom_controls_opacity);
 
-    if effective_opacity <= f32::EPSILON {
-        return frame_view;
+    let mini_progress_opacity = mini_progress_opacity_for_controls_opacity(effective_opacity);
+    let mut overlay = Stack::with_children([frame_view])
+        .width(Length::Fill)
+        .height(Length::Fill);
+    if mini_progress_opacity > f32::EPSILON {
+        if let Some(fraction) = animated_image_progress_fraction(preview) {
+            overlay = overlay.push(mini_progress_bar_layer(fraction, mini_progress_opacity));
+        }
     }
 
-    let Some(controls) = animated_image_controls(preview, size, image_width, effective_opacity)
-    else {
-        return frame_view;
-    };
-    let gradient: Element<'static, Message> = container(Space::new())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |theme| preview_window_bottom_gradient_style(theme, effective_opacity))
-        .into();
-    let controls: Element<'static, Message> = container(controls)
-        .width(Length::Fill)
-        .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
-        .center_x(Length::Fill)
-        .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
-        .into();
-    let bottom_controls: Element<'static, Message> = container(
-        Stack::with_children([gradient, controls])
+    if effective_opacity > f32::EPSILON {
+        let Some(controls) = animated_image_controls(preview, size, image_width, effective_opacity)
+        else {
+            return overlay.into();
+        };
+        let gradient: Element<'static, Message> = container(Space::new())
             .width(Length::Fill)
-            .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Bottom)
-    .into();
-
-    Stack::with_children([frame_view, bottom_controls])
+            .height(Length::Fill)
+            .style(move |theme| preview_window_bottom_gradient_style(theme, effective_opacity))
+            .into();
+        let controls: Element<'static, Message> = container(controls)
+            .width(Length::Fill)
+            .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+            .center_x(Length::Fill)
+            .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+            .into();
+        let bottom_controls: Element<'static, Message> = container(
+            Stack::with_children([gradient, controls])
+                .width(Length::Fill)
+                .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
+        )
         .width(Length::Fill)
         .height(Length::Fill)
-        .into()
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Bottom)
+        .into();
+        overlay = overlay.push(bottom_controls);
+    }
+
+    overlay.into()
 }
 
 fn animated_image_controls(
@@ -813,41 +821,48 @@ fn video_preview_panel(
         .style(preview_media_style)
         .into();
 
-    if effective_opacity <= f32::EPSILON {
-        return frame_view;
+    let mini_progress_opacity = mini_progress_opacity_for_controls_opacity(effective_opacity);
+    let mut overlay = Stack::with_children([frame_view])
+        .width(Length::Fill)
+        .height(Length::Fill);
+    if mini_progress_opacity > f32::EPSILON {
+        overlay = overlay.push(mini_progress_bar_layer(
+            video_progress_fraction(playback, duration),
+            mini_progress_opacity,
+        ));
     }
 
-    let gradient: Element<'static, Message> = container(Space::new())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |theme| preview_window_bottom_gradient_style(theme, effective_opacity))
-        .into();
-    let controls: Element<'static, Message> = container(video_controls(
-        playback,
-        duration,
-        frame_width,
-        effective_opacity,
-    ))
-    .width(Length::Fill)
-    .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
-    .center_x(Length::Fill)
-    .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
-    .into();
-    let bottom_controls: Element<'static, Message> = container(
-        Stack::with_children([gradient, controls])
+    if effective_opacity > f32::EPSILON {
+        let gradient: Element<'static, Message> = container(Space::new())
             .width(Length::Fill)
-            .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Bottom)
-    .into();
-
-    Stack::with_children([frame_view, bottom_controls])
+            .height(Length::Fill)
+            .style(move |theme| preview_window_bottom_gradient_style(theme, effective_opacity))
+            .into();
+        let controls: Element<'static, Message> = container(video_controls(
+            playback,
+            duration,
+            frame_width,
+            effective_opacity,
+        ))
+        .width(Length::Fill)
+        .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+        .center_x(Length::Fill)
+        .center_y(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT))
+        .into();
+        let bottom_controls: Element<'static, Message> = container(
+            Stack::with_children([gradient, controls])
+                .width(Length::Fill)
+                .height(Length::Fixed(VIDEO_PREVIEW_CONTROL_HEIGHT)),
+        )
         .width(Length::Fill)
         .height(Length::Fill)
-        .into()
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Bottom)
+        .into();
+        overlay = overlay.push(bottom_controls);
+    }
+
+    overlay.into()
 }
 
 fn video_controls_opacity_for_playback(
@@ -858,6 +873,61 @@ fn video_controls_opacity_for_playback(
         1.0
     } else {
         opacity.clamp(0.0, 1.0)
+    }
+}
+
+fn mini_progress_opacity_for_controls_opacity(controls_opacity: f32) -> f32 {
+    (1.0 - controls_opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+}
+
+fn video_progress_fraction(
+    playback: Option<&VideoPreviewPlayback>,
+    duration: Option<Duration>,
+) -> f32 {
+    let position = playback
+        .map(|playback| playback.position)
+        .unwrap_or(Duration::ZERO);
+    let duration_seconds = playback
+        .and_then(|playback| playback.duration)
+        .or(duration)
+        .map(|duration| duration.as_secs_f32())
+        .unwrap_or_else(|| position.as_secs_f32() + 1.0)
+        .max(1.0);
+    (position.as_secs_f32().min(duration_seconds) / duration_seconds).clamp(0.0, 1.0)
+}
+
+fn animated_image_progress_fraction(preview: &AnimatedImagePreview) -> Option<f32> {
+    let duration = preview.playback_duration()?;
+    let duration_seconds = duration
+        .as_secs_f32()
+        .max(AUDIO_PROGRESS_SLIDER_STEP_SECONDS);
+    let position_seconds = preview
+        .playback_position()
+        .min(duration)
+        .as_secs_f32()
+        .min(duration_seconds);
+    Some((position_seconds / duration_seconds).clamp(0.0, 1.0))
+}
+
+fn mini_progress_bar_layer(fraction: f32, opacity: f32) -> Element<'static, Message> {
+    container(
+        progress_bar(0.0..=1.0, fraction)
+            .girth(Length::Fixed(MINI_PROGRESS_BAR_HEIGHT))
+            .style(move |theme| mini_progress_bar_style(theme, opacity)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(Vertical::Bottom)
+    .into()
+}
+
+fn mini_progress_bar_style(theme: &Theme, opacity: f32) -> progress_bar::Style {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let colors = ui_colors(theme);
+    progress_bar::Style {
+        background: Background::Color(colors.outline_variant.scale_alpha(opacity)),
+        bar: Background::Color(colors.primary.scale_alpha(opacity)),
+        border: Border::default(),
     }
 }
 
@@ -1087,5 +1157,74 @@ mod tests {
             animated_image_controls_opacity_for_preview(&preview, 0.0),
             0.0
         );
+    }
+
+    #[test]
+    fn mini_progress_bar_opacity_inverts_controls_opacity() {
+        assert_eq!(mini_progress_opacity_for_controls_opacity(0.0), 1.0);
+        assert_eq!(mini_progress_opacity_for_controls_opacity(0.25), 0.75);
+        assert_eq!(mini_progress_opacity_for_controls_opacity(1.0), 0.0);
+        assert_eq!(mini_progress_opacity_for_controls_opacity(1.5), 0.0);
+        assert_eq!(mini_progress_opacity_for_controls_opacity(-0.5), 1.0);
+    }
+
+    #[test]
+    fn video_progress_fraction_follows_playback() {
+        let mut playback =
+            VideoPreviewPlayback::playing(PathBuf::from("clip.mp4"), Some(Duration::from_secs(10)));
+        playback.position = Duration::from_secs(4);
+        assert_eq!(video_progress_fraction(Some(&playback), None), 0.4);
+
+        // duration 未知时回退语义与 video_controls 一致:按 position + 1s 计算。
+        let mut unknown = VideoPreviewPlayback::playing(PathBuf::from("clip.webm"), None);
+        unknown.position = Duration::from_secs(5);
+        assert_eq!(video_progress_fraction(Some(&unknown), None), 5.0 / 6.0);
+
+        // 播放流未就绪时仅显示轨道。
+        assert_eq!(
+            video_progress_fraction(None, Some(Duration::from_secs(10))),
+            0.0
+        );
+    }
+
+    #[test]
+    fn animated_image_progress_fraction_requires_duration() {
+        let timed_frame = AnimatedImageFrame {
+            path: PathBuf::from("animation.gif"),
+            generation: 1,
+            position: Duration::from_secs(2),
+            delay: Duration::from_millis(20),
+            handle: image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            width: 1,
+            height: 1,
+        };
+        let timed = AnimatedImagePreview::new(
+            PathBuf::from("animation.gif"),
+            timed_frame,
+            1,
+            Some(Duration::from_secs(8)),
+            AnimatedImagePlayback::Animated,
+        )
+        .expect("animated preview");
+        assert_eq!(animated_image_progress_fraction(&timed), Some(0.25));
+
+        let untimed_frame = AnimatedImageFrame {
+            path: PathBuf::from("animation.gif"),
+            generation: 1,
+            position: Duration::from_secs(2),
+            delay: Duration::from_millis(20),
+            handle: image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            width: 1,
+            height: 1,
+        };
+        let untimed = AnimatedImagePreview::new(
+            PathBuf::from("animation.gif"),
+            untimed_frame,
+            1,
+            None,
+            AnimatedImagePlayback::Animated,
+        )
+        .expect("animated preview");
+        assert_eq!(animated_image_progress_fraction(&untimed), None);
     }
 }
