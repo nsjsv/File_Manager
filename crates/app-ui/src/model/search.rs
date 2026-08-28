@@ -18,11 +18,18 @@ pub(crate) const SEARCH_RESULT_WINDOW: usize = 100;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SearchWorkspaceSessionId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchInputStabilizationSubject {
+    Terms,
+    CustomExtensions,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchInputStabilizationRequest {
     workspace_session_id: SearchWorkspaceSessionId,
     input_revision: u64,
     input: String,
+    pub(crate) subject: SearchInputStabilizationSubject,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,6 +477,7 @@ impl SearchResultSelection {
 pub(crate) struct SearchWorkspaceState {
     session_id: SearchWorkspaceSessionId,
     input_revision: u64,
+    custom_extensions_revision: u64,
     pub(crate) root: SearchRootSnapshot,
     pub(crate) input: String,
     pub(crate) filters: SearchFilterPresetState,
@@ -487,6 +495,7 @@ impl SearchWorkspaceState {
         Self {
             session_id,
             input_revision: 0,
+            custom_extensions_revision: 0,
             root: SearchRootSnapshot::new(current_folder, home),
             input: String::new(),
             filters: SearchFilterPresetState::default(),
@@ -507,6 +516,7 @@ impl SearchWorkspaceState {
             workspace_session_id: self.session_id,
             input_revision: self.input_revision,
             input: self.input.clone(),
+            subject: SearchInputStabilizationSubject::Terms,
         }
     }
 
@@ -519,13 +529,39 @@ impl SearchWorkspaceState {
         &self,
         request: &SearchInputStabilizationRequest,
     ) -> bool {
-        self.session_id == request.workspace_session_id
+        request.subject == SearchInputStabilizationSubject::Terms
+            && self.session_id == request.workspace_session_id
             && self.input_revision == request.input_revision
             && self.input == request.input
     }
 
+    pub(crate) fn replace_custom_extensions(
+        &mut self,
+        input: String,
+    ) -> SearchInputStabilizationRequest {
+        self.filters.custom_extensions = input;
+        self.custom_extensions_revision = self.custom_extensions_revision.wrapping_add(1);
+        SearchInputStabilizationRequest {
+            workspace_session_id: self.session_id,
+            input_revision: self.custom_extensions_revision,
+            input: self.filters.custom_extensions.clone(),
+            subject: SearchInputStabilizationSubject::CustomExtensions,
+        }
+    }
+
+    pub(crate) fn accepts_custom_extensions_stabilization(
+        &self,
+        request: &SearchInputStabilizationRequest,
+    ) -> bool {
+        request.subject == SearchInputStabilizationSubject::CustomExtensions
+            && self.session_id == request.workspace_session_id
+            && self.custom_extensions_revision == request.input_revision
+            && self.filters.custom_extensions == request.input
+    }
+
     pub(crate) fn invalidate_input_stabilization(&mut self) {
         self.input_revision = self.input_revision.wrapping_add(1);
+        self.custom_extensions_revision = self.custom_extensions_revision.wrapping_add(1);
     }
 
     pub(crate) fn begin_indexed_query(

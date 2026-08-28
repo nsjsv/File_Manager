@@ -10,9 +10,10 @@ use crate::database::{EntryStageProgress, IndexedEntryStageState, IndexedFile, S
 use crate::extractor::ExtractionStatus;
 use crate::model::{
     IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, MatchSource, SearchFileKind,
-    SearchHit, SearchPathConfigurationPhase, SearchPathConfigurationStatus, SearchQuery,
-    SearchResultBatch, SearchRootAvailability, SearchRootStatus, SearchScope, SearchServiceEvent,
-    SearchServicePhase, SearchServiceRequest, SearchServiceStatus, SearchTextScope,
+    SearchHit, SearchMatchMode, SearchPathConfigurationPhase, SearchPathConfigurationStatus,
+    SearchQuery, SearchResultBatch, SearchRootAvailability, SearchRootStatus, SearchScope,
+    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus,
+    SearchTextScope,
 };
 use crate::{SearchPathPreferences, VersionedSearchPathPreferences};
 
@@ -73,6 +74,7 @@ async fn non_utf8_scope_hit_and_phase_round_trip_through_protocol_frames() {
         query_id: 9,
         terms: "needle".to_owned(),
         text_scope: SearchTextScope::NameAndContent,
+        match_mode: SearchMatchMode::Plain,
         scope: SearchScope::Directory(scope.clone()),
         recursive: true,
         filters: Default::default(),
@@ -232,6 +234,7 @@ async fn socket_search_preserves_two_lossy_colliding_path_identities() {
             query_id: 2,
             terms: "needle".to_owned(),
             text_scope: SearchTextScope::NameAndContent,
+            match_mode: SearchMatchMode::Plain,
             scope: SearchScope::Directory(first_root),
             recursive: true,
             filters: Default::default(),

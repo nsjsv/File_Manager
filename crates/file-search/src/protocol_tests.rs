@@ -205,6 +205,30 @@ fn wire_query_validation_rejects_resource_amplifying_fields() {
     assert!(validate_wire_query(&query).is_ok());
 }
 
+#[test]
+fn wire_query_validation_rejects_invalid_extension_filters() {
+    let mut query = SearchQuery::global(1, "needle");
+    query.filters.extensions = vec!["pdf".to_owned(), ".PDF".to_owned()];
+    assert!(validate_wire_query(&query).is_ok());
+
+    query.filters.extensions = vec![String::new()];
+    assert!(validate_wire_query(&query).is_err());
+
+    query.filters.extensions = vec!["pd*f".to_owned()];
+    assert!(validate_wire_query(&query).is_err());
+
+    query.filters.extensions = vec!["pdf %_".to_owned()];
+    assert!(validate_wire_query(&query).is_err());
+
+    query.filters.extensions = vec!["x".repeat(crate::model::MAX_EXTENSION_TOKEN_BYTES + 1)];
+    assert!(validate_wire_query(&query).is_err());
+
+    query.filters.extensions = (0..=crate::model::MAX_QUERY_EXTENSIONS)
+        .map(|index| format!("x{index}"))
+        .collect();
+    assert!(validate_wire_query(&query).is_err());
+}
+
 #[tokio::test]
 async fn socket_server_never_owns_more_than_the_fixed_client_limit() {
     let temporary_directory = tempfile::tempdir().unwrap();

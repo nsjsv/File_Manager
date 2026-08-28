@@ -34,12 +34,13 @@ pub use fallback::{
     search_directory_fallback, DirectoryFallbackCompletion, DirectoryFallbackLimits,
 };
 pub use model::{
-    daemon_build_id, ExtractorCapability, IndexHealth, IndexPhase, IndexStatus,
-    IndexedQueryAvailability, MatchSource, MimePattern, SearchCursor, SearchEntryTypeRule,
-    SearchFileKind, SearchFilters, SearchHit, SearchPathConfigurationPhase,
-    SearchPathConfigurationStatus, SearchProviderFailure, SearchQuery, SearchResultBatch,
-    SearchRootAvailability, SearchRootStatus, SearchScope, SearchServiceEvent, SearchServicePhase,
-    SearchServiceRequest, SearchServiceStatus, SearchTextScope, TimeRange, PROTOCOL_VERSION,
+    daemon_build_id, normalize_extension_tokens, ExtractorCapability, IndexHealth, IndexPhase,
+    IndexStatus, IndexedQueryAvailability, MatchSource, MimePattern, SearchCursor,
+    SearchEntryTypeRule, SearchFileKind, SearchFilters, SearchHit, SearchMatchMode,
+    SearchPathConfigurationPhase, SearchPathConfigurationStatus, SearchProviderFailure,
+    SearchQuery, SearchResultBatch, SearchRootAvailability, SearchRootStatus, SearchScope,
+    SearchServiceEvent, SearchServicePhase, SearchServiceRequest, SearchServiceStatus,
+    SearchTextScope, TimeRange, MAX_EXTENSION_TOKEN_BYTES, MAX_QUERY_EXTENSIONS, PROTOCOL_VERSION,
 };
 pub use protocol::{
     configure_path_preferences_via_socket, default_socket_path, path_configuration_via_socket,

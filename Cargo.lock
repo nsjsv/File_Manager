@@ -1607,6 +1607,7 @@ dependencies = [
  "file-core",
  "libc",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

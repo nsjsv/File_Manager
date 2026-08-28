@@ -1,6 +1,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone};
 use file_search::{
-    MimePattern, SearchEntryTypeRule, SearchFileKind, SearchFilters, SearchTextScope, TimeRange,
+    normalize_extension_tokens, MimePattern, SearchEntryTypeRule, SearchFileKind, SearchFilters,
+    SearchMatchMode, SearchTextScope, TimeRange,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,8 +150,11 @@ impl SearchDatePreset {
 pub(crate) struct SearchFilterPresetState {
     pub(crate) selected_entry_types: Vec<SearchEntryTypePreset>,
     pub(crate) text_scope: SearchTextScope,
+    pub(crate) match_mode: SearchMatchMode,
     pub(crate) date_field: SearchDateField,
     pub(crate) date_preset: SearchDatePreset,
+    pub(crate) custom_extensions: String,
+    pub(crate) custom_extensions_open: bool,
 }
 
 impl Default for SearchFilterPresetState {
@@ -158,8 +162,11 @@ impl Default for SearchFilterPresetState {
         Self {
             selected_entry_types: Vec::new(),
             text_scope: SearchTextScope::NameAndContent,
+            match_mode: SearchMatchMode::Plain,
             date_field: SearchDateField::Modified,
             date_preset: SearchDatePreset::Any,
+            custom_extensions: String::new(),
+            custom_extensions_open: false,
         }
     }
 }
@@ -179,6 +186,20 @@ impl SearchFilterPresetState {
 
     pub(crate) fn entry_type_is_selected(&self, entry_type: SearchEntryTypePreset) -> bool {
         self.selected_entry_types.contains(&entry_type)
+    }
+
+    pub(crate) fn toggle_custom_extensions(&mut self) {
+        self.custom_extensions_open = !self.custom_extensions_open;
+        if !self.custom_extensions_open {
+            self.custom_extensions.clear();
+        }
+    }
+
+    /// 按钮高亮语义（产品确认）：面板展开且当前输入可解析出至少一个后缀。
+    pub(crate) fn custom_extensions_are_active(&self) -> bool {
+        self.custom_extensions_open
+            && normalize_extension_tokens(&self.custom_extensions)
+                .is_ok_and(|tokens| !tokens.is_empty())
     }
 
     pub(crate) fn selected_more_type_count(&self) -> usize {
@@ -209,6 +230,7 @@ impl SearchFilterPresetState {
             }
         }
         let date_range = date_range_at(self.date_preset, now)?;
+        let extensions = normalize_extension_tokens(&self.custom_extensions)?;
         let (accessed, modified, created) = match (self.date_field, date_range) {
             (_, None) => (None, None, None),
             (SearchDateField::Accessed, range) => (range, None, None),
@@ -220,6 +242,7 @@ impl SearchFilterPresetState {
             modified,
             accessed,
             created,
+            extensions,
         })
     }
 }
@@ -419,8 +442,11 @@ mod tests {
         let mut presets = SearchFilterPresetState {
             selected_entry_types: vec![SearchEntryTypePreset::Folders],
             text_scope: SearchTextScope::NameOnly,
+            match_mode: SearchMatchMode::Regex,
             date_field: SearchDateField::Created,
             date_preset: SearchDatePreset::PastYear,
+            custom_extensions: ".PDF".to_owned(),
+            custom_extensions_open: true,
         };
 
         presets.reset();
@@ -479,5 +505,37 @@ mod tests {
                 Duration::days(days).num_milliseconds()
             );
         }
+    }
+
+    #[test]
+    fn custom_extensions_flow_into_query_filters_and_toggle_clears_them() {
+        let mut presets = SearchFilterPresetState::default();
+        presets.custom_extensions = ".PDF docx".to_owned();
+        presets.custom_extensions_open = true;
+        assert!(presets.custom_extensions_are_active());
+
+        let filters = presets
+            .query_filters_at(New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap())
+            .unwrap();
+        assert_eq!(
+            filters.extensions,
+            vec!["pdf".to_owned(), "docx".to_owned()]
+        );
+
+        presets.toggle_custom_extensions();
+        assert!(presets.custom_extensions.is_empty());
+        assert!(!presets.custom_extensions_are_active());
+        assert!(presets.is_default());
+    }
+
+    #[test]
+    fn invalid_custom_extensions_reject_the_query_filters() {
+        let mut presets = SearchFilterPresetState::default();
+        presets.custom_extensions = "pd*f".to_owned();
+        presets.custom_extensions_open = true;
+        assert!(!presets.custom_extensions_are_active());
+        assert!(presets
+            .query_filters_at(New_York.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap())
+            .is_err());
     }
 }

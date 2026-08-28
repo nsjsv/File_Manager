@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use file_search::{
-    MatchSource, SearchFileKind, SearchHit, SearchQuery, SearchResultBatch, SearchScope,
-    SearchTextScope,
+    MatchSource, SearchFileKind, SearchHit, SearchMatchMode, SearchQuery, SearchResultBatch,
+    SearchScope, SearchTextScope,
 };
 
 use super::*;
@@ -12,6 +12,7 @@ fn directory_query(query_id: u64, terms: &str) -> SearchQuery {
         query_id,
         terms: terms.to_owned(),
         text_scope: SearchTextScope::NameAndContent,
+        match_mode: SearchMatchMode::Plain,
         scope: SearchScope::Directory(PathBuf::from("/workspace")),
         recursive: true,
         filters: Default::default(),
@@ -197,6 +198,25 @@ fn input_stabilization_cannot_cross_workspace_sessions() {
     let _ = reopened.replace_input("report".to_owned());
 
     assert!(!reopened.accepts_input_stabilization(&stale));
+}
+
+#[test]
+fn custom_extension_stabilization_is_isolated_from_terms_stabilization() {
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
+    let stale = workspace.replace_custom_extensions("pdf".to_owned());
+    let current = workspace.replace_custom_extensions("pdf docx".to_owned());
+
+    assert!(!workspace.accepts_custom_extensions_stabilization(&stale));
+    assert!(workspace.accepts_custom_extensions_stabilization(&current));
+
+    // 关键词侧的稳定化请求不能被自定义后缀侧接受，反之亦然。
+    let terms = workspace.replace_input("report".to_owned());
+    assert!(!workspace.accepts_custom_extensions_stabilization(&terms));
+    assert!(workspace.accepts_input_stabilization(&terms));
+    assert!(!workspace.accepts_input_stabilization(&current));
+
+    workspace.invalidate_input_stabilization();
+    assert!(!workspace.accepts_custom_extensions_stabilization(&current));
 }
 
 #[test]

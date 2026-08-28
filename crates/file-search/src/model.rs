@@ -3,12 +3,17 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{SearchPathPreferences, VersionedSearchPathPreferences};
+use crate::error::{SearchError, SearchResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchQuery {
     pub query_id: u64,
     pub terms: String,
     pub text_scope: SearchTextScope,
+    // 旧客户端不带该字段：serde default 兜底为普通搜索，保持协议双向兼容。
+    #[serde(default)]
+    pub match_mode: SearchMatchMode,
     pub scope: SearchScope,
     pub recursive: bool,
     pub filters: SearchFilters,
@@ -22,12 +27,30 @@ impl SearchQuery {
             query_id,
             terms: terms.into(),
             text_scope: SearchTextScope::NameAndContent,
+            match_mode: SearchMatchMode::Plain,
             scope: SearchScope::Global,
             recursive: true,
             filters: SearchFilters::default(),
             limit: 50,
             cursor: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchMatchMode {
+    #[default]
+    Plain,
+    Regex,
+}
+
+impl SearchMatchMode {
+    /// 正则匹配名称的唯一编译入口：索引路径、fallback 路径与 UI 预校验共用同一语义。
+    pub fn name_regex(self, terms: &str) -> SearchResult<regex::Regex> {
+        regex::RegexBuilder::new(terms)
+            .case_insensitive(true)
+            .build()
+            .map_err(|error| SearchError::InvalidQuery(format!("invalid regex: {error}")))
     }
 }
 
@@ -44,11 +67,55 @@ pub enum SearchScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchFilters {
     pub entry_type_rules: Vec<SearchEntryTypeRule>,
     pub modified: Option<TimeRange>,
     pub accessed: Option<TimeRange>,
     pub created: Option<TimeRange>,
+    // 旧客户端不带该字段：serde default 兜底为空，保持协议双向兼容。
+    #[serde(default)]
+    pub extensions: Vec<String>,
+}
+
+/// 单个扩展名 token 的最大字节数；超长输入视为误输入而非合法后缀。
+pub const MAX_EXTENSION_TOKEN_BYTES: usize = 63;
+
+/// 单次查询允许的自定义扩展名数量上限，与 entry_type_rules 的量级约束一致。
+pub const MAX_QUERY_EXTENSIONS: usize = 16;
+
+/// 扩展名 token 的唯一字符白名单：字母数字与 `. - +`。
+/// 拒绝空白与 `%` `_` 等通配符，使 SQL 端 LIKE 拼接无需转义。
+pub(crate) fn extension_token_is_valid(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= MAX_EXTENSION_TOKEN_BYTES
+        && token
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '+'))
+}
+
+/// 自定义后缀的唯一解析入口：UI 预检与两条执行路径共用同一语义。
+/// 容错规则：逗号/空白分隔、前后点号可省略、大小写不敏感、按序去重。
+pub fn normalize_extension_tokens(input: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    for raw in input.split(|c: char| c == ',' || c.is_whitespace()) {
+        let token = raw.trim_matches('.').to_lowercase();
+        if token.is_empty() {
+            continue;
+        }
+        if !extension_token_is_valid(&token) {
+            return Err(format!("Invalid file extension: {raw}"));
+        }
+        if !tokens.contains(&token) {
+            tokens.push(token);
+        }
+    }
+    if tokens.len() > MAX_QUERY_EXTENSIONS {
+        return Err(format!(
+            "Too many file extensions (limit is {MAX_QUERY_EXTENSIONS})"
+        ));
+    }
+    Ok(tokens)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,7 +321,7 @@ pub enum SearchProviderFailure {
 }
 
 /// 协议 payload 含义变化时提升版本，让新客户端能退休仍在运行的旧 daemon。
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// app 更新后用构建标识识别遗留 daemon；本任务保留现有包版本策略。
 pub fn daemon_build_id() -> String {
@@ -308,8 +375,9 @@ pub enum SearchServiceEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability, SearchServiceEvent,
-        SearchServicePhase, SearchServiceStatus,
+        normalize_extension_tokens, IndexHealth, IndexPhase, IndexStatus, IndexedQueryAvailability,
+        SearchError, SearchMatchMode, SearchQuery, SearchServiceEvent, SearchServicePhase,
+        SearchServiceStatus, MAX_QUERY_EXTENSIONS,
     };
 
     #[test]
@@ -337,5 +405,92 @@ mod tests {
         let decoded: SearchServiceEvent = serde_json::from_slice(&encoded).unwrap();
 
         assert_eq!(decoded, event);
+    }
+    #[test]
+    fn query_without_match_mode_field_defaults_to_plain_search() {
+        // 旧客户端查询不含 match_mode：serde default 保证新 daemon 按普通搜索处理。
+        let legacy = serde_json::json!({
+            "query_id": 7,
+            "terms": "needle",
+            "text_scope": "NameOnly",
+            "scope": "Global",
+            "recursive": true,
+            "filters": { "entry_type_rules": [] },
+            "limit": 50,
+            "cursor": null,
+        });
+        let query: SearchQuery = serde_json::from_value(legacy).unwrap();
+    }
+
+    #[test]
+    fn unknown_wire_fields_are_rejected_instead_of_silently_dropped() {
+        // 版本错配必须响亮失败：旧 daemon 收到新客户端字段时拒绝整条查询，
+        // 而不是静默丢弃过滤条件后返回错误结果。
+        let mut query = serde_json::json!({
+            "query_id": 7,
+            "terms": "needle",
+            "text_scope": "NameOnly",
+            "scope": "Global",
+            "recursive": true,
+            "filters": { "entry_type_rules": [], "future_filter": 1 },
+            "limit": 50,
+            "cursor": null,
+        });
+        assert!(serde_json::from_value::<SearchQuery>(query.clone()).is_err());
+
+        query["filters"] = serde_json::json!({ "entry_type_rules": [] });
+        query["future_query_field"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<SearchQuery>(query).is_err());
+    }
+
+    #[test]
+    fn invalid_name_regex_is_rejected_as_invalid_query() {
+        assert!(matches!(
+            SearchMatchMode::Regex.name_regex("foo("),
+            Err(SearchError::InvalidQuery(_))
+        ));
+    }
+
+    #[test]
+    fn query_without_extensions_field_defaults_to_empty_filter() {
+        // 旧客户端查询不含 extensions：serde default 保证新 daemon 按无后缀过滤处理。
+        let legacy = serde_json::json!({
+            "query_id": 7,
+            "terms": "needle",
+            "text_scope": "NameOnly",
+            "scope": "Global",
+            "recursive": true,
+            "filters": { "entry_type_rules": [] },
+            "limit": 50,
+            "cursor": null,
+        });
+        let query: SearchQuery = serde_json::from_value(legacy).unwrap();
+
+        assert!(query.filters.extensions.is_empty());
+    }
+
+    #[test]
+    fn normalize_extension_tokens_tolerates_separators_dots_and_case() {
+        assert_eq!(
+            normalize_extension_tokens(".PDF, docx  tar.gz,, .md").unwrap(),
+            vec![
+                "pdf".to_owned(),
+                "docx".to_owned(),
+                "tar.gz".to_owned(),
+                "md".to_owned()
+            ]
+        );
+        assert!(normalize_extension_tokens("  ,,, .. ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn normalize_extension_tokens_rejects_invalid_and_excess_tokens() {
+        assert!(normalize_extension_tokens("pd*f").is_err());
+        assert!(normalize_extension_tokens("pdf %_").is_err());
+        let overflow = (0..=MAX_QUERY_EXTENSIONS)
+            .map(|index| format!("x{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(normalize_extension_tokens(&overflow).is_err());
     }
 }

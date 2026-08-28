@@ -176,6 +176,9 @@ fn dynamic_translation(text: &str) -> Option<String> {
     if let Some(error) = text.strip_prefix("Service degraded: ") {
         return Some(format!("服务已降级：{error}"));
     }
+    if let Some(error) = text.strip_prefix("Invalid regular expression: ") {
+        return Some(format!("无效的正则表达式：{error}"));
+    }
     if let Some(error) = text.strip_prefix("Service failed: ") {
         return Some(format!("服务失败：{error}"));
     }

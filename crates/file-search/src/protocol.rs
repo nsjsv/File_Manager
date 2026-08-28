@@ -645,6 +645,20 @@ fn validate_wire_query(query: &SearchQuery) -> Result<(), String> {
             return Err("search MIME filter contains an invalid media type pattern".to_owned());
         }
     }
+    if query.filters.extensions.len() > crate::model::MAX_QUERY_EXTENSIONS {
+        return Err(format!(
+            "search extension filter exceeds the {} extension limit",
+            crate::model::MAX_QUERY_EXTENSIONS
+        ));
+    }
+    if query
+        .filters
+        .extensions
+        .iter()
+        .any(|extension| !crate::model::extension_token_is_valid(extension))
+    {
+        return Err("search extension filter contains an invalid extension token".to_owned());
+    }
     if !(1..=200).contains(&query.limit) {
         return Err("search result limit must be between 1 and 200".to_owned());
     }

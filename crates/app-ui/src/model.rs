@@ -139,9 +139,9 @@ pub(crate) use search::{
     DirectoryFallbackOutcome, IndexedSearchOutcome, IndexedSearchRequest, SearchDateField,
     SearchDatePreset, SearchDirectoryScope, SearchEntryTypePreset, SearchHistory,
     SearchHistoryInteraction, SearchInputFocus, SearchInputFocusCheckOrigin,
-    SearchInputFocusCheckRequest, SearchInputStabilizationRequest, SearchKeyboardSelection,
-    SearchResultCompletion, SearchSelectionGesture, SearchSelectionStep, SearchWorkspaceSessionId,
-    SearchWorkspaceState,
+    SearchInputFocusCheckRequest, SearchInputStabilizationRequest, SearchInputStabilizationSubject,
+    SearchKeyboardSelection, SearchResultCompletion, SearchSelectionGesture, SearchSelectionStep,
+    SearchWorkspaceSessionId, SearchWorkspaceState,
 };
 mod search_service;
 pub(crate) use search_service::{
@@ -480,6 +480,9 @@ pub(crate) enum Message {
     SearchEntryTypeToggled(SearchEntryTypePreset),
     SearchDirectoryScopeSelected(SearchDirectoryScope),
     SearchTextScopeSelected(SearchTextScope),
+    SearchRegexToggled,
+    SearchCustomExtensionsToggled,
+    SearchCustomExtensionsChanged(String),
     SearchDateFieldSelected(SearchDateField),
     SearchDatePresetSelected(SearchDatePreset),
     SearchFiltersReset,

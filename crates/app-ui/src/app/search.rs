@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::Local;
-use file_search::{SearchExcludeRules, SearchHit, SearchQuery, SearchScope, SearchTextScope};
+use file_search::{
+    SearchError, SearchExcludeRules, SearchHit, SearchMatchMode, SearchQuery, SearchScope,
+    SearchTextScope,
+};
 use iced::Task;
 
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
@@ -16,9 +19,10 @@ use crate::model::{
     IndexedSearchOutcome, IndexedSearchRequest, LastActivationClick, Message, NavigationMode,
     SearchContextMenuState, SearchDateField, SearchDatePreset, SearchDirectoryScope,
     SearchEntryTypeMenuState, SearchEntryTypePreset, SearchInputStabilizationRequest,
-    SearchKeyboardSelection, SearchSelectionGesture, SearchSelectionStep, SearchServiceDiagnostic,
-    SearchServiceDiagnosticKind, SearchServiceRecoveryAction, SearchServiceStatusRequest,
-    SearchWorkspaceSessionId, SearchWorkspaceState,
+    SearchInputStabilizationSubject, SearchKeyboardSelection, SearchSelectionGesture,
+    SearchSelectionStep, SearchServiceDiagnostic, SearchServiceDiagnosticKind,
+    SearchServiceRecoveryAction, SearchServiceStatusRequest, SearchWorkspaceSessionId,
+    SearchWorkspaceState,
 };
 use crate::shortcuts::{FileSelectionDirection, ShortcutAction};
 
@@ -77,15 +81,42 @@ impl FileBrowser {
         search_input_stabilization_command(request)
     }
 
+    pub(super) fn update_search_custom_extensions(&mut self, value: String) -> Task<Message> {
+        if let Err(message) = self.ensure_search_workspace() {
+            self.show_global_error(message);
+            return Task::none();
+        }
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        let request = workspace.replace_custom_extensions(value);
+        search_input_stabilization_command(request)
+    }
+
+    pub(super) fn toggle_search_custom_extensions(&mut self) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.toggle_custom_extensions();
+        self.restart_search_workspace()
+    }
+
     pub(super) fn accept_search_input_stabilization(
         &mut self,
         request: SearchInputStabilizationRequest,
     ) -> Task<Message> {
-        if !self
-            .search_workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.accepts_input_stabilization(&request))
-        {
+        let accepted = match request.subject {
+            SearchInputStabilizationSubject::Terms => self
+                .search_workspace
+                .as_ref()
+                .is_some_and(|workspace| workspace.accepts_input_stabilization(&request)),
+            SearchInputStabilizationSubject::CustomExtensions => {
+                self.search_workspace.as_ref().is_some_and(|workspace| {
+                    workspace.accepts_custom_extensions_stabilization(&request)
+                })
+            }
+        };
+        if !accepted {
             return Task::none();
         }
         self.restart_search_workspace()
@@ -214,6 +245,17 @@ impl FileBrowser {
         self.restart_search_workspace()
     }
 
+    pub(super) fn toggle_search_regex(&mut self) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_mut() else {
+            return Task::none();
+        };
+        workspace.filters.match_mode = match workspace.filters.match_mode {
+            SearchMatchMode::Plain => SearchMatchMode::Regex,
+            SearchMatchMode::Regex => SearchMatchMode::Plain,
+        };
+        self.restart_search_workspace()
+    }
+
     pub(super) fn select_search_date_field(
         &mut self,
         date_field: SearchDateField,
@@ -288,7 +330,7 @@ impl FileBrowser {
         let Some(workspace) = self.search_workspace.as_ref() else {
             return Task::none();
         };
-        if workspace.input.trim().is_empty() {
+        if workspace.input.trim().is_empty() && !workspace.filters.custom_extensions_are_active() {
             if let Some(workspace) = self.search_workspace.as_mut() {
                 workspace.clear_query();
             }
@@ -314,10 +356,26 @@ impl FileBrowser {
                 return Task::none();
             }
         };
+        let terms = workspace.input.trim().to_owned();
+        let match_mode = workspace.filters.match_mode;
+        if let SearchMatchMode::Regex = match_mode {
+            if let Err(SearchError::InvalidQuery(message)) = match_mode.name_regex(&terms) {
+                if let Some(workspace) = self.search_workspace.as_mut() {
+                    workspace.reject_query(format!("Invalid regular expression: {message}"));
+                }
+                return Task::none();
+            }
+        }
         let query = SearchQuery {
             query_id: generation,
-            terms: workspace.input.trim().to_owned(),
-            text_scope: workspace.filters.text_scope,
+            terms,
+            // 正则只在名称上执行，内容范围对正则语义不可用。
+            text_scope: if match_mode == SearchMatchMode::Regex {
+                SearchTextScope::NameOnly
+            } else {
+                workspace.filters.text_scope
+            },
+            match_mode,
             scope,
             recursive: true,
             filters,

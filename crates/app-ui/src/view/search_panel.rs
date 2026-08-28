@@ -1,6 +1,6 @@
 use std::fmt;
 
-use file_search::{SearchFileKind, SearchTextScope};
+use file_search::{SearchFileKind, SearchMatchMode, SearchTextScope};
 use iced::widget::{
     button, container, mouse_area, pick_list, responsive, row, scrollable, tooltip, Button, Column,
     Row, Space,
@@ -29,7 +29,8 @@ use crate::typography::{localized_text, readable_text};
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
 
 use super::option_controls::{
-    segmented_choice_button_style, segmented_choice_row, SegmentedChoice,
+    inactive_segmented_choice_row, segmented_choice_button_style, segmented_choice_row,
+    SegmentedChoice,
 };
 use super::{themed_icon, IconTone};
 
@@ -307,6 +308,9 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
     if workspace.content_search_is_degraded() {
         content = content.push(search_content_degraded_notice());
     }
+    if workspace.filters.match_mode == SearchMatchMode::Regex {
+        content = content.push(search_regex_notice());
+    }
     content
         .push(
             container(results)
@@ -404,12 +408,23 @@ fn search_entry_type_grid(
     column_count: usize,
 ) -> Element<'static, Message> {
     let mut rows = Column::new().spacing(5).width(Length::Fill);
-    for entry_types in SearchEntryTypePreset::COMMON.chunks(column_count) {
+    let chunk_count = SearchEntryTypePreset::COMMON.chunks(column_count).count();
+    for (chunk_index, entry_types) in SearchEntryTypePreset::COMMON
+        .chunks(column_count)
+        .enumerate()
+    {
         let mut type_row = Row::new().spacing(6).width(Length::Fill);
         for entry_type in entry_types {
             type_row = type_row.push(search_entry_type_button(*entry_type, filters));
         }
+        // 自定义入口固定收尾：贴在类型网格最后一行末尾，避免独占一整行。
+        if chunk_index + 1 == chunk_count {
+            type_row = type_row.push(custom_extension_button(filters));
+        }
         rows = rows.push(type_row);
+    }
+    if filters.custom_extensions_open {
+        rows = rows.push(custom_extension_input_row(filters));
     }
     rows.into()
 }
@@ -431,6 +446,39 @@ fn search_entry_type_button(
     )
     .width(Length::FillPortion(1))
     .style(segmented_choice_button_style(selected))
+    .into()
+}
+
+fn custom_extension_button(filters: &SearchFilterPresetState) -> Element<'static, Message> {
+    let selected = filters.custom_extensions_are_active();
+    search_filter_button(
+        IconSymbol::Plus,
+        if selected {
+            IconTone::Selected
+        } else {
+            IconTone::Normal
+        },
+        crate::localization::translate_current("Custom"),
+        Message::SearchCustomExtensionsToggled,
+    )
+    .width(Length::FillPortion(1))
+    .style(segmented_choice_button_style(selected))
+    .into()
+}
+
+fn custom_extension_input_row(filters: &SearchFilterPresetState) -> Element<'static, Message> {
+    container(
+        iced::widget::text_input(
+            &crate::localization::translate_current("e.g. pdf, docx"),
+            &filters.custom_extensions,
+        )
+        .on_input(Message::SearchCustomExtensionsChanged)
+        .padding([5, 8])
+        .size(12)
+        .style(navigation_text_input_style)
+        .width(Length::Fill),
+    )
+    .width(Length::Fill)
     .into()
 }
 
@@ -457,7 +505,7 @@ fn search_filter_controls(
     match density {
         SearchToolbarDensity::Wide => {
             row![
-                container(search_text_scope_filter(filters.text_scope))
+                container(search_text_scope_filter(filters))
                     .width(Length::Fixed(SEARCH_TEXT_SCOPE_WIDTH)),
                 search_date_field_filter(
                     filters.date_field,
@@ -474,7 +522,7 @@ fn search_filter_controls(
             .into()
         }
         SearchToolbarDensity::Medium => Column::new()
-            .push(search_text_scope_filter(filters.text_scope))
+            .push(search_text_scope_filter(filters))
             .push(
                 row![
                     search_date_field_filter(
@@ -493,7 +541,7 @@ fn search_filter_controls(
             .spacing(5)
             .into(),
         SearchToolbarDensity::Narrow => Column::new()
-            .push(search_text_scope_filter(filters.text_scope))
+            .push(search_text_scope_filter(filters))
             .push(
                 row![
                     search_date_field_filter(filters.date_field, Length::FillPortion(1)),
@@ -529,19 +577,29 @@ fn search_directory_scope_choices(
         .collect()
 }
 
-fn search_text_scope_filter(selected: SearchTextScope) -> Element<'static, Message> {
-    segmented_choice_row(vec![
+fn search_text_scope_filter(filters: &SearchFilterPresetState) -> Element<'static, Message> {
+    let regex_mode = filters.match_mode == SearchMatchMode::Regex;
+    // 正则只在名称上执行：置灰范围选择器并固定显示 Name only，与提交的查询语义一致。
+    let name_content_selected =
+        !regex_mode && filters.text_scope == SearchTextScope::NameAndContent;
+    let name_only_selected = regex_mode || filters.text_scope == SearchTextScope::NameOnly;
+    let choices = vec![
         SegmentedChoice {
             label: "Name & content",
-            selected: selected == SearchTextScope::NameAndContent,
+            selected: name_content_selected,
             message: Message::SearchTextScopeSelected(SearchTextScope::NameAndContent),
         },
         SegmentedChoice {
             label: "Name only",
-            selected: selected == SearchTextScope::NameOnly,
+            selected: name_only_selected,
             message: Message::SearchTextScopeSelected(SearchTextScope::NameOnly),
         },
-    ])
+    ];
+    if regex_mode {
+        inactive_segmented_choice_row(choices)
+    } else {
+        segmented_choice_row(choices)
+    }
 }
 
 fn search_date_field_filter(selected: SearchDateField, width: Length) -> Element<'static, Message> {
@@ -581,17 +639,31 @@ fn search_filter_commands(filters: &SearchFilterPresetState) -> Element<'static,
             crate::localization::translate_current("More")
         )
     };
-    let mut commands = row![search_filter_button(
-        IconSymbol::Plus,
-        if selected_more_type_count == 0 {
-            IconTone::Normal
-        } else {
-            IconTone::Selected
-        },
-        more_label,
-        Message::SearchEntryTypesMenuOpened,
-    )
-    .style(segmented_choice_button_style(selected_more_type_count > 0))]
+    let regex_mode = filters.match_mode == SearchMatchMode::Regex;
+    let mut commands = row![
+        search_filter_button(
+            IconSymbol::Regex,
+            if regex_mode {
+                IconTone::Selected
+            } else {
+                IconTone::Normal
+            },
+            crate::localization::translate_current("Regex"),
+            Message::SearchRegexToggled,
+        )
+        .style(segmented_choice_button_style(regex_mode)),
+        search_filter_button(
+            IconSymbol::Plus,
+            if selected_more_type_count == 0 {
+                IconTone::Normal
+            } else {
+                IconTone::Selected
+            },
+            more_label,
+            Message::SearchEntryTypesMenuOpened,
+        )
+        .style(segmented_choice_button_style(selected_more_type_count > 0)),
+    ]
     .spacing(6)
     .align_y(Alignment::Center);
     if !filters.is_default() {
@@ -678,6 +750,17 @@ fn search_content_degraded_notice() -> Element<'static, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
+    )
+    .padding([7, 10])
+    .width(Length::Fill)
+    .style(list_panel_style)
+    .into()
+}
+fn search_regex_notice() -> Element<'static, Message> {
+    container(
+        localized_text("Regex mode matches file names only.")
+            .size(12)
+            .width(Length::Fill),
     )
     .padding([7, 10])
     .width(Length::Fill)

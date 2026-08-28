@@ -16,6 +16,8 @@ pub(super) fn translate(text: &str) -> Option<String> {
         "Files" => Some("文件"),
         "Archives" => Some("压缩包"),
         "Links" => Some("链接"),
+        "Custom" => Some("自定义"),
+        "e.g. pdf, docx" => Some("例如 pdf、docx"),
         "Any content" => Some("任意内容"),
         "More" => Some("更多"),
         "Any time" => Some("任意时间"),
@@ -27,6 +29,8 @@ pub(super) fn translate(text: &str) -> Option<String> {
         "This year" => Some("今年"),
         "Name & content" => Some("文件名与内容"),
         "Name only" => Some("仅文件名"),
+        "Regex" => Some("正则"),
+        "Regex mode matches file names only." => Some("正则模式仅匹配文件名。"),
         "Current folder" => Some("当前文件夹"),
         "Reset filters" => Some("重置筛选"),
         "Content indexing is unavailable; matching file names only." => {

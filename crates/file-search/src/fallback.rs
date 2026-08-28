@@ -6,7 +6,9 @@ use crate::filesystem::{
     display_name, ensure_not_cancelled, file_time_ms, mime_type_for_path, FilesystemObservation,
     LocalFilesystemBoundary, TraversalDepth, TraversalEvent,
 };
-use crate::model::{MatchSource, SearchFileKind, SearchHit, SearchQuery, SearchScope, TimeRange};
+use crate::model::{
+    MatchSource, SearchFileKind, SearchHit, SearchMatchMode, SearchQuery, SearchScope, TimeRange,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirectoryFallbackLimits {
@@ -98,6 +100,9 @@ pub fn search_directory_fallback(
         .split_whitespace()
         .map(str::to_ascii_lowercase)
         .collect::<Vec<_>>();
+    let name_regex = (query.match_mode == SearchMatchMode::Regex)
+        .then(|| query.match_mode.name_regex(&query.terms))
+        .transpose()?;
     let batch_size = query.limit.clamp(1, 200);
     let mut batch = Vec::with_capacity(batch_size);
     let mut inspected_entries = 0;
@@ -120,7 +125,12 @@ pub fn search_directory_fallback(
         inspected_entries += 1;
         let name = display_name(entry.path());
         let folded_name = name.to_ascii_lowercase();
-        if !terms.iter().all(|term| folded_name.contains(term)) {
+        let name_matches = match &name_regex {
+            // 正则自行处理大小写折叠，不依赖 ASCII lowercase 视图。
+            Some(name_regex) => name_regex.is_match(&name),
+            None => terms.iter().all(|term| folded_name.contains(term)),
+        };
+        if !name_matches {
             continue;
         }
 
@@ -135,6 +145,7 @@ pub fn search_directory_fallback(
         };
         if !matches_filters(
             query,
+            entry.path(),
             entry.kind(),
             mime_type.as_deref(),
             modified_ms,
@@ -181,6 +192,7 @@ pub fn search_directory_fallback(
 
 fn matches_filters(
     query: &SearchQuery,
+    path: &std::path::Path,
     kind: SearchFileKind,
     mime_type: Option<&str>,
     modified_ms: Option<i64>,
@@ -193,9 +205,29 @@ fn matches_filters(
             .entry_type_rules
             .iter()
             .any(|rule| entry_type_rule_matches(rule, kind, mime_type)))
+        && extension_filter_matches(query, path, kind)
         && time_matches(modified_ms, query.filters.modified)
         && time_matches(accessed_ms, query.filters.accessed)
         && time_matches(created_ms, query.filters.created)
+}
+
+/// 后缀语义只作用于文件类条目：目录即使名称以点后缀结尾也不匹配（与索引路径一致）。
+fn extension_filter_matches(
+    query: &SearchQuery,
+    path: &std::path::Path,
+    kind: SearchFileKind,
+) -> bool {
+    let extensions = &query.filters.extensions;
+    extensions.is_empty()
+        || (kind != SearchFileKind::Directory
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extensions
+                        .iter()
+                        .any(|token| extension.eq_ignore_ascii_case(token))
+                }))
 }
 
 fn entry_type_rule_matches(
@@ -240,8 +272,8 @@ mod tests {
     use crate::error::SearchError;
     use crate::filesystem::file_time_ms;
     use crate::model::{
-        SearchCursor, SearchEntryTypeRule, SearchFileKind, SearchFilters, SearchQuery, SearchScope,
-        SearchTextScope, TimeRange,
+        MatchSource, SearchCursor, SearchEntryTypeRule, SearchFileKind, SearchFilters,
+        SearchMatchMode, SearchQuery, SearchScope, SearchTextScope, TimeRange,
     };
 
     use super::{search_directory_fallback, DirectoryFallbackCompletion, DirectoryFallbackLimits};
@@ -257,6 +289,7 @@ mod tests {
             query_id: 1,
             terms: terms.to_owned(),
             text_scope: SearchTextScope::NameAndContent,
+            match_mode: SearchMatchMode::Plain,
             scope: SearchScope::Directory(root),
             recursive: true,
             filters: SearchFilters::default(),
@@ -296,6 +329,35 @@ mod tests {
     }
 
     #[test]
+    fn extension_filters_match_files_case_insensitively_and_skip_directories() {
+        let content = tempdir().unwrap();
+        fs::write(content.path().join("report.PDF"), "one").unwrap();
+        fs::write(content.path().join("notes.md"), "two").unwrap();
+        fs::write(content.path().join("photo.jpg"), "three").unwrap();
+        fs::create_dir(content.path().join("folder.pdf")).unwrap();
+        let mut query = directory_query(content.path().to_path_buf(), "");
+        query.filters.extensions = vec!["pdf".to_owned(), "md".to_owned()];
+        let mut batches = Vec::new();
+
+        search_directory_fallback(
+            &query,
+            &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
+            &CancellationToken::new(),
+            |batch| batches.push(batch),
+        )
+        .unwrap();
+
+        let mut names = batches
+            .into_iter()
+            .flatten()
+            .map(|hit| hit.display_name)
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["notes.md", "report.PDF"]);
+    }
+
+    #[test]
     fn clamps_the_maximum_batch_size_to_two_hundred() {
         let content = tempdir().unwrap();
         for index in 0..201 {
@@ -315,6 +377,49 @@ mod tests {
         .unwrap();
 
         assert_eq!(batch_lengths, vec![200, 1]);
+    }
+
+    #[test]
+    fn regex_mode_matches_names_case_insensitively_and_reports_name_hits() {
+        let content = tempdir().unwrap();
+        fs::write(content.path().join("Alpha Report 1.txt"), "one").unwrap();
+        fs::write(content.path().join("unrelated.txt"), "two").unwrap();
+        let mut query = directory_query(content.path().to_path_buf(), "^alpha \\w+ \\d\\.txt$");
+        query.match_mode = SearchMatchMode::Regex;
+        let mut batches = Vec::new();
+
+        search_directory_fallback(
+            &query,
+            &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
+            &CancellationToken::new(),
+            |batch| batches.push(batch),
+        )
+        .unwrap();
+
+        let hits = batches.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].display_name, "Alpha Report 1.txt");
+        assert_eq!(hits[0].match_source, MatchSource::Name);
+    }
+
+    #[test]
+    fn regex_mode_rejects_invalid_patterns_before_traversal() {
+        let content = tempdir().unwrap();
+        fs::write(content.path().join("note.txt"), "body").unwrap();
+        let mut query = directory_query(content.path().to_path_buf(), "foo(");
+        query.match_mode = SearchMatchMode::Regex;
+
+        let error = search_directory_fallback(
+            &query,
+            &SearchExcludeRules::new(Vec::new()),
+            complete_traversal_limits(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, SearchError::InvalidQuery(_)));
     }
 
     #[test]

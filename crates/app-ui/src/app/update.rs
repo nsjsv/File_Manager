@@ -630,11 +630,16 @@ impl FileBrowser {
             Message::SearchTextScopeSelected(text_scope) => {
                 self.select_search_text_scope(text_scope)
             }
+            Message::SearchRegexToggled => self.toggle_search_regex(),
             Message::SearchDateFieldSelected(date_field) => {
                 self.select_search_date_field(date_field)
             }
             Message::SearchDatePresetSelected(date_preset) => {
                 self.select_search_date_preset(date_preset)
+            }
+            Message::SearchCustomExtensionsToggled => self.toggle_search_custom_extensions(),
+            Message::SearchCustomExtensionsChanged(value) => {
+                self.update_search_custom_extensions(value)
             }
             Message::SearchFiltersReset => self.reset_search_filters(),
             Message::SearchKeywordCleared => self.clear_search_keyword(),

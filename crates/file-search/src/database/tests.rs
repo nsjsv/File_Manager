@@ -9,8 +9,8 @@ use tempfile::tempdir;
 
 use crate::extractor::ExtractionStatus;
 use crate::model::{
-    MatchSource, MimePattern, SearchEntryTypeRule, SearchFileKind, SearchQuery, SearchScope,
-    SearchTextScope, TimeRange,
+    MatchSource, MimePattern, SearchEntryTypeRule, SearchFileKind, SearchMatchMode, SearchQuery,
+    SearchScope, SearchTextScope, TimeRange,
 };
 
 use super::{
@@ -817,6 +817,73 @@ fn entry_type_rules_are_or_with_each_other_and_and_with_other_filters() {
 }
 
 #[test]
+fn extension_filters_or_within_themselves_and_exclude_directories() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for (path, display_name, kind) in [
+        ("/tmp/report.PDF", "report.PDF", SearchFileKind::File),
+        ("/tmp/notes.Md", "notes.Md", SearchFileKind::File),
+        ("/tmp/photo.jpg", "photo.jpg", SearchFileKind::File),
+        (
+            "/tmp/archive.tar.gz",
+            "archive.tar.gz",
+            SearchFileKind::File,
+        ),
+        ("/tmp/folder.pdf", "folder.pdf", SearchFileKind::Directory),
+    ] {
+        let mut file = indexed_file(path, display_name, "");
+        file.kind = kind;
+        database.upsert_file(&file).unwrap();
+    }
+    let mut query = SearchQuery::global(1, "");
+    query.filters.extensions = vec!["pdf".to_owned(), "md".to_owned()];
+
+    let paths = database
+        .search(&query)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            Path::new("/tmp/report.PDF").to_path_buf(),
+            Path::new("/tmp/notes.Md").to_path_buf(),
+        ])
+    );
+}
+
+#[test]
+fn extension_filters_and_with_text_terms_and_time_ranges() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for (path, content, modified_ms) in [
+        ("/tmp/match.pdf", "alpha", 30),
+        ("/tmp/wrong-ext.pdf", "beta", 30),
+        ("/tmp/wrong-time.txt", "alpha", 10),
+    ] {
+        let mut file = indexed_file(
+            path,
+            Path::new(path).file_name().unwrap().to_str().unwrap(),
+            content,
+        );
+        file.modified_ms = Some(modified_ms);
+        database.upsert_file(&file).unwrap();
+    }
+    let mut query = SearchQuery::global(1, "alpha");
+    query.filters.extensions = vec!["pdf".to_owned()];
+    query.filters.modified = Some(TimeRange {
+        start_ms: 20,
+        end_ms: 40,
+    });
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/match.pdf"));
+}
+
+#[test]
 fn search_window_reports_more_rows_only_when_an_extra_row_exists() {
     fn search_count(file_count: usize) -> crate::model::SearchResultBatch {
         let database = SearchDatabase::in_memory().unwrap();
@@ -1600,4 +1667,119 @@ fn classification_rejects_batches_above_the_fixed_capacity() {
 
     let error = database.classify_observed_files(&observations).unwrap_err();
     assert!(matches!(error, crate::error::SearchError::InvalidQuery(_)));
+}
+
+#[test]
+fn regex_mode_matches_names_without_touching_content() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/notes.txt", "notes.txt", "alpha body"))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file(
+            "/tmp/alpha-report.txt",
+            "alpha-report.txt",
+            "unrelated",
+        ))
+        .unwrap();
+    let mut query = SearchQuery::global(1, "^alpha-\\w+\\.txt$");
+    query.match_mode = SearchMatchMode::Regex;
+    query.text_scope = SearchTextScope::NameAndContent;
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/alpha-report.txt"));
+    assert_eq!(batch.hits[0].match_source, MatchSource::Name);
+    assert!(batch.hits[0].snippet.is_none());
+    assert_eq!(batch.hits[0].rank, 0.0);
+}
+
+#[test]
+fn regex_mode_defaults_to_case_insensitive_and_honors_inline_overrides() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/Notes.TXT", "Notes.TXT", ""))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/exact.md", "exact.md", ""))
+        .unwrap();
+
+    let mut default_query = SearchQuery::global(1, "^notes\\.txt$");
+    default_query.match_mode = SearchMatchMode::Regex;
+    assert_eq!(database.search(&default_query).unwrap().hits.len(), 1);
+
+    let mut sensitive_query = SearchQuery::global(2, "(?-i)^notes\\.txt$");
+    sensitive_query.match_mode = SearchMatchMode::Regex;
+    assert_eq!(database.search(&sensitive_query).unwrap().hits.len(), 0);
+
+    let mut sensitive_hit_query = SearchQuery::global(3, "(?-i)^Notes\\.TXT$");
+    sensitive_hit_query.match_mode = SearchMatchMode::Regex;
+    assert_eq!(database.search(&sensitive_hit_query).unwrap().hits.len(), 1);
+}
+
+#[test]
+fn regex_mode_rejects_invalid_patterns_as_invalid_query() {
+    let database = SearchDatabase::in_memory().unwrap();
+    let mut query = SearchQuery::global(1, "foo(");
+    query.match_mode = SearchMatchMode::Regex;
+
+    let error = database.search(&query).unwrap_err();
+    assert!(matches!(error, crate::error::SearchError::InvalidQuery(_)));
+}
+
+#[test]
+fn regex_mode_pages_in_scan_order_without_duplicates_or_gaps() {
+    let database = SearchDatabase::in_memory().unwrap();
+    for index in 0..5 {
+        let name = format!("log-{index:02}.txt");
+        database
+            .upsert_file(&indexed_file(&format!("/tmp/{name}"), &name, ""))
+            .unwrap();
+    }
+
+    let mut first_page_query = SearchQuery::global(1, r"^log-\d+\.txt$");
+    first_page_query.match_mode = SearchMatchMode::Regex;
+    first_page_query.limit = 3;
+    let first_page = database.search(&first_page_query).unwrap();
+    assert_eq!(first_page.hits.len(), 3);
+    assert!(!first_page.finished);
+
+    let mut second_page_query = first_page_query.clone();
+    second_page_query.query_id = 2;
+    second_page_query.cursor = first_page.next_cursor;
+    let second_page = database.search(&second_page_query).unwrap();
+    assert_eq!(second_page.hits.len(), 2);
+    assert!(second_page.finished);
+
+    let mut paths = first_page
+        .hits
+        .iter()
+        .chain(&second_page.hits)
+        .map(|hit| hit.path.clone())
+        .collect::<Vec<_>>();
+    let unique_count = paths.len();
+    paths.sort();
+    paths.dedup();
+    assert_eq!(unique_count, paths.len());
+    assert_eq!(paths.len(), 5);
+}
+
+#[test]
+fn regex_mode_still_applies_directory_scope_and_filters() {
+    let database = SearchDatabase::in_memory().unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/docs/log-1.txt", "log-1.txt", ""))
+        .unwrap();
+    database
+        .upsert_file(&indexed_file("/tmp/other/log-2.txt", "log-2.txt", ""))
+        .unwrap();
+    let mut query = SearchQuery::global(1, r"^log-\d+\.txt$");
+    query.match_mode = SearchMatchMode::Regex;
+    query.scope = SearchScope::Directory(PathBuf::from("/tmp/docs"));
+
+    let batch = database.search(&query).unwrap();
+
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(batch.hits[0].path, Path::new("/tmp/docs/log-1.txt"));
 }

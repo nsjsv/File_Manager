@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 use iced::Point;
 
-use file_search::{MatchSource, SearchFileKind, SearchHit, SearchResultBatch, SearchScope};
+use file_search::{
+    MatchSource, SearchFileKind, SearchHit, SearchMatchMode, SearchResultBatch, SearchScope,
+    SearchTextScope,
+};
 use tempfile::tempdir;
 
 use super::FileBrowser;
@@ -779,4 +782,45 @@ fn activating_non_utf8_directory_preserves_native_path_and_closes_workspace() {
 
     assert_eq!(browser.current_dir, path);
     assert!(browser.search_workspace.is_none());
+}
+
+#[test]
+fn toggling_regex_mode_submits_name_only_query() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    stabilize_search_input(&mut browser, "^report-\\d+");
+    drop(browser.toggle_search_regex());
+
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert_eq!(workspace.filters.match_mode, SearchMatchMode::Regex);
+    let query = workspace.run.active_query.as_ref().unwrap();
+    assert_eq!(query.match_mode, SearchMatchMode::Regex);
+    assert_eq!(query.text_scope, SearchTextScope::NameOnly);
+    assert_eq!(query.terms, "^report-\\d+");
+}
+
+#[test]
+fn toggling_regex_off_restores_selected_text_scope() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    stabilize_search_input(&mut browser, "report");
+    drop(browser.toggle_search_regex());
+    drop(browser.toggle_search_regex());
+
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert_eq!(workspace.filters.match_mode, SearchMatchMode::Plain);
+    let query = workspace.run.active_query.as_ref().unwrap();
+    assert_eq!(query.match_mode, SearchMatchMode::Plain);
+    assert_eq!(query.text_scope, SearchTextScope::NameAndContent);
+}
+
+#[test]
+fn invalid_regex_is_rejected_without_submitting_a_query() {
+    let mut browser = browser_for_search_tests(PathBuf::from("/workspace"));
+    stabilize_search_input(&mut browser, "foo(");
+    drop(browser.toggle_search_regex());
+
+    let workspace = browser.search_workspace.as_ref().unwrap();
+    assert_eq!(workspace.filters.match_mode, SearchMatchMode::Regex);
+    assert!(workspace.run.active_query.is_none());
+    let failure = workspace.window.failure.as_deref().unwrap();
+    assert!(failure.starts_with("Invalid regular expression: "));
 }

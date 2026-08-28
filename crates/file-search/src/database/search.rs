@@ -3,8 +3,8 @@ use rusqlite::types::Value;
 
 use crate::error::SearchResult;
 use crate::model::{
-    MatchSource, SearchCursor, SearchEntryTypeRule, SearchFileKind, SearchHit, SearchQuery,
-    SearchResultBatch, SearchScope, SearchTextScope,
+    MatchSource, SearchCursor, SearchEntryTypeRule, SearchFileKind, SearchHit, SearchMatchMode,
+    SearchQuery, SearchResultBatch, SearchScope, SearchTextScope,
 };
 
 use super::{
@@ -23,6 +23,9 @@ enum FullTextQueryPlan {
 
 impl SearchDatabase {
     pub fn search(&self, query: &SearchQuery) -> SearchResult<SearchResultBatch> {
+        if query.match_mode == SearchMatchMode::Regex {
+            return self.search_regex(query);
+        }
         let limit = query.limit.clamp(1, 200);
         let fetch_limit = limit.saturating_add(1);
         let offset = query.cursor.map_or(0, |cursor| cursor.offset);
@@ -64,6 +67,68 @@ impl SearchDatabase {
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             rows
+        };
+        transaction.commit()?;
+
+        let has_more = hits.len() > limit;
+        hits.truncate(limit);
+        let next_cursor = has_more.then_some(SearchCursor {
+            offset: offset + hits.len(),
+        });
+        Ok(SearchResultBatch {
+            query_id: query.query_id,
+            hits,
+            next_cursor,
+            finished: !has_more,
+        })
+    }
+
+    /// 正则无法在 FTS 倒排索引上执行：按 rowid 扫描序流式过滤名称，凑满一页提前退出。
+    fn search_regex(&self, query: &SearchQuery) -> SearchResult<SearchResultBatch> {
+        let limit = query.limit.clamp(1, 200);
+        let fetch_limit = limit.saturating_add(1);
+        let offset = query.cursor.map_or(0, |cursor| cursor.offset);
+        let name_regex = query.match_mode.name_regex(&query.terms)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let (sql, values) = regex_scan_sql(query);
+        let mut hits = {
+            let mut statement = transaction.prepare(&sql)?;
+            let mut rows = statement.query(params_from_iter(values))?;
+            let mut hits = Vec::with_capacity(fetch_limit);
+            let mut skipped = 0_usize;
+            while let Some(row) = rows.next()? {
+                let display_name: String = row.get(1)?;
+                if !name_regex.is_match(&display_name) {
+                    continue;
+                }
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                let path_bytes: Vec<u8> = row.get(0)?;
+                let kind_value: String = row.get(2)?;
+                let kind = SearchFileKind::from_storage_value(&kind_value);
+                hits.push(SearchHit {
+                    path: path_from_storage_bytes(path_bytes),
+                    display_name,
+                    kind,
+                    size: row.get::<_, i64>(3)? as u64,
+                    modified_ms: row.get(4)?,
+                    accessed_ms: row.get(5)?,
+                    created_ms: row.get(6)?,
+                    rank: 0.0,
+                    snippet: None,
+                    match_source: if query.terms.is_empty() {
+                        MatchSource::Metadata
+                    } else {
+                        MatchSource::Name
+                    },
+                });
+                if hits.len() == fetch_limit {
+                    break;
+                }
+            }
+            hits
         };
         transaction.commit()?;
 
@@ -124,6 +189,19 @@ impl SearchDatabase {
     }
 }
 
+fn regex_scan_sql(query: &SearchQuery) -> (String, Vec<Value>) {
+    let mut values = Vec::new();
+    let mut sql = "SELECT f.path, f.display_name, f.kind, f.size, f.modified_ms,
+                f.accessed_ms, f.created_ms
+             FROM files f
+             WHERE "
+        .to_owned()
+        + QUERY_VISIBLE_PREDICATE;
+    append_scope_filter(&mut sql, &mut values, query);
+    append_filters(&mut sql, &mut values, query);
+    (sql, values)
+}
+
 fn full_text_query_plan(
     connection: &rusqlite::Connection,
     query: &SearchQuery,
@@ -133,7 +211,8 @@ fn full_text_query_plan(
         && query.filters.entry_type_rules.is_empty()
         && query.filters.modified.is_none()
         && query.filters.accessed.is_none()
-        && query.filters.created.is_none();
+        && query.filters.created.is_none()
+        && query.filters.extensions.is_empty();
     if !unrestricted_full_text_query {
         return Ok(FullTextQueryPlan::FilterWithMetadata);
     }
@@ -265,6 +344,7 @@ fn append_filters(sql: &mut String, values: &mut Vec<Value>, query: &SearchQuery
     append_time_filter(sql, values, "f.modified_ms", query.filters.modified);
     append_time_filter(sql, values, "f.accessed_ms", query.filters.accessed);
     append_time_filter(sql, values, "f.created_ms", query.filters.created);
+    append_extension_filter(sql, values, &query.filters.extensions);
 }
 
 fn append_entry_type_rules(
@@ -308,6 +388,27 @@ fn escaped_like_prefix(prefix: &str) -> String {
     }
     pattern.push('%');
     pattern
+}
+
+fn append_extension_filter(sql: &mut String, values: &mut Vec<Value>, extensions: &[String]) {
+    if extensions.is_empty() {
+        return;
+    }
+    // 后缀语义只作用于文件类条目：目录即使名称以点后缀结尾也不匹配。
+    sql.push_str(" AND (f.kind <> ?");
+    values.push(Value::Text(
+        SearchFileKind::Directory.as_storage_value().to_owned(),
+    ));
+    sql.push_str(" AND (");
+    for (index, extension) in extensions.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        // LIKE 默认对 ASCII 大小写不敏感；token 已规范化小写且不含通配符，无需转义。
+        sql.push_str("f.display_name LIKE '%.' || ?");
+        values.push(Value::Text(extension.clone()));
+    }
+    sql.push_str("))");
 }
 
 fn append_time_filter(
