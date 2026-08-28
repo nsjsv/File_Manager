@@ -6,24 +6,27 @@ use iced::widget::{
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
+use crate::anchored_popup::anchored_popup;
 use crate::appearance::{
-    base_text_color, context_menu_style, dragged_row_style, enhanced_scrollbar_style,
-    enhanced_vertical_scrollbar_direction, muted_text_color, path_suggestion_item_style,
-    subtle_border_color,
+    base_text_color, context_menu_item_button_style, context_menu_style, dragged_row_style,
+    enhanced_scrollbar_style, enhanced_vertical_scrollbar_direction, muted_text_color,
+    path_suggestion_item_style, subtle_border_color,
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::matugen_theme::ui_colors;
 use crate::model::{
     BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode, BatchRenameMessage,
     BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass, BatchRenameRemoveMode,
-    BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode, BatchRenameSortMode,
-    BatchRenameState, Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility,
+    BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSimpleKind, BatchRenameSimpleToken,
+    BatchRenameSliceMode, BatchRenameSortMode, BatchRenameState, Message, ScrollbarRegion,
+    ScrollbarViewport, ScrollbarVisibility,
 };
 use crate::typography::{localized_text, readable_text};
 
 use super::batch_rename_preview_name_input_id;
 use super::option_controls::{
     inactive_primary_action_button, primary_action_button, secondary_action_button,
+    segmented_choice_row, SegmentedChoice,
 };
 
 const BATCH_RENAME_PANEL_WIDTH: f32 = 720.0;
@@ -43,8 +46,15 @@ pub(super) fn batch_rename_panel(
 
     let content = column![
         header,
-        rule_panel_selector(state),
-        active_rule_controls(state),
+        mode_selector(state),
+        if state.simple_mode {
+            simple_controls(state)
+        } else {
+            column![rule_panel_selector(state), active_rule_controls(state)]
+                .spacing(12)
+                .width(Length::Fill)
+                .into()
+        },
         preview_rows(state, scrollbar_visibility, scrollbar_viewport),
         action_row(state),
     ]
@@ -716,6 +726,181 @@ fn action_row(state: &BatchRenameState) -> Element<'static, Message> {
     ]
     .spacing(8)
     .align_y(Alignment::Center)
+    .into()
+}
+
+fn mode_selector(state: &BatchRenameState) -> Element<'static, Message> {
+    segmented_choice_row(vec![
+        SegmentedChoice {
+            label: "Simple",
+            selected: state.simple_mode,
+            message: Message::BatchRename(BatchRenameMessage::SimpleModeSelected(true)),
+        },
+        SegmentedChoice {
+            label: "Advanced",
+            selected: !state.simple_mode,
+            message: Message::BatchRename(BatchRenameMessage::SimpleModeSelected(false)),
+        },
+    ])
+}
+
+fn simple_controls(state: &BatchRenameState) -> Element<'_, Message> {
+    let kind_selector = container(
+        row![
+            simple_kind_radio(
+                BatchRenameSimpleKind::Template,
+                state.simple.kind,
+                "Rename using a template",
+            ),
+            simple_kind_radio(
+                BatchRenameSimpleKind::ReplaceText,
+                state.simple.kind,
+                "Find and replace text",
+            ),
+        ]
+        .spacing(24),
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill);
+
+    let controls = match state.simple.kind {
+        BatchRenameSimpleKind::Template => simple_template_controls(state),
+        BatchRenameSimpleKind::ReplaceText => simple_replace_controls(state),
+    };
+
+    column![kind_selector, controls]
+        .spacing(12)
+        .width(Length::Fill)
+        .into()
+}
+
+fn simple_kind_radio(
+    kind: BatchRenameSimpleKind,
+    selected: BatchRenameSimpleKind,
+    label: &'static str,
+) -> Element<'static, Message> {
+    let is_selected = kind == selected;
+    let choice = button(
+        row![radio_dot(is_selected), readable_text(label).size(12)]
+            .spacing(8)
+            .align_y(Alignment::Center),
+    )
+    .padding([4, 6])
+    .style(|theme, status| {
+        let background = matches!(status, button::Status::Hovered | button::Status::Pressed)
+            .then(|| Background::Color(ui_colors(theme).surface_container_high));
+        button::Style {
+            background,
+            text_color: base_text_color(theme),
+            border: Border {
+                radius: 6.0.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        }
+    });
+
+    if is_selected {
+        choice.into()
+    } else {
+        choice
+            .on_press(Message::BatchRename(
+                BatchRenameMessage::SimpleKindSelected(kind),
+            ))
+            .into()
+    }
+}
+
+fn radio_dot(selected: bool) -> Element<'static, Message> {
+    container(
+        Space::new()
+            .width(Length::Fixed(6.0))
+            .height(Length::Fixed(6.0)),
+    )
+    .width(Length::Fixed(14.0))
+    .height(Length::Fixed(14.0))
+    .center_x(Length::Fixed(14.0))
+    .center_y(Length::Fixed(14.0))
+    .style(move |theme| {
+        let accent = ui_colors(theme).primary;
+        container::Style {
+            background: selected.then(|| Background::Color(accent)),
+            border: Border {
+                color: if selected {
+                    accent
+                } else {
+                    subtle_border_color(theme)
+                },
+                width: 1.5,
+                radius: 7.0.into(),
+            },
+            ..container::Style::default()
+        }
+    })
+    .into()
+}
+
+fn simple_template_controls(state: &BatchRenameState) -> Element<'_, Message> {
+    let add_button = secondary_action_button(
+        "Add",
+        Message::BatchRename(BatchRenameMessage::SimpleTokenMenuToggled),
+    );
+    let template_input = text_input(
+        &crate::localization::translate_current("Original name"),
+        &state.simple.template,
+    )
+    .on_input(|value| Message::BatchRename(BatchRenameMessage::SimpleTemplateChanged(value)))
+    .padding([6, 8])
+    .size(13)
+    .width(Length::Fill);
+
+    row![
+        template_input,
+        anchored_popup(
+            add_button,
+            state.simple.token_menu_open.then(simple_token_menu),
+        ),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn simple_token_menu() -> Element<'static, Message> {
+    let mut items = Column::new().spacing(2);
+    for token in BatchRenameSimpleToken::ALL {
+        items = items.push(
+            button(readable_text(token.label()).size(12))
+                .padding([5, 10])
+                .width(Length::Fill)
+                .style(context_menu_item_button_style())
+                .on_press(Message::BatchRename(
+                    BatchRenameMessage::SimpleTokenSelected(token),
+                )),
+        );
+    }
+
+    container(items)
+        .padding(4)
+        .width(Length::Fixed(230.0))
+        .style(context_menu_style)
+        .into()
+}
+
+fn simple_replace_controls(state: &BatchRenameState) -> Element<'_, Message> {
+    row![
+        input_column(
+            "Find",
+            &state.simple.find,
+            BatchRenameMessage::SimpleFindChanged
+        ),
+        input_column(
+            "With",
+            &state.simple.replacement,
+            BatchRenameMessage::SimpleReplacementChanged,
+        ),
+    ]
+    .spacing(8)
     .into()
 }
 

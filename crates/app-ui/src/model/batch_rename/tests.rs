@@ -30,7 +30,10 @@ fn source_with_modified(name: &str, modified_secs: u64) -> BatchRenameSource {
 }
 
 fn state_for_sources(items: Vec<BatchRenameSource>) -> BatchRenameState {
-    BatchRenameState::new_with_existing_sources(items, HashSet::new()).unwrap()
+    let mut state = BatchRenameState::new_with_existing_sources(items, HashSet::new()).unwrap();
+    // 高级规则测试显式退出默认的简单模式
+    state.simple_mode = false;
+    state
 }
 
 fn preview_names(state: &BatchRenameState) -> Vec<&str> {
@@ -607,6 +610,7 @@ fn batch_rename_preview_marks_existing_unselected_target() {
         existing,
     )
     .unwrap();
+    state.simple_mode = false;
     state.replace.find = "report".to_owned();
     state.replace.replacement = "taken".to_owned();
     state.rebuild_preview();
@@ -616,4 +620,134 @@ fn batch_rename_preview_marks_existing_unselected_target() {
         BatchRenamePreviewStatus::ExistingTarget
     );
     assert!(!state.can_apply());
+}
+
+#[test]
+fn simple_mode_defaults_to_template_with_no_name_changes() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    state.simple_mode = true;
+
+    assert_eq!(state.simple.kind, BatchRenameSimpleKind::Template);
+    assert_eq!(preview_names(&state), vec!["a.txt", "b.txt"]);
+    assert!(state
+        .preview
+        .rows
+        .iter()
+        .all(|row| row.status == BatchRenamePreviewStatus::Unchanged));
+    assert!(!state.can_apply());
+}
+
+#[test]
+fn simple_template_numbers_follow_preview_order_with_padding() {
+    let mut state = state_for_names(&["a.txt", "b.txt", "c.txt"]);
+    state.simple_mode = true;
+    state.simple.template = format!(
+        "{}{}{}",
+        BatchRenameSimpleToken::NameWithoutExtension.label(),
+        BatchRenameSimpleToken::Number001.label(),
+        BatchRenameSimpleToken::Extension.label(),
+    );
+    state.rebuild_preview();
+
+    assert_eq!(
+        preview_names(&state),
+        vec!["a001.txt", "b002.txt", "c003.txt"]
+    );
+    assert!(state.can_apply());
+}
+
+#[test]
+fn simple_template_original_name_token_preserves_full_name() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    state.simple_mode = true;
+    state.simple.template = format!(
+        "{}-copy{}",
+        BatchRenameSimpleToken::OriginalName.label(),
+        BatchRenameSimpleToken::Number1.label(),
+    );
+    state.rebuild_preview();
+
+    assert_eq!(preview_names(&state), vec!["a.txt-copy1", "b.txt-copy2"]);
+}
+
+#[test]
+fn simple_replace_replaces_full_name_case_sensitively() {
+    let mut state = state_for_names(&["Report.TXT", "note.txt"]);
+    state.simple_mode = true;
+    state.simple.kind = BatchRenameSimpleKind::ReplaceText;
+    state.simple.find = "txt".to_owned();
+    state.simple.replacement = "md".to_owned();
+    state.rebuild_preview();
+
+    assert_eq!(preview_names(&state), vec!["Report.TXT", "note.md"]);
+
+    state.simple.find.clear();
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state), vec!["Report.TXT", "note.txt"]);
+    assert!(!state.can_apply());
+}
+
+#[test]
+fn simple_mode_state_is_isolated_from_advanced_rules() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    state.simple_mode = true;
+    state.custom.template = "{stem}-advanced".to_owned();
+    state.replace.find = "advanced".to_owned();
+    state.simple.find = "simple-find".to_owned();
+
+    assert_eq!(preview_names(&state), vec!["a.txt", "b.txt"]);
+
+    state.simple_mode = false;
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state), vec!["a-advanced", "b-advanced"]);
+
+    state.simple_mode = true;
+    state.rebuild_preview();
+    assert_eq!(state.simple.find, "simple-find");
+    assert_eq!(state.custom.template, "{stem}-advanced");
+}
+
+#[test]
+fn token_selection_appends_label_and_closes_menu() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    state.simple_mode = true;
+    state.simple.token_menu_open = true;
+
+    state.apply_update(BatchRenameMessage::SimpleTokenSelected(
+        BatchRenameSimpleToken::Number01,
+    ));
+
+    assert_eq!(
+        state.simple.template,
+        format!(
+            "{}{}",
+            BatchRenameSimpleToken::OriginalName.label(),
+            BatchRenameSimpleToken::Number01.label(),
+        )
+    );
+    assert!(!state.simple.token_menu_open);
+}
+
+#[test]
+fn simple_mode_toggling_preserves_simple_fields() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    state.simple_mode = true;
+
+    state.apply_update(BatchRenameMessage::SimpleKindSelected(
+        BatchRenameSimpleKind::ReplaceText,
+    ));
+    state.apply_update(BatchRenameMessage::SimpleFindChanged("old".to_owned()));
+    state.apply_update(BatchRenameMessage::SimpleReplacementChanged(
+        "new".to_owned(),
+    ));
+    state.apply_update(BatchRenameMessage::SimpleTokenMenuToggled);
+    assert!(state.simple.token_menu_open);
+
+    state.apply_update(BatchRenameMessage::SimpleModeSelected(false));
+    assert!(!state.simple_mode);
+
+    state.apply_update(BatchRenameMessage::SimpleModeSelected(true));
+    assert!(state.simple_mode);
+    assert_eq!(state.simple.find, "old");
+    assert_eq!(state.simple.replacement, "new");
 }

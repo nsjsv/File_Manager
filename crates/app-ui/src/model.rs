@@ -97,8 +97,9 @@ mod batch_rename;
 pub(crate) use batch_rename::{
     same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode,
     BatchRenameMessage, BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass,
-    BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSliceMode,
-    BatchRenameSortMode, BatchRenameSource, BatchRenameSourceNameError, BatchRenameState,
+    BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSimpleKind,
+    BatchRenameSimpleToken, BatchRenameSliceMode, BatchRenameSortMode, BatchRenameSource,
+    BatchRenameSourceNameError, BatchRenameState,
 };
 mod properties;
 pub(crate) use properties::{

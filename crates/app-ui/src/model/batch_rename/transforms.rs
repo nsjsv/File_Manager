@@ -4,14 +4,15 @@ use regex::Regex;
 
 use super::{
     BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode, BatchRenameRandomMode,
-    BatchRenameRemoveClass, BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameSliceMode,
-    BatchRenameSource, BatchRenameState,
+    BatchRenameRemoveClass, BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameSimpleKind,
+    BatchRenameSimpleToken, BatchRenameSliceMode, BatchRenameSource, BatchRenameState,
 };
 
 pub(super) struct PreparedBatchRenameRules {
     regex: Result<Option<Regex>, String>,
     batch_commands: Result<Vec<BatchRenameCommand>, String>,
     list_names: Vec<String>,
+    simple_template: String,
 }
 
 enum BatchRenameCommand {
@@ -37,11 +38,13 @@ impl PreparedBatchRenameRules {
         };
         let batch_commands = parse_batch_commands(&state.batch.commands);
         let list_names = parse_list_names(&state.list.names);
+        let simple_template = canonical_simple_template(&state.simple.template);
 
         Self {
             regex,
             batch_commands,
             list_names,
+            simple_template,
         }
     }
 
@@ -51,6 +54,9 @@ impl PreparedBatchRenameRules {
         preview_index: usize,
         state: &BatchRenameState,
     ) -> Result<String, String> {
+        if state.simple_mode {
+            return Ok(self.rename_item_name_simple(item, preview_index, state));
+        }
         let start = parse_usize_or_default(&state.sequence.start_input, 1);
         let step = parse_usize_or_default(&state.sequence.step_input, 1);
         let padding = parse_usize_or_default(&state.sequence.padding_input, 0);
@@ -252,6 +258,55 @@ fn apply_random_rule(stem: String, random_text: &str, mode: BatchRenameRandomMod
     }
 }
 
+fn canonical_simple_template(template: &str) -> String {
+    let mut canonical = template.to_owned();
+    for token in BatchRenameSimpleToken::ALL {
+        for label in token.localized_labels() {
+            canonical = canonical.replace(&label, token.engine_token());
+        }
+    }
+    canonical
+}
+
+impl PreparedBatchRenameRules {
+    fn rename_item_name_simple(
+        &self,
+        item: &BatchRenameSource,
+        preview_index: usize,
+        state: &BatchRenameState,
+    ) -> String {
+        match state.simple.kind {
+            BatchRenameSimpleKind::Template => {
+                let random_text = deterministic_random_text(
+                    &item.source_name_text,
+                    preview_index,
+                    parse_usize_or_default(&state.random.length_input, 6).min(64),
+                    &state.random.alphabet,
+                );
+                render_custom_template(
+                    &self.simple_template,
+                    &item.source_name_text,
+                    item,
+                    preview_index.saturating_add(1),
+                    0,
+                    &random_text,
+                )
+            }
+            BatchRenameSimpleKind::ReplaceText => {
+                if state.simple.find.is_empty() {
+                    return item.source_name_text.clone();
+                }
+                replace_all(
+                    &item.source_name_text,
+                    &state.simple.find,
+                    &state.simple.replacement,
+                    false,
+                )
+            }
+        }
+    }
+}
+
 fn render_custom_template(
     template: &str,
     current_name: &str,
@@ -268,6 +323,8 @@ fn render_custom_template(
         .replace("{ext}", current_extension.as_deref().unwrap_or(""))
         .replace("{index}", &sequence_number.to_string())
         .replace("{n}", &padded_number(sequence_number, padding))
+        .replace("{n2}", &padded_number(sequence_number, 2))
+        .replace("{n3}", &padded_number(sequence_number, 3))
         .replace("{original}", &item.source_name_text)
         .replace("{original_stem}", &original_stem)
         .replace(

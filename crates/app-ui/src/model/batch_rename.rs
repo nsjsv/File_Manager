@@ -55,6 +55,13 @@ pub(crate) enum BatchRenameMessage {
     RegexPatternChanged(String),
     RegexReplacementChanged(String),
     BatchCommandsChanged(String),
+    SimpleModeSelected(bool),
+    SimpleKindSelected(BatchRenameSimpleKind),
+    SimpleTemplateChanged(String),
+    SimpleTokenMenuToggled,
+    SimpleTokenSelected(BatchRenameSimpleToken),
+    SimpleFindChanged(String),
+    SimpleReplacementChanged(String),
     PreviewNameEditStarted(PathBuf),
     PreviewNameChanged(String),
     PreviewNameEditCommitted,
@@ -82,6 +89,8 @@ pub(crate) struct BatchRenameState {
     pub(crate) custom: BatchRenameCustomRule,
     pub(crate) regex: BatchRenameRegexRule,
     pub(crate) batch: BatchRenameBatchRule,
+    pub(crate) simple_mode: bool,
+    pub(crate) simple: BatchRenameSimpleRule,
     manual_target_name_overrides: HashMap<PathBuf, String>,
     editing_target_name_source: Option<PathBuf>,
     editing_target_name_input: String,
@@ -283,6 +292,101 @@ pub(crate) struct BatchRenameBatchRule {
     pub(crate) commands: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BatchRenameSimpleKind {
+    Template,
+    ReplaceText,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BatchRenameSimpleToken {
+    OriginalName,
+    NameWithoutExtension,
+    Extension,
+    Number1,
+    Number01,
+    Number001,
+    Random,
+}
+
+impl BatchRenameSimpleToken {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::OriginalName,
+        Self::NameWithoutExtension,
+        Self::Extension,
+        Self::Number1,
+        Self::Number01,
+        Self::Number001,
+        Self::Random,
+    ];
+
+    pub(crate) fn label_key(self) -> &'static str {
+        match self {
+            Self::OriginalName => "Original name",
+            Self::NameWithoutExtension => "Name without extension",
+            Self::Extension => "Extension",
+            Self::Number1 => "Number 1,2,3",
+            Self::Number01 => "Number 01,02,03",
+            Self::Number001 => "Number 001,002,003",
+            Self::Random => "Random characters",
+        }
+    }
+
+    pub(crate) fn engine_token(self) -> &'static str {
+        match self {
+            Self::OriginalName => "{original}",
+            Self::NameWithoutExtension => "{original_stem}",
+            Self::Extension => ".{original_ext}",
+            Self::Number1 => "{index}",
+            Self::Number01 => "{n2}",
+            Self::Number001 => "{n3}",
+            Self::Random => "{random}",
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        format!(
+            "[{}]",
+            crate::localization::translate_current(self.label_key())
+        )
+    }
+
+    // 模板串按插入时的界面语言存储，渲染端必须同时识别中英两种标签
+    pub(crate) fn localized_labels(self) -> [String; 2] {
+        [
+            format!("[{}]", self.label_key()),
+            format!(
+                "[{}]",
+                crate::localization::translate(
+                    crate::config::UiLanguage::Chinese,
+                    self.label_key(),
+                )
+            ),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchRenameSimpleRule {
+    pub(crate) kind: BatchRenameSimpleKind,
+    pub(crate) template: String,
+    pub(crate) find: String,
+    pub(crate) replacement: String,
+    pub(crate) token_menu_open: bool,
+}
+
+impl Default for BatchRenameSimpleRule {
+    fn default() -> Self {
+        Self {
+            kind: BatchRenameSimpleKind::Template,
+            template: BatchRenameSimpleToken::OriginalName.label(),
+            find: String::new(),
+            replacement: String::new(),
+            token_menu_open: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BatchRenamePreview {
     pub(crate) rows: Vec<BatchRenamePreviewRow>,
@@ -332,6 +436,8 @@ impl BatchRenameState {
             custom: BatchRenameCustomRule::default(),
             regex: BatchRenameRegexRule::default(),
             batch: BatchRenameBatchRule::default(),
+            simple_mode: true,
+            simple: BatchRenameSimpleRule::default(),
             manual_target_name_overrides: HashMap::new(),
             editing_target_name_source: None,
             editing_target_name_input: String::new(),
@@ -404,6 +510,20 @@ impl BatchRenameState {
             BatchRenameMessage::RegexPatternChanged(value) => self.regex.pattern = value,
             BatchRenameMessage::RegexReplacementChanged(value) => self.regex.replacement = value,
             BatchRenameMessage::BatchCommandsChanged(value) => self.batch.commands = value,
+            BatchRenameMessage::SimpleModeSelected(value) => self.simple_mode = value,
+            BatchRenameMessage::SimpleKindSelected(value) => self.simple.kind = value,
+            BatchRenameMessage::SimpleTemplateChanged(value) => self.simple.template = value,
+            BatchRenameMessage::SimpleTokenMenuToggled => {
+                self.simple.token_menu_open = !self.simple.token_menu_open;
+            }
+            BatchRenameMessage::SimpleTokenSelected(token) => {
+                self.simple.template.push_str(&token.label());
+                self.simple.token_menu_open = false;
+            }
+            BatchRenameMessage::SimpleFindChanged(value) => self.simple.find = value,
+            BatchRenameMessage::SimpleReplacementChanged(value) => {
+                self.simple.replacement = value;
+            }
             BatchRenameMessage::PreviewNameEditStarted(source) => {
                 self.start_preview_name_edit(source)
             }
