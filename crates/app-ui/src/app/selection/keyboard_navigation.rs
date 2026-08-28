@@ -466,9 +466,10 @@ impl FileBrowser {
         if is_animated_image_preview {
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.clear_global_error();
+            let max_file_bytes = self.preview_file_size_limit_for(&path);
             let generation = self.next_animated_image_preview_generation();
             return Task::batch([
-                animated_image_preview_command(path, generation),
+                animated_image_preview_command(path, generation, max_file_bytes),
                 self.request_browser_session_save(),
             ]);
         }
@@ -484,15 +485,13 @@ impl FileBrowser {
         if is_video_preview {
             self.preview = Some(PreviewState::Loading(path.clone()));
             self.clear_global_error();
-            return Task::batch([
-                preview_command(
-                    path,
-                    kind,
-                    self.options.clone(),
-                    self.max_preview_file_bytes(),
-                ),
-                self.request_browser_session_save(),
-            ]);
+            let max_file_bytes = self.preview_file_size_limit_for(&path);
+            return Task::batch([preview_command(
+                path,
+                kind,
+                self.options.clone(),
+                max_file_bytes,
+            )]);
         }
 
         let window_profile = if is_audio_preview {
@@ -506,35 +505,27 @@ impl FileBrowser {
         self.clear_global_error();
         if is_audio_preview {
             self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
+            let max_file_bytes = self.preview_file_size_limit_for(&path);
             return Task::batch([
                 window_command,
-                preview_command(
-                    path.clone(),
-                    kind,
-                    self.options.clone(),
-                    self.max_preview_file_bytes(),
-                ),
+                preview_command(path.clone(), kind, self.options.clone(), max_file_bytes),
                 start_audio_preview_command(path),
                 self.request_browser_session_save(),
             ]);
         }
+        let max_file_bytes = self.preview_file_size_limit_for(&path);
         Task::batch([
             window_command,
-            preview_command(
-                path,
-                kind,
-                self.options.clone(),
-                self.max_preview_file_bytes(),
-            ),
+            preview_command(path, kind, self.options.clone(), max_file_bytes),
             self.request_browser_session_save(),
         ])
     }
 
     fn reject_oversized_file_preview(&mut self, path: &Path) -> Option<Task<Message>> {
         let entry = self.entry_for_path(path)?;
-        let max_bytes = self.max_preview_file_bytes();
+        let max_bytes = self.preview_file_size_limit_for(path);
         let file_bytes = entry.metadata.len;
-        if file_bytes <= max_bytes {
+        if max_bytes == 0 || file_bytes <= max_bytes {
             return None;
         }
 

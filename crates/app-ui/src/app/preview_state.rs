@@ -39,7 +39,19 @@ impl FileBrowser {
         }
 
         match preview_outcome {
-            Ok(preview) => {
+            Ok(mut preview) => {
+                let mut directory_expand_command = Task::none();
+                if let PreviewContent::Directory { entries, .. } = &mut preview {
+                    let options = self.options.clone();
+                    let expand_levels = self.preview_directory_expand_levels();
+                    let range = 0..entries.len();
+                    directory_expand_command = tree::auto_expand_preview_tree_directories(
+                        entries,
+                        range,
+                        expand_levels,
+                        &options,
+                    );
+                }
                 let command = match &preview {
                     PreviewContent::Text {
                         path,
@@ -82,7 +94,7 @@ impl FileBrowser {
                 };
                 self.preview = Some(PreviewState::Ready(preview));
                 self.clear_global_error();
-                command
+                Task::batch([command, directory_expand_command])
             }
             Err(error) => {
                 self.text_preview_document = None;

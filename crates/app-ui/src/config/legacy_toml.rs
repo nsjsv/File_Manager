@@ -7,8 +7,9 @@ use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, Ter
 use super::startup;
 use super::{
     browser_view_mode_from_config_value, file_operation_verification_from_config_value,
-    normalize_icon_grid_size, normalize_max_preview_file_bytes, normalize_sidebar_width,
-    toml_string, SidebarFavoriteConfig, UserConfig, CONFIG_FILE_NAME,
+    normalize_icon_grid_size, normalize_preview_directory_expand_levels, normalize_sidebar_width,
+    toml_string, PreviewFileSizeKind, PreviewFileSizeLimits, SidebarFavoriteConfig, UserConfig,
+    CONFIG_FILE_NAME,
 };
 use crate::network_connections::SavedNetworkConnection;
 
@@ -16,6 +17,25 @@ const THUMBNAIL_CACHE_DIR_KEY: &str = "thumbnail_cache_dir";
 const NETWORK_LIST_THUMBNAIL_DOWNLOADS_ENABLED_KEY: &str =
     "network_list_thumbnail_downloads_enabled";
 const MAX_PREVIEW_FILE_BYTES_KEY: &str = "max_preview_file_bytes";
+const MAX_PREVIEW_TEXT_BYTES_KEY: &str = "max_preview_text_bytes";
+const MAX_PREVIEW_IMAGE_BYTES_KEY: &str = "max_preview_image_bytes";
+const MAX_PREVIEW_VIDEO_BYTES_KEY: &str = "max_preview_video_bytes";
+const MAX_PREVIEW_AUDIO_BYTES_KEY: &str = "max_preview_audio_bytes";
+const MAX_PREVIEW_ARCHIVE_BYTES_KEY: &str = "max_preview_archive_bytes";
+const MAX_PREVIEW_DOCUMENT_BYTES_KEY: &str = "max_preview_document_bytes";
+const PREVIEW_DIRECTORY_EXPAND_LEVELS_KEY: &str = "preview_directory_expand_levels";
+
+const PREVIEW_SIZE_LIMIT_KEYS: &[(&str, PreviewFileSizeKind)] = &[
+    (MAX_PREVIEW_TEXT_BYTES_KEY, PreviewFileSizeKind::Text),
+    (MAX_PREVIEW_IMAGE_BYTES_KEY, PreviewFileSizeKind::Image),
+    (MAX_PREVIEW_VIDEO_BYTES_KEY, PreviewFileSizeKind::Video),
+    (MAX_PREVIEW_AUDIO_BYTES_KEY, PreviewFileSizeKind::Audio),
+    (MAX_PREVIEW_ARCHIVE_BYTES_KEY, PreviewFileSizeKind::Archive),
+    (
+        MAX_PREVIEW_DOCUMENT_BYTES_KEY,
+        PreviewFileSizeKind::Document,
+    ),
+];
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
 const SIDEBAR_FAVORITES_KEY: &str = "sidebar_favorites";
@@ -61,11 +81,27 @@ pub(super) fn parse_toml_user_config(content: &str, default: UserConfig) -> User
     {
         config.network_list_thumbnail_downloads_enabled = value;
     }
+    // Legacy single global limit seeds every kind; per-kind keys below override it.
     if let Some(bytes) = document
         .get(MAX_PREVIEW_FILE_BYTES_KEY)
         .and_then(toml_positive_integer_as_u64)
     {
-        config.max_preview_file_bytes = normalize_max_preview_file_bytes(bytes);
+        config.preview_size_limits = PreviewFileSizeLimits::from_legacy_global_bytes(bytes);
+    }
+    for (key, kind) in PREVIEW_SIZE_LIMIT_KEYS {
+        if let Some(bytes) = document
+            .get(*key)
+            .and_then(toml_non_negative_integer_as_u64)
+        {
+            config.preview_size_limits.set_limit(*kind, bytes);
+        }
+    }
+    if let Some(levels) = document
+        .get(PREVIEW_DIRECTORY_EXPAND_LEVELS_KEY)
+        .and_then(toml::Value::as_integer)
+        .and_then(|levels| u8::try_from(levels).ok())
+    {
+        config.preview_directory_expand_levels = normalize_preview_directory_expand_levels(levels);
     }
     if let Some(value) = document
         .get(SHOW_HIDDEN_FILES_KEY)
@@ -202,6 +238,13 @@ fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
 fn toml_positive_integer_as_u64(value: &toml::Value) -> Option<u64> {
     match value {
         toml::Value::Integer(value) => (*value > 0).then_some(*value as u64),
+        _ => None,
+    }
+}
+
+fn toml_non_negative_integer_as_u64(value: &toml::Value) -> Option<u64> {
+    match value {
+        toml::Value::Integer(value) => (*value >= 0).then_some(*value as u64),
         _ => None,
     }
 }

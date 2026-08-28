@@ -36,7 +36,15 @@ pub(crate) const MAX_SIDEBAR_WIDTH: f32 = 360.0;
 pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
 pub(crate) const PREVIEW_FILE_SIZE_UNIT_BYTES: u64 = 1024 * 1024;
-pub(crate) const DEFAULT_MAX_PREVIEW_FILE_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const DEFAULT_PREVIEW_TEXT_SIZE_BYTES: u64 = 25 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const DEFAULT_PREVIEW_IMAGE_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const DEFAULT_PREVIEW_VIDEO_SIZE_BYTES: u64 = 1024 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const DEFAULT_PREVIEW_AUDIO_SIZE_BYTES: u64 = 200 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const DEFAULT_PREVIEW_ARCHIVE_SIZE_BYTES: u64 = 25 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const DEFAULT_PREVIEW_DOCUMENT_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const MIN_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 0;
+pub(crate) const MAX_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 3;
+pub(crate) const DEFAULT_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 1;
 pub(crate) const DEFAULT_SEARCH_MAX_EXTRACT_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_ICON_GRID_SIZE: u32 = 96;
 pub(crate) const MIN_ICON_GRID_SIZE: u32 = 64;
@@ -236,11 +244,105 @@ pub(crate) fn list_directory_size_display_mode_config_value(
     mode.config_value()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewFileSizeKind {
+    Text,
+    Image,
+    Video,
+    Audio,
+    Archive,
+    Document,
+}
+
+impl PreviewFileSizeKind {
+    pub(crate) const ALL: [PreviewFileSizeKind; 6] = [
+        Self::Text,
+        Self::Image,
+        Self::Video,
+        Self::Audio,
+        Self::Archive,
+        Self::Document,
+    ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PreviewFileSizeLimits {
+    pub(crate) text_bytes: u64,
+    pub(crate) image_bytes: u64,
+    pub(crate) video_bytes: u64,
+    pub(crate) audio_bytes: u64,
+    pub(crate) archive_bytes: u64,
+    pub(crate) document_bytes: u64,
+}
+
+impl PreviewFileSizeLimits {
+    pub(crate) fn with_default_limits() -> Self {
+        Self {
+            text_bytes: DEFAULT_PREVIEW_TEXT_SIZE_BYTES,
+            image_bytes: DEFAULT_PREVIEW_IMAGE_SIZE_BYTES,
+            video_bytes: DEFAULT_PREVIEW_VIDEO_SIZE_BYTES,
+            audio_bytes: DEFAULT_PREVIEW_AUDIO_SIZE_BYTES,
+            archive_bytes: DEFAULT_PREVIEW_ARCHIVE_SIZE_BYTES,
+            document_bytes: DEFAULT_PREVIEW_DOCUMENT_SIZE_BYTES,
+        }
+    }
+
+    pub(crate) fn limit(self, kind: PreviewFileSizeKind) -> u64 {
+        match kind {
+            PreviewFileSizeKind::Text => self.text_bytes,
+            PreviewFileSizeKind::Image => self.image_bytes,
+            PreviewFileSizeKind::Video => self.video_bytes,
+            PreviewFileSizeKind::Audio => self.audio_bytes,
+            PreviewFileSizeKind::Archive => self.archive_bytes,
+            PreviewFileSizeKind::Document => self.document_bytes,
+        }
+    }
+
+    pub(crate) fn set_limit(&mut self, kind: PreviewFileSizeKind, bytes: u64) {
+        match kind {
+            PreviewFileSizeKind::Text => self.text_bytes = bytes,
+            PreviewFileSizeKind::Image => self.image_bytes = bytes,
+            PreviewFileSizeKind::Video => self.video_bytes = bytes,
+            PreviewFileSizeKind::Audio => self.audio_bytes = bytes,
+            PreviewFileSizeKind::Archive => self.archive_bytes = bytes,
+            PreviewFileSizeKind::Document => self.document_bytes = bytes,
+        }
+    }
+
+    /// 迁移时用旧的全局单值上限同时填充全部六个类型。
+    pub(crate) fn from_legacy_global_bytes(bytes: u64) -> Self {
+        Self {
+            text_bytes: bytes,
+            image_bytes: bytes,
+            video_bytes: bytes,
+            audio_bytes: bytes,
+            archive_bytes: bytes,
+            document_bytes: bytes,
+        }
+    }
+}
+
+pub(crate) fn normalize_preview_directory_expand_levels(levels: u8) -> u8 {
+    levels.clamp(
+        MIN_PREVIEW_DIRECTORY_EXPAND_LEVELS,
+        MAX_PREVIEW_DIRECTORY_EXPAND_LEVELS,
+    )
+}
+
+pub(crate) fn preview_size_limit_mib(bytes: u64) -> u64 {
+    bytes.div_ceil(PREVIEW_FILE_SIZE_UNIT_BYTES)
+}
+
+pub(crate) fn preview_size_limit_bytes_from_mib(mib: u64) -> Option<u64> {
+    mib.checked_mul(PREVIEW_FILE_SIZE_UNIT_BYTES)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UserConfig {
     pub(crate) thumbnail_cache_dir: PathBuf,
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
-    pub(crate) max_preview_file_bytes: u64,
+    pub(crate) preview_size_limits: PreviewFileSizeLimits,
+    pub(crate) preview_directory_expand_levels: u8,
     pub(crate) show_hidden_files: bool,
     pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
@@ -288,7 +390,8 @@ pub(crate) fn default_user_config() -> UserConfig {
     UserConfig {
         thumbnail_cache_dir: cache_base.join("thumbnails"),
         network_list_thumbnail_downloads_enabled: false,
-        max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
+        preview_size_limits: PreviewFileSizeLimits::with_default_limits(),
+        preview_directory_expand_levels: DEFAULT_PREVIEW_DIRECTORY_EXPAND_LEVELS,
         show_hidden_files: false,
         language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -319,7 +422,8 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
     UserConfig {
         thumbnail_cache_dir: PathBuf::new(),
         network_list_thumbnail_downloads_enabled: false,
-        max_preview_file_bytes: DEFAULT_MAX_PREVIEW_FILE_BYTES,
+        preview_size_limits: PreviewFileSizeLimits::with_default_limits(),
+        preview_directory_expand_levels: DEFAULT_PREVIEW_DIRECTORY_EXPAND_LEVELS,
         show_hidden_files: false,
         language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -362,25 +466,16 @@ pub(crate) fn normalize_sidebar_width(width: f32) -> f32 {
     }
 }
 
-pub(crate) fn normalize_max_preview_file_bytes(bytes: u64) -> u64 {
-    bytes.max(1)
-}
-
 pub(crate) fn normalize_icon_grid_size(size: u32) -> u32 {
     size.clamp(MIN_ICON_GRID_SIZE, MAX_ICON_GRID_SIZE)
 }
 
-pub(crate) fn max_preview_file_mib(bytes: u64) -> u64 {
-    normalize_max_preview_file_bytes(bytes).div_ceil(PREVIEW_FILE_SIZE_UNIT_BYTES)
-}
-
-pub(crate) fn max_preview_file_bytes_from_mib(mib: u64) -> Option<u64> {
-    mib.checked_mul(PREVIEW_FILE_SIZE_UNIT_BYTES)
-        .map(normalize_max_preview_file_bytes)
-}
-
 pub(super) fn app_config_dir_path() -> Option<PathBuf> {
     dirs::config_dir().map(|path| path.join(APP_DIR_NAME))
+}
+
+pub(crate) fn preview_size_limit_mib_inputs(limits: &PreviewFileSizeLimits) -> [String; 6] {
+    PreviewFileSizeKind::ALL.map(|kind| preview_size_limit_mib(limits.limit(kind)).to_string())
 }
 
 pub(crate) fn matugen_theme_file_path() -> Option<PathBuf> {

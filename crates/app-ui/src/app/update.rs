@@ -779,10 +779,18 @@ impl FileBrowser {
                 self.toggle_network_list_thumbnail_downloads()
             }
             Message::SearchContentIndexingToggled => self.toggle_search_content_indexing(),
-            Message::MaxPreviewFileMibInputChanged(value) => {
-                self.update_max_preview_file_mib_input(value)
+            Message::PreviewSizeLimitInputChanged(kind_index, value) => {
+                self.update_preview_size_limit_mib_input(kind_index, value)
             }
-            Message::MaxPreviewFileMibInputCommitted => self.commit_max_preview_file_mib_input(),
+            Message::PreviewSizeLimitInputCommitted(kind_index) => {
+                self.commit_preview_size_limit_mib_input(kind_index)
+            }
+            Message::PreviewDirectoryExpandLevelsInputChanged(value) => {
+                self.update_preview_directory_expand_levels_input(value)
+            }
+            Message::PreviewDirectoryExpandLevelsInputCommitted => {
+                self.commit_preview_directory_expand_levels_input()
+            }
             Message::LanguageSettingSelected(language_setting) => {
                 self.select_language_setting(language_setting)
             }

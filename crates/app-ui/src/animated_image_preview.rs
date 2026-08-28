@@ -164,10 +164,13 @@ pub(crate) fn is_animated_image_preview_path(path: &Path) -> bool {
 pub(crate) async fn load_animated_image_preview(
     path: PathBuf,
     generation: u64,
+    max_file_bytes: u64,
 ) -> Result<AnimatedImagePreview, String> {
-    tokio::task::spawn_blocking(move || decode_animated_image_first_frame(path, generation))
-        .await
-        .map_err(|error| format!("could not decode animated image preview: {error}"))?
+    tokio::task::spawn_blocking(move || {
+        decode_animated_image_first_frame(path, generation, max_file_bytes)
+    })
+    .await
+    .map_err(|error| format!("could not decode animated image preview: {error}"))?
 }
 
 pub(crate) fn animated_image_preview_subscription(
@@ -214,7 +217,20 @@ fn animated_image_preview_stream(
 fn decode_animated_image_first_frame(
     path: PathBuf,
     generation: u64,
+    max_file_bytes: u64,
 ) -> Result<AnimatedImagePreview, String> {
+    if max_file_bytes != 0 {
+        let byte_len = std::fs::metadata(&path)
+            .map_err(|error| format!("could not inspect animated image {path:?}: {error}"))?
+            .len();
+        if byte_len > max_file_bytes {
+            return Err(format!(
+                "File is too large to preview ({}). Maximum preview size is {}.",
+                crate::formatting::format_file_size(byte_len),
+                crate::formatting::format_file_size(max_file_bytes)
+            ));
+        }
+    }
     let metadata = inspect_animated_image_metadata(path.as_path())?;
     let first_frame = decode_animated_image_frame_at(path.as_path(), generation, Duration::ZERO)?;
     AnimatedImagePreview::new(

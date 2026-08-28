@@ -78,7 +78,7 @@ pub(crate) async fn cache_remote_preview_file(
             request.source_path
         ));
     }
-    if source_metadata.len() > request.max_file_bytes {
+    if request.max_file_bytes != 0 && source_metadata.len() > request.max_file_bytes {
         return Err(format!(
             "File is too large to preview ({}). Maximum preview size is {}.",
             format_file_size(source_metadata.len()),

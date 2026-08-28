@@ -106,7 +106,7 @@ pub(super) async fn validate_document_source(
             }
         });
     }
-    if metadata.len() > request.max_file_bytes {
+    if request.max_file_bytes != 0 && metadata.len() > request.max_file_bytes {
         return Err(format!(
             "File is too large to preview ({}). Maximum preview size is {}.",
             format_file_size(metadata.len()),

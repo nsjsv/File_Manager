@@ -68,7 +68,7 @@ impl FileBrowser {
             prepare_document_command(DocumentPrepareRequest {
                 key,
                 format,
-                max_file_bytes: self.max_preview_file_bytes(),
+                max_file_bytes: self.user_config.preview_size_limits.document_bytes,
                 cancellation,
             }),
             self.request_browser_session_save(),

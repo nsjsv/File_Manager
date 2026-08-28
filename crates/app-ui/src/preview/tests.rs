@@ -264,6 +264,62 @@ async fn load_preview_rejects_file_over_configured_limit() {
 }
 
 #[tokio::test]
+async fn load_preview_allows_any_size_when_limit_is_zero() {
+    let temp_dir = tempdir().expect("temp dir");
+    let text_path = temp_dir.path().join("single-line.txt");
+    let content = "a".repeat(4096);
+    std::fs::write(&text_path, content).expect("write text file");
+
+    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default(), 0)
+        .await
+        .expect("zero limit must not reject");
+
+    assert!(matches!(preview_content, PreviewContent::Text { .. }));
+}
+
+#[test]
+fn preview_file_size_kind_matches_preview_dispatch() {
+    use crate::config::PreviewFileSizeKind;
+
+    assert_eq!(
+        preview_file_size_kind(Path::new("report.pdf")),
+        PreviewFileSizeKind::Document
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("report.docx")),
+        PreviewFileSizeKind::Document
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("bundle.zip")),
+        PreviewFileSizeKind::Archive
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("clip.mp4")),
+        PreviewFileSizeKind::Video
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("song.flac")),
+        PreviewFileSizeKind::Audio
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("animation.gif")),
+        PreviewFileSizeKind::Image
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("photo.png")),
+        PreviewFileSizeKind::Image
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("notes.txt")),
+        PreviewFileSizeKind::Text
+    );
+    assert_eq!(
+        preview_file_size_kind(Path::new("data.unknownext")),
+        PreviewFileSizeKind::Text
+    );
+}
+
+#[tokio::test]
 async fn load_preview_truncates_long_markdown_on_utf8_boundary() {
     let temp_dir = tempdir().expect("temp dir");
     let text_path = temp_dir.path().join("unicode.md");

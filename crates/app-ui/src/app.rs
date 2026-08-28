@@ -71,7 +71,7 @@ mod x11_dnd;
 pub(crate) use runtime::run;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -263,8 +263,10 @@ pub(crate) struct FileBrowser {
     pub(crate) options: ScanOptions,
     application_launch_request: ApplicationLaunchRequest,
     user_config: config::UserConfig,
-    pub(crate) max_preview_file_mib_input: String,
-    pub(crate) max_preview_file_mib_error: Option<String>,
+    pub(crate) preview_size_limit_mib_inputs: [String; 6],
+    pub(crate) preview_size_limit_mib_errors: [Option<String>; 6],
+    pub(crate) preview_directory_expand_levels_input: String,
+    pub(crate) preview_directory_expand_levels_error: Option<String>,
     pub(crate) startup_custom_directory_input: String,
     pub(crate) startup_custom_directory_error: Option<String>,
     pending_startup_directory_validation: Option<StartupDirectoryValidationRequest>,
@@ -403,8 +405,14 @@ impl FileBrowser {
         self.user_config.network_list_thumbnail_downloads_enabled
     }
 
-    pub(crate) fn max_preview_file_bytes(&self) -> u64 {
-        self.user_config.max_preview_file_bytes
+    pub(crate) fn preview_file_size_limit_for(&self, path: &Path) -> u64 {
+        self.user_config
+            .preview_size_limits
+            .limit(crate::preview::preview_file_size_kind(path))
+    }
+
+    pub(crate) fn preview_directory_expand_levels(&self) -> u8 {
+        self.user_config.preview_directory_expand_levels
     }
 
     fn boot(
@@ -607,11 +615,14 @@ impl FileBrowser {
             options: options.clone(),
             application_launch_request,
             user_config: user_config.clone(),
-            max_preview_file_mib_input: config::max_preview_file_mib(
-                user_config.max_preview_file_bytes,
-            )
-            .to_string(),
-            max_preview_file_mib_error: None,
+            preview_size_limit_mib_inputs: config::preview_size_limit_mib_inputs(
+                &user_config.preview_size_limits,
+            ),
+            preview_size_limit_mib_errors: [const { None }; 6],
+            preview_directory_expand_levels_input: user_config
+                .preview_directory_expand_levels
+                .to_string(),
+            preview_directory_expand_levels_error: None,
             startup_custom_directory_input: user_config
                 .startup_custom_directory
                 .to_string_lossy()

@@ -24,7 +24,7 @@ use super::auxiliary_window_layout::{
     auxiliary_full_height_sidebar, auxiliary_sidebar_button,
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
-use super::network_settings::{max_preview_file_size_row, network_thumbnails_row};
+use super::network_settings::{network_thumbnails_row, preview_size_limit_rows};
 use super::option_controls::{
     inactive_segmented_choice_row, segmented_choice_button_style, segmented_choice_row,
     SegmentedChoice,
@@ -234,7 +234,7 @@ fn files_settings_detail(
                 "Network",
                 vec![
                     network_thumbnails_row(browser),
-                    max_preview_file_size_row(browser),
+                    preview_size_limit_rows(browser),
                 ],
             ),
         ]

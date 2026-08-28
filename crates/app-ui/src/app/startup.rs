@@ -162,9 +162,12 @@ impl FileBrowser {
         self.options.sort_field = user_config.list_view_preferences.sort().field;
         self.options.sort_direction = user_config.list_view_preferences.sort().direction;
         self.view_mode = user_config.browser_view_mode;
-        self.max_preview_file_mib_input =
-            crate::config::max_preview_file_mib(user_config.max_preview_file_bytes).to_string();
-        self.max_preview_file_mib_error = None;
+        self.preview_size_limit_mib_inputs =
+            crate::config::preview_size_limit_mib_inputs(&user_config.preview_size_limits);
+        self.preview_size_limit_mib_errors = [const { None }; 6];
+        self.preview_directory_expand_levels_input =
+            user_config.preview_directory_expand_levels.to_string();
+        self.preview_directory_expand_levels_error = None;
         self.invalidate_startup_directory_validation();
         self.startup_custom_directory_input = user_config
             .startup_custom_directory

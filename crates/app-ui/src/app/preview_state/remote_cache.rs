@@ -30,13 +30,14 @@ impl FileBrowser {
         ));
         self.clear_global_error();
 
+        let max_file_bytes = self.preview_file_size_limit_for(&source_path);
         Task::batch([
             window_command,
             remote_preview_cache_command(
                 source_path,
                 generation,
                 default_remote_preview_cache_dir(),
-                self.max_preview_file_bytes(),
+                max_file_bytes,
                 cancel,
             ),
         ])

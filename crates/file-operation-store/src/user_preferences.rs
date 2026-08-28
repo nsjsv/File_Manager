@@ -9,7 +9,22 @@ pub const USER_PREFERENCES_KEY: &str = "main";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredUserPreferences {
     pub network_list_thumbnail_downloads_enabled: bool,
-    pub max_preview_file_bytes: u64,
+    #[serde(default)]
+    pub max_preview_file_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_text_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_image_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_video_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_audio_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_archive_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_document_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub preview_directory_expand_levels: Option<u8>,
     pub show_hidden_files: bool,
     #[serde(default = "default_language_setting")]
     pub language_setting: String,
@@ -51,7 +66,14 @@ impl Default for StoredUserPreferences {
     fn default() -> Self {
         Self {
             network_list_thumbnail_downloads_enabled: false,
-            max_preview_file_bytes: 25 * 1024 * 1024,
+            max_preview_file_bytes: None,
+            preview_text_size_bytes: None,
+            preview_image_size_bytes: None,
+            preview_video_size_bytes: None,
+            preview_audio_size_bytes: None,
+            preview_archive_size_bytes: None,
+            preview_document_size_bytes: None,
+            preview_directory_expand_levels: None,
             show_hidden_files: false,
             language_setting: default_language_setting(),
             sidebar_width: 180.0,

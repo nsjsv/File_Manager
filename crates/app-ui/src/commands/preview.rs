@@ -159,10 +159,14 @@ async fn send_remote_preview_progress(
         .await;
 }
 
-pub(crate) fn animated_image_preview_command(path: PathBuf, generation: u64) -> Task<Message> {
+pub(crate) fn animated_image_preview_command(
+    path: PathBuf,
+    generation: u64,
+    max_file_bytes: u64,
+) -> Task<Message> {
     let image_path = path.clone();
     Task::perform(
-        load_animated_image_preview(path, generation),
+        load_animated_image_preview(path, generation, max_file_bytes),
         move |preview_outcome| {
             Message::AnimatedImagePreviewLoaded(image_path.clone(), generation, preview_outcome)
         },

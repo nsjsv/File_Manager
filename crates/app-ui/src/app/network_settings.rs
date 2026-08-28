@@ -20,36 +20,87 @@ impl FileBrowser {
         ])
     }
 
-    pub(super) fn update_max_preview_file_mib_input(&mut self, value: String) -> Task<Message> {
-        self.max_preview_file_mib_input = value;
-        self.max_preview_file_mib_error = None;
+    pub(super) fn update_preview_size_limit_mib_input(
+        &mut self,
+        kind_index: usize,
+        value: String,
+    ) -> Task<Message> {
+        if let Some(input) = self.preview_size_limit_mib_inputs.get_mut(kind_index) {
+            *input = value;
+        }
+        if let Some(error) = self.preview_size_limit_mib_errors.get_mut(kind_index) {
+            *error = None;
+        }
         Task::none()
     }
 
-    pub(super) fn commit_max_preview_file_mib_input(&mut self) -> Task<Message> {
-        let trimmed = self.max_preview_file_mib_input.trim();
-        let Ok(mib) = trimmed.parse::<u64>() else {
-            self.max_preview_file_mib_error =
-                Some("Enter a whole number of MiB greater than 0.".to_owned());
+    pub(super) fn commit_preview_size_limit_mib_input(
+        &mut self,
+        kind_index: usize,
+    ) -> Task<Message> {
+        let Some(kind) = config::PreviewFileSizeKind::ALL.get(kind_index).copied() else {
             return Task::none();
         };
-        if mib == 0 {
-            self.max_preview_file_mib_error =
-                Some("Enter a whole number of MiB greater than 0.".to_owned());
-            return Task::none();
-        }
-        let Some(bytes) = config::max_preview_file_bytes_from_mib(mib) else {
-            self.max_preview_file_mib_error = Some("Enter a smaller preview size.".to_owned());
+        let mib = match self.preview_size_limit_mib_inputs[kind_index]
+            .trim()
+            .parse::<u64>()
+        {
+            Ok(mib) => mib,
+            Err(_) => {
+                self.preview_size_limit_mib_errors[kind_index] =
+                    Some("Enter a whole number of MiB (0 = unlimited).".to_owned());
+                return Task::none();
+            }
+        };
+        let Some(bytes) = config::preview_size_limit_bytes_from_mib(mib) else {
+            self.preview_size_limit_mib_errors[kind_index] =
+                Some("Enter a smaller preview size.".to_owned());
             return Task::none();
         };
 
-        self.max_preview_file_mib_input = config::max_preview_file_mib(bytes).to_string();
-        self.max_preview_file_mib_error = None;
-        if self.user_config.max_preview_file_bytes == bytes {
+        self.preview_size_limit_mib_inputs[kind_index] =
+            config::preview_size_limit_mib(bytes).to_string();
+        self.preview_size_limit_mib_errors[kind_index] = None;
+        if self.user_config.preview_size_limits.limit(kind) == bytes {
             return Task::none();
         }
 
-        self.user_config.max_preview_file_bytes = bytes;
+        self.user_config.preview_size_limits.set_limit(kind, bytes);
+        self.persist_user_preferences_command()
+    }
+
+    pub(super) fn update_preview_directory_expand_levels_input(
+        &mut self,
+        value: String,
+    ) -> Task<Message> {
+        self.preview_directory_expand_levels_input = value;
+        self.preview_directory_expand_levels_error = None;
+        Task::none()
+    }
+
+    pub(super) fn commit_preview_directory_expand_levels_input(&mut self) -> Task<Message> {
+        let Ok(levels) = self
+            .preview_directory_expand_levels_input
+            .trim()
+            .parse::<u8>()
+        else {
+            self.preview_directory_expand_levels_error =
+                Some("Enter a whole number from 0 to 3.".to_owned());
+            return Task::none();
+        };
+        if levels > config::MAX_PREVIEW_DIRECTORY_EXPAND_LEVELS {
+            self.preview_directory_expand_levels_error =
+                Some("Enter a whole number from 0 to 3.".to_owned());
+            return Task::none();
+        }
+
+        self.preview_directory_expand_levels_input = levels.to_string();
+        self.preview_directory_expand_levels_error = None;
+        if self.user_config.preview_directory_expand_levels == levels {
+            return Task::none();
+        }
+
+        self.user_config.preview_directory_expand_levels = levels;
         self.persist_user_preferences_command()
     }
 
@@ -73,20 +124,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn committing_zero_preview_size_keeps_existing_config_and_reports_error() {
+    fn committing_invalid_preview_size_keeps_config_and_reports_error() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        let original_max_preview_file_bytes = browser.user_config.max_preview_file_bytes;
+        let original_limits = browser.user_config.preview_size_limits;
 
-        let _ = browser.update_max_preview_file_mib_input("0".to_owned());
-        let _ = browser.commit_max_preview_file_mib_input();
+        let _ = browser.update_preview_size_limit_mib_input(0, "abc".to_owned());
+        let _ = browser.commit_preview_size_limit_mib_input(0);
 
+        assert_eq!(browser.user_config.preview_size_limits, original_limits);
         assert_eq!(
-            browser.user_config.max_preview_file_bytes,
-            original_max_preview_file_bytes
+            browser.preview_size_limit_mib_errors[0].as_deref(),
+            Some("Enter a whole number of MiB (0 = unlimited).")
         );
+    }
+
+    #[test]
+    fn committing_zero_persists_unlimited_preview_size() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+        let _ = browser.update_preview_size_limit_mib_input(0, "0".to_owned());
+        let _ = browser.commit_preview_size_limit_mib_input(0);
+
+        assert_eq!(browser.user_config.preview_size_limits.text_bytes, 0);
+        assert!(browser.preview_size_limit_mib_errors[0].is_none());
+    }
+
+    #[test]
+    fn committing_rejects_directory_expand_levels_above_maximum() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+        let _ = browser.update_preview_directory_expand_levels_input("4".to_owned());
+        let _ = browser.commit_preview_directory_expand_levels_input();
+
+        assert_eq!(browser.user_config.preview_directory_expand_levels, 1);
         assert_eq!(
-            browser.max_preview_file_mib_error.as_deref(),
-            Some("Enter a whole number of MiB greater than 0.")
+            browser.preview_directory_expand_levels_error.as_deref(),
+            Some("Enter a whole number from 0 to 3.")
         );
     }
 }

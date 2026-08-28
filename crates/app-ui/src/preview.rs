@@ -7,10 +7,14 @@ use file_core::{
     ScanOptions,
 };
 
+use crate::animated_image_preview::is_animated_image_preview_path;
 use crate::audio_preview::inspect_audio_preview_metadata;
+use crate::config::PreviewFileSizeKind;
+use crate::document_preview::document_preview_format_for_path;
 use crate::formatting::format_file_size;
 use crate::model::{PreviewContent, PreviewTreeDirectoryChildren, PreviewTreeEntry};
 use crate::text_preview_loading::load_initial_text_preview;
+use thumbnails::is_supported_thumbnail_path;
 
 pub(crate) const PREVIEW_ARCHIVE_ENTRY_LIMIT: usize = 500;
 
@@ -51,7 +55,7 @@ async fn reject_file_over_preview_limit(path: &Path, max_file_bytes: u64) -> Res
     let metadata = tokio::fs::metadata(path)
         .await
         .map_err(|error| format!("could not inspect preview file: {error}"))?;
-    if metadata.len() <= max_file_bytes {
+    if max_file_bytes == 0 || metadata.len() <= max_file_bytes {
         return Ok(());
     }
 
@@ -60,6 +64,26 @@ async fn reject_file_over_preview_limit(path: &Path, max_file_bytes: u64) -> Res
         format_file_size(metadata.len()),
         format_file_size(max_file_bytes)
     ))
+}
+
+/// 与预览打开的 dispatch 顺序保持一致：文件适用的大小上限
+/// 等于它实际打开时所属预览类型的上限。
+pub(crate) fn preview_file_size_kind(path: &Path) -> PreviewFileSizeKind {
+    if document_preview_format_for_path(path).is_some() {
+        PreviewFileSizeKind::Document
+    } else if archive_extraction_format_for_path(path).is_some() {
+        PreviewFileSizeKind::Archive
+    } else if is_animated_image_preview_path(path) {
+        PreviewFileSizeKind::Image
+    } else if is_supported_thumbnail_path(path) && !is_supported_video_path(path) {
+        PreviewFileSizeKind::Image
+    } else if is_supported_video_path(path) {
+        PreviewFileSizeKind::Video
+    } else if is_supported_audio_path(path) {
+        PreviewFileSizeKind::Audio
+    } else {
+        PreviewFileSizeKind::Text
+    }
 }
 
 async fn load_directory_preview(

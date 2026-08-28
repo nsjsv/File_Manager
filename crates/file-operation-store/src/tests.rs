@@ -490,12 +490,13 @@ fn user_preferences_roundtrip_replace() {
     let (store, root) = test_store();
     assert_eq!(store.read_user_preferences().unwrap(), None);
     assert_eq!(
-        StoredUserPreferences::default().max_preview_file_bytes,
-        25 * 1024 * 1024
+        StoredUserPreferences::default().preview_text_size_bytes,
+        None
     );
     let first = StoredUserPreferences {
         network_list_thumbnail_downloads_enabled: true,
-        max_preview_file_bytes: 8 * 1024 * 1024,
+        max_preview_file_bytes: None,
+        preview_text_size_bytes: Some(8 * 1024 * 1024),
         show_hidden_files: true,
         language_setting: "chinese".to_owned(),
         sidebar_width: 248.0,
@@ -579,6 +580,7 @@ fn user_preferences_roundtrip_replace() {
                 danger: "#f85149".to_owned(),
             }),
         }),
+        ..StoredUserPreferences::default()
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -721,6 +723,8 @@ fn legacy_user_preferences_ignore_removed_search_fields() {
     assert!(preferences.network_list_thumbnail_downloads_enabled);
     assert_eq!(preferences.language_setting, "chinese");
     assert_eq!(preferences.icon_grid_size, 96);
+    assert_eq!(preferences.max_preview_file_bytes, Some(4194304));
+    assert_eq!(preferences.preview_text_size_bytes, None);
     let _ = fs::remove_dir_all(root);
 }
 

@@ -255,7 +255,7 @@ async fn validate_office_conversion_output(
     if !entry.metadata.file_type().is_file() || entry.metadata.len() == 0 {
         return Err("LibreOffice produced an empty PDF".to_owned());
     }
-    if entry.metadata.len() > max_file_bytes {
+    if max_file_bytes != 0 && entry.metadata.len() > max_file_bytes {
         return Err(format!(
             "Converted Office PDF is too large to preview ({}). Maximum preview size is {}.",
             format_file_size(entry.metadata.len()),

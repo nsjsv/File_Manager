@@ -15,9 +15,10 @@ use super::{
     default_state_database_path, default_user_config, file_operation_verification_config_value,
     file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
     list_directory_size_display_mode_from_config_value, normalize_icon_grid_size,
-    normalize_max_preview_file_bytes, normalize_sidebar_width, sort_direction_config_value,
-    sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
-    SidebarFavoriteConfig, UiLanguageSetting, UserConfig,
+    normalize_preview_directory_expand_levels, normalize_sidebar_width,
+    sort_direction_config_value, sort_direction_from_config_value, sort_field_config_value,
+    sort_field_from_config_value, PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting,
+    UserConfig,
 };
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
@@ -32,7 +33,8 @@ use crate::shortcuts::ShortcutConfig;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserPreferences {
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
-    pub(crate) max_preview_file_bytes: u64,
+    pub(crate) preview_size_limits: PreviewFileSizeLimits,
+    pub(crate) preview_directory_expand_levels: u8,
     pub(crate) show_hidden_files: bool,
     pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
@@ -60,7 +62,8 @@ impl UserPreferences {
         Self {
             network_list_thumbnail_downloads_enabled: config
                 .network_list_thumbnail_downloads_enabled,
-            max_preview_file_bytes: normalize_max_preview_file_bytes(config.max_preview_file_bytes),
+            preview_size_limits: config.preview_size_limits,
+            preview_directory_expand_levels: config.preview_directory_expand_levels,
             show_hidden_files: config.show_hidden_files,
             language_setting: config.language_setting,
             sidebar_width: normalize_sidebar_width(config.sidebar_width),
@@ -87,7 +90,8 @@ impl UserPreferences {
     pub(crate) fn apply_to_user_config(&self, config: &mut UserConfig) {
         config.network_list_thumbnail_downloads_enabled =
             self.network_list_thumbnail_downloads_enabled;
-        config.max_preview_file_bytes = self.max_preview_file_bytes;
+        config.preview_size_limits = self.preview_size_limits;
+        config.preview_directory_expand_levels = self.preview_directory_expand_levels;
         config.show_hidden_files = self.show_hidden_files;
         config.language_setting = self.language_setting;
         config.sidebar_width = self.sidebar_width;
@@ -114,8 +118,14 @@ impl UserPreferences {
         let mut stored = StoredUserPreferences::default();
         stored.network_list_thumbnail_downloads_enabled =
             self.network_list_thumbnail_downloads_enabled;
-        stored.max_preview_file_bytes =
-            normalize_max_preview_file_bytes(self.max_preview_file_bytes);
+        stored.max_preview_file_bytes = None;
+        stored.preview_text_size_bytes = Some(self.preview_size_limits.text_bytes);
+        stored.preview_image_size_bytes = Some(self.preview_size_limits.image_bytes);
+        stored.preview_video_size_bytes = Some(self.preview_size_limits.video_bytes);
+        stored.preview_audio_size_bytes = Some(self.preview_size_limits.audio_bytes);
+        stored.preview_archive_size_bytes = Some(self.preview_size_limits.archive_bytes);
+        stored.preview_document_size_bytes = Some(self.preview_size_limits.document_bytes);
+        stored.preview_directory_expand_levels = Some(self.preview_directory_expand_levels);
         stored.show_hidden_files = self.show_hidden_files;
         stored.language_setting = self.language_setting.config_value().to_owned();
         stored.sidebar_width = f64::from(normalize_sidebar_width(self.sidebar_width));
@@ -176,7 +186,11 @@ impl UserPreferences {
         Self {
             network_list_thumbnail_downloads_enabled: stored
                 .network_list_thumbnail_downloads_enabled,
-            max_preview_file_bytes: normalize_max_preview_file_bytes(stored.max_preview_file_bytes),
+            preview_size_limits: preview_size_limits_from_stored(&stored, &default_preferences),
+            preview_directory_expand_levels: stored.preview_directory_expand_levels.map_or(
+                default_preferences.preview_directory_expand_levels,
+                normalize_preview_directory_expand_levels,
+            ),
             show_hidden_files: stored.show_hidden_files,
             language_setting: UiLanguageSetting::from_config_value(&stored.language_setting)
                 .unwrap_or(default_preferences.language_setting),
@@ -209,6 +223,44 @@ impl UserPreferences {
             color_scheme,
             custom_color_scheme,
         }
+    }
+}
+
+fn preview_size_limits_from_stored(
+    stored: &StoredUserPreferences,
+    default: &UserPreferences,
+) -> PreviewFileSizeLimits {
+    let legacy_global_limit = stored.max_preview_file_bytes;
+    let limit = |stored_bytes: Option<u64>, default_bytes: u64| {
+        stored_bytes
+            .or(legacy_global_limit)
+            .unwrap_or(default_bytes)
+    };
+    PreviewFileSizeLimits {
+        text_bytes: limit(
+            stored.preview_text_size_bytes,
+            default.preview_size_limits.text_bytes,
+        ),
+        image_bytes: limit(
+            stored.preview_image_size_bytes,
+            default.preview_size_limits.image_bytes,
+        ),
+        video_bytes: limit(
+            stored.preview_video_size_bytes,
+            default.preview_size_limits.video_bytes,
+        ),
+        audio_bytes: limit(
+            stored.preview_audio_size_bytes,
+            default.preview_size_limits.audio_bytes,
+        ),
+        archive_bytes: limit(
+            stored.preview_archive_size_bytes,
+            default.preview_size_limits.archive_bytes,
+        ),
+        document_bytes: limit(
+            stored.preview_document_size_bytes,
+            default.preview_size_limits.document_bytes,
+        ),
     }
 }
 

@@ -405,7 +405,8 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Optional password" => Some("可选密码"),
         "Enter a directory path." => Some("请输入目录路径。"),
         "Choose an existing directory." => Some("请选择一个已存在的目录。"),
-        "Enter a whole number of MiB greater than 0." => Some("请输入大于 0 的 MiB 整数。"),
+        "Enter a whole number of MiB (0 = unlimited)." => Some("请输入 MiB 整数（0 表示不限制）。"),
+        "Enter a whole number from 0 to 3." => Some("请输入 0 到 3 的整数。"),
         "Enter a smaller preview size." => Some("请输入更小的预览大小。"),
         "Enter an archive name." => Some("请输入归档名称。"),
         "Archive name cannot contain path separators." => Some("归档名称不能包含路径分隔符。"),
@@ -731,7 +732,17 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "When enabled, images and videos on remote locations may use more data." => {
             Some("启用后，远程位置中的图片和视频可能会使用更多流量。")
         }
-        "Max File Preview" => Some("最大文件预览"),
+        "Max Text Preview" => Some("最大文本预览"),
+        "Max Image Preview" => Some("最大图片预览"),
+        "Max Video Preview" => Some("最大视频预览"),
+        "Max Audio Preview" => Some("最大音频预览"),
+        "Max Archive Preview" => Some("最大压缩包预览"),
+        "Max Document Preview" => Some("最大文档预览"),
+        "Preview Expand Levels" => Some("预览展开层数"),
+        "levels" => Some("层"),
+        "Size is unlimited: previewing very large files may use a lot of memory." => {
+            Some("大小不限制：预览超大文件可能占用大量内存。")
+        }
         "MiB" => Some("MiB"),
         "(default)" => Some("（默认）"),
         "File is too large to preview" => Some("文件过大，无法预览"),

@@ -405,7 +405,7 @@ impl FileBrowser {
             generation,
             width,
             height,
-            max_file_bytes: self.max_preview_file_bytes(),
+            max_file_bytes: self.user_config.preview_size_limits.image_bytes,
             placeholder_handle: None,
             cancellation: self
                 .original_image_preview_cancel

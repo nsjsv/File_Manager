@@ -228,3 +228,133 @@ fn new_original_request_drops_previous_pending_request() {
         .as_ref()
         .is_some_and(|cancellation| !cancellation.is_cancelled()));
 }
+
+fn directory_entry_at(path: &Path) -> DirectoryEntry {
+    let mut metadata = EntryMetadata::default();
+    metadata.len = 1;
+    DirectoryEntry::new(
+        path.to_path_buf(),
+        FileKind::Directory,
+        metadata,
+        false,
+        false,
+        false,
+    )
+}
+
+fn file_entry_at(path: &Path) -> DirectoryEntry {
+    let mut metadata = EntryMetadata::default();
+    metadata.len = 1;
+    DirectoryEntry::new(
+        path.to_path_buf(),
+        FileKind::File,
+        metadata,
+        false,
+        false,
+        false,
+    )
+}
+
+fn directory_preview_content(root: &Path, names: &[(&str, FileKind)]) -> PreviewContent {
+    let entries = names
+        .iter()
+        .enumerate()
+        .map(|(index, (name, kind))| {
+            let path = root.join(name);
+            let entry = match kind {
+                FileKind::Directory => directory_entry_at(&path),
+                _ => file_entry_at(&path),
+            };
+            crate::model::PreviewTreeEntry::from_directory_entry(index, entry, 0, None)
+        })
+        .collect();
+    PreviewContent::Directory { entries }
+}
+
+fn ready_directory_entries(browser: &FileBrowser) -> &Vec<crate::model::PreviewTreeEntry> {
+    match &browser.preview {
+        Some(PreviewState::Ready(PreviewContent::Directory { entries, .. })) => entries,
+        _ => panic!("directory preview expected"),
+    }
+}
+
+#[test]
+fn directory_preview_auto_expands_root_directories_by_default() {
+    let root = PathBuf::from("/workspace");
+    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+    browser.preview = Some(PreviewState::Loading(root.clone()));
+
+    let command = browser.accept_preview(
+        root.clone(),
+        Ok(directory_preview_content(
+            &root,
+            &[("src", FileKind::Directory), ("README.md", FileKind::File)],
+        )),
+    );
+
+    let entries = ready_directory_entries(&browser);
+    assert!(entries[0].is_expanded);
+    assert!(!entries[1].is_expanded);
+    assert!(command.units() > 0);
+}
+
+#[test]
+fn directory_preview_without_auto_expansion_stays_collapsed() {
+    let root = PathBuf::from("/workspace");
+    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+    browser.user_config.preview_directory_expand_levels = 0;
+    browser.preview = Some(PreviewState::Loading(root.clone()));
+
+    drop(browser.accept_preview(
+        root.clone(),
+        Ok(directory_preview_content(
+            &root,
+            &[("src", FileKind::Directory)],
+        )),
+    ));
+
+    let entries = ready_directory_entries(&browser);
+    assert!(!entries[0].is_expanded);
+}
+
+#[test]
+fn directory_preview_children_expand_up_to_configured_levels() {
+    let root = PathBuf::from("/workspace");
+    let src_dir = root.join("src");
+    let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
+    browser.user_config.preview_directory_expand_levels = 2;
+    browser.preview = Some(PreviewState::Loading(root.clone()));
+    drop(browser.accept_preview(
+        root.clone(),
+        Ok(directory_preview_content(
+            &root,
+            &[("src", FileKind::Directory)],
+        )),
+    ));
+
+    drop(browser.accept_preview_directory_children(
+        src_dir.clone(),
+        Ok(vec![
+            directory_entry_at(&src_dir.join("app")),
+            file_entry_at(&src_dir.join("main.rs")),
+        ]),
+    ));
+    let entries = ready_directory_entries(&browser);
+    let nested = entries
+        .iter()
+        .find(|entry| entry.name == "app")
+        .expect("nested entry");
+    assert!(nested.is_expanded);
+
+    browser.user_config.preview_directory_expand_levels = 1;
+    drop(browser.accept_preview_directory_children(
+        src_dir.join("app"),
+        Ok(vec![directory_entry_at(&src_dir.join("app").join("deep"))]),
+    ));
+    let entries = ready_directory_entries(&browser);
+    let deep = entries
+        .iter()
+        .find(|entry| entry.name == "deep")
+        .expect("deep entry");
+    assert!(!deep.is_expanded);
+}

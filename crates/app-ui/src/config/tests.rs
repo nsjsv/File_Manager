@@ -49,7 +49,10 @@ network_connections = [
 
     assert_eq!(parsed.thumbnail_cache_dir, PathBuf::from("/tmp/thumbnails"));
     assert!(parsed.network_list_thumbnail_downloads_enabled);
-    assert_eq!(parsed.max_preview_file_bytes, 4 * 1024 * 1024);
+    assert_eq!(
+        parsed.preview_size_limits,
+        PreviewFileSizeLimits::from_legacy_global_bytes(4 * 1024 * 1024)
+    );
     assert!(parsed.show_hidden_files);
     assert_eq!(parsed.language_setting, UiLanguageSetting::System);
     assert_eq!(parsed.sidebar_width, 260.5);
@@ -236,7 +239,9 @@ fn user_preferences_round_trip_through_sqlite() {
     config.terminal_emulator = TerminalEmulator::Ghostty;
     config.file_operation_verification = FileOperationVerification::Strong;
     config.network_list_thumbnail_downloads_enabled = true;
-    config.max_preview_file_bytes = 8 * 1024 * 1024;
+    config
+        .preview_size_limits
+        .set_limit(crate::config::PreviewFileSizeKind::Video, 8 * 1024 * 1024);
     config.search_history.record_submission("report");
     config.search_history.record_submission("images");
     let mut shortcut_table = toml::Table::new();
@@ -306,7 +311,7 @@ fn user_preferences_round_trip_through_sqlite() {
         FileOperationVerification::Strong
     );
     assert!(loaded.network_list_thumbnail_downloads_enabled);
-    assert_eq!(loaded.max_preview_file_bytes, 8 * 1024 * 1024);
+    assert_eq!(loaded.preview_size_limits.video_bytes, 8 * 1024 * 1024);
     assert_eq!(loaded.search_history.entries(), ["images", "report"]);
     assert_eq!(
         loaded
@@ -622,10 +627,7 @@ save_view_state = "maybe"
         parsed.network_list_thumbnail_downloads_enabled,
         default.network_list_thumbnail_downloads_enabled
     );
-    assert_eq!(
-        parsed.max_preview_file_bytes,
-        default.max_preview_file_bytes
-    );
+    assert_eq!(parsed.preview_size_limits, default.preview_size_limits);
     assert_eq!(parsed.sidebar_width, default.sidebar_width);
     assert_eq!(parsed.terminal_emulator, default.terminal_emulator);
     assert_eq!(
@@ -658,8 +660,17 @@ fn default_user_config_keeps_expected_preview_defaults() {
     let config = default_user_config();
 
     assert!(!config.network_list_thumbnail_downloads_enabled);
-    assert_eq!(DEFAULT_MAX_PREVIEW_FILE_BYTES, 25 * 1024 * 1024);
-    assert_eq!(config.max_preview_file_bytes, 25 * 1024 * 1024);
+    assert_eq!(
+        config.preview_size_limits,
+        PreviewFileSizeLimits::with_default_limits()
+    );
+    assert_eq!(config.preview_size_limits.text_bytes, 25 * 1024 * 1024);
+    assert_eq!(config.preview_size_limits.image_bytes, 100 * 1024 * 1024);
+    assert_eq!(config.preview_size_limits.video_bytes, 1024 * 1024 * 1024);
+    assert_eq!(config.preview_size_limits.audio_bytes, 200 * 1024 * 1024);
+    assert_eq!(config.preview_size_limits.archive_bytes, 25 * 1024 * 1024);
+    assert_eq!(config.preview_size_limits.document_bytes, 100 * 1024 * 1024);
+    assert_eq!(config.preview_directory_expand_levels, 1);
     assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
     assert_eq!(config.icon_grid_size, DEFAULT_ICON_GRID_SIZE);
     assert!(!config.save_view_state);
@@ -740,4 +751,22 @@ fn defaults_to_display_gpu_preference() {
         default_user_config().rendering_gpu_preference,
         RenderingGpuPreference::DisplayGpu
     );
+}
+
+#[test]
+fn per_kind_preview_limits_override_legacy_global_value() {
+    let parsed = legacy_toml::parse_toml_user_config(
+        r#"
+max_preview_file_bytes = 4194304
+max_preview_text_bytes = 1048576
+max_preview_video_bytes = 0
+preview_directory_expand_levels = 3
+"#,
+        default_user_config(),
+    );
+
+    assert_eq!(parsed.preview_size_limits.text_bytes, 1024 * 1024);
+    assert_eq!(parsed.preview_size_limits.video_bytes, 0);
+    assert_eq!(parsed.preview_size_limits.image_bytes, 4 * 1024 * 1024);
+    assert_eq!(parsed.preview_directory_expand_levels, 3);
 }

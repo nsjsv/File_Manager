@@ -67,7 +67,7 @@ fn load_original_image_preview_blocking(
     let bytes = std::fs::read(path)
         .map_err(|error| format!("could not read original image {path:?}: {error}"))?;
     let byte_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if byte_len > max_file_bytes {
+    if max_file_bytes != 0 && byte_len > max_file_bytes {
         return Err(preview_file_size_error(path, byte_len, max_file_bytes));
     }
     if cancellation.is_cancelled() {
@@ -206,6 +206,9 @@ fn original_image_preview_cancelled(path: &Path) -> String {
 }
 
 fn ensure_preview_file_size(path: &Path, max_file_bytes: u64) -> Result<(), String> {
+    if max_file_bytes == 0 {
+        return Ok(());
+    }
     let byte_len = std::fs::metadata(path)
         .map_err(|error| format!("could not inspect original image {path:?}: {error}"))?
         .len();

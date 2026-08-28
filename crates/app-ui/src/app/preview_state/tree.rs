@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use file_core::{DirectoryEntry, ScanOptions};
 use iced::Task;
@@ -34,16 +37,26 @@ impl FileBrowser {
         parent_path: PathBuf,
         children_outcome: Result<Vec<DirectoryEntry>, String>,
     ) -> Task<Message> {
+        let options = self.options.clone();
+        let expand_levels = self.preview_directory_expand_levels();
         let Some(entries) = directory_preview_entries_mut(self.preview.as_mut()) else {
             return Task::none();
         };
-        match children_outcome {
+        let inserted_range = match children_outcome {
             Ok(children) => {
                 accept_loaded_preview_directory_children(entries, &parent_path, children)
             }
-            Err(error) => accept_preview_directory_children_error(entries, &parent_path, error),
+            Err(error) => {
+                accept_preview_directory_children_error(entries, &parent_path, error);
+                None
+            }
+        };
+        match inserted_range {
+            Some(range) => {
+                auto_expand_preview_tree_directories(entries, range, expand_levels, &options)
+            }
+            None => Task::none(),
         }
-        Task::none()
     }
 
     pub(in crate::app) fn preview_tree_animation_is_active(&self) -> bool {
@@ -133,15 +146,13 @@ fn accept_loaded_preview_directory_children(
     entries: &mut Vec<PreviewTreeEntry>,
     parent_path: &Path,
     children: Vec<DirectoryEntry>,
-) {
-    let Some(parent_id) = preview_tree_entry_index_for_path(entries, parent_path) else {
-        return;
-    };
+) -> Option<Range<usize>> {
+    let parent_id = preview_tree_entry_index_for_path(entries, parent_path)?;
     if !matches!(
         entries[parent_id].directory_children.as_ref(),
         Some(PreviewTreeDirectoryChildren::Loading)
     ) {
-        return;
+        return None;
     }
 
     let insert_at = preview_tree_subtree_end(entries, parent_id);
@@ -163,6 +174,38 @@ fn accept_loaded_preview_directory_children(
     entries.splice(insert_at..insert_at, child_entries);
     entries[parent_id].directory_children = Some(PreviewTreeDirectoryChildren::Loaded);
     renumber_preview_tree_entries(entries);
+    Some(insert_at..insert_at + child_count)
+}
+
+/// 把新插入的目录按配置的预览展开层数自动展开，
+/// 只作用于 `range` 内的节点，不覆盖用户手动收起的其他目录。
+pub(super) fn auto_expand_preview_tree_directories(
+    entries: &mut [PreviewTreeEntry],
+    range: Range<usize>,
+    expand_levels: u8,
+    options: &ScanOptions,
+) -> Task<Message> {
+    if expand_levels == 0 {
+        return Task::none();
+    }
+    let levels = expand_levels as usize;
+    let commands = entries
+        .iter_mut()
+        .enumerate()
+        .filter(|(index, entry)| {
+            range.contains(index) && entry.is_directory() && entry.depth < levels
+        })
+        .filter_map(|(_index, entry)| {
+            if entry.is_expanded || !directory_children_can_load(entry) {
+                return None;
+            }
+            entry.is_expanded = true;
+            let path = entry.filesystem_path.clone()?;
+            entry.directory_children = Some(PreviewTreeDirectoryChildren::Loading);
+            Some(preview_directory_children_command(path, options.clone()))
+        })
+        .collect::<Vec<_>>();
+    Task::batch(commands)
 }
 
 fn accept_preview_directory_children_error(
