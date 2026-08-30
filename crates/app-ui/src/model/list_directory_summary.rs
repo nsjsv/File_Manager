@@ -186,6 +186,17 @@ impl ListDirectorySummaryCache {
             self.invalidate_path(&affected_path);
         }
     }
+
+    // 按存活根裁剪：仅保留等于或在任一存活根之下的键（按路径段比较），
+    // 其余整键删除。这是该缓存的内存上界机制，防止键集合随浏览过的
+    // 目录数量无限增长；被裁剪的键下次需要时照常重新发起请求。
+    pub(crate) fn retain_roots(&mut self, roots: &[PathBuf]) {
+        self.entries.retain(|key, _| {
+            roots
+                .iter()
+                .any(|root| key == root || key.starts_with(root))
+        });
+    }
 }
 
 #[cfg(test)]
@@ -338,5 +349,31 @@ mod tests {
         assert_eq!(summary.direct_child_count, 4);
         assert_eq!(summary.recursive_total_size_bytes, None);
         assert!(cache.start_request(path, true).is_none());
+    }
+
+    #[test]
+    fn retain_roots_keeps_only_keys_under_live_roots() {
+        let mut cache = ListDirectorySummaryCache::default();
+        let home = PathBuf::from("/home");
+        let home_child = PathBuf::from("/home/projects");
+        let live = PathBuf::from("/a/b");
+        let live_child = PathBuf::from("/a/b/c");
+        let prefix_collision = PathBuf::from("/a/bc");
+        for path in [&home, &home_child, &live, &live_child, &prefix_collision] {
+            cache.remember_direct_child_count(path.clone(), 1);
+        }
+
+        cache.retain_roots(&[live.clone()]);
+
+        assert!(cache.summary_for_path(&live).is_some());
+        assert!(cache.summary_for_path(&live_child).is_some());
+        // /a/bc 不是 /a/b 之下：路径段前缀不得误留。
+        assert!(cache.summary_for_path(&prefix_collision).is_none());
+        assert!(cache.summary_for_path(&home).is_none());
+        assert!(cache.summary_for_path(&home_child).is_none());
+
+        // 空存活集清空全部键，缓存回到空态。
+        cache.retain_roots(&[]);
+        assert!(cache.summary_for_path(&live).is_none());
     }
 }

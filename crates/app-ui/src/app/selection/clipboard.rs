@@ -10,9 +10,12 @@ use crate::app::FileBrowser;
 use crate::commands::{
     create_clipboard_file_command, read_desktop_clipboard_command, write_file_clipboard_command,
 };
+use crate::file_drag_hit_test_bounds::{
+    file_drag_hit_test_bounds_command, FileDragHitTestBoundsRequest,
+};
 use crate::model::{
-    ContextMenuState, DestructiveActionConfirmation, FileDropPrompt, Message, PendingOperation,
-    TransferConflictMode,
+    BrowserViewMode, ContextMenuState, DestructiveActionConfirmation, FileDragHitTestBounds,
+    FileDropPrompt, Message, PendingOperation, TransferConflictMode,
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
@@ -193,9 +196,32 @@ impl FileBrowser {
             self.context_menu = None;
             return Task::none();
         }
+        if self.context_menu.is_none() && self.view_mode == BrowserViewMode::Columns {
+            // 悬停缓存会在布局静止位移时过期;多栏粘贴改为按实测栏几何解析指针位置。
+            self.context_menu = None;
+            return file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::PasteTarget);
+        }
         let paste_directory = self.paste_target_directory();
         self.context_menu = None;
         read_desktop_clipboard_command(paste_directory, self.pending_operation.clone())
+    }
+
+    pub(in crate::app) fn accept_paste_target_measured(
+        &mut self,
+        bounds: FileDragHitTestBounds,
+    ) -> Task<Message> {
+        let paste_directory = self.paste_directory_at_cursor(&bounds);
+        read_desktop_clipboard_command(paste_directory, self.pending_operation.clone())
+    }
+
+    fn paste_directory_at_cursor(&self, bounds: &FileDragHitTestBounds) -> PathBuf {
+        bounds
+            .directory_targets
+            .iter()
+            .rev()
+            .find(|target| target.bounds.contains(self.cursor_position))
+            .map(|target| target.directory.clone())
+            .unwrap_or_else(|| self.current_dir.clone())
     }
 
     pub(in crate::app) fn accept_file_clipboard_write(
@@ -619,5 +645,60 @@ mod tests {
             browser.current_error(),
             Some("Delete local and remote items separately so local files can use Trash")
         );
+    }
+
+    #[test]
+    fn paste_directory_at_cursor_hits_rendered_column_bounds() {
+        let mut browser = browser_with_entries(&[PathBuf::from("/workspace/a.txt")]);
+        let column_bounds = FileDragHitTestBounds {
+            tabs: Vec::new(),
+            entries: Vec::new(),
+            breadcrumbs: Vec::new(),
+            directory_targets: vec![crate::model::DirectoryFileDragTargetBounds {
+                pane_id: crate::model::BrowserPaneId(0),
+                directory: PathBuf::from("/workspace/project"),
+                bounds: iced::Rectangle::new(
+                    iced::Point::new(0.0, 0.0),
+                    iced::Size::new(200.0, 600.0),
+                ),
+            }],
+            blocked_directories: Vec::new(),
+            sidebar_directories: Vec::new(),
+            empty_sidebar_bookmarks: None,
+        };
+
+        browser.cursor_position = iced::Point::new(150.0, 300.0);
+        assert_eq!(
+            browser.paste_directory_at_cursor(&column_bounds),
+            PathBuf::from("/workspace/project")
+        );
+    }
+
+    #[test]
+    fn paste_directory_at_cursor_falls_back_to_current_dir_on_miss() {
+        let mut browser = browser_with_entries(&[PathBuf::from("/workspace/a.txt")]);
+        let column_bounds = FileDragHitTestBounds {
+            tabs: Vec::new(),
+            entries: Vec::new(),
+            breadcrumbs: Vec::new(),
+            directory_targets: vec![crate::model::DirectoryFileDragTargetBounds {
+                pane_id: crate::model::BrowserPaneId(0),
+                directory: PathBuf::from("/workspace/project"),
+                bounds: iced::Rectangle::new(
+                    iced::Point::new(0.0, 0.0),
+                    iced::Size::new(200.0, 600.0),
+                ),
+            }],
+            blocked_directories: Vec::new(),
+            sidebar_directories: Vec::new(),
+            empty_sidebar_bookmarks: None,
+        };
+        let fallback = browser.current_dir.clone();
+
+        browser.cursor_position = iced::Point::new(500.0, 300.0);
+        assert_eq!(browser.paste_directory_at_cursor(&column_bounds), fallback);
+
+        browser.cursor_position = iced::Point::new(-10.0, 300.0);
+        assert_eq!(browser.paste_directory_at_cursor(&column_bounds), fallback);
     }
 }

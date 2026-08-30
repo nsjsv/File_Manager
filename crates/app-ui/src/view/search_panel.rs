@@ -23,7 +23,7 @@ use crate::icons::IconSymbol;
 use crate::model::search::SearchFilterPresetState;
 use crate::model::{
     Message, ScrollbarRegion, SearchDateField, SearchDatePreset, SearchDirectoryScope,
-    SearchEntryTypePreset, SearchResultCompletion,
+    SearchEntryTypePreset, SearchResultCompletion, SEARCH_RESULT_TOTAL_LIMIT,
 };
 use crate::typography::{localized_text, readable_text};
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport};
@@ -278,6 +278,12 @@ pub(super) fn search_results_view(browser: &FileBrowser) -> Element<'_, Message>
     if !workspace.window.is_loading {
         if let Some(completion) = workspace.window.completion {
             rows = rows.push(search_completion_message(completion));
+        }
+        if workspace.window.truncated {
+            rows = rows.push(search_message(format!(
+                "Result limit reached ({}); the oldest results were dropped. Narrow the search to see more.",
+                SEARCH_RESULT_TOTAL_LIMIT
+            )));
         }
     }
 

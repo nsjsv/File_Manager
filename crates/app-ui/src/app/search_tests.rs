@@ -569,9 +569,32 @@ fn unavailable_frozen_root_cancels_the_run_without_switching_scope() {
         .replace_input("later".to_owned());
     drop(browser.accept_search_input_stabilization(request));
 
+    {
+        let workspace = browser.search_workspace.as_ref().unwrap();
+        assert_eq!(workspace.root.path(), root);
+        assert!(workspace.run.generation > first_generation);
+        // 根目录校验已移入后台：查询此时处于待校验状态而非直接失败。
+        assert!(workspace.run.active_query.is_some());
+    }
+
+    // 以与消息处理器相同的入口注入“根不可用”的校验结果。
+    let request = pending_indexed_request(&browser);
+    let query = browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .active_query
+        .clone()
+        .expect("active query");
+    drop(browser.accept_search_scope_root_validation(
+        request,
+        query,
+        tokio_util::sync::CancellationToken::new(),
+        false,
+    ));
+
     let workspace = browser.search_workspace.as_ref().unwrap();
-    assert_eq!(workspace.root.path(), root);
-    assert!(workspace.run.generation > first_generation);
     assert!(workspace.run.active_query.is_none());
     assert!(workspace.window.hits.is_empty());
     assert!(workspace

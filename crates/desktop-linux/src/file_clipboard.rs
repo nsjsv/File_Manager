@@ -10,6 +10,7 @@ use wl_clipboard_rs::copy::{MimeSource, MimeType, Options as ClipboardOptions, S
 
 pub const GNOME_COPIED_FILES_MIME: &str = "x-special/gnome-copied-files";
 pub const URI_LIST_MIME: &str = "text/uri-list";
+const PLAIN_TEXT_MIME: &str = "text/plain;charset=utf-8";
 
 const IMAGE_MIME_EXTENSIONS: [(&str, &str); 5] = [
     ("image/png", "png"),
@@ -19,7 +20,7 @@ const IMAGE_MIME_EXTENSIONS: [(&str, &str); 5] = [
     ("image/tiff", "tiff"),
 ];
 const TEXT_MIME_CANDIDATES: [&str; 5] = [
-    "text/plain;charset=utf-8",
+    PLAIN_TEXT_MIME,
     "text/plain",
     "UTF8_STRING",
     "TEXT",
@@ -130,8 +131,14 @@ pub async fn write_file_clipboard(
 }
 
 fn file_clipboard_mime_sources(selection: &FileClipboardSelection) -> Vec<MimeSource> {
-    // URI 数据作为文本回退，终端请求 text/plain 时也能收到文件路径。
+    // wl-clipboard-rs 会把第一个文本类源的 payload 自动补挂到其余 text MIME；
+    // 明文路径源必须排第一，终端粘贴 text 目标才能拿到解码路径，
+    // 而 uri-list 保留百分号编码供文件管理器互操作。
     vec![
+        MimeSource {
+            mime_type: MimeType::Specific(PLAIN_TEXT_MIME.to_owned()),
+            source: Source::Bytes(serialize_plain_paths(&selection.paths).into_bytes().into()),
+        },
         MimeSource {
             mime_type: MimeType::Specific(URI_LIST_MIME.to_owned()),
             source: Source::Bytes(
@@ -287,6 +294,16 @@ pub fn serialize_file_uri_list(paths: &[PathBuf]) -> String {
     paths
         .iter()
         .map(|path| file_uri(path))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// text/plain 是文本 MIME，非 UTF-8 文件名按 lossy 处理；
+/// 字节级精确表示由百分号编码的 `text/uri-list` 承担。
+fn serialize_plain_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.to_string_lossy())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -515,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn file_clipboard_offers_uri_list_and_gnome_payloads() {
+    fn file_clipboard_offers_plain_uri_and_gnome_payloads() {
         let selection = FileClipboardSelection::new(
             FileClipboardOperation::Move,
             vec![PathBuf::from("/tmp/a b")],
@@ -523,23 +540,43 @@ mod tests {
 
         let sources = file_clipboard_mime_sources(&selection);
 
-        assert_eq!(sources.len(), 2);
+        assert_eq!(sources.len(), 3);
         assert_eq!(
             sources[0].mime_type,
-            MimeType::Specific(URI_LIST_MIME.to_owned())
+            MimeType::Specific(PLAIN_TEXT_MIME.to_owned())
         );
         assert_eq!(
             sources[1].mime_type,
+            MimeType::Specific(URI_LIST_MIME.to_owned())
+        );
+        assert_eq!(
+            sources[2].mime_type,
             MimeType::Specific(GNOME_COPIED_FILES_MIME.to_owned())
         );
         assert!(matches!(
             &sources[0].source,
-            Source::Bytes(bytes) if bytes.as_ref() == b"file:///tmp/a%20b"
+            Source::Bytes(bytes) if bytes.as_ref() == b"/tmp/a b"
         ));
         assert!(matches!(
             &sources[1].source,
+            Source::Bytes(bytes) if bytes.as_ref() == b"file:///tmp/a%20b"
+        ));
+        assert!(matches!(
+            &sources[2].source,
             Source::Bytes(bytes) if bytes.as_ref() == b"cut\nfile:///tmp/a%20b"
         ));
+    }
+
+    #[test]
+    fn plain_paths_join_with_lossy_decoding() {
+        let paths = vec![
+            PathBuf::from("/tmp/a b"),
+            PathBuf::from(OsString::from_vec(b"/tmp/non-utf8-\xFF".to_vec())),
+        ];
+
+        let payload = serialize_plain_paths(&paths);
+
+        assert_eq!(payload, "/tmp/a b\n/tmp/non-utf8-\u{FFFD}");
     }
 
     #[tokio::test]
@@ -554,9 +591,7 @@ mod tests {
 
         let mime_types = read_clipboard_mime_types().await.unwrap().unwrap();
         assert!(mime_types.iter().any(|mime| mime == "text/plain"));
-        assert!(mime_types
-            .iter()
-            .any(|mime| mime == "text/plain;charset=utf-8"));
+        assert!(mime_types.iter().any(|mime| mime == PLAIN_TEXT_MIME));
         assert!(mime_types.iter().any(|mime| mime == "UTF8_STRING"));
         assert!(mime_types.iter().any(|mime| mime == "TEXT"));
         assert!(mime_types.iter().any(|mime| mime == "STRING"));
@@ -565,8 +600,12 @@ mod tests {
             .iter()
             .any(|mime| mime == GNOME_COPIED_FILES_MIME));
         assert_eq!(
+            read_clipboard_text_payload(PLAIN_TEXT_MIME).await.unwrap(),
+            "/tmp/clipboard file"
+        );
+        assert_eq!(
             read_clipboard_text_payload("text/plain").await.unwrap(),
-            "file:///tmp/clipboard%20file"
+            "/tmp/clipboard file"
         );
         assert_eq!(
             read_clipboard_text_payload(URI_LIST_MIME).await.unwrap(),

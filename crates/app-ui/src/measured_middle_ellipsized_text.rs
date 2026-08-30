@@ -146,8 +146,8 @@ impl<Font: PartialEq> MeasuredTextLayoutKey<Font> {
         align_x: text::Alignment,
         ellipsis_kind: MiddleEllipsisKind,
     ) -> bool {
-        self.content == content
-            && self.bounds == bounds
+        // 先比廉价标量字段，最后才比较整段字符串：尺寸未变时零字符串比较开销。
+        self.bounds == bounds
             && self.size == size
             && self.line_height == line_height
             && self.font == font
@@ -155,6 +155,7 @@ impl<Font: PartialEq> MeasuredTextLayoutKey<Font> {
             && self.wrapping == wrapping
             && self.align_x == align_x
             && self.ellipsis_kind == ellipsis_kind
+            && self.content == content
     }
 }
 
@@ -402,8 +403,6 @@ fn fit_middle_ellipsized_by(
 
     best
 }
-
-#[allow(clippy::too_many_arguments)]
 fn measured_text_fits<Renderer>(
     content: &str,
     available_width: f32,

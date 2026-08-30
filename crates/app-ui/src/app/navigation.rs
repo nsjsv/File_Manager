@@ -12,10 +12,10 @@ use crate::commands::{
 };
 use crate::model::{
     empty_directory_entry_snapshot, trash_location_path, BrowserPaneId, BrowserViewMode,
-    DirectoryCollectionPhase, DirectoryExpansionLoadContext, DirectoryLoadRequest,
-    DirectoryLoadingPlaceholder, DirectoryLoadingPlaceholderEntry, DirectoryOrderPhase,
-    ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, Message,
-    NavigationMode,
+    DirectoryCollectionPhase, DirectoryEntrySnapshot, DirectoryExpansionLoadContext,
+    DirectoryLoadRequest, DirectoryLoadingPlaceholder, DirectoryLoadingPlaceholderEntry,
+    DirectoryOrderPhase, ExpandedDirectory, ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus,
+    Message, NavigationMode,
 };
 use crate::startup_trace;
 impl FileBrowser {
@@ -151,6 +151,8 @@ impl FileBrowser {
             return Task::none();
         }
         Arc::make_mut(&mut self.entries).extend(entries);
+        // 原地扩展可能在共享指针内变更内容：主列表条目索引在此失效。
+        self.entry_index = None;
         self.directory_loading_placeholder = None;
         Task::none()
     }
@@ -158,11 +160,16 @@ impl FileBrowser {
     pub(super) fn accept_directory_discovery(
         &mut self,
         request: DirectoryLoadRequest,
-        discovery: DirectoryDiscovery,
+        prebuilt: crate::model::PrebuiltDirectoryDiscovery,
     ) -> Task<Message> {
-        let path = discovery.path.clone();
-        let entries = Arc::new(display_entries_in_discovery_order(&discovery));
-        self.accept_authoritative_directory_entries(request, path, entries, Some(discovery))
+        let path = prebuilt.discovery.path.clone();
+        let entries = prebuilt.display_entries;
+        self.accept_authoritative_directory_entries(
+            request,
+            path,
+            entries,
+            Some(prebuilt.discovery),
+        )
     }
 
     #[cfg(test)]
@@ -236,7 +243,7 @@ impl FileBrowser {
 
         self.reconcile_icon_grid_root_after_scan(&entries);
         self.current_dir = path;
-        self.entries = entries;
+        self.set_entries(entries);
         self.directory_discovery = discovery;
         if self.view_mode == crate::model::BrowserViewMode::Icons {
             self.retain_icon_grid_visible_selection();
@@ -275,7 +282,7 @@ impl FileBrowser {
         self.clear_icon_grid_expansion();
         self.current_dir = path.clone();
         self.is_trash_view = false;
-        self.entries = empty_directory_entry_snapshot();
+        self.set_entries(empty_directory_entry_snapshot());
         self.directory_loading_placeholder = loading_placeholder;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;
@@ -289,6 +296,8 @@ impl FileBrowser {
         self.sync_active_tab_state();
         let request = self.next_directory_load_request(path);
         let cancellation = self.directory_load_cancellation(&request);
+        // 目录已切换：按新存活树裁剪摘要缓存（内存上界机制）。
+        self.prune_list_directory_summaries_to_live_roots();
         Task::batch([
             cancel_address_editing,
             load_directory_command(request, self.options.clone(), cancellation),
@@ -319,12 +328,13 @@ impl FileBrowser {
         self.is_trash_view = true;
         let has_cached_entries = cached_entries.is_some();
         self.trash_entries = cached_entries.unwrap_or_default();
-        self.entries = self
-            .trash_entries
-            .iter()
-            .map(|trash_entry| trash_entry.entry.clone())
-            .collect::<Vec<_>>()
-            .into();
+        self.set_entries(
+            self.trash_entries
+                .iter()
+                .map(|trash_entry| trash_entry.entry.clone())
+                .collect::<Vec<_>>()
+                .into(),
+        );
         self.directory_discovery = None;
         self.directory_loading_placeholder = loading_placeholder;
         self.deepest_open_column_directory = None;
@@ -386,6 +396,7 @@ impl FileBrowser {
             self.deepest_open_column_directory = None;
             self.cancel_active_expanded_directory_loads();
             self.expanded_directories.clear();
+            self.prune_list_directory_summaries_to_live_roots();
             return self.request_trash_snapshot_refresh();
         }
 
@@ -476,6 +487,7 @@ impl FileBrowser {
             }
             pane.expanded_directories.clear();
             pane.sync_active_tab_state();
+            self.prune_list_directory_summaries_to_live_roots();
             return self.request_trash_snapshot_refresh();
         }
 
@@ -588,7 +600,42 @@ impl FileBrowser {
         }
     }
 
+    // 主列表条目统一写入边界：任何整体替换都必须经过这里，
+    // 使 hover 热路径的条目索引随之失效（内存/正确性不变量）。
+    pub(super) fn set_entries(&mut self, entries: DirectoryEntrySnapshot) {
+        self.entries = entries;
+        self.entry_index = None;
+    }
+
+    // hover 热路径的 O(1) 查找前提：按需惰性重建索引（导航级一次 O(n)）。
+    pub(super) fn refresh_entry_index(&mut self) {
+        let already_valid = self
+            .entry_index
+            .as_ref()
+            .is_some_and(|(entries, _)| std::sync::Arc::ptr_eq(entries, &self.entries));
+        if already_valid {
+            return;
+        }
+        let index = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(position, entry)| (entry.path.clone(), position))
+            .collect();
+        self.entry_index = Some((std::sync::Arc::clone(&self.entries), index));
+    }
+
     pub(crate) fn entry_for_path(&self, path: &Path) -> Option<&DirectoryEntry> {
+        if let Some((snapshot, index)) = &self.entry_index {
+            if std::sync::Arc::ptr_eq(snapshot, &self.entries) {
+                if let Some(position) = index.get(path) {
+                    if let Some(entry) = self.entries.get(*position) {
+                        return Some(entry);
+                    }
+                }
+            }
+        }
+        // 索引过期或未命中主列表时退回线性查找，保证语义不变。
         self.entries
             .iter()
             .find(|entry| entry.path == path)
@@ -774,20 +821,6 @@ fn directory_load_request_matches_pane(
     request.generation == generation && request.path.as_path() == current_dir
 }
 
-pub(super) fn display_entries_in_discovery_order(
-    discovery: &DirectoryDiscovery,
-) -> Vec<DirectoryEntry> {
-    discovery
-        .order
-        .iter()
-        .map(|index| {
-            discovery.entries[*index]
-                .display_entry()
-                .with_discovery_index(*index)
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use file_core::{
@@ -828,7 +861,10 @@ mod tests {
             .expect("active tab");
         assert!(active_tab.entries.is_empty());
 
-        drop(browser.accept_directory_discovery(request, discovery));
+        drop(browser.accept_directory_discovery(
+            request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
 
         assert_eq!(browser.entries.len(), 300);
         assert!(browser.entries.iter().all(|entry| {

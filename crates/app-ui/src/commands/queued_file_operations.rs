@@ -39,7 +39,7 @@ use crate::operation_queue::{
 use super::batch_rename_operation::run_queued_batch_rename;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
-const BYTE_PROGRESS_UI_INTERVAL: Duration = Duration::from_millis(100);
+const BYTE_PROGRESS_UI_INTERVAL: Duration = crate::ui_pacing::PROGRESS_UI_INTERVAL;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DurableDirectMoveCommit {

@@ -135,10 +135,7 @@ fn open_committed_database(database_path: &Path) -> SearchResult<Connection> {
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     super::configure_writer_connection(&connection)?;
-    let database = SearchDatabase {
-        connection,
-        backing_path: Some(database_path.to_path_buf()),
-    };
+    let database = SearchDatabase { connection };
     database.initialize()?;
     Ok(database.connection)
 }
@@ -199,10 +196,7 @@ fn build_replacement_database(
         &fulltext_evidence.probe_terms,
     )?;
 
-    let target_database = SearchDatabase {
-        connection: target,
-        backing_path: Some(workspace.replacement_path.clone()),
-    };
+    let target_database = SearchDatabase { connection: target };
     target_database.recover_legacy_tombstones_once()?;
     verify_search_storage_schema(&target_database.connection)?;
     let quick_check = target_database

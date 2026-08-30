@@ -58,8 +58,8 @@ impl FileBrowser {
             Message::DirectoryDiscoveryBatch(request, batch) => {
                 self.accept_directory_discovery_batch(request, batch)
             }
-            Message::DirectoryEntriesReady(request, Ok(discovery)) => {
-                self.accept_directory_discovery(request, discovery)
+            Message::DirectoryEntriesReady(request, Ok(prebuilt)) => {
+                self.accept_directory_discovery(request, prebuilt)
             }
             Message::DirectoryEntriesReady(request, Err(failure)) => {
                 self.accept_directory_load_failure(request, failure)
@@ -476,6 +476,7 @@ impl FileBrowser {
             Message::FileDropLayoutMeasured(request, bounds) => {
                 self.accept_drop_layout(request, bounds)
             }
+            Message::PasteTargetMeasured(bounds) => self.accept_paste_target_measured(bounds),
             Message::PaneCursorEntered(pane_id) => {
                 self.hovered_pane_id = Some(pane_id);
                 Task::none()
@@ -646,6 +647,14 @@ impl FileBrowser {
             Message::SearchWorkspaceClosed => self.close_search_workspace(),
             Message::SearchResultsLoaded(request, outcome) => {
                 self.accept_search_results(request, outcome)
+            }
+            Message::SearchScopeRootValidated(request, query, cancellation, root_is_available) => {
+                self.accept_search_scope_root_validation(
+                    request,
+                    query,
+                    cancellation,
+                    root_is_available,
+                )
             }
             Message::SearchDirectoryBatchLoaded(generation, hits) => {
                 self.accept_directory_search_batch(generation, hits)

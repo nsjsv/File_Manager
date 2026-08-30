@@ -74,6 +74,7 @@ mod text_preview_viewer;
 mod three_column_view;
 mod thumbnail_cache;
 mod typography;
+mod ui_pacing;
 mod video_preview;
 mod view;
 mod virtual_range;

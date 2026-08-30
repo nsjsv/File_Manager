@@ -21,12 +21,7 @@ impl DirectoryWatcher {
     pub async fn recv(&mut self) -> Option<DirectoryChange> {
         self.events.recv().await
     }
-
-    pub fn into_events(self) -> mpsc::UnboundedReceiver<DirectoryChange> {
-        self.events
-    }
 }
-
 pub fn watch_directory(
     path: impl AsRef<Path>,
     debounce: Duration,

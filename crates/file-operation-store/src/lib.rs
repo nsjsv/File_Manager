@@ -599,18 +599,6 @@ impl TaskQueueStore {
         Ok(())
     }
 
-    pub fn read_column_width(&self) -> StoreResult<Option<f64>> {
-        Ok(self.read_column_widths()?.remove(&0))
-    }
-
-    pub fn replace_column_width(&self, width: Option<f64>) -> StoreResult<()> {
-        let widths = width
-            .filter(|value| value.is_finite())
-            .map(|width| HashMap::from([(0, width)]))
-            .unwrap_or_default();
-        self.replace_column_widths(widths)
-    }
-
     pub fn read_column_widths(&self) -> StoreResult<HashMap<usize, f64>> {
         read_indexed_column_widths(&self.connection()?)
     }

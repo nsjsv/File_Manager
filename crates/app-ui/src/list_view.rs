@@ -66,8 +66,14 @@ pub(crate) fn list_browser_view<'a>(
     ) {
         if let Some(placeholder) = pane.directory_loading_placeholder {
             rows = rows.push(vertical_spacer(placeholder.before_height));
+            // 列配置每次渲染收集一次，避免每行每帧重复分配 Vec。
+            let visible_columns = list_visible_columns(browser);
             for placeholder_entry in &placeholder.entries {
-                rows = rows.push(list_placeholder_entry_row(browser, placeholder_entry));
+                rows = rows.push(list_placeholder_entry_row(
+                    browser,
+                    &visible_columns,
+                    placeholder_entry,
+                ));
                 if placeholder_entry.trailing_status_height > f32::EPSILON {
                     rows = rows.push(vertical_spacer(placeholder_entry.trailing_status_height));
                 }
@@ -113,6 +119,8 @@ pub(crate) fn list_browser_view<'a>(
         );
         let neighbor_offset = usize::from(range.start > 0);
         let rendered_count = range.end.saturating_sub(range.start);
+        // 列配置每次渲染收集一次，避免每行每帧重复分配 Vec。
+        let visible_columns = list_visible_columns(browser);
         for local_index in 0..rendered_count {
             let entry_index = local_index + neighbor_offset;
             let Some(visible_entry) = entries_with_neighbors.get(entry_index) else {
@@ -122,6 +130,7 @@ pub(crate) fn list_browser_view<'a>(
             rows = rows.push(list_entry_row(
                 browser,
                 pane,
+                &visible_columns,
                 visible_entry.entry,
                 visible_entry.depth,
                 row_index,
@@ -407,6 +416,7 @@ fn list_directory_status_row(
 fn list_entry_row<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    visible_columns: &[ListColumnConfig],
     entry: &DirectoryEntry,
     depth: usize,
     row_index: usize,
@@ -416,9 +426,16 @@ fn list_entry_row<'a>(
     let visual_state = FileEntryVisualState::from_entry_context(pane, &entry.path, false);
     let modifier = browser.file_entry_content_modifier(&entry.path);
     let icon_tone = visual_state.icon_tone();
-    let row_content = container(list_entry_cells(browser, pane, entry, depth, icon_tone))
-        .width(Length::Fill)
-        .style(visual_state.content_style(modifier));
+    let row_content = container(list_entry_cells(
+        browser,
+        pane,
+        visible_columns,
+        entry,
+        depth,
+        icon_tone,
+    ))
+    .width(Length::Fill)
+    .style(visual_state.content_style(modifier));
 
     let row_container = container(row_content)
         .padding(LIST_ROW_PADDING)
@@ -459,6 +476,7 @@ fn list_entry_row<'a>(
 
 fn list_placeholder_entry_row<'a>(
     browser: &'a FileBrowser,
+    visible_columns: &[ListColumnConfig],
     placeholder: &'a DirectoryLoadingPlaceholderEntry,
 ) -> Element<'a, Message> {
     let entry = &placeholder.entry;
@@ -467,6 +485,7 @@ fn list_placeholder_entry_row<'a>(
         browser,
         entry,
         placeholder.depth,
+        visible_columns,
     ))
     .width(Length::Fill)
     .style(FileEntryVisualState::Normal.content_style(modifier));
@@ -489,15 +508,13 @@ fn list_placeholder_entry_row<'a>(
 fn list_entry_cells<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    visible_columns: &[ListColumnConfig],
     entry: &DirectoryEntry,
     depth: usize,
     icon_tone: FileEntryIconTone,
 ) -> Row<'a, Message> {
-    let visible_columns = browser
-        .user_config()
-        .list_view_preferences
-        .visible_columns()
-        .collect::<Vec<_>>();
+    // 元数据解析每行一次，避免随列数重复查找。
+    let metadata = pane.metadata_for_entry(entry);
     let mut row_content = Row::new()
         .spacing(0)
         .align_y(Alignment::Center)
@@ -507,22 +524,27 @@ fn list_entry_cells<'a>(
             row_content = row_content.push(list_column_gap());
         }
         row_content = row_content.push(list_entry_cell(
-            browser, pane, entry, depth, icon_tone, column,
+            browser, pane, entry, depth, icon_tone, &metadata, column,
         ));
     }
     row_content.push(list_column_gap())
+}
+
+fn list_visible_columns(browser: &FileBrowser) -> Vec<ListColumnConfig> {
+    browser
+        .user_config()
+        .list_view_preferences
+        .visible_columns()
+        .cloned()
+        .collect()
 }
 
 fn list_placeholder_entry_cells<'a>(
     browser: &'a FileBrowser,
     entry: &DirectoryEntry,
     depth: usize,
+    visible_columns: &[ListColumnConfig],
 ) -> Row<'a, Message> {
-    let visible_columns = browser
-        .user_config()
-        .list_view_preferences
-        .visible_columns()
-        .collect::<Vec<_>>();
     let mut row_content = Row::new()
         .spacing(0)
         .align_y(Alignment::Center)
@@ -542,9 +564,9 @@ fn list_entry_cell<'a>(
     entry: &DirectoryEntry,
     depth: usize,
     icon_tone: FileEntryIconTone,
+    metadata: &EntryMetadata,
     column: &ListColumnConfig,
 ) -> Element<'a, Message> {
-    let metadata = pane.metadata_for_entry(entry);
     match column.kind {
         ListColumnKind::Name => {
             list_name_cell(browser, pane, entry, depth, icon_tone, column.width)
@@ -686,8 +708,21 @@ fn list_directory_toggle<'a>(
     .interaction(iced::mouse::Interaction::Pointer)
     .into()
 }
-
-fn text_cell(text: String, width: f32) -> Element<'static, Message> {
+fn kind_text(entry: &DirectoryEntry) -> std::borrow::Cow<'static, str> {
+    let kind = match entry.kind {
+        FileKind::Directory => "Folder",
+        FileKind::File => "File",
+        FileKind::Symlink if entry.is_broken_symlink => "Broken Link",
+        FileKind::Symlink => "Link",
+        FileKind::Other => "Other",
+    };
+    // 直接借用翻译结果：英文原文零分配，中文仅一次小分配。
+    crate::localization::translate(crate::localization::current_language(), kind)
+}
+fn text_cell(
+    text: impl crate::typography::ReadableTextContent,
+    width: f32,
+) -> Element<'static, Message> {
     container(readable_text(text).size(LIST_ROW_TEXT_SIZE))
         .width(list_column_width(width))
         .clip(true)
@@ -699,17 +734,6 @@ fn modified_text(metadata: &EntryMetadata) -> String {
         return "-".to_owned();
     }
     timestamp_text(metadata.modified)
-}
-
-fn kind_text(entry: &DirectoryEntry) -> String {
-    let kind = match entry.kind {
-        FileKind::Directory => "Folder",
-        FileKind::File => "File",
-        FileKind::Symlink if entry.is_broken_symlink => "Broken Link",
-        FileKind::Symlink => "Link",
-        FileKind::Other => "Other",
-    };
-    crate::localization::translate_current(kind)
 }
 
 fn owner_text(metadata: &EntryMetadata) -> String {

@@ -141,7 +141,7 @@ pub(crate) use search::{
     SearchHistoryInteraction, SearchInputFocus, SearchInputFocusCheckOrigin,
     SearchInputFocusCheckRequest, SearchInputStabilizationRequest, SearchInputStabilizationSubject,
     SearchKeyboardSelection, SearchResultCompletion, SearchSelectionGesture, SearchSelectionStep,
-    SearchWorkspaceSessionId, SearchWorkspaceState,
+    SearchWorkspaceSessionId, SearchWorkspaceState, SEARCH_RESULT_TOTAL_LIMIT,
 };
 mod search_service;
 pub(crate) use search_service::{
@@ -259,6 +259,38 @@ pub(crate) struct LoadedOperationStore {
 }
 
 #[derive(Debug, Clone)]
+// 权威目录发现 + 预构建显示条目：display 深拷贝在 discovery 命令任务内完成，
+// update 线程只做整体替换——目录提交路径不在 UI 线程逐条深拷贝。
+pub(crate) struct PrebuiltDirectoryDiscovery {
+    pub(crate) discovery: DirectoryDiscovery,
+    pub(crate) display_entries: std::sync::Arc<Vec<DirectoryEntry>>,
+}
+
+impl PrebuiltDirectoryDiscovery {
+    pub(crate) fn build(discovery: DirectoryDiscovery) -> Self {
+        let display_entries = std::sync::Arc::new(display_entries_in_discovery_order(&discovery));
+        Self {
+            discovery,
+            display_entries,
+        }
+    }
+}
+
+pub(crate) fn display_entries_in_discovery_order(
+    discovery: &DirectoryDiscovery,
+) -> Vec<DirectoryEntry> {
+    discovery
+        .order
+        .iter()
+        .map(|index| {
+            discovery.entries[*index]
+                .display_entry()
+                .with_discovery_index(*index)
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum Message {
     StartupEnvironmentLoaded(Box<StartupEnvironment>),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
@@ -280,7 +312,7 @@ pub(crate) enum Message {
     DirectoryDiscoveryBatch(DirectoryLoadRequest, DirectoryDiscoveryBatch),
     DirectoryEntriesReady(
         DirectoryLoadRequest,
-        Result<DirectoryDiscovery, DirectoryLoadFailure>,
+        Result<PrebuiltDirectoryDiscovery, DirectoryLoadFailure>,
     ),
     DirectoryMetadataResolved(
         DirectoryMetadataLoadRequest,
@@ -416,6 +448,7 @@ pub(crate) enum Message {
     ColumnEntryBoundsMeasured(Vec<ColumnEntryBounds>),
     BreadcrumbDropTargetBoundsMeasured(u64, Vec<BreadcrumbDropTargetBounds>),
     FileDropLayoutMeasured(FileDropLayoutRequest, FileDragHitTestBounds),
+    PasteTargetMeasured(FileDragHitTestBounds),
     PaneCursorEntered(BrowserPaneId),
     PaneCursorExited(BrowserPaneId),
     KeyboardModifiersChanged(keyboard::Modifiers),
@@ -489,6 +522,12 @@ pub(crate) enum Message {
     SearchKeywordCleared,
     SearchWorkspaceClosed,
     SearchResultsLoaded(IndexedSearchRequest, IndexedSearchOutcome),
+    SearchScopeRootValidated(
+        IndexedSearchRequest,
+        file_search::SearchQuery,
+        tokio_util::sync::CancellationToken,
+        bool,
+    ),
     SearchDirectoryBatchLoaded(u64, Vec<SearchHit>),
     SearchDirectoryFinished(u64, DirectoryFallbackOutcome),
     SearchResultPressed(PathBuf),
@@ -559,7 +598,7 @@ pub(crate) enum Message {
     ExpandedDirectoryDiscoveryBatch(ExpandedDirectoryLoadRequest, DirectoryDiscoveryBatch),
     ExpandedDirectoryEntriesReady(
         ExpandedDirectoryLoadRequest,
-        Result<DirectoryDiscovery, DirectoryLoadFailure>,
+        Result<PrebuiltDirectoryDiscovery, DirectoryLoadFailure>,
     ),
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,

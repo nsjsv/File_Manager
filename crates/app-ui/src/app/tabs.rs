@@ -205,7 +205,7 @@ impl FileBrowser {
         self.active_tab_id = tab.id;
         self.clear_column_interaction_context();
         self.is_trash_view = tab.is_trash_view;
-        self.entries = tab.entries;
+        self.set_entries(tab.entries);
         self.directory_discovery = tab.directory_discovery;
         self.directory_loading_placeholder = None;
         self.trash_entries = tab.trash_entries;
@@ -615,6 +615,8 @@ impl FileBrowser {
 
         self.sync_tab_bar_visibility();
         self.sync_active_pane_state();
+        // 标签关闭后存活树变化：裁剪摘要缓存（内存上界机制）。
+        self.prune_list_directory_summaries_to_live_roots();
     }
 
     fn shifted_tab_ids_for_reorder(

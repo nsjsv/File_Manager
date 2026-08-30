@@ -440,9 +440,7 @@ impl FileBrowser {
                 return Task::none();
             }
             discovery.order = Arc::new(sort_discovered_entry_indices(&discovery.entries, &options));
-            pane.entries = Arc::new(super::navigation::display_entries_in_discovery_order(
-                discovery,
-            ));
+            pane.entries = Arc::new(crate::model::display_entries_in_discovery_order(discovery));
             pane.directory_order_phase =
                 crate::model::DirectoryOrderPhase::Ready { field, direction };
             pane.sync_active_tab_state();
@@ -464,16 +462,17 @@ impl FileBrowser {
             sort_direction: direction,
             ..base_options
         };
-        let Some(discovery) = self.directory_discovery.as_mut() else {
-            return Task::none();
+        let display_entries = {
+            let Some(discovery) = self.directory_discovery.as_mut() else {
+                return Task::none();
+            };
+            if !discovered_sort_is_ready(&discovery.entries, &options) {
+                return Task::none();
+            }
+            discovery.order = Arc::new(sort_discovered_entry_indices(&discovery.entries, &options));
+            Arc::new(crate::model::display_entries_in_discovery_order(discovery))
         };
-        if !discovered_sort_is_ready(&discovery.entries, &options) {
-            return Task::none();
-        }
-        discovery.order = Arc::new(sort_discovered_entry_indices(&discovery.entries, &options));
-        self.entries = Arc::new(super::navigation::display_entries_in_discovery_order(
-            discovery,
-        ));
+        self.set_entries(display_entries);
         self.directory_order_phase = crate::model::DirectoryOrderPhase::Ready { field, direction };
         crate::startup_trace::mark_once("initial_directory_requested_sort_ready");
         crate::startup_trace::mark_once("initial_directory_ready");
@@ -540,7 +539,7 @@ fn commit_expanded_metadata_sort(
         return false;
     }
     discovery.order = Arc::new(sort_discovered_entry_indices(&discovery.entries, &options));
-    expanded.entries = super::navigation::display_entries_in_discovery_order(discovery);
+    expanded.entries = crate::model::display_entries_in_discovery_order(discovery);
     expanded.directory_order_phase = crate::model::DirectoryOrderPhase::Ready { field, direction };
     true
 }
@@ -591,7 +590,10 @@ mod tests {
         browser.current_dir = directory.path().to_path_buf();
         let request = browser.next_directory_load_request(directory.path().to_path_buf());
 
-        drop(browser.accept_directory_discovery(request, discovery));
+        drop(browser.accept_directory_discovery(
+            request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
         let first_demand_count = browser.directory_metadata_in_flight.len();
         assert!(first_demand_count > 0);
         assert!(first_demand_count < 300);
@@ -617,7 +619,10 @@ mod tests {
         browser.current_dir = directory.path().to_path_buf();
         let request = browser.next_directory_load_request(directory.path().to_path_buf());
 
-        drop(browser.accept_directory_discovery(request, discovery));
+        drop(browser.accept_directory_discovery(
+            request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
 
         assert_eq!(browser.directory_metadata_in_flight.len(), 300);
         assert!(browser.directory_metadata_in_flight.iter().all(|key| {
@@ -646,7 +651,10 @@ mod tests {
         browser.current_dir = directory.path().to_path_buf();
         let request = browser.next_directory_load_request(directory.path().to_path_buf());
 
-        drop(browser.accept_directory_discovery(request, discovery));
+        drop(browser.accept_directory_discovery(
+            request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
 
         assert_eq!(
             browser.directory_collection_phase,
@@ -693,7 +701,10 @@ mod tests {
         let load_request = browser.next_directory_load_request(directory.path().to_path_buf());
         let collection_generation = load_request.generation;
 
-        drop(browser.accept_directory_discovery(load_request, discovery));
+        drop(browser.accept_directory_discovery(
+            load_request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
         assert_eq!(
             browser.directory_collection_phase,
             crate::model::DirectoryCollectionPhase::Ready
@@ -785,7 +796,10 @@ mod tests {
         browser.current_dir = directory.path().to_path_buf();
         let load_request = browser.next_directory_load_request(directory.path().to_path_buf());
         let stale_collection_generation = load_request.generation;
-        drop(browser.accept_directory_discovery(load_request, discovery));
+        drop(browser.accept_directory_discovery(
+            load_request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
 
         let replacement = directory.path().join("replacement");
         std::fs::create_dir(&replacement).unwrap();
@@ -848,7 +862,10 @@ mod tests {
             .list_view_preferences
             .set_column_visible(ListColumnKind::Owner, true);
         let load_request = browser.next_directory_load_request(directory.path().to_path_buf());
-        drop(browser.accept_directory_discovery(load_request, discovery));
+        drop(browser.accept_directory_discovery(
+            load_request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
 
         drop(browser.schedule_visible_directory_metadata(BrowserPaneId::PRIMARY, None));
 
@@ -888,9 +905,12 @@ mod tests {
         browser.view_mode = BrowserViewMode::List;
         browser.current_dir = root.path().to_path_buf();
         let load_request = browser.next_directory_load_request(root.path().to_path_buf());
-        drop(browser.accept_directory_discovery(load_request, root_discovery));
+        drop(browser.accept_directory_discovery(
+            load_request,
+            crate::model::PrebuiltDirectoryDiscovery::build(root_discovery),
+        ));
         let expanded_entries =
-            super::super::navigation::display_entries_in_discovery_order(&expanded_discovery);
+            crate::model::display_entries_in_discovery_order(&expanded_discovery);
         browser.expanded_directories.insert(
             expanded_path.clone(),
             crate::model::ExpandedDirectory {
@@ -960,7 +980,10 @@ mod tests {
         browser.current_dir = directory.path().to_path_buf();
         let load_request = browser.next_directory_load_request(directory.path().to_path_buf());
         let collection_generation = load_request.generation;
-        drop(browser.accept_directory_discovery(load_request, discovery));
+        drop(browser.accept_directory_discovery(
+            load_request,
+            crate::model::PrebuiltDirectoryDiscovery::build(discovery),
+        ));
         std::fs::remove_file(file_path).unwrap();
         let resolution = resolve_directory_metadata(
             resolver,

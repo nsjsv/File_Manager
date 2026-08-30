@@ -374,6 +374,11 @@ fn decode_animated_image_frames_into_channel(
         let frame_position = position;
         position += delay;
         if frame_position < start_position {
+            if frame_sender.is_closed() {
+                // 接收端已随旧 generation 丢弃：seek 叠加出的旧任务立即停止前缀解码，
+                // 不再把整段前缀扫完，消除重复 seek 的 CPU 与内存叠加。
+                return Ok(());
+            }
             continue;
         }
 

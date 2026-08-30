@@ -14,6 +14,9 @@ mod history;
 pub(crate) use history::SearchHistory;
 
 pub(crate) const SEARCH_RESULT_WINDOW: usize = 100;
+/// 结果总量硬上界：无论翻页多少页，窗口最多保留这么多条，超限丢弃最旧页，
+/// 保证长会话滚动加载不会让内存无限增长。
+pub(crate) const SEARCH_RESULT_TOTAL_LIMIT: usize = 5000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SearchWorkspaceSessionId(pub(crate) u64);
@@ -289,6 +292,7 @@ pub(crate) struct SearchResultWindow {
     pub(crate) is_loading: bool,
     pub(crate) failure: Option<String>,
     pub(crate) completion: Option<SearchResultCompletion>,
+    pub(crate) truncated: bool,
     pub(crate) viewport_offset_y: f32,
     pub(crate) viewport_height: f32,
 }
@@ -300,6 +304,7 @@ impl SearchResultWindow {
             is_loading: false,
             failure: None,
             completion: None,
+            truncated: false,
             viewport_offset_y: 0.0,
             viewport_height: 0.0,
         }
@@ -310,6 +315,7 @@ impl SearchResultWindow {
         self.is_loading = true;
         self.failure = None;
         self.completion = None;
+        self.truncated = false;
         self.viewport_offset_y = 0.0;
         self.viewport_height = 0.0;
     }
@@ -624,9 +630,11 @@ impl SearchWorkspaceState {
         batch.hits.truncate(SEARCH_RESULT_WINDOW);
         if request.cursor.is_none() {
             self.window.hits = batch.hits;
+            self.window.truncated = false;
         } else {
             self.window.hits.extend(batch.hits);
         }
+        self.enforce_result_total_limit();
         self.run.next_cursor = batch.next_cursor;
         self.window.is_loading = false;
         self.window.failure = None;
@@ -669,6 +677,7 @@ impl SearchWorkspaceState {
             && self.window.completion == Some(SearchResultCompletion::MoreAvailable)
             && self.run.next_cursor.is_some()
             && self.run.pending_indexed_request.is_none()
+            && self.window.hits.len() < SEARCH_RESULT_TOTAL_LIMIT
     }
 
     pub(crate) fn begin_directory_fallback(&mut self) -> CancellationToken {
@@ -691,6 +700,20 @@ impl SearchWorkspaceState {
     pub(crate) fn apply_directory_batch(&mut self, hits: Vec<SearchHit>) {
         self.window.hits.extend(hits);
         self.window.failure = None;
+        self.enforce_result_total_limit();
+    }
+
+    // 结果总量硬上界：超限丢弃最旧页并置 truncated，翻页/回退两条路径共用。
+    fn enforce_result_total_limit(&mut self) {
+        let excess = self
+            .window
+            .hits
+            .len()
+            .saturating_sub(SEARCH_RESULT_TOTAL_LIMIT);
+        if excess > 0 {
+            self.window.hits.drain(0..excess);
+            self.window.truncated = true;
+        }
     }
 
     pub(crate) fn finish_directory_fallback(&mut self, outcome: DirectoryFallbackOutcome) {
@@ -729,6 +752,7 @@ impl SearchWorkspaceState {
         self.window.is_loading = false;
         self.window.failure = None;
         self.window.completion = None;
+        self.window.truncated = false;
         self.window.viewport_offset_y = 0.0;
         self.window.viewport_height = 0.0;
         self.selection.clear();

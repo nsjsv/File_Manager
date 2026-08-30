@@ -443,3 +443,60 @@ fn keyboard_selection_moves_focus_and_select_all_uses_result_order() {
     selection.select_all(&hits);
     assert_eq!(selection.selected_paths_in_result_order(&hits).len(), 3);
 }
+
+#[test]
+fn directory_batches_are_capped_at_total_limit_and_report_truncation() {
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
+    let _ = workspace.begin_indexed_query(directory_query(1, "report"));
+    workspace.begin_directory_fallback();
+    let total = SEARCH_RESULT_TOTAL_LIMIT + SEARCH_RESULT_WINDOW;
+    workspace.apply_directory_batch((0..total).map(hit).collect());
+
+    assert_eq!(workspace.window.hits.len(), SEARCH_RESULT_TOTAL_LIMIT);
+    assert!(workspace.window.truncated);
+    // 丢弃的是最旧页：窗口首条应为被挤出之后的第一个结果。
+    let excess = total - SEARCH_RESULT_TOTAL_LIMIT;
+    assert_eq!(workspace.window.hits.first(), Some(&hit(excess)));
+}
+
+#[test]
+fn indexed_pagination_stops_at_total_limit_and_first_page_resets_truncation() {
+    let mut workspace = search_workspace_for_tests("/workspace", 1);
+    let (first_request, _) = workspace.begin_indexed_query(directory_query(1, "report"));
+    workspace.apply_indexed_batch(
+        first_request,
+        SearchResultBatch {
+            query_id: 1,
+            hits: (0..SEARCH_RESULT_WINDOW).map(hit).collect(),
+            next_cursor: Some(file_search::SearchCursor {
+                offset: SEARCH_RESULT_WINDOW,
+            }),
+            finished: false,
+        },
+    );
+    // 首页为整窗替换语义：截断标志复位。
+    assert!(!workspace.window.truncated);
+
+    let pages = SEARCH_RESULT_TOTAL_LIMIT / SEARCH_RESULT_WINDOW;
+    for page in 1..pages {
+        let (request, _, _) = workspace
+            .begin_next_indexed_page()
+            .expect("pending indexed page");
+        workspace.apply_indexed_batch(
+            request,
+            SearchResultBatch {
+                query_id: 1,
+                hits: (0..SEARCH_RESULT_WINDOW).map(hit).collect(),
+                next_cursor: Some(file_search::SearchCursor {
+                    offset: (page + 1) * SEARCH_RESULT_WINDOW,
+                }),
+                finished: false,
+            },
+        );
+    }
+
+    assert_eq!(workspace.window.hits.len(), SEARCH_RESULT_TOTAL_LIMIT);
+    assert!(!workspace.window.truncated);
+    // 总量达上界后翻页门关闭，不再发起新的索引分页请求。
+    assert!(!workspace.indexed_next_page_is_available());
+}

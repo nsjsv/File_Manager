@@ -15,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 use crate::formatting::format_file_size;
 
 const NETWORK_PREVIEW_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+/// 磁盘侧容量预算：缓存总量不允许越过该值，防止长期使用无限膨胀。
+const NETWORK_PREVIEW_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RemotePreviewCacheRequest {
@@ -65,6 +67,12 @@ pub(crate) async fn cache_remote_preview_file(
 
     let now = SystemTime::now();
     let _ = remove_expired_remote_preview_files(&request.cache_dir, now).await;
+    // 每次缓存流程先做容量预算清理，覆盖会话首次预览与长期未预览后的再次进入。
+    let _ = enforce_remote_preview_cache_budget_with_limit(
+        &request.cache_dir,
+        NETWORK_PREVIEW_CACHE_MAX_BYTES,
+    )
+    .await;
 
     let source_metadata = fs::metadata(&request.source_path).await.map_err(|error| {
         format!(
@@ -99,6 +107,12 @@ pub(crate) async fn cache_remote_preview_file(
     copy_path_with_options(&request.source_path, &cache_path, transfer_options)
         .await
         .map_err(|error| format!("could not download remote preview file: {error}"))?;
+    // 下载新增文件后再次清理，保证总量始终在预算内。
+    let _ = enforce_remote_preview_cache_budget_with_limit(
+        &request.cache_dir,
+        NETWORK_PREVIEW_CACHE_MAX_BYTES,
+    )
+    .await;
     Ok(cache_path)
 }
 
@@ -202,6 +216,47 @@ fn cache_entry_is_expired(modified: SystemTime, now: SystemTime) -> bool {
     now.duration_since(modified)
         .map(|age| age > NETWORK_PREVIEW_CACHE_TTL)
         .unwrap_or(false)
+}
+
+async fn enforce_remote_preview_cache_budget_with_limit(
+    cache_dir: &Path,
+    max_total_bytes: u64,
+) -> io::Result<()> {
+    let mut entries = match fs::read_dir(cache_dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        files.push((
+            entry.path(),
+            metadata.len(),
+            metadata.modified().unwrap_or(UNIX_EPOCH),
+        ));
+    }
+
+    let mut total_bytes: u64 = files.iter().map(|(_, size, _)| size).sum();
+    if total_bytes <= max_total_bytes {
+        return Ok(());
+    }
+    // 超预算按 modified 最旧优先删除，等价 LRU：刚下载的文件 modified 最新，必被保留。
+    files.sort_by_key(|(_, _, modified)| *modified);
+    for (path, size, _) in files {
+        if total_bytes <= max_total_bytes {
+            break;
+        }
+        if fs::remove_file(&path).await.is_ok() {
+            total_bytes = total_bytes.saturating_sub(size);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,5 +371,39 @@ mod tests {
             CancellationToken::new(),
         );
         cache_remote_preview_file(request, progress).await
+    }
+
+    #[tokio::test]
+    async fn budget_cleanup_removes_oldest_until_under_limit() {
+        let temp_dir = tempdir().expect("temp dir");
+        let cache_dir = temp_dir.path().join("cache");
+        tokio::fs::create_dir(&cache_dir)
+            .await
+            .expect("create cache");
+        for (name, size) in [
+            ("network-preview-a.bin", 40usize),
+            ("network-preview-b.bin", 40usize),
+        ] {
+            tokio::fs::write(cache_dir.join(name), vec![0u8; size])
+                .await
+                .expect("write entry");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        tokio::fs::write(cache_dir.join("network-preview-c.bin"), vec![0u8; 40])
+            .await
+            .expect("write newest");
+
+        enforce_remote_preview_cache_budget_with_limit(&cache_dir, 100)
+            .await
+            .expect("cleanup");
+
+        let oldest_gone = !tokio::fs::try_exists(cache_dir.join("network-preview-a.bin"))
+            .await
+            .unwrap_or(true);
+        let newest_kept = tokio::fs::try_exists(cache_dir.join("network-preview-c.bin"))
+            .await
+            .unwrap_or(false);
+        assert!(oldest_gone, "最旧文件应按 LRU 顺序被删除");
+        assert!(newest_kept, "最新文件必须保留");
     }
 }

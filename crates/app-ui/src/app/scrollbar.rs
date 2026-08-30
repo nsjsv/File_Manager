@@ -17,13 +17,13 @@ use crate::model::{
     SCROLLBAR_MIN_THUMB_LENGTH,
 };
 
-pub(super) const SCROLLBAR_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+pub(super) const SCROLLBAR_ANIMATION_INTERVAL: Duration = crate::ui_pacing::FRAME_INTERVAL_60HZ;
 
 const SCROLLBAR_REVEAL_DURATION: Duration = Duration::from_millis(96);
 const SCROLLBAR_HIDE_DURATION: Duration = Duration::from_millis(300);
 const SCROLLBAR_MIN_REVEAL_OPACITY: f32 = 0.12;
 const SCROLLBAR_HOVER_DURATION: IcedDuration = IcedDuration::from_millis(140);
-const SCROLLBAR_HOVER_FRAME_INTERVAL: IcedDuration = IcedDuration::from_millis(16);
+const SCROLLBAR_HOVER_FRAME_INTERVAL: IcedDuration = crate::ui_pacing::FRAME_INTERVAL_60HZ;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScrollbarAxis {

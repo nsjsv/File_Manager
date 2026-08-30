@@ -102,7 +102,7 @@ impl FileBrowser {
     ) -> Task<Message> {
         self.current_dir = directory.clone();
         self.is_trash_view = false;
-        self.entries = empty_directory_entry_snapshot();
+        self.set_entries(empty_directory_entry_snapshot());
         self.directory_loading_placeholder = None;
         self.trash_entries.clear();
         self.deepest_open_column_directory = None;

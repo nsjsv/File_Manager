@@ -130,7 +130,6 @@ pub(crate) fn icon_grid_view<'a>(
     .into()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_panel<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
@@ -237,7 +236,6 @@ fn render_rows<'a>(
         .into()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_band<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,

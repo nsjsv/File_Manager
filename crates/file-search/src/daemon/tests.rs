@@ -780,8 +780,10 @@ fn corruption_recovery_stays_degraded_until_the_rebuild_cycle_finishes() {
     core.shutdown().unwrap();
 }
 
+/// 每次启动都执行 FTS optimize 会整库重写倒排索引（GB 级 IO 与内存峰值）；
+/// 碎片由 FTS5 automerge 在写入时增量收敛，启动维护不得再做全量合并。
 #[test]
-fn daemon_defers_fragmented_full_text_compaction_to_startup_maintenance() {
+fn startup_maintenance_leaves_full_text_compaction_to_automerge() {
     let directory = tempdir().unwrap();
     let database_path = directory.path().join("search.sqlite");
     drop(SearchDatabase::open(&database_path).unwrap());
@@ -832,6 +834,7 @@ fn daemon_defers_fragmented_full_text_compaction_to_startup_maintenance() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    assert_eq!(segment_count(), 1);
+    // 维护结束后仍保持多段：启动路径未触发 FTS optimize 整库合并。
+    assert!(segment_count() > 1);
     core.shutdown().unwrap();
 }

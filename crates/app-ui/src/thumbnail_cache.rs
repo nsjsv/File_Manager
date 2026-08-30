@@ -13,9 +13,18 @@ pub(crate) const COLUMN_THUMBNAIL_SIZE: f32 = 18.0;
 pub(crate) const TRANSFER_CONFLICT_THUMBNAIL_EDGE: u32 = 96;
 pub(crate) const PREVIEW_THUMBNAIL_MAX_EDGE: u32 = 2048;
 
-const MAX_READY_THUMBNAILS: usize = 256;
-const MAX_IN_FLIGHT: usize = 2;
+/// 内存就绪缩略图上限：Handle 仅持路径不驻留像素，2048 项内存成本可忽略。
+const MAX_READY_THUMBNAILS: usize = 2048;
+/// 解码并发跟随可用核数：IO+CPU 混合负载，限制在 2..=8 防止小核机器过载。
+fn max_in_flight() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4)
+        .clamp(2, 8)
+}
+
 const PREVIEW_IN_FLIGHT_EXTRA: usize = 1;
+
 const FAILURE_BACKOFF: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,7 +253,7 @@ impl ThumbnailCache {
         }
 
         let mut works = Vec::new();
-        let available = MAX_IN_FLIGHT.saturating_sub(self.inflight.len());
+        let available = max_in_flight().saturating_sub(self.inflight.len());
         for _ in 0..available {
             let Some(work) = self.take_highest_priority_work() else {
                 break;
@@ -378,7 +387,7 @@ impl ThumbnailCache {
     }
 
     fn preview_extra_slot_is_available(&self) -> bool {
-        self.inflight.len() >= MAX_IN_FLIGHT
+        self.inflight.len() >= max_in_flight()
             && self
                 .inflight
                 .values()
@@ -394,6 +403,14 @@ impl ThumbnailCache {
             };
             self.ready.remove(&key);
         }
+        // 失败表过期即清扫：上界恒等于最近一个退避周期内的失败数，
+        // 避免视图早已移走的失败键永久滞留内存。
+        self.sweep_expired_failures(Instant::now());
+    }
+
+    fn sweep_expired_failures(&mut self, now: Instant) {
+        self.failures
+            .retain(|_, failed_at| now.duration_since(*failed_at) <= FAILURE_BACKOFF);
     }
 }
 
@@ -446,20 +463,17 @@ mod tests {
     #[test]
     fn preview_work_uses_extra_slot_when_list_work_fills_normal_slots() {
         let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
-        cache.enqueue_request(
-            thumbnail_request("list-a.png", 1),
-            ThumbnailPurpose::List,
-            ThumbnailPriority::Focused,
-        );
-        cache.enqueue_request(
-            thumbnail_request("list-b.png", 2),
-            ThumbnailPurpose::List,
-            ThumbnailPriority::Focused,
-        );
+        for index in 0..max_in_flight() {
+            cache.enqueue_request(
+                thumbnail_request(&format!("list-{index}.png"), index as u64),
+                ThumbnailPurpose::List,
+                ThumbnailPriority::Focused,
+            );
+        }
 
         let first_batch = cache.take_next_batch();
 
-        assert_eq!(first_batch.len(), MAX_IN_FLIGHT);
+        assert_eq!(first_batch.len(), max_in_flight());
         assert!(first_batch
             .iter()
             .all(|work| work.purpose == ThumbnailPurpose::List));
@@ -481,17 +495,14 @@ mod tests {
     #[test]
     fn preview_extra_slot_allows_only_one_preview_work() {
         let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
-        cache.enqueue_request(
-            thumbnail_request("list-a.png", 1),
-            ThumbnailPurpose::List,
-            ThumbnailPriority::Focused,
-        );
-        cache.enqueue_request(
-            thumbnail_request("list-b.png", 2),
-            ThumbnailPurpose::List,
-            ThumbnailPriority::Focused,
-        );
-        assert_eq!(cache.take_next_batch().len(), MAX_IN_FLIGHT);
+        for index in 0..max_in_flight() {
+            cache.enqueue_request(
+                thumbnail_request(&format!("list-{index}.png"), index as u64),
+                ThumbnailPurpose::List,
+                ThumbnailPriority::Focused,
+            );
+        }
+        assert_eq!(cache.take_next_batch().len(), max_in_flight());
 
         cache.enqueue_request(
             thumbnail_request("preview-a.png", 3),
@@ -596,6 +607,20 @@ mod tests {
         assert!(cache.ready_for_request(&first_request).is_none());
         assert!(cache.ready_for_request(&second_request).is_some());
         assert!(cache.ready_for_request(&newest_request).is_some());
+    }
+
+    #[test]
+    fn failure_entries_expire_after_backoff_window() {
+        let mut cache = ThumbnailCache::new(PathBuf::from("cache"));
+        let key = thumbnail_request("broken.png", 1).key();
+        cache.mark_failure(key.clone());
+
+        // 退避期内保留；退避期过后必须被清扫，失败表不允许无限累积。
+        cache.sweep_expired_failures(Instant::now());
+        assert!(cache.failures.contains_key(&key));
+
+        cache.sweep_expired_failures(Instant::now() + FAILURE_BACKOFF);
+        assert!(!cache.failures.contains_key(&key));
     }
 
     fn cached_thumbnail_for_request(request: &ThumbnailRequest) -> CachedThumbnail {

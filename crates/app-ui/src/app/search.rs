@@ -7,11 +7,13 @@ use file_search::{
     SearchTextScope,
 };
 use iced::Task;
+use tokio_util::sync::CancellationToken;
 
 use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 use crate::commands::{
     directory_fallback_search_command, open_file_command, read_search_path_configuration,
     search_command, search_service_recovery_command, search_service_status_command,
+    search_with_scope_root_check_command,
 };
 use crate::model::search::SEARCH_RESULT_WINDOW;
 use crate::model::{
@@ -338,15 +340,6 @@ impl FileBrowser {
         }
         let generation = workspace.next_generation();
         let scope = workspace.root.query_scope();
-        if let SearchScope::Directory(root) = &scope {
-            if !std::fs::metadata(root).is_ok_and(|metadata| metadata.is_dir()) {
-                if let Some(workspace) = self.search_workspace.as_mut() {
-                    workspace
-                        .reject_query(format!("Search root is unavailable: {}", root.display()));
-                }
-                return Task::none();
-            }
-        }
         let filters = match workspace.filters.query_filters_at(Local::now()) {
             Ok(filters) => filters,
             Err(message) => {
@@ -386,6 +379,35 @@ impl FileBrowser {
             return Task::none();
         };
         let (request, cancellation) = workspace.begin_indexed_query(query.clone());
+        search_with_scope_root_check_command(request, query, cancellation)
+    }
+
+    pub(super) fn accept_search_scope_root_validation(
+        &mut self,
+        request: IndexedSearchRequest,
+        query: SearchQuery,
+        cancellation: CancellationToken,
+        root_is_available: bool,
+    ) -> Task<Message> {
+        let Some(workspace) = self.search_workspace.as_ref() else {
+            return Task::none();
+        };
+        if !workspace.accepts_indexed_outcome(request.clone()) {
+            // 过期校验结果：期间查询已重启，直接丢弃。
+            return Task::none();
+        }
+        if !root_is_available {
+            let message = match &query.scope {
+                SearchScope::Directory(root) => {
+                    format!("Search root is unavailable: {}", root.display())
+                }
+                _ => "Search root is unavailable".to_owned(),
+            };
+            if let Some(workspace) = self.search_workspace.as_mut() {
+                workspace.reject_query(message);
+            }
+            return Task::none();
+        }
         search_command(request, query, cancellation)
     }
 

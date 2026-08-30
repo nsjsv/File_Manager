@@ -443,7 +443,6 @@ fn expanded_panel_content(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_visible_entries<'a>(
     panel: &IconGridPanelLayout<'a>,
     panel_top: f32,

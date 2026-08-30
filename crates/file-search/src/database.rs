@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
@@ -44,7 +42,6 @@ pub(super) const SEARCH_CONTENT_PREVIEW_CHARACTER_LIMIT: usize = 1_024;
 const WRITER_PAGE_CACHE_KIB: i64 = 2_048;
 const READER_PAGE_CACHE_KIB: i64 = 512;
 const NORMAL_BUSY_TIMEOUT_MILLIS: i64 = 5_000;
-const COMPACTION_BUSY_TIMEOUT_MILLIS: i64 = 250;
 const WAL_AUTOCHECKPOINT_PAGES: i64 = 128;
 const WAL_JOURNAL_LIMIT_BYTES: i64 = 1_000_000;
 
@@ -188,7 +185,6 @@ impl IndexedFile {
 
 pub struct SearchDatabase {
     connection: Connection,
-    backing_path: Option<PathBuf>,
 }
 
 impl SearchDatabase {
@@ -200,10 +196,7 @@ impl SearchDatabase {
         verify_supported_schema(&connection)?;
         let connection = storage_rebuild::rebuild_schema_eight_database(path, connection)?;
         configure_writer_connection(&connection)?;
-        let database = Self {
-            connection,
-            backing_path: Some(path.to_path_buf()),
-        };
+        let database = Self { connection };
         database.initialize()?;
         Ok(database)
     }
@@ -218,20 +211,14 @@ impl SearchDatabase {
         verify_current_schema(&connection)?;
         schema::verify_search_storage_schema(&connection)?;
         configure_read_only_connection(&connection)?;
-        Ok(Self {
-            connection,
-            backing_path: Some(path.to_path_buf()),
-        })
+        Ok(Self { connection })
     }
 
     pub fn in_memory() -> SearchResult<Self> {
         let connection = Connection::open_in_memory()?;
         verify_supported_schema(&connection)?;
         configure_writer_connection(&connection)?;
-        let database = Self {
-            connection,
-            backing_path: None,
-        };
+        let database = Self { connection };
         database.initialize()?;
         Ok(database)
     }
@@ -299,48 +286,6 @@ impl SearchDatabase {
             }
         }
         transaction.commit()?;
-        Ok(())
-    }
-
-    pub(crate) fn compact_search_database(&self) -> SearchResult<()> {
-        // Online compaction is joined during daemon shutdown, while sqlite3_interrupt
-        // cannot wake a busy handler that is waiting for a checkpoint lock.
-        self.connection
-            .pragma_update(None, "busy_timeout", COMPACTION_BUSY_TIMEOUT_MILLIS)?;
-        let compaction_outcome = self.compact_search_database_with_bounded_lock_wait();
-        let timeout_restore_outcome =
-            self.connection
-                .pragma_update(None, "busy_timeout", NORMAL_BUSY_TIMEOUT_MILLIS);
-        compaction_outcome.and(timeout_restore_outcome.map_err(Into::into))
-    }
-
-    fn compact_search_database_with_bounded_lock_wait(&self) -> SearchResult<()> {
-        let segment_count = self.connection.query_row(
-            "SELECT COUNT(*)
-             FROM (
-                SELECT segid FROM file_search_fts_idx GROUP BY segid LIMIT 2
-             )",
-            [],
-            |row| row.get::<_, u64>(0),
-        )?;
-        if segment_count > 1 {
-            self.connection.execute(
-                "INSERT INTO file_search_fts(file_search_fts) VALUES('optimize')",
-                [],
-            )?;
-        }
-        self.connection
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA shrink_memory;")?;
-        let Some(database_path) = self.backing_path.as_ref() else {
-            return Ok(());
-        };
-        release_clean_file_pages(database_path)?;
-        let mut wal_path = database_path.as_os_str().to_os_string();
-        wal_path.push("-wal");
-        let wal_path = PathBuf::from(wal_path);
-        if wal_path.exists() {
-            release_clean_file_pages(&wal_path)?;
-        }
         Ok(())
     }
 
@@ -420,22 +365,6 @@ fn configure_writer_connection(connection: &Connection) -> SearchResult<()> {
     connection.pragma_update(None, "temp_store", "FILE")?;
     connection.pragma_update(None, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)?;
     connection.pragma_update(None, "journal_size_limit", WAL_JOURNAL_LIMIT_BYTES)?;
-    Ok(())
-}
-
-fn release_clean_file_pages(path: &Path) -> SearchResult<()> {
-    let file = File::open(path).map_err(|source| SearchError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let advice_status =
-        unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
-    if advice_status != 0 {
-        return Err(SearchError::Io {
-            path: path.to_path_buf(),
-            source: std::io::Error::from_raw_os_error(advice_status),
-        });
-    }
     Ok(())
 }
 

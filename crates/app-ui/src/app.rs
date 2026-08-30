@@ -148,7 +148,7 @@ use crate::view::{
 };
 const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 const POINTER_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
-const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+const PREVIEW_TREE_ANIMATION_INTERVAL: Duration = crate::ui_pacing::FRAME_INTERVAL_60HZ;
 const OPERATION_PROGRESS_ANIMATION_INTERVAL: Duration = Duration::from_millis(80);
 const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -168,6 +168,8 @@ pub(crate) struct FileBrowser {
     pub(crate) current_dir: PathBuf,
     pub(crate) is_trash_view: bool,
     pub(crate) entries: DirectoryEntrySnapshot,
+    /// 主列表条目索引：仅随 [`Self::set_entries`] 失效，hover 热路径 O(1) 查找用。
+    entry_index: Option<(DirectoryEntrySnapshot, HashMap<PathBuf, usize>)>,
     pub(crate) directory_discovery: Option<DirectoryDiscovery>,
     pub(crate) directory_loading_placeholder: Option<DirectoryLoadingPlaceholder>,
     pub(crate) trash_entries: Vec<TrashEntry>,
@@ -518,6 +520,7 @@ impl FileBrowser {
             current_dir: placeholder_dir.clone(),
             is_trash_view: false,
             entries: empty_directory_entry_snapshot(),
+            entry_index: None,
             directory_discovery: None,
             directory_loading_placeholder: None,
             trash_entries: Vec::new(),

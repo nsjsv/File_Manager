@@ -13,7 +13,8 @@ use crate::model::{
 };
 use crate::startup_trace;
 
-const DIRECTORY_HINT_MIN_INTERVAL_MS: u64 = 16;
+/// 目录加载 UI 提示节流：对齐 60Hz 帧步进，提示密度与渲染节奏一致。
+const DIRECTORY_HINT_MIN_INTERVAL: Duration = crate::ui_pacing::FRAME_INTERVAL_60HZ;
 const DIRECTORY_LOAD_CHANNEL_SIZE: usize = 8;
 
 #[derive(Debug, Default)]
@@ -24,8 +25,7 @@ struct DirectoryHintThrottle {
 impl DirectoryHintThrottle {
     fn should_emit(&mut self, now: Instant) -> bool {
         let should_emit = self.last_emitted_at.is_none_or(|last_emitted_at| {
-            now.saturating_duration_since(last_emitted_at)
-                >= Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS)
+            now.saturating_duration_since(last_emitted_at) >= DIRECTORY_HINT_MIN_INTERVAL
         });
         if should_emit {
             self.last_emitted_at = Some(now);
@@ -59,7 +59,7 @@ pub(crate) fn load_directory_command(
                     collected.accepted_hint_count,
                     collected.dropped_hint_count,
                 );
-                collected.discovery
+                crate::model::PrebuiltDirectoryDiscovery::build(collected.discovery)
             });
             let _ = output
                 .send(Message::DirectoryEntriesReady(request, authoritative))
@@ -96,7 +96,7 @@ pub(crate) fn load_expanded_directory_command(
                     collected.accepted_hint_count,
                     collected.dropped_hint_count,
                 );
-                collected.discovery
+                crate::model::PrebuiltDirectoryDiscovery::build(collected.discovery)
             });
             let _ = output
                 .send(Message::ExpandedDirectoryEntriesReady(
@@ -216,9 +216,10 @@ mod tests {
         let mut throttle = DirectoryHintThrottle::default();
 
         assert!(throttle.should_emit(start));
-        assert!(!throttle
-            .should_emit(start + Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS - 1)));
-        assert!(throttle.should_emit(start + Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS)));
+        assert!(
+            !throttle.should_emit(start + DIRECTORY_HINT_MIN_INTERVAL - Duration::from_millis(1))
+        );
+        assert!(throttle.should_emit(start + DIRECTORY_HINT_MIN_INTERVAL));
     }
 
     #[test]
@@ -227,8 +228,6 @@ mod tests {
         let mut throttle = DirectoryHintThrottle::default();
 
         assert!(throttle.should_emit(start));
-        assert!(
-            !throttle.should_emit(start - Duration::from_millis(DIRECTORY_HINT_MIN_INTERVAL_MS))
-        );
+        assert!(!throttle.should_emit(start - DIRECTORY_HINT_MIN_INTERVAL));
     }
 }

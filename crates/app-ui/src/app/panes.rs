@@ -436,7 +436,7 @@ impl FileBrowser {
     pub(super) fn apply_pane_browsing_snapshot(&mut self, pane: BrowserPane) {
         self.current_dir = pane.current_dir;
         self.is_trash_view = pane.is_trash_view;
-        self.entries = pane.entries;
+        self.set_entries(pane.entries);
         self.directory_discovery = pane.directory_discovery;
         self.directory_loading_placeholder = pane.directory_loading_placeholder;
         self.trash_entries = pane.trash_entries;

@@ -22,6 +22,32 @@ pub(crate) fn search_command(
     })
 }
 
+// 根目录可用性校验移入后台执行：NFS/失联挂载点上的同步 stat 可能阻塞数秒，
+// 绝不能在 update 线程执行（原实现为同步 std::fs::metadata 的历史缺陷）。
+pub(crate) fn search_with_scope_root_check_command(
+    request: IndexedSearchRequest,
+    query: SearchQuery,
+    cancellation: CancellationToken,
+) -> Task<Message> {
+    let scope_root = match &query.scope {
+        file_search::SearchScope::Directory(root) => Some(root.clone()),
+        _ => None,
+    };
+    Task::perform(
+        async move {
+            let root_is_available = match &scope_root {
+                Some(root) => tokio::fs::metadata(root)
+                    .await
+                    .map(|metadata| metadata.is_dir())
+                    .unwrap_or(false),
+                None => true,
+            };
+            Message::SearchScopeRootValidated(request, query, cancellation, root_is_available)
+        },
+        |message| message,
+    )
+}
+
 pub(crate) fn directory_fallback_search_command(
     generation: u64,
     query: SearchQuery,

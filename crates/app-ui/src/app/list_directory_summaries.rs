@@ -182,6 +182,25 @@ impl FileBrowser {
         }
     }
 
+    // 摘要缓存按存活树裁剪：收集全部存活根（每个面板的当前目录、各标签目录、
+    // 各级已展开目录），删除不在任何根之下的键。在导航级时机调用，
+    // 保证缓存键集合不随浏览过的目录数量无限增长（内存上界机制）。
+    pub(super) fn prune_list_directory_summaries_to_live_roots(&mut self) {
+        let active_pane_id = self.active_pane_id();
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for pane in &self.panes {
+            let (current_dir, tabs, expanded_directories) = if pane.id == active_pane_id {
+                (&self.current_dir, &self.tabs, &self.expanded_directories)
+            } else {
+                (&pane.current_dir, &pane.tabs, &pane.expanded_directories)
+            };
+            roots.push(current_dir.clone());
+            roots.extend(tabs.iter().map(|tab| tab.directory.clone()));
+            roots.extend(expanded_directories.keys().cloned());
+        }
+        self.list_directory_summary_cache.retain_roots(&roots);
+    }
+
     pub(super) fn invalidate_list_directory_summaries_for_pane(&mut self, pane_id: BrowserPaneId) {
         for path in self.list_directory_paths_for_pane(pane_id) {
             self.invalidate_list_directory_summary(&path);

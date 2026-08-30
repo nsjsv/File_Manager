@@ -47,7 +47,7 @@ fn measured_viewport_schedules_list_rows_from_shared_geometry() {
         OVERSCAN_ROWS,
     );
 
-    assert_eq!((range.start, range.end), (12, 71));
+    assert_eq!((range.start, range.end), (28, 55));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn column_thumbnail_range_uses_shared_column_geometry() {
         OVERSCAN_ROWS,
     );
 
-    assert_eq!((range.start, range.end), (12, 71));
+    assert_eq!((range.start, range.end), (28, 55));
 }
 
 #[test]

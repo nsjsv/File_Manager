@@ -294,10 +294,33 @@ fn empty_input_scope_selection_is_used_later_and_unavailable_home_fails_closed()
     std::fs::remove_dir(&home).unwrap();
 
     drop(browser.select_search_directory_scope(SearchDirectoryScope::Home));
+    {
+        let workspace = browser.search_workspace.as_ref().unwrap();
+        assert_eq!(workspace.root.selected_scope(), SearchDirectoryScope::Home);
+        assert_eq!(workspace.root.path(), home);
+        assert!(workspace.run.generation > current_request.generation);
+        // 根目录校验已移入后台：查询先进入待校验状态。
+        assert!(workspace.run.active_query.is_some());
+    }
+
+    // 以与消息处理器相同的入口注入“根不可用”的校验结果。
+    let request = pending_indexed_request(&browser);
+    let query = browser
+        .search_workspace
+        .as_ref()
+        .unwrap()
+        .run
+        .active_query
+        .clone()
+        .expect("active query");
+    drop(browser.accept_search_scope_root_validation(
+        request,
+        query,
+        tokio_util::sync::CancellationToken::new(),
+        false,
+    ));
+
     let workspace = browser.search_workspace.as_ref().unwrap();
-    assert_eq!(workspace.root.selected_scope(), SearchDirectoryScope::Home);
-    assert_eq!(workspace.root.path(), home);
-    assert!(workspace.run.generation > current_request.generation);
     assert!(workspace.run.active_query.is_none());
     assert!(workspace.window.hits.is_empty());
     assert!(workspace

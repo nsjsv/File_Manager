@@ -428,7 +428,7 @@ async fn rebuild_paths_only_scans_the_requested_file_and_keeps_skip_semantics() 
 }
 
 #[tokio::test]
-async fn bulk_recovery_compacts_pending_full_text_segments() {
+async fn bulk_recovery_leaves_full_text_compaction_to_automerge() {
     let content = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
     let database_path = db_dir.path().join("search.sqlite");
@@ -462,12 +462,14 @@ async fn bulk_recovery_compacts_pending_full_text_segments() {
 
     let unchanged = indexer.rebuild().await.unwrap();
     assert_eq!(unchanged.database_mutations, 0);
-    assert_eq!(segment_count(), 1);
+    // 全量核对不得触发 FTS optimize：启动时整库合并是 GB 级 IO 与内存峰值的来源，
+    // 碎片由 FTS5 automerge 在写入时增量收敛。
+    assert_eq!(segment_count(), fragmented_segments);
 
     fs::write(&paths[2], "needle bulk update with changed length").unwrap();
     let changed = indexer.rebuild().await.unwrap();
     assert_eq!(changed.database_mutations, 1);
-    assert_eq!(segment_count(), 1);
+    assert!(segment_count() > 1);
 }
 
 #[tokio::test]

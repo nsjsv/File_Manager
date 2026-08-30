@@ -220,22 +220,6 @@ fn shutdown_drains_queued_writes_before_stopping_writer() {
 }
 
 #[test]
-fn cancelled_index_maintenance_refuses_future_compaction_without_stopping_writer() {
-    let dir = tempdir().unwrap();
-    let db_path = dir.path().join("search.sqlite");
-    let writer = IndexWriter::spawn(SearchDatabase::open(&db_path).unwrap());
-
-    writer.cancel_index_maintenance();
-
-    assert!(matches!(
-        writer.compact_search_database(),
-        Err(SearchError::Cancelled)
-    ));
-    assert_eq!(writer.count().unwrap(), 0);
-    writer.shutdown().unwrap();
-}
-
-#[test]
 fn cancelled_index_maintenance_discards_write_failure_during_shutdown() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("search.sqlite");

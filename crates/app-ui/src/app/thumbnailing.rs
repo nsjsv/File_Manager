@@ -17,7 +17,8 @@ use crate::thumbnail_cache::{
 };
 use crate::virtual_range::initial_virtual_range;
 
-const OVERSCAN_ROWS: usize = 28;
+/// 缩略图预热行数：对齐视图实际 overscan（16 行），避免大量无效解码排队。
+const OVERSCAN_ROWS: usize = 12;
 const INITIAL_THUMBNAIL_ROWS: usize = OVERSCAN_ROWS * 2 + 1;
 
 impl FileBrowser {
@@ -219,6 +220,8 @@ impl FileBrowser {
     }
 
     fn schedule_interaction_thumbnails(&mut self) {
+        // hover/选中缩略图调度走条目索引查找：先保证索引可用。
+        self.refresh_entry_index();
         if self
             .pane_view(self.active_pane_id())
             .is_some_and(|pane| pane.view_mode == BrowserViewMode::Icons)

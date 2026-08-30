@@ -148,6 +148,8 @@ impl FileBrowser {
     }
 
     pub(super) fn handle_entry_hovered(&mut self, path: PathBuf) -> Task<Message> {
+        // hover 是鼠标移动热路径：先保证条目索引可用，避免每次悬停线性扫描。
+        self.refresh_entry_index();
         self.hovered_entry = Some(path.clone());
         self.cursor_paste_directory = Some(self.entry_parent_directory(&path));
         if self.file_drag.is_some() {

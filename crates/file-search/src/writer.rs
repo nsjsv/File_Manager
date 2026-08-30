@@ -21,7 +21,6 @@ const INDEXED_FILE_FIXED_BYTES: usize = 1_024;
 /// A single write operation for the dedicated writer thread to apply.
 enum WriteCommand {
     UpsertObservable(Box<IndexedFile>),
-    UpsertInaccessible(Box<IndexedFile>),
     ClassifyObserved {
         files: Vec<ObservedFile>,
         reply: Sender<SearchResult<Vec<FileClassification>>>,
@@ -63,7 +62,6 @@ enum WriteCommand {
         affected_scopes: Vec<PathBuf>,
         reply: Sender<SearchResult<()>>,
     },
-    CompactSearchDatabase(Sender<SearchResult<()>>),
     /// 统计当前可查询条目，并继续复用 writer 持有的数据库连接。
     Count(Sender<SearchResult<u64>>),
     /// Drain everything queued before this point, then report the first error
@@ -113,13 +111,6 @@ impl IndexWriter {
         validate_indexed_file_payload(&file)?;
         self.sender
             .send(WriteCommand::UpsertObservable(Box::new(file)))
-            .map_err(|_| writer_gone())
-    }
-
-    pub fn upsert_inaccessible(&self, file: IndexedFile) -> SearchResult<()> {
-        validate_indexed_file_payload(&file)?;
-        self.sender
-            .send(WriteCommand::UpsertInaccessible(Box::new(file)))
             .map_err(|_| writer_gone())
     }
 
@@ -260,14 +251,6 @@ impl IndexWriter {
         outcome.recv().map_err(|_| writer_gone())?
     }
 
-    pub(crate) fn compact_search_database(&self) -> SearchResult<()> {
-        let (reply, outcome) = mpsc::channel();
-        self.sender
-            .send(WriteCommand::CompactSearchDatabase(reply))
-            .map_err(|_| writer_gone())?;
-        outcome.recv().map_err(|_| writer_gone())?
-    }
-
     pub(crate) fn cancel_index_maintenance(&self) {
         self.maintenance_cancelled.store(true, Ordering::Release);
         self.interrupt.interrupt();
@@ -345,13 +328,6 @@ fn writer_loop(
                 record_first_write_error(
                     &mut pending_error,
                     database.upsert_file(&file),
-                    &maintenance_cancelled,
-                );
-            }
-            WriteCommand::UpsertInaccessible(file) => {
-                record_first_write_error(
-                    &mut pending_error,
-                    database.upsert_inaccessible_file(&file),
                     &maintenance_cancelled,
                 );
             }
@@ -450,16 +426,6 @@ fn writer_loop(
                         &invalidated_roots,
                         &affected_scopes,
                     ),
-                };
-                let _ = reply.send(outcome);
-            }
-            WriteCommand::CompactSearchDatabase(reply) => {
-                let outcome = match pending_error.take() {
-                    Some(error) => Err(error),
-                    None if maintenance_cancelled.load(Ordering::Acquire) => {
-                        Err(SearchError::Cancelled)
-                    }
-                    None => database.compact_search_database(),
                 };
                 let _ = reply.send(outcome);
             }
@@ -582,7 +548,3 @@ fn extraction_status_bytes(status: &ExtractionStatus) -> usize {
 #[cfg(test)]
 #[path = "writer/tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "writer/compact_search_database_tests.rs"]
-mod compact_search_database_tests;

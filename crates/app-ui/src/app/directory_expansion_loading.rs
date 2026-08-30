@@ -56,19 +56,21 @@ impl FileBrowser {
     pub(super) fn accept_expanded_directory_discovery(
         &mut self,
         request: ExpandedDirectoryLoadRequest,
-        discovery: Result<DirectoryDiscovery, DirectoryLoadFailure>,
+        prebuilt: Result<crate::model::PrebuiltDirectoryDiscovery, DirectoryLoadFailure>,
     ) -> Task<Message> {
         if matches!(
             &request.context,
             DirectoryExpansionLoadContext::IconGrid { .. }
         ) {
-            let entries = discovery
-                .map(|discovery| super::navigation::display_entries_in_discovery_order(&discovery));
+            let entries =
+                prebuilt.map(|prebuilt| std::sync::Arc::unwrap_or_clone(prebuilt.display_entries));
             return self.accept_icon_grid_directory_entries(request, entries);
         }
-        let entries = discovery.map(|discovery| {
-            let entries = super::navigation::display_entries_in_discovery_order(&discovery);
-            (entries, Some(discovery))
+        let entries = prebuilt.map(|prebuilt| {
+            (
+                std::sync::Arc::unwrap_or_clone(prebuilt.display_entries),
+                Some(prebuilt.discovery),
+            )
         });
         self.accept_expanded_directory_entries(request, entries)
     }

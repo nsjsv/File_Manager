@@ -78,7 +78,9 @@ pub(crate) use properties::{
 mod queued_file_operations;
 pub(crate) use queued_file_operations::{file_operation_subscription, DurableDirectMoveCommit};
 mod search;
-pub(crate) use search::{directory_fallback_search_command, search_command};
+pub(crate) use search::{
+    directory_fallback_search_command, search_command, search_with_scope_root_check_command,
+};
 mod search_service;
 mod search_service_endpoint;
 mod search_service_recovery;

@@ -140,7 +140,6 @@ pub enum FileManagerActivationClaim {
 
 #[derive(Debug)]
 pub struct DesktopActivationRuntime {
-    connection: zbus::blocking::Connection,
     event_receiver: Mutex<Option<Receiver<DesktopActivationEvent>>>,
     standard_service_status: StandardFileManagerServiceStatus,
 }
@@ -154,7 +153,6 @@ impl DesktopActivationRuntime {
             Ok(connection) => {
                 let standard_service_status = claim_file_manager1_name(&connection);
                 Ok(FileManagerActivationClaim::Primary(Arc::new(Self {
-                    connection,
                     event_receiver: Mutex::new(Some(event_receiver)),
                     standard_service_status,
                 })))
@@ -200,12 +198,7 @@ impl DesktopActivationRuntime {
     pub fn identity(&self) -> usize {
         self as *const Self as usize
     }
-
-    pub fn unique_bus_name(&self) -> Option<&str> {
-        self.connection.unique_name().map(|name| name.as_str())
-    }
 }
-
 #[derive(Debug, Error)]
 pub enum FileManagerActivationError {
     #[error("could not connect to the desktop session bus: {source}")]

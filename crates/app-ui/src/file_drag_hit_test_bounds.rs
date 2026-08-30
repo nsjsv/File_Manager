@@ -45,6 +45,7 @@ pub(crate) enum FileDragHitTestBoundsRequest {
     SelectionMarquee,
     Breadcrumbs(u64),
     FileDropLayout(FileDropLayoutRequest),
+    PasteTarget,
 }
 
 pub(crate) fn file_drag_hit_test_bounds_command(
@@ -147,6 +148,18 @@ impl FileDragHitTestBoundsOperation {
             })
             .collect()
     }
+
+    fn measured_bounds(&self) -> FileDragHitTestBounds {
+        FileDragHitTestBounds {
+            tabs: self.tabs.clone(),
+            entries: self.entries.clone(),
+            breadcrumbs: self.breadcrumb_targets(),
+            directory_targets: self.directory_targets.clone(),
+            blocked_directories: self.blocked_directories.clone(),
+            sidebar_directories: self.sidebar_directories.clone(),
+            empty_sidebar_bookmarks: self.empty_sidebar_bookmark_bounds,
+        }
+    }
 }
 
 impl widget::Operation<Message> for FileDragHitTestBoundsOperation {
@@ -244,18 +257,10 @@ impl widget::Operation<Message> for FileDragHitTestBoundsOperation {
                 Message::BreadcrumbDropTargetBoundsMeasured(generation, self.breadcrumb_targets())
             }
             FileDragHitTestBoundsRequest::FileDropLayout(request) => {
-                Message::FileDropLayoutMeasured(
-                    request,
-                    FileDragHitTestBounds {
-                        tabs: self.tabs.clone(),
-                        entries: self.entries.clone(),
-                        breadcrumbs: self.breadcrumb_targets(),
-                        directory_targets: self.directory_targets.clone(),
-                        blocked_directories: self.blocked_directories.clone(),
-                        sidebar_directories: self.sidebar_directories.clone(),
-                        empty_sidebar_bookmarks: self.empty_sidebar_bookmark_bounds,
-                    },
-                )
+                Message::FileDropLayoutMeasured(request, self.measured_bounds())
+            }
+            FileDragHitTestBoundsRequest::PasteTarget => {
+                Message::PasteTargetMeasured(self.measured_bounds())
             }
         };
         Outcome::Some(message)

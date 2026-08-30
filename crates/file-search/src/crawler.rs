@@ -143,16 +143,6 @@ impl SearchIndexer {
             .await
     }
 
-    /// 启动核对从 SQLite 稳定分页读取签名，crawler 只保留当前批次与 DFS 栈。
-    pub async fn rebuild_with_progress(
-        &self,
-        on_progress: impl FnMut(IndexMaintenanceProgress),
-    ) -> SearchResult<RebuildStats> {
-        let cancellation = CancellationToken::new();
-        self.rebuild_with_progress_cancelled(&cancellation, on_progress)
-            .await
-    }
-
     pub async fn rebuild_with_progress_cancelled(
         &self,
         cancellation: &CancellationToken,
@@ -164,16 +154,6 @@ impl SearchIndexer {
             on_progress,
         )
         .await
-    }
-
-    pub async fn rebuild_paths_with_progress(
-        &self,
-        changed_paths: Vec<PathBuf>,
-        on_progress: impl FnMut(IndexMaintenanceProgress),
-    ) -> SearchResult<RebuildStats> {
-        let cancellation = CancellationToken::new();
-        self.rebuild_paths_with_progress_cancelled(changed_paths, &cancellation, on_progress)
-            .await
     }
 
     pub async fn rebuild_paths_with_progress_cancelled(
@@ -236,7 +216,6 @@ impl SearchIndexer {
         self.startup_check_scopes(scopes, &mut stats, cancellation, &mut on_progress)
             .await?;
         self.writer.flush()?;
-        self.writer.compact_search_database()?;
         Ok(stats)
     }
 
