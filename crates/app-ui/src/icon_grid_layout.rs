@@ -13,7 +13,6 @@ use crate::model::{
 };
 use crate::virtual_range::vertical_scroll_delta_to_reveal;
 
-const ICON_GRID_INITIAL_ROWS: usize = ICON_GRID_OVERSCAN_ROWS * 2 + 1;
 pub(crate) const ICON_GRID_STATUS_HEIGHT: f32 = 48.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,8 +49,10 @@ impl IconGridRowsLayout<'_> {
         clip_bottom: f32,
         viewport: IconGridViewport,
         icon_edge: u32,
+        height_bound: f32,
     ) -> Option<IconGridVisibleRows> {
-        let (visible_top, visible_bottom) = visible_vertical_window(viewport, icon_edge);
+        let (visible_top, visible_bottom) =
+            visible_vertical_window(viewport, icon_edge, height_bound);
         self.visible_rows_in_window(
             panel_top,
             clip_bottom,
@@ -138,6 +139,7 @@ pub(crate) struct IconGridPanelLayout<'a> {
 #[derive(Debug)]
 pub(crate) struct IconGridLayout<'a> {
     icon_edge: u32,
+    height_bound: f32,
     root: IconGridPanelLayout<'a>,
 }
 
@@ -167,6 +169,7 @@ impl<'a> IconGridLayout<'a> {
         root_directory: &'a Path,
         root_entries: &'a [DirectoryEntry],
         viewport_width: f32,
+        height_bound: f32,
         icon_edge: u32,
         expansion: Option<&'a IconGridExpansionState>,
     ) -> Self {
@@ -185,7 +188,11 @@ impl<'a> IconGridLayout<'a> {
             icon_edge,
             children_by_parent.as_ref(),
         );
-        Self { icon_edge, root }
+        Self {
+            icon_edge,
+            height_bound,
+            root,
+        }
     }
 
     pub(crate) fn root(&self) -> &IconGridPanelLayout<'a> {
@@ -200,7 +207,8 @@ impl<'a> IconGridLayout<'a> {
         &self,
         viewport: IconGridViewport,
     ) -> Vec<IconGridVisibleEntry<'a>> {
-        let (visible_top, visible_bottom) = visible_vertical_window(viewport, self.icon_edge);
+        let (visible_top, visible_bottom) =
+            visible_vertical_window(viewport, self.icon_edge, self.height_bound);
         let mut entries = Vec::new();
         collect_visible_entries(
             &self.root,
@@ -643,9 +651,13 @@ fn find_interactive_entry<'a>(
     None
 }
 
-fn visible_vertical_window(viewport: IconGridViewport, icon_edge: u32) -> (f32, f32) {
+fn visible_vertical_window(
+    viewport: IconGridViewport,
+    icon_edge: u32,
+    height_bound: f32,
+) -> (f32, f32) {
+    let overscan = ICON_GRID_OVERSCAN_ROWS as f32 * row_height(icon_edge);
     if viewport.width > f32::EPSILON && viewport.height > f32::EPSILON {
-        let overscan = ICON_GRID_OVERSCAN_ROWS as f32 * row_height(icon_edge);
         (
             (viewport.offset_y - overscan).max(0.0),
             viewport.offset_y + viewport.height + overscan,
@@ -653,7 +665,7 @@ fn visible_vertical_window(viewport: IconGridViewport, icon_edge: u32) -> (f32, 
     } else {
         (
             0.0,
-            ICON_GRID_CONTENT_PADDING + ICON_GRID_INITIAL_ROWS as f32 * row_height(icon_edge),
+            ICON_GRID_CONTENT_PADDING + height_bound.max(0.0) + overscan,
         )
     }
 }

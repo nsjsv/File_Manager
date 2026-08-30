@@ -680,7 +680,7 @@ impl FileBrowser {
                     &self.entries,
                     &self.expanded_directories,
                     crate::list_view::LIST_ROW_HEIGHT,
-                    crate::list_view::LIST_INITIAL_ROWS,
+                    crate::list_view::list_initial_rows(self.main_window_height),
                 )
             });
         let entries = crate::visible_entries::visible_entries_in_range(

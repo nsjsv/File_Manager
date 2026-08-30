@@ -1,53 +1,12 @@
 use std::fmt;
 
 use super::{
-    BatchRenameBatchRule, BatchRenameCaseRule, BatchRenameCustomRule, BatchRenameExtensionMode,
-    BatchRenameExtensionRule, BatchRenameInsertMode, BatchRenameInsertRule, BatchRenameListRule,
-    BatchRenameRandomMode, BatchRenameRandomRule, BatchRenameRegexRule, BatchRenameRemoveClass,
-    BatchRenameRemoveMode, BatchRenameRemoveRule, BatchRenameReplaceRule, BatchRenameReplaceScope,
-    BatchRenameRulePanel, BatchRenameSequenceRule, BatchRenameSliceMode, BatchRenameSliceRule,
-    BatchRenameSortMode, BatchRenameSortRule,
+    BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameExtensionRule, BatchRenameInsertMode,
+    BatchRenameInsertRule, BatchRenameListRule, BatchRenameRandomMode, BatchRenameRandomRule,
+    BatchRenameRegexRule, BatchRenameRemoveClass, BatchRenameRemoveMode, BatchRenameRemoveRule,
+    BatchRenameReplaceRule, BatchRenameReplaceScope, BatchRenameSequenceRule, BatchRenameSliceMode,
+    BatchRenameSliceRule, BatchRenameSortMode, BatchRenameSortRule,
 };
-
-impl BatchRenameRulePanel {
-    pub(crate) fn options() -> Vec<Self> {
-        vec![
-            Self::Sort,
-            Self::Extension,
-            Self::Case,
-            Self::Sequence,
-            Self::Replace,
-            Self::Insert,
-            Self::Slice,
-            Self::Random,
-            Self::Remove,
-            Self::List,
-            Self::Custom,
-            Self::Regex,
-            Self::Batch,
-        ]
-    }
-}
-
-impl fmt::Display for BatchRenameRulePanel {
-    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
-        output.write_str(&crate::localization::translate_current(match self {
-            Self::Sort => "Sort",
-            Self::Extension => "Extension",
-            Self::Case => "Case",
-            Self::Sequence => "Sequence",
-            Self::Replace => "Replace",
-            Self::Insert => "Insert",
-            Self::Slice => "Slice",
-            Self::Random => "Random",
-            Self::Remove => "Remove",
-            Self::List => "List",
-            Self::Custom => "Custom",
-            Self::Regex => "Regex",
-            Self::Batch => "Batch",
-        }))
-    }
-}
 
 impl Default for BatchRenameSortRule {
     fn default() -> Self {
@@ -308,27 +267,11 @@ impl Default for BatchRenameListRule {
     }
 }
 
-impl Default for BatchRenameCustomRule {
-    fn default() -> Self {
-        Self {
-            template: String::new(),
-        }
-    }
-}
-
 impl Default for BatchRenameRegexRule {
     fn default() -> Self {
         Self {
             pattern: String::new(),
             replacement: String::new(),
-        }
-    }
-}
-
-impl Default for BatchRenameBatchRule {
-    fn default() -> Self {
-        Self {
-            commands: String::new(),
         }
     }
 }

@@ -313,6 +313,7 @@ impl FileBrowser {
             return Vec::new();
         }
 
+        let window_height = self.main_window_height;
         let Some(pane) = self.pane_view(pane_id) else {
             return Vec::new();
         };
@@ -341,7 +342,7 @@ impl FileBrowser {
                     pane.entries,
                     pane.expanded_directories,
                     crate::list_view::LIST_ROW_HEIGHT,
-                    crate::list_view::LIST_INITIAL_ROWS,
+                    crate::list_view::list_initial_rows(window_height),
                 )
             });
 

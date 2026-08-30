@@ -30,10 +30,91 @@ fn source_with_modified(name: &str, modified_secs: u64) -> BatchRenameSource {
 }
 
 fn state_for_sources(items: Vec<BatchRenameSource>) -> BatchRenameState {
-    let mut state = BatchRenameState::new_with_existing_sources(items, HashSet::new()).unwrap();
-    // 高级规则测试显式退出默认的简单模式
-    state.simple_mode = false;
-    state
+    BatchRenameState::new_with_existing_sources(items, HashSet::new()).unwrap()
+}
+
+fn add_rule(state: &mut BatchRenameState, kind: BatchRenameRuleKind) -> u64 {
+    state.apply_update(BatchRenameMessage::AddRuleSelected(kind));
+    state.rules.last().expect("rule appended").id
+}
+
+fn rule_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameRuleParams {
+    &mut state
+        .rules
+        .iter_mut()
+        .find(|rule| rule.id == id)
+        .expect("rule exists")
+        .params
+}
+
+fn replace_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameReplaceRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Replace(params) => params,
+        _ => panic!("expected replace rule"),
+    }
+}
+
+fn insert_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameInsertRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Insert(params) => params,
+        _ => panic!("expected insert rule"),
+    }
+}
+
+fn slice_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameSliceRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Slice(params) => params,
+        _ => panic!("expected slice rule"),
+    }
+}
+
+fn remove_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameRemoveRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Remove(params) => params,
+        _ => panic!("expected remove rule"),
+    }
+}
+
+fn sequence_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameSequenceRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Sequence(params) => params,
+        _ => panic!("expected sequence rule"),
+    }
+}
+
+fn random_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameRandomRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Random(params) => params,
+        _ => panic!("expected random rule"),
+    }
+}
+
+fn extension_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameExtensionRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Extension(params) => params,
+        _ => panic!("expected extension rule"),
+    }
+}
+
+fn list_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameListRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::List(params) => params,
+        _ => panic!("expected list rule"),
+    }
+}
+
+fn regex_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameRegexRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Regex(params) => params,
+        _ => panic!("expected regex rule"),
+    }
+}
+
+fn template_params_mut(state: &mut BatchRenameState, id: u64) -> &mut BatchRenameTemplateRule {
+    match rule_params_mut(state, id) {
+        BatchRenameRuleParams::Template(params) => params,
+        _ => panic!("expected template rule"),
+    }
 }
 
 fn preview_names(state: &BatchRenameState) -> Vec<&str> {
@@ -104,7 +185,8 @@ fn batch_rename_plan_preserves_non_utf8_parent_path() {
             modified: None,
         },
     ]);
-    state.sequence.prefix = "renamed ".to_owned();
+    let sequence = add_rule(&mut state, BatchRenameRuleKind::Sequence);
+    sequence_params_mut(&mut state, sequence).prefix = "renamed ".to_owned();
     state.rebuild_preview();
 
     let plan = state.plan().expect("valid batch rename plan");
@@ -119,11 +201,29 @@ fn batch_rename_plan_preserves_non_utf8_parent_path() {
 }
 
 #[test]
+fn empty_pipeline_leaves_all_names_unchanged() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    state.rebuild_preview();
+
+    assert_eq!(preview_names(&state), vec!["a.txt", "b.txt"]);
+    assert!(state
+        .preview
+        .rows
+        .iter()
+        .all(|row| row.status == BatchRenamePreviewStatus::Unchanged));
+    assert!(!state.can_apply());
+}
+
+#[test]
 fn batch_rename_sequence_prefixes_number_and_preserves_extension() {
     let mut state = state_for_names(&["report.txt", "notes.txt"]);
-    state.sequence.prefix = "File ".to_owned();
-    state.sequence.start_input = "3".to_owned();
-    state.sequence.padding_input = "3".to_owned();
+    let sequence = add_rule(&mut state, BatchRenameRuleKind::Sequence);
+    {
+        let params = sequence_params_mut(&mut state, sequence);
+        params.prefix = "File ".to_owned();
+        params.start_input = "3".to_owned();
+        params.padding_input = "3".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -135,10 +235,14 @@ fn batch_rename_sequence_prefixes_number_and_preserves_extension() {
 #[test]
 fn batch_rename_sequence_respects_step() {
     let mut state = state_for_names(&["report.txt", "notes.txt"]);
-    state.sequence.prefix = "File ".to_owned();
-    state.sequence.start_input = "3".to_owned();
-    state.sequence.step_input = "5".to_owned();
-    state.sequence.padding_input = "3".to_owned();
+    let sequence = add_rule(&mut state, BatchRenameRuleKind::Sequence);
+    {
+        let params = sequence_params_mut(&mut state, sequence);
+        params.prefix = "File ".to_owned();
+        params.start_input = "3".to_owned();
+        params.step_input = "5".to_owned();
+        params.padding_input = "3".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -148,15 +252,34 @@ fn batch_rename_sequence_respects_step() {
 }
 
 #[test]
-fn batch_rename_replace_insert_slice_and_case_are_ordered() {
+fn batch_rename_replace_insert_slice_and_case_follow_pipeline_order() {
     let mut state = state_for_names(&["summer draft.txt", "winter draft.txt"]);
-    state.replace.find = "draft".to_owned();
-    state.replace.replacement = "photo".to_owned();
-    state.insert.text = "2026 ".to_owned();
-    state.insert.position_input = "0".to_owned();
-    state.slice.start_input = "0".to_owned();
-    state.slice.length_input = "11".to_owned();
-    state.case = BatchRenameCaseRule::Uppercase;
+    let replace = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.find = "draft".to_owned();
+        params.replacement = "photo".to_owned();
+    }
+    let insert = add_rule(&mut state, BatchRenameRuleKind::Insert);
+    {
+        let params = insert_params_mut(&mut state, insert);
+        params.text = "2026 ".to_owned();
+        params.position_input = "0".to_owned();
+    }
+    let slice = add_rule(&mut state, BatchRenameRuleKind::Slice);
+    {
+        let params = slice_params_mut(&mut state, slice);
+        params.start_input = "0".to_owned();
+        params.length_input = "11".to_owned();
+    }
+    let case = add_rule(&mut state, BatchRenameRuleKind::Case);
+    assert!(matches!(
+        rule_params_mut(&mut state, case),
+        BatchRenameRuleParams::Case(BatchRenameCaseRule::Unchanged)
+    ));
+    if let BatchRenameRuleParams::Case(case) = rule_params_mut(&mut state, case) {
+        *case = BatchRenameCaseRule::Uppercase;
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -166,33 +289,138 @@ fn batch_rename_replace_insert_slice_and_case_are_ordered() {
 }
 
 #[test]
+fn batch_rename_pipeline_order_swap_changes_result() {
+    // 替换 "1"→"9" 与序号规则的先后顺序决定结果是否受影响
+    let mut replace_first = state_for_names(&["a.txt", "b.txt"]);
+    let replace = add_rule(&mut replace_first, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut replace_first, replace);
+        params.find = "1".to_owned();
+        params.replacement = "9".to_owned();
+    }
+    let sequence = add_rule(&mut replace_first, BatchRenameRuleKind::Sequence);
+    sequence_params_mut(&mut replace_first, sequence).include_original_stem = false;
+    replace_first.rebuild_preview();
+    assert_eq!(preview_names(&replace_first), vec!["01.txt", "02.txt"]);
+
+    let mut sequence_first = state_for_names(&["a.txt", "b.txt"]);
+    let sequence = add_rule(&mut sequence_first, BatchRenameRuleKind::Sequence);
+    sequence_params_mut(&mut sequence_first, sequence).include_original_stem = false;
+    let replace = add_rule(&mut sequence_first, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut sequence_first, replace);
+        params.find = "1".to_owned();
+        params.replacement = "9".to_owned();
+    }
+    sequence_first.rebuild_preview();
+    assert_eq!(preview_names(&sequence_first), vec!["09.txt", "02.txt"]);
+
+    // 在同一状态里用 RuleMoved 交换顺序，结果应与手工构建的相反管道一致
+    let mut swapped = state_for_names(&["a.txt", "b.txt"]);
+    let replace = add_rule(&mut swapped, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut swapped, replace);
+        params.find = "1".to_owned();
+        params.replacement = "9".to_owned();
+    }
+    let sequence = add_rule(&mut swapped, BatchRenameRuleKind::Sequence);
+    sequence_params_mut(&mut swapped, sequence).include_original_stem = false;
+    swapped.apply_update(BatchRenameMessage::RuleMoved(replace, 1));
+    swapped.rebuild_preview();
+    assert_eq!(preview_names(&swapped), preview_names(&sequence_first));
+}
+
+#[test]
+fn batch_rename_disabled_rule_is_skipped_by_pipeline() {
+    let mut state = state_for_names(&["draft-a.txt", "draft-b.txt"]);
+    let replace = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.find = "draft".to_owned();
+        params.replacement = "final".to_owned();
+    }
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state), vec!["final-a.txt", "final-b.txt"]);
+
+    state.apply_update(BatchRenameMessage::RuleEnabledToggled(replace));
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state), vec!["draft-a.txt", "draft-b.txt"]);
+
+    state.apply_update(BatchRenameMessage::RuleEnabledToggled(replace));
+    state.rebuild_preview();
+    assert_eq!(preview_names(&state), vec!["final-a.txt", "final-b.txt"]);
+}
+
+#[test]
+fn batch_rename_rule_removal_and_selection_followups() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    let first = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    let second = add_rule(&mut state, BatchRenameRuleKind::Sequence);
+
+    assert_eq!(state.selected_rule, Some(second));
+    state.apply_update(BatchRenameMessage::RuleRemoved(second));
+    assert_eq!(state.selected_rule, Some(first));
+    assert_eq!(state.rules.len(), 1);
+
+    state.apply_update(BatchRenameMessage::RuleRemoved(first));
+    assert_eq!(state.selected_rule, None);
+    assert!(state.rules.is_empty());
+}
+
+#[test]
 fn batch_rename_replace_supports_first_last_range_and_ignore_case() {
     let mut state = state_for_names(&["foo-foo-FOO.txt", "demo.txt"]);
-    state.replace.find = "foo".to_owned();
-    state.replace.replacement = "bar".to_owned();
-    state.replace.scope = BatchRenameReplaceScope::First;
+    let replace = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.find = "foo".to_owned();
+        params.replacement = "bar".to_owned();
+        params.scope = BatchRenameReplaceScope::First;
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "bar-foo-FOO.txt");
 
-    state.replace.scope = BatchRenameReplaceScope::Last;
-    state.replace.ignore_case = true;
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.scope = BatchRenameReplaceScope::Last;
+        params.ignore_case = true;
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "foo-foo-bar.txt");
 
-    state.replace.scope = BatchRenameReplaceScope::Range;
-    state.replace.ignore_case = false;
-    state.replace.range_start_input = "4".to_owned();
-    state.replace.range_length_input = "7".to_owned();
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.scope = BatchRenameReplaceScope::Range;
+        params.ignore_case = false;
+        params.range_start_input = "4".to_owned();
+        params.range_length_input = "7".to_owned();
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "foo-bar-FOO.txt");
 }
 
 #[test]
+fn batch_rename_per_rule_params_are_isolated() {
+    let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
+    let first = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    let second = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    replace_params_mut(&mut state, first).find = "first-find".to_owned();
+    replace_params_mut(&mut state, second).find = "second-find".to_owned();
+
+    assert_eq!(replace_params_mut(&mut state, first).find, "first-find");
+    assert_eq!(replace_params_mut(&mut state, second).find, "second-find");
+}
+
+#[test]
 fn batch_rename_insert_supports_after_anchor() {
     let mut state = state_for_names(&["photo_final.txt", "notes.txt"]);
-    state.insert.mode = BatchRenameInsertMode::AfterAnchor;
-    state.insert.anchor = "photo".to_owned();
-    state.insert.text = "-2026".to_owned();
+    let insert = add_rule(&mut state, BatchRenameRuleKind::Insert);
+    {
+        let params = insert_params_mut(&mut state, insert);
+        params.mode = BatchRenameInsertMode::AfterAnchor;
+        params.anchor = "photo".to_owned();
+        params.text = "-2026".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -204,13 +432,17 @@ fn batch_rename_insert_supports_after_anchor() {
 #[test]
 fn batch_rename_insert_scope_controls_extension_inclusion() {
     let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
-    state.insert.mode = BatchRenameInsertMode::Position;
-    state.insert.position_input = "7".to_owned();
-    state.insert.text = "-x".to_owned();
+    let insert = add_rule(&mut state, BatchRenameRuleKind::Insert);
+    {
+        let params = insert_params_mut(&mut state, insert);
+        params.mode = BatchRenameInsertMode::Position;
+        params.position_input = "7".to_owned();
+        params.text = "-x".to_owned();
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "photo.j-xpg");
 
-    state.insert.ignore_extension = true;
+    insert_params_mut(&mut state, insert).ignore_extension = true;
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "photo-x.jpg");
 }
@@ -218,22 +450,29 @@ fn batch_rename_insert_scope_controls_extension_inclusion() {
 #[test]
 fn batch_rename_insert_scope_applies_to_after_and_anchor_modes() {
     let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
-    state.insert.mode = BatchRenameInsertMode::After;
-    state.insert.text = "-x".to_owned();
+    let insert = add_rule(&mut state, BatchRenameRuleKind::Insert);
+    {
+        let params = insert_params_mut(&mut state, insert);
+        params.mode = BatchRenameInsertMode::After;
+        params.text = "-x".to_owned();
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "photo.jpg-x");
 
-    state.insert.ignore_extension = true;
+    insert_params_mut(&mut state, insert).ignore_extension = true;
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "photo-x.jpg");
 
-    state.insert.mode = BatchRenameInsertMode::AfterAnchor;
-    state.insert.anchor = "jpg".to_owned();
-    state.insert.ignore_extension = false;
+    {
+        let params = insert_params_mut(&mut state, insert);
+        params.mode = BatchRenameInsertMode::AfterAnchor;
+        params.anchor = "jpg".to_owned();
+        params.ignore_extension = false;
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "photo.jpg-x");
 
-    state.insert.ignore_extension = true;
+    insert_params_mut(&mut state, insert).ignore_extension = true;
     state.rebuild_preview();
     assert_eq!(preview_names(&state)[0], "photo-x.jpg");
 }
@@ -241,78 +480,30 @@ fn batch_rename_insert_scope_applies_to_after_and_anchor_modes() {
 #[test]
 fn batch_rename_extension_rule_runs_after_full_name_insert() {
     let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
-    state.insert.mode = BatchRenameInsertMode::Position;
-    state.insert.position_input = "7".to_owned();
-    state.insert.text = "-x".to_owned();
-    state.extension.mode = BatchRenameExtensionMode::Uppercase;
+    let insert = add_rule(&mut state, BatchRenameRuleKind::Insert);
+    {
+        let params = insert_params_mut(&mut state, insert);
+        params.mode = BatchRenameInsertMode::Position;
+        params.position_input = "7".to_owned();
+        params.text = "-x".to_owned();
+    }
+    let extension = add_rule(&mut state, BatchRenameRuleKind::Extension);
+    extension_params_mut(&mut state, extension).mode = BatchRenameExtensionMode::Uppercase;
     state.rebuild_preview();
 
     assert_eq!(preview_names(&state)[0], "photo.J-XPG");
 }
 
 #[test]
-fn batch_rename_mode_switches_preserve_hidden_rule_inputs() {
-    let mut state = state_for_names(&["photo.jpg", "notes.txt"]);
-    state.extension.replacement = "bak".to_owned();
-    state.replace.range_start_input = "2".to_owned();
-    state.replace.range_length_input = "3".to_owned();
-    state.insert.position_input = "4".to_owned();
-    state.insert.anchor = "oto".to_owned();
-    state.insert.ignore_extension = true;
-    state.slice.start_input = "1".to_owned();
-    state.slice.anchor = "pho".to_owned();
-    state.remove.text = "o".to_owned();
-    state.remove.classes = vec![BatchRenameRemoveClass::Digits];
-
-    state.apply_update(BatchRenameMessage::ExtensionModeSelected(
-        BatchRenameExtensionMode::Replace,
-    ));
-    state.apply_update(BatchRenameMessage::ExtensionModeSelected(
-        BatchRenameExtensionMode::Preserve,
-    ));
-    state.apply_update(BatchRenameMessage::ReplaceScopeSelected(
-        BatchRenameReplaceScope::Range,
-    ));
-    state.apply_update(BatchRenameMessage::ReplaceScopeSelected(
-        BatchRenameReplaceScope::All,
-    ));
-    state.apply_update(BatchRenameMessage::InsertModeSelected(
-        BatchRenameInsertMode::Position,
-    ));
-    state.apply_update(BatchRenameMessage::InsertModeSelected(
-        BatchRenameInsertMode::Before,
-    ));
-    state.apply_update(BatchRenameMessage::SliceModeSelected(
-        BatchRenameSliceMode::AfterAnchor,
-    ));
-    state.apply_update(BatchRenameMessage::SliceModeSelected(
-        BatchRenameSliceMode::Position,
-    ));
-    state.apply_update(BatchRenameMessage::RemoveModeSelected(
-        BatchRenameRemoveMode::CharacterClasses,
-    ));
-    state.apply_update(BatchRenameMessage::RemoveModeSelected(
-        BatchRenameRemoveMode::TextAndRange,
-    ));
-
-    assert_eq!(state.extension.replacement, "bak");
-    assert_eq!(state.replace.range_start_input, "2");
-    assert_eq!(state.replace.range_length_input, "3");
-    assert_eq!(state.insert.position_input, "4");
-    assert_eq!(state.insert.anchor, "oto");
-    assert!(state.insert.ignore_extension);
-    assert_eq!(state.slice.start_input, "1");
-    assert_eq!(state.slice.anchor, "pho");
-    assert_eq!(state.remove.text, "o");
-    assert_eq!(state.remove.classes, vec![BatchRenameRemoveClass::Digits]);
-}
-
-#[test]
 fn batch_rename_slice_supports_after_anchor() {
     let mut state = state_for_names(&["photo_final.txt", "notes.txt"]);
-    state.slice.mode = BatchRenameSliceMode::AfterAnchor;
-    state.slice.anchor = "photo_".to_owned();
-    state.slice.length_input = "5".to_owned();
+    let slice = add_rule(&mut state, BatchRenameRuleKind::Slice);
+    {
+        let params = slice_params_mut(&mut state, slice);
+        params.mode = BatchRenameSliceMode::AfterAnchor;
+        params.anchor = "photo_".to_owned();
+        params.length_input = "5".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(preview_names(&state), vec!["final.txt", ".txt"]);
@@ -321,7 +512,10 @@ fn batch_rename_slice_supports_after_anchor() {
 #[test]
 fn batch_rename_case_invert_flips_stem_letter_case() {
     let mut state = state_for_names(&["AbC.txt", "xYz.txt"]);
-    state.case = BatchRenameCaseRule::InvertCase;
+    let case = add_rule(&mut state, BatchRenameRuleKind::Case);
+    if let BatchRenameRuleParams::Case(value) = rule_params_mut(&mut state, case) {
+        *value = BatchRenameCaseRule::InvertCase;
+    }
     state.rebuild_preview();
 
     assert_eq!(preview_names(&state), vec!["aBc.txt", "XyZ.txt"]);
@@ -331,8 +525,12 @@ fn batch_rename_case_invert_flips_stem_letter_case() {
 fn batch_rename_sort_changes_sequence_order() {
     let mut state = state_for_names(&["b.txt", "a.txt"]);
     state.sort.mode = BatchRenameSortMode::NameAscending;
-    state.sequence.prefix = "Item ".to_owned();
-    state.sequence.include_original_stem = false;
+    let sequence = add_rule(&mut state, BatchRenameRuleKind::Sequence);
+    {
+        let params = sequence_params_mut(&mut state, sequence);
+        params.prefix = "Item ".to_owned();
+        params.include_original_stem = false;
+    }
     state.rebuild_preview();
 
     assert_eq!(preview_names(&state), vec!["Item 01.txt", "Item 02.txt"]);
@@ -427,6 +625,7 @@ fn batch_rename_preview_drag_reorders_selection_order() {
 #[test]
 fn batch_rename_preview_name_edit_overrides_single_target() {
     let mut state = state_for_names(&["alpha.txt", "beta.txt"]);
+    let replace = add_rule(&mut state, BatchRenameRuleKind::Replace);
     let source = PathBuf::from("/tmp/beta.txt");
 
     state.apply_update(BatchRenameMessage::PreviewNameEditStarted(source.clone()));
@@ -439,8 +638,11 @@ fn batch_rename_preview_name_edit_overrides_single_target() {
     state.rebuild_preview();
     assert_eq!(preview_names(&state), vec!["alpha.txt", "chosen.md"]);
 
-    state.replace.find = "alpha".to_owned();
-    state.replace.replacement = "renamed".to_owned();
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.find = "alpha".to_owned();
+        params.replacement = "renamed".to_owned();
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state), vec!["renamed.txt", "chosen.md"]);
     let plan = state.plan().expect("manual edit should produce a plan");
@@ -454,12 +656,16 @@ fn batch_rename_preview_name_edit_overrides_single_target() {
 #[test]
 fn batch_rename_extension_modes_transform_extension() {
     let mut state = state_for_names(&["photo.JPEG", "archive.tar"]);
-    state.extension.mode = BatchRenameExtensionMode::Replace;
-    state.extension.replacement = ".bak".to_owned();
+    let extension = add_rule(&mut state, BatchRenameRuleKind::Extension);
+    {
+        let params = extension_params_mut(&mut state, extension);
+        params.mode = BatchRenameExtensionMode::Replace;
+        params.replacement = ".bak".to_owned();
+    }
     state.rebuild_preview();
     assert_eq!(preview_names(&state), vec!["photo.bak", "archive.bak"]);
 
-    state.extension.mode = BatchRenameExtensionMode::Remove;
+    extension_params_mut(&mut state, extension).mode = BatchRenameExtensionMode::Remove;
     state.rebuild_preview();
     assert_eq!(preview_names(&state), vec!["photo", "archive"]);
 }
@@ -467,9 +673,13 @@ fn batch_rename_extension_modes_transform_extension() {
 #[test]
 fn batch_rename_random_is_deterministic() {
     let mut state = state_for_names(&["photo.jpg", "photo.jpg"]);
-    state.random.mode = BatchRenameRandomMode::Suffix;
-    state.random.length_input = "4".to_owned();
-    state.random.alphabet = "ab".to_owned();
+    let random = add_rule(&mut state, BatchRenameRuleKind::Random);
+    {
+        let params = random_params_mut(&mut state, random);
+        params.mode = BatchRenameRandomMode::Suffix;
+        params.length_input = "4".to_owned();
+        params.alphabet = "ab".to_owned();
+    }
     state.rebuild_preview();
     let first_preview = preview_names(&state)
         .into_iter()
@@ -484,9 +694,13 @@ fn batch_rename_random_is_deterministic() {
 #[test]
 fn batch_rename_remove_text_and_range() {
     let mut state = state_for_names(&["draft-2026-final.txt", "draft-2027-final.txt"]);
-    state.remove.text = "draft-".to_owned();
-    state.remove.start_input = "4".to_owned();
-    state.remove.length_input = "1".to_owned();
+    let remove = add_rule(&mut state, BatchRenameRuleKind::Remove);
+    {
+        let params = remove_params_mut(&mut state, remove);
+        params.text = "draft-".to_owned();
+        params.start_input = "4".to_owned();
+        params.length_input = "1".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -498,15 +712,19 @@ fn batch_rename_remove_text_and_range() {
 #[test]
 fn batch_rename_remove_character_classes() {
     let mut state = state_for_names(&["Ab 中-12(测).txt", "xY 9!.txt"]);
-    state.remove.mode = BatchRenameRemoveMode::CharacterClasses;
-    state.remove.classes = vec![
-        BatchRenameRemoveClass::Uppercase,
-        BatchRenameRemoveClass::Digits,
-        BatchRenameRemoveClass::Symbols,
-        BatchRenameRemoveClass::Brackets,
-        BatchRenameRemoveClass::Whitespace,
-        BatchRenameRemoveClass::Hanzi,
-    ];
+    let remove = add_rule(&mut state, BatchRenameRuleKind::Remove);
+    {
+        let params = remove_params_mut(&mut state, remove);
+        params.mode = BatchRenameRemoveMode::CharacterClasses;
+        params.classes = vec![
+            BatchRenameRemoveClass::Uppercase,
+            BatchRenameRemoveClass::Digits,
+            BatchRenameRemoveClass::Symbols,
+            BatchRenameRemoveClass::Brackets,
+            BatchRenameRemoveClass::Whitespace,
+            BatchRenameRemoveClass::Hanzi,
+        ];
+    }
     state.rebuild_preview();
 
     assert_eq!(preview_names(&state), vec!["b.txt", "x.txt"]);
@@ -516,31 +734,68 @@ fn batch_rename_remove_character_classes() {
 fn batch_rename_list_overrides_target_names_by_order() {
     let mut state = state_for_names(&["b.txt", "a.txt"]);
     state.sort.mode = BatchRenameSortMode::NameAscending;
-    state.list.names = "first.md|second.md".to_owned();
+    let list = add_rule(&mut state, BatchRenameRuleKind::List);
+    list_params_mut(&mut state, list).names = "first.md|second.md".to_owned();
     state.rebuild_preview();
 
     assert_eq!(preview_names(&state), vec!["first.md", "second.md"]);
 }
 
 #[test]
-fn batch_rename_custom_template_uses_placeholders() {
+fn batch_rename_template_numbering_is_independent_with_padding() {
     let mut state = state_for_names(&["report.txt", "notes.md"]);
-    state.sequence.start_input = "7".to_owned();
-    state.sequence.padding_input = "3".to_owned();
-    state.custom.template = "{n}-{original_stem}.{ext}".to_owned();
+    let template = add_rule(&mut state, BatchRenameRuleKind::Template);
+    template_params_mut(&mut state, template).template = "{n3}-{original_stem}.{ext}".to_owned();
     state.rebuild_preview();
 
     assert_eq!(
         preview_names(&state),
-        vec!["007-report.txt", "008-notes.md"]
+        vec!["001-report.txt", "002-notes.md"]
     );
+}
+
+#[test]
+fn batch_rename_template_applies_to_pipeline_output() {
+    let mut state = state_for_names(&["draft-a.txt", "draft-b.txt"]);
+    let replace = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.find = "draft".to_owned();
+        params.replacement = "final".to_owned();
+    }
+    let template = add_rule(&mut state, BatchRenameRuleKind::Template);
+    template_params_mut(&mut state, template).template = "[{stem}]".to_owned();
+    state.rebuild_preview();
+
+    // 模板的 {stem} 引用上一条规则的输出（final-a），而非原始名
+    assert_eq!(preview_names(&state), vec!["[final-a]", "[final-b]"]);
+}
+
+#[test]
+fn batch_rename_template_accepts_localized_labels() {
+    let mut state = state_for_names(&["a.txt", "b.txt"]);
+    let template = add_rule(&mut state, BatchRenameRuleKind::Template);
+    template_params_mut(&mut state, template).template = format!(
+        "{}{}{}",
+        BatchRenameTemplateToken::OriginalNameWithoutExtension.localized_labels()[1],
+        BatchRenameTemplateToken::Number001.localized_labels()[1],
+        BatchRenameTemplateToken::OriginalExtension.localized_labels()[1],
+    );
+    state.rebuild_preview();
+
+    assert_eq!(preview_names(&state), vec!["a001.txt", "b002.txt"]);
+    assert!(state.can_apply());
 }
 
 #[test]
 fn batch_rename_regex_replaces_whole_target_name() {
     let mut state = state_for_names(&["IMG_0001.JPG", "IMG_0002.JPG"]);
-    state.regex.pattern = r"IMG_(\d+)".to_owned();
-    state.regex.replacement = "photo-$1".to_owned();
+    let regex = add_rule(&mut state, BatchRenameRuleKind::Regex);
+    {
+        let params = regex_params_mut(&mut state, regex);
+        params.pattern = r"IMG_(\d+)".to_owned();
+        params.replacement = "photo-$1".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -550,21 +805,10 @@ fn batch_rename_regex_replaces_whole_target_name() {
 }
 
 #[test]
-fn batch_rename_batch_commands_apply_in_order() {
-    let mut state = state_for_names(&["draft.txt", "notes.txt"]);
-    state.batch.commands = "prefix final-; replace draft => copy; ext md".to_owned();
-    state.rebuild_preview();
-
-    assert_eq!(
-        preview_names(&state),
-        vec!["final-copy.md", "final-notes.md"]
-    );
-}
-
-#[test]
 fn batch_rename_invalid_regex_blocks_apply() {
     let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.regex.pattern = "(".to_owned();
+    let regex = add_rule(&mut state, BatchRenameRuleKind::Regex);
+    regex_params_mut(&mut state, regex).pattern = "(".to_owned();
     state.rebuild_preview();
 
     assert!(state
@@ -578,7 +822,8 @@ fn batch_rename_invalid_regex_blocks_apply() {
 #[test]
 fn batch_rename_preview_marks_duplicate_targets() {
     let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.slice.start_input = "99".to_owned();
+    let slice = add_rule(&mut state, BatchRenameRuleKind::Slice);
+    slice_params_mut(&mut state, slice).start_input = "99".to_owned();
     state.rebuild_preview();
 
     assert!(state
@@ -610,9 +855,12 @@ fn batch_rename_preview_marks_existing_unselected_target() {
         existing,
     )
     .unwrap();
-    state.simple_mode = false;
-    state.replace.find = "report".to_owned();
-    state.replace.replacement = "taken".to_owned();
+    let replace = add_rule(&mut state, BatchRenameRuleKind::Replace);
+    {
+        let params = replace_params_mut(&mut state, replace);
+        params.find = "report".to_owned();
+        params.replacement = "taken".to_owned();
+    }
     state.rebuild_preview();
 
     assert_eq!(
@@ -623,131 +871,36 @@ fn batch_rename_preview_marks_existing_unselected_target() {
 }
 
 #[test]
-fn simple_mode_defaults_to_template_with_no_name_changes() {
-    let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.simple_mode = true;
-
-    assert_eq!(state.simple.kind, BatchRenameSimpleKind::Template);
-    assert_eq!(preview_names(&state), vec!["a.txt", "b.txt"]);
-    assert!(state
-        .preview
-        .rows
-        .iter()
-        .all(|row| row.status == BatchRenamePreviewStatus::Unchanged));
-    assert!(!state.can_apply());
-}
-
-#[test]
-fn simple_template_numbers_follow_preview_order_with_padding() {
-    let mut state = state_for_names(&["a.txt", "b.txt", "c.txt"]);
-    state.simple_mode = true;
-    state.simple.template = format!(
-        "{}{}{}",
-        BatchRenameSimpleToken::NameWithoutExtension.label(),
-        BatchRenameSimpleToken::Number001.label(),
-        BatchRenameSimpleToken::Extension.label(),
-    );
-    state.rebuild_preview();
-
-    assert_eq!(
-        preview_names(&state),
-        vec!["a001.txt", "b002.txt", "c003.txt"]
-    );
-    assert!(state.can_apply());
-}
-
-#[test]
-fn simple_template_original_name_token_preserves_full_name() {
-    let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.simple_mode = true;
-    state.simple.template = format!(
-        "{}-copy{}",
-        BatchRenameSimpleToken::OriginalName.label(),
-        BatchRenameSimpleToken::Number1.label(),
-    );
-    state.rebuild_preview();
-
-    assert_eq!(preview_names(&state), vec!["a.txt-copy1", "b.txt-copy2"]);
-}
-
-#[test]
-fn simple_replace_replaces_full_name_case_sensitively() {
-    let mut state = state_for_names(&["Report.TXT", "note.txt"]);
-    state.simple_mode = true;
-    state.simple.kind = BatchRenameSimpleKind::ReplaceText;
-    state.simple.find = "txt".to_owned();
-    state.simple.replacement = "md".to_owned();
-    state.rebuild_preview();
-
-    assert_eq!(preview_names(&state), vec!["Report.TXT", "note.md"]);
-
-    state.simple.find.clear();
-    state.rebuild_preview();
-    assert_eq!(preview_names(&state), vec!["Report.TXT", "note.txt"]);
-    assert!(!state.can_apply());
-}
-
-#[test]
-fn simple_mode_state_is_isolated_from_advanced_rules() {
-    let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.simple_mode = true;
-    state.custom.template = "{stem}-advanced".to_owned();
-    state.replace.find = "advanced".to_owned();
-    state.simple.find = "simple-find".to_owned();
-
-    assert_eq!(preview_names(&state), vec!["a.txt", "b.txt"]);
-
-    state.simple_mode = false;
-    state.rebuild_preview();
-    assert_eq!(preview_names(&state), vec!["a-advanced", "b-advanced"]);
-
-    state.simple_mode = true;
-    state.rebuild_preview();
-    assert_eq!(state.simple.find, "simple-find");
-    assert_eq!(state.custom.template, "{stem}-advanced");
-}
-
-#[test]
 fn token_selection_appends_label_and_closes_menu() {
     let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.simple_mode = true;
-    state.simple.token_menu_open = true;
+    let template = add_rule(&mut state, BatchRenameRuleKind::Template);
+    template_params_mut(&mut state, template).token_menu_open = true;
 
-    state.apply_update(BatchRenameMessage::SimpleTokenSelected(
-        BatchRenameSimpleToken::Number01,
+    state.apply_update(BatchRenameMessage::TemplateTokenSelected(
+        template,
+        BatchRenameTemplateToken::Number01,
     ));
 
     assert_eq!(
-        state.simple.template,
+        template_params_mut(&mut state, template).template,
         format!(
             "{}{}",
-            BatchRenameSimpleToken::OriginalName.label(),
-            BatchRenameSimpleToken::Number01.label(),
+            BatchRenameTemplateToken::OriginalName.label(),
+            BatchRenameTemplateToken::Number01.label(),
         )
     );
-    assert!(!state.simple.token_menu_open);
+    assert!(!template_params_mut(&mut state, template).token_menu_open);
 }
 
 #[test]
-fn simple_mode_toggling_preserves_simple_fields() {
+fn add_rule_menu_closes_after_selection() {
     let mut state = state_for_names(&["a.txt", "b.txt"]);
-    state.simple_mode = true;
+    state.apply_update(BatchRenameMessage::AddRuleMenuToggled);
+    assert!(state.add_rule_menu_open);
 
-    state.apply_update(BatchRenameMessage::SimpleKindSelected(
-        BatchRenameSimpleKind::ReplaceText,
+    state.apply_update(BatchRenameMessage::AddRuleSelected(
+        BatchRenameRuleKind::Replace,
     ));
-    state.apply_update(BatchRenameMessage::SimpleFindChanged("old".to_owned()));
-    state.apply_update(BatchRenameMessage::SimpleReplacementChanged(
-        "new".to_owned(),
-    ));
-    state.apply_update(BatchRenameMessage::SimpleTokenMenuToggled);
-    assert!(state.simple.token_menu_open);
-
-    state.apply_update(BatchRenameMessage::SimpleModeSelected(false));
-    assert!(!state.simple_mode);
-
-    state.apply_update(BatchRenameMessage::SimpleModeSelected(true));
-    assert!(state.simple_mode);
-    assert_eq!(state.simple.find, "old");
-    assert_eq!(state.simple.replacement, "new");
+    assert!(!state.add_rule_menu_open);
+    assert_eq!(state.rules.len(), 1);
 }

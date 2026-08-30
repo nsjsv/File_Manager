@@ -41,6 +41,7 @@ impl FileBrowser {
             pane.current_dir,
             pane.entries,
             pane.icon_grid_viewport.width,
+            self.main_window_height,
             self.user_config.icon_grid_size,
             expansion,
         )

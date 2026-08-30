@@ -40,7 +40,14 @@ const LIST_CONTENT_PADDING: iced::Padding = iced::Padding {
 };
 pub(crate) const LIST_ROW_HEIGHT: f32 = 46.0;
 pub(crate) const LIST_OVERSCAN_ROWS: usize = 16;
-pub(crate) const LIST_INITIAL_ROWS: usize = LIST_OVERSCAN_ROWS * 2 + 1;
+
+pub(crate) fn list_initial_rows(window_height: f32) -> usize {
+    crate::virtual_range::initial_rows_for_height(
+        window_height - LIST_HEADER_HEIGHT,
+        LIST_ROW_HEIGHT,
+        LIST_OVERSCAN_ROWS,
+    )
+}
 const LIST_ROW_PADDING: [u16; 2] = [0, 8];
 const LIST_HEADER_PADDING: [u16; 2] = [4, 8];
 const LIST_ROW_SPACING: u32 = 6;
@@ -106,7 +113,7 @@ pub(crate) fn list_browser_view<'a>(
                     pane.entries,
                     pane.expanded_directories,
                     LIST_ROW_HEIGHT,
-                    LIST_INITIAL_ROWS,
+                    list_initial_rows(browser.main_window_height),
                 )
             });
         rows = rows.push(vertical_spacer(range.before_height));
@@ -853,5 +860,30 @@ mod tests {
         });
 
         assert_eq!(permissions_text(&entry.metadata), "rwxr-xr-x (0755)");
+    }
+
+    #[test]
+    fn list_initial_rows_cover_full_window_without_scroll() {
+        let range = crate::visible_entries::initial_list_entry_range(
+            &(0..34)
+                .map(|index| {
+                    DirectoryEntry::new(
+                        std::path::PathBuf::from(format!("/workspace/item-{index:02}")),
+                        FileKind::File,
+                        EntryMetadata::default(),
+                        false,
+                        false,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            &std::collections::HashMap::new(),
+            LIST_ROW_HEIGHT,
+            list_initial_rows(900.0),
+        );
+        assert_eq!(range.end, 34);
+
+        let rows = list_initial_rows(900.0);
+        assert!(rows as f32 * LIST_ROW_HEIGHT >= 900.0 - LIST_HEADER_HEIGHT);
     }
 }

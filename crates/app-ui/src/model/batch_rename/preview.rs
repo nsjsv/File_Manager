@@ -11,7 +11,7 @@ use super::{
     BatchRenamePreview, BatchRenamePreviewRow, BatchRenamePreviewStatus, BatchRenameSortMode,
     BatchRenameSortRule, BatchRenameSource, BatchRenameState,
 };
-use crate::model::batch_rename::transforms::PreparedBatchRenameRules;
+use crate::model::batch_rename::transforms::{rename_with_rules, PreparedBatchRenameRules};
 
 pub(super) fn build_batch_rename_preview(state: &BatchRenameState) -> BatchRenamePreview {
     let sorted_items = sorted_batch_rename_items(&state.items, &state.sort);
@@ -19,7 +19,7 @@ pub(super) fn build_batch_rename_preview(state: &BatchRenameState) -> BatchRenam
     let mut rows = Vec::with_capacity(sorted_items.len());
 
     for (index, item) in sorted_items.into_iter().enumerate() {
-        let target_name_result = prepared_rules.rename_item_name(item, index, state);
+        let target_name_result = rename_with_rules(&prepared_rules, state, item, index);
         let has_rule_error = target_name_result.is_err();
         let rule_target_name = target_name_result.unwrap_or_else(|_| item.source_name_text.clone());
         let target_name = state

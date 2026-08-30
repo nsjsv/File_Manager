@@ -5,7 +5,8 @@ use crate::config::{
 use crate::model::IconGridViewport;
 #[cfg(test)]
 use crate::virtual_range::{
-    initial_virtual_range, vertical_scroll_delta_to_reveal, virtual_range_for_viewport,
+    initial_rows_for_height, initial_virtual_range, vertical_scroll_delta_to_reveal,
+    virtual_range_for_viewport,
 };
 
 pub(crate) const ICON_GRID_CONTENT_PADDING: f32 = 12.0;
@@ -20,8 +21,6 @@ pub(crate) const ICON_GRID_LABEL_LINE_HEIGHT_PX: f32 = 17.0;
 pub(crate) const ICON_GRID_LABEL_HEIGHT: f32 =
     ICON_GRID_LABEL_LINE_HEIGHT_PX * ICON_GRID_LABEL_LINES as f32;
 const ICON_GRID_TILE_EXTRA_WIDTH: f32 = 32.0;
-#[cfg(test)]
-const ICON_GRID_INITIAL_ROWS: usize = ICON_GRID_OVERSCAN_ROWS * 2 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IconGridDirection {
@@ -79,6 +78,7 @@ pub(crate) fn row_count_for_entries(entry_count: usize, column_count: usize) -> 
 pub(crate) fn visible_entry_range(
     viewport: IconGridViewport,
     entry_count: usize,
+    height_bound: f32,
     icon_edge: u32,
 ) -> IconGridVisibleRange {
     let column_count = column_count_for_width(viewport.width, icon_edge);
@@ -93,7 +93,11 @@ pub(crate) fn visible_entry_range(
             ICON_GRID_OVERSCAN_ROWS,
         )
     } else {
-        initial_virtual_range(total_rows, row_height, ICON_GRID_INITIAL_ROWS)
+        initial_virtual_range(
+            total_rows,
+            row_height,
+            initial_rows_for_height(height_bound, row_height, ICON_GRID_OVERSCAN_ROWS),
+        )
     };
 
     IconGridVisibleRange {
@@ -210,7 +214,7 @@ mod tests {
             width: 500.0,
             height: row_height(96) * 2.0,
         };
-        let range = visible_entry_range(viewport, 44, 96);
+        let range = visible_entry_range(viewport, 44, 800.0, 96);
 
         assert_eq!(range.start_row, 7);
         assert_eq!(range.end_row, 15);

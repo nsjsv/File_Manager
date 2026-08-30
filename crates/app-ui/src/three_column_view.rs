@@ -44,10 +44,16 @@ pub(crate) const COLUMN_ENTRY_HEIGHT: f32 = 24.0;
 pub(crate) const COLUMN_ENTRY_SCROLL_HEIGHT: f32 =
     COLUMN_ENTRY_HEIGHT + COLUMN_CONTENT_SPACING as f32;
 const COLUMN_OVERSCAN_ROWS: usize = 16;
-const COLUMN_INITIAL_ROWS: usize = COLUMN_OVERSCAN_ROWS * 2 + 1;
 const COLUMN_ENTRY_SPACING: u32 = 4;
 const COLUMN_ENTRY_PADDING: [u16; 2] = [1, 4];
 
+pub(crate) fn column_initial_rows(window_height: f32) -> usize {
+    crate::virtual_range::initial_rows_for_height(
+        window_height - COLUMN_ENTRIES_TOP_PADDING,
+        COLUMN_ENTRY_SCROLL_HEIGHT,
+        COLUMN_OVERSCAN_ROWS,
+    )
+}
 pub(crate) fn column_virtual_range_for_viewport(
     total_rows: usize,
     viewport_offset: f32,
@@ -231,7 +237,7 @@ fn directory_column<'a>(
                     initial_virtual_range(
                         entries.len(),
                         COLUMN_ENTRY_SCROLL_HEIGHT,
-                        COLUMN_INITIAL_ROWS,
+                        column_initial_rows(browser.main_window_height),
                     )
                 });
             content = content.push(vertical_spacer(range.before_height));
@@ -698,6 +704,19 @@ mod tests {
             0,
         );
         assert_eq!((second.start, second.end), (1, 2));
+    }
+
+    #[test]
+    fn column_initial_rows_cover_full_window_without_scroll() {
+        // 回归：34 条目目录在内容不溢出列高、永远不会产生滚动事件时，
+        // 初始窗口也必须完整覆盖最后一行。
+        let range =
+            initial_virtual_range(34, COLUMN_ENTRY_SCROLL_HEIGHT, column_initial_rows(900.0));
+        assert_eq!(range.end, 34);
+        assert_eq!(range.after_height, 0.0);
+
+        let rows = column_initial_rows(900.0);
+        assert!(rows as f32 * COLUMN_ENTRY_SCROLL_HEIGHT >= 900.0 - COLUMN_ENTRIES_TOP_PADDING);
     }
 
     #[test]

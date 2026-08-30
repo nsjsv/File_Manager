@@ -197,6 +197,7 @@ fn render_rows<'a>(
         clip_bottom,
         viewport,
         browser.user_config().icon_grid_size,
+        browser.main_window_height,
     ) else {
         return vertical_spacer(rows.height);
     };

@@ -75,6 +75,16 @@ pub(crate) fn initial_virtual_range(
     heights_for_range(total_rows, row_height, 0, initial_rows.min(total_rows))
 }
 
+// 初始虚拟窗口行数必须由真实视口高度上界推导。固定行数常数在内容
+// 恰好不溢出视口时（无滚动事件记录 viewport）会永久遮蔽折叠线以下
+// 的行，且无法通过滚动自愈。
+pub(crate) fn initial_rows_for_height(height: f32, row_height: f32, overscan_rows: usize) -> usize {
+    if row_height <= f32::EPSILON {
+        return overscan_rows;
+    }
+    (height.max(0.0) / row_height).ceil() as usize + overscan_rows
+}
+
 fn heights_for_range(total_rows: usize, row_height: f32, start: usize, end: usize) -> VirtualRange {
     VirtualRange {
         start,
@@ -115,6 +125,15 @@ mod tests {
         assert_eq!(range.start, 7);
         assert_eq!(range.end, 10);
         assert_eq!(range.after_height, 0.0);
+    }
+
+    #[test]
+    fn initial_rows_cover_viewport_height_plus_overscan() {
+        assert_eq!(initial_rows_for_height(300.0, 10.0, 2), 32);
+        assert_eq!(initial_rows_for_height(301.0, 10.0, 2), 33);
+        assert_eq!(initial_rows_for_height(0.0, 10.0, 2), 2);
+        assert_eq!(initial_rows_for_height(-40.0, 10.0, 2), 2);
+        assert_eq!(initial_rows_for_height(300.0, 0.0, 2), 2);
     }
 
     #[test]

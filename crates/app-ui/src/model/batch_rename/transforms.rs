@@ -4,139 +4,192 @@ use regex::Regex;
 
 use super::{
     BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode, BatchRenameRandomMode,
-    BatchRenameRemoveClass, BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameSimpleKind,
-    BatchRenameSimpleToken, BatchRenameSliceMode, BatchRenameSource, BatchRenameState,
+    BatchRenameRemoveClass, BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameRuleParams,
+    BatchRenameSliceMode, BatchRenameSource, BatchRenameState, BatchRenameTemplateToken,
 };
 
+/// 每轮预览只做一次的准备工作：正则编译与列表名单解析按规则 id 缓存。
 pub(super) struct PreparedBatchRenameRules {
-    regex: Result<Option<Regex>, String>,
-    batch_commands: Result<Vec<BatchRenameCommand>, String>,
-    list_names: Vec<String>,
-    simple_template: String,
-}
-
-enum BatchRenameCommand {
-    Prefix(String),
-    Suffix(String),
-    Replace { find: String, replacement: String },
-    Remove(String),
-    Insert { position: usize, text: String },
-    Slice { start: usize, length: Option<usize> },
-    Case(BatchRenameCaseRule),
-    Extension(Option<String>),
-    Regex { pattern: Regex, replacement: String },
+    regexes: Vec<(u64, Result<Regex, String>)>,
+    list_names: Vec<(u64, Vec<String>)>,
 }
 
 impl PreparedBatchRenameRules {
     pub(super) fn new(state: &BatchRenameState) -> Self {
-        let regex = if state.regex.pattern.trim().is_empty() {
-            Ok(None)
-        } else {
-            Regex::new(&state.regex.pattern)
-                .map(Some)
-                .map_err(|error| format!("invalid regex: {error}"))
-        };
-        let batch_commands = parse_batch_commands(&state.batch.commands);
-        let list_names = parse_list_names(&state.list.names);
-        let simple_template = canonical_simple_template(&state.simple.template);
-
+        let mut regexes = Vec::new();
+        let mut list_names = Vec::new();
+        for rule in &state.rules {
+            match &rule.params {
+                BatchRenameRuleParams::Regex(params) if !params.pattern.trim().is_empty() => {
+                    let compiled = Regex::new(&params.pattern)
+                        .map_err(|error| format!("invalid regex: {error}"));
+                    regexes.push((rule.id, compiled));
+                }
+                BatchRenameRuleParams::List(params) => {
+                    list_names.push((rule.id, parse_list_names(&params.names)));
+                }
+                _ => {}
+            }
+        }
         Self {
-            regex,
-            batch_commands,
+            regexes,
             list_names,
-            simple_template,
         }
     }
 
-    pub(super) fn rename_item_name(
-        &self,
-        item: &BatchRenameSource,
-        preview_index: usize,
-        state: &BatchRenameState,
-    ) -> Result<String, String> {
-        if state.simple_mode {
-            return Ok(self.rename_item_name_simple(item, preview_index, state));
-        }
-        let start = parse_usize_or_default(&state.sequence.start_input, 1);
-        let step = parse_usize_or_default(&state.sequence.step_input, 1);
-        let padding = parse_usize_or_default(&state.sequence.padding_input, 0);
-        let sequence_number = start.saturating_add(preview_index.saturating_mul(step));
-        let insert_position = parse_usize_or_default(&state.insert.position_input, 0);
-        let replace_range_start = parse_optional_usize(&state.replace.range_start_input);
-        let replace_range_length = parse_optional_usize(&state.replace.range_length_input);
-        let slice_start = parse_optional_usize(&state.slice.start_input);
-        let slice_length = parse_optional_usize(&state.slice.length_input);
-        let remove_start = parse_optional_usize(&state.remove.start_input);
-        let remove_length = parse_optional_usize(&state.remove.length_input);
-        let random_text = deterministic_random_text(
-            &item.source_name_text,
-            preview_index,
-            parse_usize_or_default(&state.random.length_input, 6).min(64),
-            &state.random.alphabet,
-        );
+    fn regex_for(&self, id: u64) -> Option<&Result<Regex, String>> {
+        self.regexes
+            .iter()
+            .find(|(rule_id, _)| *rule_id == id)
+            .map(|(_, compiled)| compiled)
+    }
 
-        let (mut stem, mut extension) = split_file_name(&item.source_name_text);
-        if !state.replace.find.is_empty() {
-            stem = replace_text(
-                &stem,
-                &state.replace.find,
-                &state.replace.replacement,
-                state.replace.scope,
-                replace_range_start,
-                replace_range_length,
-                state.replace.ignore_case,
+    fn list_for(&self, id: u64) -> Option<&[String]> {
+        self.list_names
+            .iter()
+            .find(|(rule_id, _)| *rule_id == id)
+            .map(|(_, names)| names.as_slice())
+    }
+}
+
+/// 规则管道求值：按用户排列的顺序逐条应用，每条规则以上一条的输出为输入。
+pub(super) fn rename_with_rules(
+    prepared: &PreparedBatchRenameRules,
+    state: &BatchRenameState,
+    item: &BatchRenameSource,
+    preview_index: usize,
+) -> Result<String, String> {
+    let mut name = item.source_name_text.clone();
+    for rule in state.rules.iter().filter(|rule| rule.enabled) {
+        name = apply_rule(prepared, rule.id, &rule.params, name, item, preview_index)?;
+    }
+    Ok(name)
+}
+
+fn apply_rule(
+    prepared: &PreparedBatchRenameRules,
+    rule_id: u64,
+    params: &BatchRenameRuleParams,
+    name: String,
+    item: &BatchRenameSource,
+    preview_index: usize,
+) -> Result<String, String> {
+    match params {
+        BatchRenameRuleParams::Template(params) => {
+            let canonical = canonical_template(&params.template);
+            let random_text = deterministic_random_text(
+                &item.source_name_text,
+                preview_index,
+                6,
+                "abcdefghijklmnopqrstuvwxyz0123456789",
             );
+            Ok(render_custom_template(
+                &canonical,
+                &name,
+                item,
+                preview_index.saturating_add(1),
+                0,
+                &random_text,
+            ))
         }
-        if !state.insert.text.is_empty() {
-            if state.insert.ignore_extension {
-                stem = insert_text(&stem, state, insert_position);
+        BatchRenameRuleParams::Replace(params) => {
+            if params.find.is_empty() {
+                return Ok(name);
+            }
+            let (stem, extension) = split_file_name(&name);
+            let stem = replace_text(
+                &stem,
+                &params.find,
+                &params.replacement,
+                params.scope,
+                parse_optional_usize(&params.range_start_input),
+                parse_optional_usize(&params.range_length_input),
+                params.ignore_case,
+            );
+            Ok(join_stem_extension(&stem, extension.as_deref()))
+        }
+        BatchRenameRuleParams::Insert(params) => {
+            if params.text.is_empty() {
+                return Ok(name);
+            }
+            let position = parse_usize_or_default(&params.position_input, 0);
+            if params.ignore_extension {
+                let (stem, extension) = split_file_name(&name);
+                let stem = insert_text(&stem, params, position);
+                Ok(join_stem_extension(&stem, extension.as_deref()))
             } else {
-                let name = join_stem_extension(&stem, extension.as_deref());
-                let name = insert_text(&name, state, insert_position);
-                (stem, extension) = split_file_name(&name);
+                Ok(insert_text(&name, params, position))
             }
         }
-        if slice_start.is_some() || slice_length.is_some() {
-            stem = slice_text(&stem, state, slice_start.unwrap_or(0), slice_length);
+        BatchRenameRuleParams::Slice(params) => {
+            let start = parse_optional_usize(&params.start_input);
+            let length = parse_optional_usize(&params.length_input);
+            if start.is_none() && length.is_none() {
+                return Ok(name);
+            }
+            let (stem, extension) = split_file_name(&name);
+            let stem = slice_text(&stem, params, start.unwrap_or(0), length);
+            Ok(join_stem_extension(&stem, extension.as_deref()))
         }
-        stem = remove_text(&stem, state, remove_start.unwrap_or(0), remove_length);
-        stem = apply_case_rule(&stem, state.case);
-        stem = apply_random_rule(stem, &random_text, state.random.mode);
-        stem = apply_sequence_rule(stem, sequence_number, padding, state);
-
-        if !state.sequence.preserve_extension {
-            extension = None;
+        BatchRenameRuleParams::Remove(params) => {
+            let start = parse_optional_usize(&params.start_input);
+            let length = parse_optional_usize(&params.length_input);
+            let (stem, extension) = split_file_name(&name);
+            let stem = remove_text(&stem, params, start.unwrap_or(0), length);
+            Ok(join_stem_extension(&stem, extension.as_deref()))
         }
-        extension = apply_extension_rule(extension, state);
-
-        let mut target_name = join_stem_extension(&stem, extension.as_deref());
-        if let Some(list_name) = self.list_names.get(preview_index) {
-            target_name = list_name.clone();
+        BatchRenameRuleParams::Case(case) => {
+            let (stem, extension) = split_file_name(&name);
+            let stem = apply_case_rule(&stem, *case);
+            Ok(join_stem_extension(&stem, extension.as_deref()))
         }
-        if !state.custom.template.is_empty() {
-            target_name = render_custom_template(
-                &state.custom.template,
-                &target_name,
-                item,
-                sequence_number,
-                padding,
-                &random_text,
+        BatchRenameRuleParams::Random(params) => {
+            let random_text = deterministic_random_text(
+                &item.source_name_text,
+                preview_index,
+                parse_usize_or_default(&params.length_input, 6).min(64),
+                &params.alphabet,
             );
+            let (stem, extension) = split_file_name(&name);
+            let stem = apply_random_rule(stem, &random_text, params.mode);
+            Ok(join_stem_extension(&stem, extension.as_deref()))
         }
-        if let Some(regex) = self.regex.as_ref().map_err(|error| error.clone())? {
-            target_name = regex
-                .replace_all(&target_name, state.regex.replacement.as_str())
-                .to_string();
+        BatchRenameRuleParams::Sequence(params) => {
+            let start = parse_usize_or_default(&params.start_input, 1);
+            let step = parse_usize_or_default(&params.step_input, 1);
+            let padding = parse_usize_or_default(&params.padding_input, 0);
+            let sequence_number = start.saturating_add(preview_index.saturating_mul(step));
+            let (stem, extension) = split_file_name(&name);
+            let stem = apply_sequence_rule(stem, sequence_number, padding, params);
+            let extension = params.preserve_extension.then_some(extension).flatten();
+            Ok(join_stem_extension(&stem, extension.as_deref()))
         }
-        for command in self
-            .batch_commands
-            .as_ref()
-            .map_err(|error| error.clone())?
-        {
-            target_name = apply_batch_command(target_name, command);
+        BatchRenameRuleParams::Extension(params) => {
+            let (stem, extension) = split_file_name(&name);
+            let extension = apply_extension_rule(extension, params);
+            Ok(join_stem_extension(&stem, extension.as_deref()))
         }
-
-        Ok(target_name)
+        BatchRenameRuleParams::Regex(params) => {
+            let compiled = prepared
+                .regex_for(rule_id)
+                .ok_or_else(|| "regex pattern is empty".to_owned())?;
+            let regex = compiled.clone()?;
+            Ok(regex
+                .replace_all(&name, params.replacement.as_str())
+                .to_string())
+        }
+        BatchRenameRuleParams::List(params) => {
+            if params.names.trim().is_empty() {
+                return Ok(name);
+            }
+            let names = prepared
+                .list_for(rule_id)
+                .ok_or_else(|| "list rule is missing".to_owned())?;
+            Ok(names
+                .get(preview_index)
+                .cloned()
+                .unwrap_or_else(|| name.clone()))
+        }
     }
 }
 
@@ -144,15 +197,15 @@ fn apply_sequence_rule(
     stem: String,
     sequence_number: usize,
     padding: usize,
-    state: &BatchRenameState,
+    params: &super::BatchRenameSequenceRule,
 ) -> String {
-    if state.sequence.prefix.is_empty() && state.sequence.include_original_stem {
+    if params.prefix.is_empty() && params.include_original_stem {
         return stem;
     }
 
     let number = padded_number(sequence_number, padding);
-    let mut name = format!("{}{}", state.sequence.prefix, number);
-    if state.sequence.include_original_stem && !stem.is_empty() {
+    let mut name = format!("{}{}", params.prefix, number);
+    if params.include_original_stem && !stem.is_empty() {
         name.push(' ');
         name.push_str(&stem);
     }
@@ -187,63 +240,62 @@ fn replace_text(
     }
 }
 
-fn insert_text(source: &str, state: &BatchRenameState, position: usize) -> String {
-    match state.insert.mode {
-        BatchRenameInsertMode::Before => format!("{}{}", state.insert.text, source),
-        BatchRenameInsertMode::After => format!("{}{}", source, state.insert.text),
+fn insert_text(source: &str, params: &super::BatchRenameInsertRule, position: usize) -> String {
+    match params.mode {
+        BatchRenameInsertMode::Before => format!("{}{}", params.text, source),
+        BatchRenameInsertMode::After => format!("{}{}", source, params.text),
         BatchRenameInsertMode::Position => {
-            insert_text_at_char_position(source, &state.insert.text, position)
+            insert_text_at_char_position(source, &params.text, position)
         }
         BatchRenameInsertMode::AfterAnchor => {
-            insert_text_after_anchor(source, &state.insert.anchor, &state.insert.text)
+            insert_text_after_anchor(source, &params.anchor, &params.text)
         }
     }
 }
 
 fn slice_text(
     source: &str,
-    state: &BatchRenameState,
+    params: &super::BatchRenameSliceRule,
     start: usize,
     length: Option<usize>,
 ) -> String {
-    match state.slice.mode {
+    match params.mode {
         BatchRenameSliceMode::Position => slice_text_by_chars(source, start, length),
         BatchRenameSliceMode::AfterAnchor => {
-            slice_text_after_anchor(source, &state.slice.anchor, length)
+            slice_text_after_anchor(source, &params.anchor, length)
         }
     }
 }
 
 fn remove_text(
     source: &str,
-    state: &BatchRenameState,
+    params: &super::BatchRenameRemoveRule,
     start: usize,
     length: Option<usize>,
 ) -> String {
-    match state.remove.mode {
+    match params.mode {
         BatchRenameRemoveMode::TextAndRange => {
             let mut next = source.to_owned();
-            if !state.remove.text.is_empty() {
-                next = next.replace(&state.remove.text, "");
+            if !params.text.is_empty() {
+                next = next.replace(&params.text, "");
             }
-            if !state.remove.start_input.trim().is_empty()
-                || !state.remove.length_input.trim().is_empty()
-            {
+            if !params.start_input.trim().is_empty() || !params.length_input.trim().is_empty() {
                 next = remove_text_by_char_range(&next, start, length);
             }
             next
         }
-        BatchRenameRemoveMode::CharacterClasses => {
-            remove_char_classes(source, &state.remove.classes)
-        }
+        BatchRenameRemoveMode::CharacterClasses => remove_char_classes(source, &params.classes),
     }
 }
 
-fn apply_extension_rule(extension: Option<String>, state: &BatchRenameState) -> Option<String> {
-    match state.extension.mode {
+fn apply_extension_rule(
+    extension: Option<String>,
+    params: &super::BatchRenameExtensionRule,
+) -> Option<String> {
+    match params.mode {
         BatchRenameExtensionMode::Preserve => extension,
         BatchRenameExtensionMode::Remove => None,
-        BatchRenameExtensionMode::Replace => normalize_extension(&state.extension.replacement),
+        BatchRenameExtensionMode::Replace => normalize_extension(&params.replacement),
         BatchRenameExtensionMode::Lowercase => extension.map(|extension| extension.to_lowercase()),
         BatchRenameExtensionMode::Uppercase => extension.map(|extension| extension.to_uppercase()),
     }
@@ -258,53 +310,14 @@ fn apply_random_rule(stem: String, random_text: &str, mode: BatchRenameRandomMod
     }
 }
 
-fn canonical_simple_template(template: &str) -> String {
+fn canonical_template(template: &str) -> String {
     let mut canonical = template.to_owned();
-    for token in BatchRenameSimpleToken::ALL {
+    for token in BatchRenameTemplateToken::ALL {
         for label in token.localized_labels() {
             canonical = canonical.replace(&label, token.engine_token());
         }
     }
     canonical
-}
-
-impl PreparedBatchRenameRules {
-    fn rename_item_name_simple(
-        &self,
-        item: &BatchRenameSource,
-        preview_index: usize,
-        state: &BatchRenameState,
-    ) -> String {
-        match state.simple.kind {
-            BatchRenameSimpleKind::Template => {
-                let random_text = deterministic_random_text(
-                    &item.source_name_text,
-                    preview_index,
-                    parse_usize_or_default(&state.random.length_input, 6).min(64),
-                    &state.random.alphabet,
-                );
-                render_custom_template(
-                    &self.simple_template,
-                    &item.source_name_text,
-                    item,
-                    preview_index.saturating_add(1),
-                    0,
-                    &random_text,
-                )
-            }
-            BatchRenameSimpleKind::ReplaceText => {
-                if state.simple.find.is_empty() {
-                    return item.source_name_text.clone();
-                }
-                replace_all(
-                    &item.source_name_text,
-                    &state.simple.find,
-                    &state.simple.replacement,
-                    false,
-                )
-            }
-        }
-    }
 }
 
 fn render_custom_template(
@@ -332,137 +345,6 @@ fn render_custom_template(
             original_extension.as_deref().unwrap_or(""),
         )
         .replace("{random}", random_text)
-}
-
-fn apply_batch_command(current_name: String, command: &BatchRenameCommand) -> String {
-    match command {
-        BatchRenameCommand::Prefix(prefix) => {
-            let (stem, extension) = split_file_name(&current_name);
-            join_stem_extension(&format!("{prefix}{stem}"), extension.as_deref())
-        }
-        BatchRenameCommand::Suffix(suffix) => {
-            let (stem, extension) = split_file_name(&current_name);
-            join_stem_extension(&format!("{stem}{suffix}"), extension.as_deref())
-        }
-        BatchRenameCommand::Replace { find, replacement } => {
-            current_name.replace(find, replacement)
-        }
-        BatchRenameCommand::Remove(text) => current_name.replace(text, ""),
-        BatchRenameCommand::Insert { position, text } => {
-            insert_text_at_char_position(&current_name, text, *position)
-        }
-        BatchRenameCommand::Slice { start, length } => {
-            slice_text_by_chars(&current_name, *start, *length)
-        }
-        BatchRenameCommand::Case(case) => {
-            let (stem, extension) = split_file_name(&current_name);
-            join_stem_extension(&apply_case_rule(&stem, *case), extension.as_deref())
-        }
-        BatchRenameCommand::Extension(extension) => {
-            let (stem, _) = split_file_name(&current_name);
-            join_stem_extension(&stem, extension.as_deref())
-        }
-        BatchRenameCommand::Regex {
-            pattern,
-            replacement,
-        } => pattern
-            .replace_all(&current_name, replacement.as_str())
-            .to_string(),
-    }
-}
-
-fn parse_batch_commands(input: &str) -> Result<Vec<BatchRenameCommand>, String> {
-    let mut commands = Vec::new();
-    for raw_command in input.lines().flat_map(|line| line.split(';')) {
-        let command = raw_command.trim();
-        if command.is_empty() {
-            continue;
-        }
-        commands.push(parse_batch_command(command)?);
-    }
-    Ok(commands)
-}
-
-fn parse_batch_command(command: &str) -> Result<BatchRenameCommand, String> {
-    let mut words = command.splitn(2, char::is_whitespace);
-    let keyword = words.next().unwrap_or("").to_ascii_lowercase();
-    let rest = words.next().unwrap_or("").trim();
-
-    match keyword.as_str() {
-        "prefix" if !rest.is_empty() => Ok(BatchRenameCommand::Prefix(rest.to_owned())),
-        "suffix" if !rest.is_empty() => Ok(BatchRenameCommand::Suffix(rest.to_owned())),
-        "replace" => {
-            let (find, replacement) = split_rule_arrow(rest, "replace")?;
-            Ok(BatchRenameCommand::Replace { find, replacement })
-        }
-        "remove" if !rest.is_empty() => Ok(BatchRenameCommand::Remove(rest.to_owned())),
-        "insert" => {
-            let (position, text) = split_position_text(rest, "insert")?;
-            Ok(BatchRenameCommand::Insert { position, text })
-        }
-        "slice" => {
-            let mut parts = rest.split_whitespace();
-            let start = parse_required_usize(parts.next(), "slice start")?;
-            let length = parts
-                .next()
-                .map(|value| parse_required_usize(Some(value), "slice length"))
-                .transpose()?;
-            Ok(BatchRenameCommand::Slice { start, length })
-        }
-        "case" => parse_batch_case_command(rest),
-        "ext" | "extension" => Ok(BatchRenameCommand::Extension(normalize_extension(rest))),
-        "regex" => {
-            let (pattern, replacement) = split_rule_arrow(rest, "regex")?;
-            let pattern =
-                Regex::new(&pattern).map_err(|error| format!("invalid regex command: {error}"))?;
-            Ok(BatchRenameCommand::Regex {
-                pattern,
-                replacement,
-            })
-        }
-        _ => Err(format!("unsupported batch command: {command}")),
-    }
-}
-
-fn parse_batch_case_command(rest: &str) -> Result<BatchRenameCommand, String> {
-    let case = match rest.to_ascii_lowercase().as_str() {
-        "lower" | "lowercase" => BatchRenameCaseRule::Lowercase,
-        "upper" | "uppercase" => BatchRenameCaseRule::Uppercase,
-        "title" | "titlecase" => BatchRenameCaseRule::TitleCase,
-        "invert" | "swap" => BatchRenameCaseRule::InvertCase,
-        "keep" | "unchanged" => BatchRenameCaseRule::Unchanged,
-        _ => return Err(format!("unsupported case command: {rest}")),
-    };
-    Ok(BatchRenameCommand::Case(case))
-}
-
-fn split_rule_arrow(rest: &str, command: &str) -> Result<(String, String), String> {
-    let Some((left, right)) = rest.split_once("=>") else {
-        return Err(format!("{command} command requires =>"));
-    };
-    let find = left.trim().to_owned();
-    if find.is_empty() {
-        return Err(format!("{command} command requires a pattern"));
-    }
-    Ok((find, right.trim().to_owned()))
-}
-
-fn split_position_text(rest: &str, command: &str) -> Result<(usize, String), String> {
-    let mut parts = rest.splitn(2, char::is_whitespace);
-    let position = parse_required_usize(parts.next(), command)?;
-    let text = parts.next().unwrap_or("").trim();
-    if text.is_empty() {
-        return Err(format!("{command} command requires text"));
-    }
-    Ok((position, text.to_owned()))
-}
-
-fn parse_required_usize(value: Option<&str>, label: &str) -> Result<usize, String> {
-    value
-        .ok_or_else(|| format!("{label} is missing"))?
-        .trim()
-        .parse::<usize>()
-        .map_err(|_| format!("{label} must be a number"))
 }
 
 fn parse_list_names(input: &str) -> Vec<String> {

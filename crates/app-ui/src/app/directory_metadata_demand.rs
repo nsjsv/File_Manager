@@ -48,6 +48,7 @@ impl FileBrowser {
                 .and_then(|pane| pane.directory_load_cancel.clone())
         }
         .unwrap_or_default();
+        let window_height = self.main_window_height;
         let sources = {
             let Some(pane) = self.pane_view(pane_id) else {
                 return Task::none();
@@ -90,7 +91,7 @@ impl FileBrowser {
                         pane.entries,
                         pane.expanded_directories,
                         crate::list_view::LIST_ROW_HEIGHT,
-                        crate::list_view::LIST_INITIAL_ROWS,
+                        crate::list_view::list_initial_rows(window_height),
                     )
                 });
             for visible in crate::visible_entries::visible_entries_in_range(

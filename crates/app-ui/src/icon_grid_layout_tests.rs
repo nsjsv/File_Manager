@@ -84,8 +84,8 @@ fn flat_layout_matches_existing_virtual_range() {
         width: 500.0,
         height: row_height(96) * 2.0,
     };
-    let old_range = visible_entry_range(viewport, entries.len(), 96);
-    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 96, None);
+    let old_range = visible_entry_range(viewport, entries.len(), 800.0, 96);
+    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 800.0, 96, None);
     let visible = layout.visible_entries(viewport);
 
     assert_eq!(layout.root().flow.len(), 1);
@@ -118,6 +118,7 @@ fn nested_panel_keeps_the_full_width_column_count() {
         Path::new("/workspace"),
         &root_entries,
         440.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -162,6 +163,7 @@ fn opening_band_does_not_schedule_thumbnail_entries() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -197,6 +199,7 @@ fn root_band_is_inserted_after_its_complete_visual_row() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -240,6 +243,7 @@ fn panel_layout_contains_only_the_active_sibling_band() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -277,6 +281,7 @@ fn nested_band_contributes_to_parent_natural_height() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -307,6 +312,7 @@ fn collapse_fraction_clips_band_height_without_flattening_entries() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -327,6 +333,7 @@ fn keyboard_navigation_crosses_from_root_row_into_expansion_panel() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -362,6 +369,7 @@ fn resize_reflows_anchor_to_new_row_without_changing_state_index() {
         Path::new("/workspace"),
         &root_entries,
         500.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -369,6 +377,7 @@ fn resize_reflows_anchor_to_new_row_without_changing_state_index() {
         Path::new("/workspace"),
         &root_entries,
         200.0,
+        800.0,
         96,
         Some(&state),
     );
@@ -386,7 +395,7 @@ fn resize_reflows_anchor_to_new_row_without_changing_state_index() {
 #[test]
 fn large_flat_directory_stays_one_compressed_segment() {
     let entries = files("/workspace", 100_000);
-    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 96, None);
+    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 800.0, 96, None);
 
     assert_eq!(layout.root().flow.len(), 1);
 }
@@ -394,7 +403,7 @@ fn large_flat_directory_stays_one_compressed_segment() {
 #[test]
 fn flat_layout_paths_and_membership_preserve_entry_identity() {
     let entries = files("/workspace", 4);
-    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 96, None);
+    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 800.0, 96, None);
 
     assert_eq!(
         layout.interactive_entry_paths(),
@@ -411,4 +420,28 @@ fn flat_layout_paths_and_membership_preserve_entry_identity() {
     assert_eq!(matching.len(), 2);
     assert!(matching.contains(&entries[1].path));
     assert!(matching.contains(&entries[3].path));
+}
+
+#[test]
+fn unmeasured_viewport_fallback_covers_window_bound() {
+    // 未测量 viewport（从未滚动）时，初始窗口必须由窗口高度上界推导，
+    // 而不是固定行数：30 条目目录在 600px 上界下只渲染可见窗口，
+    // 上界足够覆盖全部内容时最后一行也必须出现。
+    let entries = files("/workspace", 30);
+    let layout = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 600.0, 96, None);
+    let visible = layout.visible_entries(IconGridViewport {
+        offset_y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    });
+    assert_eq!(visible.len(), 21);
+
+    let full = IconGridLayout::new(Path::new("/workspace"), &entries, 500.0, 2600.0, 96, None);
+    let all = full.visible_entries(IconGridViewport {
+        offset_y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    });
+    assert_eq!(all.len(), 30);
+    assert_eq!(all.last().unwrap().entry.path, entries[29].path);
 }

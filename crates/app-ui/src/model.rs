@@ -96,10 +96,12 @@ pub(crate) use file_entry_content_modifier::FileEntryContentModifier;
 mod batch_rename;
 pub(crate) use batch_rename::{
     same_parent, BatchRenameCaseRule, BatchRenameExtensionMode, BatchRenameInsertMode,
-    BatchRenameMessage, BatchRenamePreviewRow, BatchRenameRandomMode, BatchRenameRemoveClass,
-    BatchRenameRemoveMode, BatchRenameReplaceScope, BatchRenameRulePanel, BatchRenameSimpleKind,
-    BatchRenameSimpleToken, BatchRenameSliceMode, BatchRenameSortMode, BatchRenameSource,
-    BatchRenameSourceNameError, BatchRenameState,
+    BatchRenameInsertRule, BatchRenameMessage, BatchRenamePreviewRow, BatchRenamePreviewStatus,
+    BatchRenameRandomMode, BatchRenameRemoveClass, BatchRenameRemoveMode, BatchRenameRemoveRule,
+    BatchRenameReplaceRule, BatchRenameReplaceScope, BatchRenameRule, BatchRenameRuleKind,
+    BatchRenameRuleParams, BatchRenameSequenceRule, BatchRenameSliceMode, BatchRenameSliceRule,
+    BatchRenameSortMode, BatchRenameSource, BatchRenameSourceNameError, BatchRenameState,
+    BatchRenameTemplateRule, BatchRenameTemplateToken,
 };
 mod properties;
 pub(crate) use properties::{

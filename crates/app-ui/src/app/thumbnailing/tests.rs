@@ -203,7 +203,7 @@ fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
             viewport,
         },
     );
-    let visible = crate::icon_grid_geometry::visible_entry_range(viewport, 100, 112);
+    let visible = crate::icon_grid_geometry::visible_entry_range(viewport, 100, 800.0, 112);
 
     browser.schedule_visible_icon_grid_thumbnails_for_pane(BrowserPaneId::PRIMARY);
 
