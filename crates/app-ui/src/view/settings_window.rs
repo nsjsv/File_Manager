@@ -14,11 +14,12 @@ use crate::icons::{rotated_chevron_right_view, IconSymbol};
 use crate::matugen_theme::{ColorSchemeFamily, ColorSchemePreset, ContrastWarnings, ThemeMode};
 use crate::model::{
     Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility, SettingsCategory,
+    WindowChromeLayout, WindowControlSide, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
+    WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::typography::{localized_text, readable_text};
 
 use super::application_logs::application_logs_settings_detail;
-use super::auxiliary_window_content_without_title;
 use super::auxiliary_window_layout::{
     auxiliary_detail_scroller, auxiliary_detail_surface_with_sidebar_space,
     auxiliary_full_height_sidebar, auxiliary_sidebar_button,
@@ -36,10 +37,27 @@ use super::settings_group::{
     SETTINGS_GROUP_SPACING,
 };
 use super::shortcut_settings::shortcut_settings_section;
+use super::window_chrome::{floating_window_control_group, separate_window_content};
 use super::window_control_settings::window_control_settings_row;
+use super::window_drag_region::window_drag_region;
 use super::IconTone;
 
 const SETTINGS_DROPDOWN_WIDTH: f32 = 220.0;
+
+/// Settings Integrated chrome 悬浮层高度；滚动内容以同高空白开头，悬浮按钮不遮挡初始内容。
+const SETTINGS_CHROME_HEIGHT: f32 = WINDOW_TOP_BAR_HEIGHT + 12.0;
+
+/// Settings 滚动内容顶部的空白填充：Integrated 布局下悬浮控制键落在空白上，不遮挡内容。
+pub(super) fn chrome_top_spacer(browser: &FileBrowser) -> Element<'static, Message> {
+    let height = match browser.user_config().window_controls.layout() {
+        // 内容起点与 SeparateTitleBar 模式对齐（标题栏 40px，减去列间距 16px）。
+        WindowChromeLayout::IntegratedNavigation => {
+            WINDOW_TITLE_BAR_HEIGHT - SETTINGS_GROUP_SPACING
+        }
+        WindowChromeLayout::SeparateTitleBar => 0.0,
+    };
+    Space::new().height(Length::Fixed(height)).into()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerminalEmulatorPickOption(TerminalEmulator);
@@ -88,18 +106,58 @@ pub(crate) fn view_settings_window(
     window: window::Id,
 ) -> Element<'_, Message> {
     let sidebar = settings_category_sidebar(browser.selected_settings_category);
-    let detail = auxiliary_detail_surface_with_sidebar_space(settings_category_detail(browser));
     let frame_state = browser.window_frame_state(window);
-    let window_content = auxiliary_window_content_without_title(
-        detail,
-        &browser.user_config().window_controls,
-        window,
-        frame_state,
-    );
-    let content = stack![window_content, sidebar]
+    let layout = browser.user_config().window_controls.layout();
+    let detail = auxiliary_detail_surface_with_sidebar_space(match layout {
+        WindowChromeLayout::IntegratedNavigation => stack![
+            settings_category_detail(browser),
+            settings_window_controls_chrome(browser, window, frame_state),
+        ]
         .width(Length::Fill)
-        .height(Length::Fill);
-    super::window_resize_frame(content.into(), window, frame_state)
+        .height(Length::Fill)
+        .into(),
+        WindowChromeLayout::SeparateTitleBar => settings_category_detail(browser),
+    });
+    let content: Element<'_, Message> = stack![detail, sidebar]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
+    let window_content = match layout {
+        WindowChromeLayout::IntegratedNavigation => content,
+        WindowChromeLayout::SeparateTitleBar => separate_window_content(
+            browser.window_title(window),
+            content,
+            &browser.user_config().window_controls,
+            window,
+            frame_state,
+        ),
+    };
+    super::window_resize_frame(window_content, window, frame_state)
+}
+
+fn settings_window_controls_chrome(
+    browser: &FileBrowser,
+    window: window::Id,
+    frame_state: WindowFrameState,
+) -> Element<'static, Message> {
+    let config = &browser.user_config().window_controls;
+    let chrome: Element<'static, Message> = row![
+        floating_window_control_group(config, WindowControlSide::Left, window, frame_state, 1.0),
+        Space::new().width(Length::Fill),
+        floating_window_control_group(config, WindowControlSide::Right, window, frame_state, 1.0),
+    ]
+    .spacing(10)
+    .padding(iced::Padding {
+        top: 14.0,
+        right: 8.0,
+        bottom: 10.0,
+        left: 8.0,
+    })
+    .align_y(Alignment::Center)
+    .width(Length::Fill)
+    .height(Length::Fixed(SETTINGS_CHROME_HEIGHT))
+    .into();
+    window_drag_region(chrome, window)
 }
 
 fn settings_category_sidebar(selected: SettingsCategory) -> Element<'static, Message> {
@@ -168,7 +226,7 @@ fn general_settings_detail(
     ));
 
     settings_detail_scroller(
-        column![settings_card(rows)]
+        column![chrome_top_spacer(browser), settings_card(rows)]
             .spacing(SETTINGS_GROUP_SPACING)
             .width(Length::Fill),
         scrollbar_visibility,
@@ -183,6 +241,7 @@ fn appearance_settings_detail(
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
+            chrome_top_spacer(browser),
             settings_group(
                 "Theme",
                 vec![
@@ -216,6 +275,7 @@ fn files_settings_detail(
 ) -> Element<'_, Message> {
     settings_detail_scroller(
         column![
+            chrome_top_spacer(browser),
             settings_group(
                 "File display",
                 vec![
@@ -263,9 +323,12 @@ fn shortcut_settings_detail(
     scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     settings_detail_scroller(
-        column![shortcut_settings_section(browser)]
-            .spacing(SETTINGS_GROUP_SPACING)
-            .width(Length::Fill),
+        column![
+            chrome_top_spacer(browser),
+            shortcut_settings_section(browser)
+        ]
+        .spacing(SETTINGS_GROUP_SPACING)
+        .width(Length::Fill),
         scrollbar_visibility,
         scrollbar_viewport,
     )

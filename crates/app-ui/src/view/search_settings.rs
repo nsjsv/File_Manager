@@ -24,6 +24,7 @@ use super::settings_group::{
     action_setting_row, info_setting_row, labeled_setting_row, settings_group, toggle_setting_row,
     SETTINGS_GROUP_SPACING,
 };
+use super::settings_window::chrome_top_spacer;
 use super::{themed_icon, IconTone};
 
 pub(super) fn search_settings_detail(
@@ -32,6 +33,7 @@ pub(super) fn search_settings_detail(
     scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
     let content = column![
+        chrome_top_spacer(browser),
         settings_group("Indexed locations", indexed_location_rows(browser)),
         settings_group("Excluded locations", excluded_location_rows(browser)),
         settings_group("Content indexing", content_indexing_rows(browser)),

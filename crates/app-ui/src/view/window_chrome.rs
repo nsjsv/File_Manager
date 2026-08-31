@@ -269,15 +269,6 @@ pub(crate) fn auxiliary_window_content<'a>(
     }
 }
 
-pub(crate) fn auxiliary_window_content_without_title<'a>(
-    content: Element<'a, Message>,
-    config: &WindowControlsConfig,
-    window: window::Id,
-    frame_state: WindowFrameState,
-) -> Element<'a, Message> {
-    auxiliary_window_content("", String::new(), content, config, window, frame_state)
-}
-
 pub(crate) fn floating_preview_window_content<'a>(
     content: Element<'a, Message>,
     config: &WindowControlsConfig,

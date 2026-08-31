@@ -1,6 +1,6 @@
 # Matugen 配色
 
-[Matugen](https://github.com/Inspirateur/matugen) 可以从壁纸生成 Material 风格配色。File Manager 支持读取 Matugen 生成的配色文件，壁纸换色调，文件管理器跟着换。
+[Matugen](https://github.com/InioX/matugen) 可以从壁纸生成 Material 风格配色。File Manager 支持读取 Matugen 生成的配色文件，壁纸换色调，文件管理器跟着换。
 
 ## 工作方式
 

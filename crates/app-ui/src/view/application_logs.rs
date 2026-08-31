@@ -11,18 +11,22 @@ use crate::typography::readable_text;
 use super::auxiliary_window_layout::auxiliary_detail_scroller;
 use super::option_controls::{segmented_choice_row, SegmentedChoice};
 use super::settings_group::{info_setting_row, settings_group, SETTINGS_GROUP_SPACING};
+use super::settings_window::chrome_top_spacer;
 
 pub(super) fn application_logs_settings_detail(
     browser: &FileBrowser,
     scrollbar_visibility: ScrollbarVisibility,
     scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'_, Message> {
-    let mut content = column![settings_group(
-        "Display level",
-        vec![info_setting_row(log_threshold_choices(
-            browser.application_logs.threshold,
-        ))],
-    )]
+    let mut content = column![
+        chrome_top_spacer(browser),
+        settings_group(
+            "Display level",
+            vec![info_setting_row(log_threshold_choices(
+                browser.application_logs.threshold,
+            ))],
+        )
+    ]
     .spacing(SETTINGS_GROUP_SPACING)
     .width(Length::Fill);
 

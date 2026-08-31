@@ -32,9 +32,8 @@ mod window_control_settings;
 mod window_drag_region;
 
 pub(crate) use window_chrome::{
-    auxiliary_window_content, auxiliary_window_content_without_title,
-    floating_preview_window_content, main_pane_window_chrome_role, separate_window_content,
-    window_resize_frame, MainPaneWindowChromeRole,
+    auxiliary_window_content, floating_preview_window_content, main_pane_window_chrome_role,
+    separate_window_content, window_resize_frame, MainPaneWindowChromeRole,
 };
 
 pub(crate) use address_bar::address_input_id;
