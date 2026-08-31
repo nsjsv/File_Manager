@@ -132,10 +132,19 @@ pub enum StandardFileManagerServiceStatus {
     Occupied(String),
 }
 
+/// 二次启动时新进程的策略：转发给主实例合并，或自己独立运行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopLaunchWindowPolicy {
+    MergeIntoExisting,
+    OpenNewWindow,
+}
+
 #[derive(Debug)]
 pub enum FileManagerActivationClaim {
     Primary(Arc<DesktopActivationRuntime>),
     Forwarded,
+    /// 主实例已存在且策略要求独立窗口：不转发、不注册激活名，进程继续普通启动。
+    Detached,
 }
 
 #[derive(Debug)]
@@ -147,6 +156,7 @@ pub struct DesktopActivationRuntime {
 impl DesktopActivationRuntime {
     pub fn claim_or_forward(
         paths: &[PathBuf],
+        policy: DesktopLaunchWindowPolicy,
     ) -> Result<FileManagerActivationClaim, FileManagerActivationError> {
         let (event_sender, event_receiver) = mpsc::channel(ACTIVATION_CHANNEL_CAPACITY);
         match build_primary_connection(event_sender) {
@@ -158,8 +168,7 @@ impl DesktopActivationRuntime {
                 })))
             }
             Err(zbus::Error::NameTaken) => {
-                forward_paths_to_primary(paths)?;
-                Ok(FileManagerActivationClaim::Forwarded)
+                resolve_name_taken_claim(paths, policy, forward_paths_to_primary)
             }
             Err(source) => Err(FileManagerActivationError::Connect { source }),
         }
@@ -470,6 +479,22 @@ fn forward_paths_to_primary(paths: &[PathBuf]) -> Result<(), FileManagerActivati
     };
     response.map_err(|source| FileManagerActivationError::Forward { source })?;
     Ok(())
+}
+
+/// NameTaken 时的分流决策：独立窗口策略直接 Detached，不触碰 D-Bus；
+/// 合并策略转发路径给主实例。转发动作注入以便无 session bus 时测试。
+fn resolve_name_taken_claim(
+    paths: &[PathBuf],
+    policy: DesktopLaunchWindowPolicy,
+    forward: impl FnOnce(&[PathBuf]) -> Result<(), FileManagerActivationError>,
+) -> Result<FileManagerActivationClaim, FileManagerActivationError> {
+    match policy {
+        DesktopLaunchWindowPolicy::OpenNewWindow => Ok(FileManagerActivationClaim::Detached),
+        DesktopLaunchWindowPolicy::MergeIntoExisting => {
+            forward(paths)?;
+            Ok(FileManagerActivationClaim::Forwarded)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

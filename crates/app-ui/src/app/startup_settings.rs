@@ -4,7 +4,7 @@ use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::startup_directory_validation_command;
-use crate::config::{StartupLocationPolicy, UiLanguageSetting};
+use crate::config::{LaunchWindowPolicy, StartupLocationPolicy, UiLanguageSetting};
 use crate::model::{Message, StartupDirectoryAvailability, StartupDirectoryValidationRequest};
 
 impl FileBrowser {
@@ -40,6 +40,17 @@ impl FileBrowser {
             self.persist_user_preferences_command(),
             self.request_browser_session_save(),
         ])
+    }
+
+    pub(super) fn select_launch_window_policy(
+        &mut self,
+        policy: LaunchWindowPolicy,
+    ) -> Task<Message> {
+        if self.user_config.launch_window_policy == policy {
+            return Task::none();
+        }
+        self.user_config.launch_window_policy = policy;
+        self.persist_user_preferences_command()
     }
 
     pub(super) fn update_startup_custom_directory_input(&mut self, value: String) -> Task<Message> {

@@ -9,7 +9,7 @@ use iced::{window, Alignment, Element, Length, Theme};
 
 use crate::app::FileBrowser;
 use crate::appearance::context_menu_button_style;
-use crate::config::{StartupLocationPolicy, UiLanguageSetting};
+use crate::config::{LaunchWindowPolicy, StartupLocationPolicy, UiLanguageSetting};
 use crate::icons::{rotated_chevron_right_view, IconSymbol};
 use crate::matugen_theme::{ColorSchemeFamily, ColorSchemePreset, ContrastWarnings, ThemeMode};
 use crate::model::{
@@ -68,6 +68,17 @@ impl fmt::Display for StartupLocationPickOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&crate::localization::translate_current(
             startup_location_label(self.0),
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LaunchWindowPickOption(LaunchWindowPolicy);
+
+impl fmt::Display for LaunchWindowPickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&crate::localization::translate_current(
+            launch_window_label(self.0),
         ))
     }
 }
@@ -146,6 +157,7 @@ fn general_settings_detail(
     let mut rows = vec![
         labeled_setting_row("Language", language_setting_dropdown(browser)),
         labeled_setting_row("Startup location", startup_location_dropdown(browser)),
+        labeled_setting_row("Launch behavior", launch_window_dropdown(browser)),
     ];
     if browser.user_config().startup_location_policy == StartupLocationPolicy::CustomDirectory {
         rows.push(startup_custom_directory_row(browser));
@@ -586,6 +598,35 @@ fn startup_location_dropdown(browser: &FileBrowser) -> Element<'static, Message>
             browser.user_config().startup_location_policy,
         )),
         |selected| Message::StartupLocationPolicySelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
+}
+
+fn launch_window_label(policy: LaunchWindowPolicy) -> &'static str {
+    match policy {
+        LaunchWindowPolicy::MergeIntoExisting => "Merge into existing window",
+        LaunchWindowPolicy::OpenNewWindow => "Open a new window",
+    }
+}
+
+fn launch_window_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
+    let options = [
+        LaunchWindowPolicy::MergeIntoExisting,
+        LaunchWindowPolicy::OpenNewWindow,
+    ]
+    .into_iter()
+    .map(LaunchWindowPickOption)
+    .collect::<Vec<_>>();
+
+    pick_list(
+        options,
+        Some(LaunchWindowPickOption(
+            browser.user_config().launch_window_policy,
+        )),
+        |selected| Message::LaunchWindowPolicySelected(selected.0),
     )
     .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
     .text_size(12)

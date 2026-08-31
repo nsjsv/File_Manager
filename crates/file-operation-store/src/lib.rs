@@ -33,7 +33,8 @@ mod user_preferences;
 pub use user_preferences::{
     StoredCustomColorScheme, StoredCustomColorSet, StoredListViewColumn, StoredNetworkConnection,
     StoredShortcutBinding, StoredSidebarFavorite, StoredUserPreferences,
-    StoredWindowControlPlacement,
+    StoredWindowControlPlacement, LAUNCH_WINDOW_POLICY_MERGE_INTO_EXISTING,
+    LAUNCH_WINDOW_POLICY_OPEN_NEW_WINDOW,
 };
 
 #[cfg(test)]

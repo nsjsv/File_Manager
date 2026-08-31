@@ -17,8 +17,8 @@ use super::{
     list_directory_size_display_mode_from_config_value, normalize_icon_grid_size,
     normalize_preview_directory_expand_levels, normalize_sidebar_width,
     sort_direction_config_value, sort_direction_from_config_value, sort_field_config_value,
-    sort_field_from_config_value, PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting,
-    UserConfig,
+    sort_field_from_config_value, LaunchWindowPolicy, PreviewFileSizeLimits, SidebarFavoriteConfig,
+    UiLanguageSetting, UserConfig,
 };
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
@@ -48,6 +48,7 @@ pub(crate) struct UserPreferences {
     pub(crate) list_view_preferences: ListViewPreferences,
     pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
+    pub(crate) launch_window_policy: LaunchWindowPolicy,
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
     pub(crate) shortcuts: ShortcutConfig,
@@ -77,6 +78,7 @@ impl UserPreferences {
             list_view_preferences: config.list_view_preferences.clone(),
             list_directory_size_display_mode: config.list_directory_size_display_mode,
             startup_location_policy: config.startup_location_policy,
+            launch_window_policy: config.launch_window_policy,
             startup_custom_directory: config.startup_custom_directory.clone(),
             save_view_state: config.startup_location_policy.saves_view_state(),
             shortcuts: config.shortcuts.clone(),
@@ -105,6 +107,7 @@ impl UserPreferences {
         config.list_view_preferences = self.list_view_preferences.clone();
         config.list_directory_size_display_mode = self.list_directory_size_display_mode;
         config.startup_location_policy = self.startup_location_policy;
+        config.launch_window_policy = self.launch_window_policy;
         config.startup_custom_directory = self.startup_custom_directory.clone();
         config.save_view_state = self.startup_location_policy.saves_view_state();
         config.shortcuts = self.shortcuts.clone();
@@ -151,6 +154,7 @@ impl UserPreferences {
             list_directory_size_display_mode_config_value(self.list_directory_size_display_mode)
                 .to_owned();
         stored.startup_location = self.startup_location_policy.config_value().to_owned();
+        stored.launch_window_policy = self.launch_window_policy.config_value().to_owned();
         stored.startup_custom_directory = StoredPath::from_path(&self.startup_custom_directory);
         stored.save_view_state = self.startup_location_policy.saves_view_state();
         stored.shortcuts = stored_shortcuts(&self.shortcuts);
@@ -215,6 +219,10 @@ impl UserPreferences {
             )
             .unwrap_or(default_preferences.list_directory_size_display_mode),
             startup_location_policy,
+            launch_window_policy: LaunchWindowPolicy::from_config_value(
+                &stored.launch_window_policy,
+            )
+            .unwrap_or(default_preferences.launch_window_policy),
             startup_custom_directory: stored.startup_custom_directory.to_path_buf(),
             save_view_state: startup_location_policy.saves_view_state(),
             shortcuts: shortcut_config_from_stored(&stored.shortcuts),

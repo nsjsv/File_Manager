@@ -26,7 +26,7 @@ const SCROLLBAR_AUTO_HIDE_DURATION: Duration = Duration::from_millis(650);
 
 pub(crate) fn run(
     application_launch_request: ApplicationLaunchRequest,
-    file_manager_activation: Arc<DesktopActivationRuntime>,
+    file_manager_activation: Option<Arc<DesktopActivationRuntime>>,
     initial_desktop_activation: Option<desktop_linux::DesktopActivationEvent>,
     startup_rendering_environment: StartupRenderingEnvironment,
 ) -> iced::Result {
@@ -35,7 +35,7 @@ pub(crate) fn run(
         move || {
             FileBrowser::boot(
                 application_launch_request.clone(),
-                Arc::clone(&file_manager_activation),
+                file_manager_activation.clone(),
                 initial_desktop_activation.clone(),
                 startup_rendering_environment.clone(),
             )

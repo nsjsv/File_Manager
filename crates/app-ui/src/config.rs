@@ -12,7 +12,11 @@ use crate::shortcuts::ShortcutConfig;
 
 mod app_config;
 pub(crate) use app_config::{load_app_config, save_app_config, AppConfig};
+pub(crate) mod launch_window;
 mod legacy_toml;
+pub(crate) use launch_window::{
+    stored_launch_window_policy, LaunchWindowPolicy, DEFAULT_LAUNCH_WINDOW_POLICY,
+};
 pub(crate) mod startup;
 pub(crate) use startup::StartupLocationPolicy;
 mod user_preferences;
@@ -366,6 +370,7 @@ pub(crate) struct UserConfig {
     pub(crate) startup_custom_directory: PathBuf,
     pub(crate) save_view_state: bool,
     pub(crate) shortcuts: ShortcutConfig,
+    pub(crate) launch_window_policy: LaunchWindowPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +419,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         startup_location_policy: StartupLocationPolicy::Home,
         startup_custom_directory: fallback_base.clone(),
         save_view_state: false,
+        launch_window_policy: DEFAULT_LAUNCH_WINDOW_POLICY,
         shortcuts: ShortcutConfig::defaults(),
     }
 }
@@ -447,6 +453,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         startup_custom_directory: PathBuf::new(),
         save_view_state: false,
         shortcuts: ShortcutConfig::defaults(),
+        launch_window_policy: DEFAULT_LAUNCH_WINDOW_POLICY,
     }
 }
 

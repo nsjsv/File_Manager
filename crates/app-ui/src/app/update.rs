@@ -811,6 +811,7 @@ impl FileBrowser {
             Message::StartupLocationPolicySelected(policy) => {
                 self.select_startup_location_policy(policy)
             }
+            Message::LaunchWindowPolicySelected(policy) => self.select_launch_window_policy(policy),
             Message::StartupSessionClassified(classified) => self.accept_startup_plan(classified),
             Message::StartupCustomDirectoryInputChanged(value) => {
                 self.update_startup_custom_directory_input(value)

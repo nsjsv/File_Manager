@@ -634,6 +634,7 @@ pub(crate) enum Message {
     PreviewDirectoryExpandLevelsInputCommitted,
     LanguageSettingSelected(UiLanguageSetting),
     StartupLocationPolicySelected(crate::config::StartupLocationPolicy),
+    LaunchWindowPolicySelected(crate::config::LaunchWindowPolicy),
     StartupSessionClassified(ClassifiedStartupSession),
     StartupCustomDirectoryInputChanged(String),
     StartupCustomDirectoryCommitted,

@@ -3,9 +3,10 @@ use std::os::unix::ffi::OsStringExt;
 use std::sync::{Arc, Barrier};
 
 use desktop_linux::{
-    DesktopActivationEvent, DesktopActivationRuntime, FileManagerActivationClaim,
-    StandardFileManagerServiceStatus, FILE_MANAGER1_BUS_NAME, FILE_MANAGER1_OBJECT_PATH,
-    FILE_MANAGER_ACTIVATION_BUS_NAME, FILE_MANAGER_ACTIVATION_OBJECT_PATH,
+    DesktopActivationEvent, DesktopActivationRuntime, DesktopLaunchWindowPolicy,
+    FileManagerActivationClaim, StandardFileManagerServiceStatus, FILE_MANAGER1_BUS_NAME,
+    FILE_MANAGER1_OBJECT_PATH, FILE_MANAGER_ACTIVATION_BUS_NAME,
+    FILE_MANAGER_ACTIVATION_OBJECT_PATH,
 };
 use tempfile::TempDir;
 use url::Url;
@@ -14,13 +15,20 @@ use zbus::fdo::RequestNameFlags;
 #[test]
 #[ignore = "run under an isolated dbus-run-session"]
 fn isolated_bus_claims_standard_name_when_available() {
-    let runtime =
-        match DesktopActivationRuntime::claim_or_forward(&[]).expect("claim branded activation") {
-            FileManagerActivationClaim::Primary(runtime) => runtime,
-            FileManagerActivationClaim::Forwarded => {
-                panic!("isolated bus unexpectedly had a brand owner")
-            }
-        };
+    let runtime = match DesktopActivationRuntime::claim_or_forward(
+        &[],
+        DesktopLaunchWindowPolicy::MergeIntoExisting,
+    )
+    .expect("claim branded activation")
+    {
+        FileManagerActivationClaim::Primary(runtime) => runtime,
+        FileManagerActivationClaim::Forwarded => {
+            panic!("isolated bus unexpectedly had a brand owner")
+        }
+        FileManagerActivationClaim::Detached => {
+            panic!("unexpected detached claim")
+        }
+    };
 
     assert_eq!(
         runtime.standard_service_status(),
@@ -52,7 +60,11 @@ fn concurrent_claims_choose_one_primary_and_forward_the_loser() {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
-                DesktopActivationRuntime::claim_or_forward(&[]).expect("claim or forward")
+                DesktopActivationRuntime::claim_or_forward(
+                    &[],
+                    DesktopLaunchWindowPolicy::MergeIntoExisting,
+                )
+                .expect("claim or forward")
             })
         })
         .collect::<Vec<_>>();
@@ -77,6 +89,7 @@ fn concurrent_claims_choose_one_primary_and_forward_the_loser() {
         .find_map(|claim| match claim {
             FileManagerActivationClaim::Primary(runtime) => Some(runtime),
             FileManagerActivationClaim::Forwarded => None,
+            FileManagerActivationClaim::Detached => None,
         })
         .expect("primary runtime");
     let mut events = primary
@@ -96,13 +109,20 @@ fn isolated_bus_exposes_standard_contract_and_keeps_brand_activation_when_standa
         .request_name_with_flags(FILE_MANAGER1_BUS_NAME, RequestNameFlags::DoNotQueue.into())
         .expect("claim standard name");
 
-    let runtime =
-        match DesktopActivationRuntime::claim_or_forward(&[]).expect("claim branded activation") {
-            FileManagerActivationClaim::Primary(runtime) => runtime,
-            FileManagerActivationClaim::Forwarded => {
-                panic!("isolated bus unexpectedly had a brand owner")
-            }
-        };
+    let runtime = match DesktopActivationRuntime::claim_or_forward(
+        &[],
+        DesktopLaunchWindowPolicy::MergeIntoExisting,
+    )
+    .expect("claim branded activation")
+    {
+        FileManagerActivationClaim::Primary(runtime) => runtime,
+        FileManagerActivationClaim::Forwarded => {
+            panic!("isolated bus unexpectedly had a brand owner")
+        }
+        FileManagerActivationClaim::Detached => {
+            panic!("unexpected detached claim")
+        }
+    };
     assert!(matches!(
         runtime.standard_service_status(),
         StandardFileManagerServiceStatus::Occupied(_)
@@ -206,8 +226,11 @@ fn isolated_bus_exposes_standard_contract_and_keeps_brand_activation_when_standa
     let non_utf8 = folder.join(std::ffi::OsString::from_vec(b"nonutf8-\xff".to_vec()));
     fs::write(&non_utf8, b"bytes").expect("write non-UTF-8 file");
     assert!(matches!(
-        DesktopActivationRuntime::claim_or_forward(std::slice::from_ref(&non_utf8))
-            .expect("forward private activation"),
+        DesktopActivationRuntime::claim_or_forward(
+            std::slice::from_ref(&non_utf8),
+            DesktopLaunchWindowPolicy::MergeIntoExisting,
+        )
+        .expect("forward private activation"),
         FileManagerActivationClaim::Forwarded
     ));
     let DesktopActivationEvent::MergeWorkspace(private_workspace, _) =
@@ -231,4 +254,38 @@ fn isolated_bus_exposes_standard_contract_and_keeps_brand_activation_when_standa
     .expect("introspect branded object");
     assert!(branded_introspection.contains("<method name=\"Activate\">"));
     assert!(branded_introspection.contains("<method name=\"OpenPaths\">"));
+}
+
+#[test]
+#[ignore = "run under an isolated dbus-run-session"]
+fn isolated_bus_open_new_window_policy_detaches_instead_of_forwarding() {
+    let primary = match DesktopActivationRuntime::claim_or_forward(
+        &[],
+        DesktopLaunchWindowPolicy::MergeIntoExisting,
+    )
+    .expect("claim branded activation")
+    {
+        FileManagerActivationClaim::Primary(runtime) => runtime,
+        FileManagerActivationClaim::Forwarded => {
+            panic!("isolated bus unexpectedly had a brand owner")
+        }
+        FileManagerActivationClaim::Detached => {
+            panic!("unexpected detached claim")
+        }
+    };
+    drop(primary);
+
+    assert!(matches!(
+        DesktopActivationRuntime::claim_or_forward(&[], DesktopLaunchWindowPolicy::OpenNewWindow,)
+            .expect("detached claim"),
+        FileManagerActivationClaim::Detached
+    ));
+    assert!(matches!(
+        DesktopActivationRuntime::claim_or_forward(
+            &[],
+            DesktopLaunchWindowPolicy::MergeIntoExisting,
+        )
+        .expect("forwarded claim"),
+        FileManagerActivationClaim::Forwarded
+    ));
 }

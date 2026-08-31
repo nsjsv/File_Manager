@@ -6,6 +6,10 @@ use crate::{StoreError, StoreResult, StoredPath, TaskQueueStore};
 
 pub const USER_PREFERENCES_KEY: &str = "main";
 
+/// StoredUserPreferences.launch_window_policy 的合法取值。
+pub const LAUNCH_WINDOW_POLICY_MERGE_INTO_EXISTING: &str = "merge_into_existing";
+pub const LAUNCH_WINDOW_POLICY_OPEN_NEW_WINDOW: &str = "open_new_window";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredUserPreferences {
     pub network_list_thumbnail_downloads_enabled: bool,
@@ -60,6 +64,8 @@ pub struct StoredUserPreferences {
     pub color_scheme: String,
     #[serde(default)]
     pub custom_color_scheme: Option<StoredCustomColorScheme>,
+    #[serde(default = "default_launch_window_policy")]
+    pub launch_window_policy: String,
 }
 
 impl Default for StoredUserPreferences {
@@ -97,6 +103,7 @@ impl Default for StoredUserPreferences {
             theme_mode: default_theme_mode(),
             color_scheme: default_color_scheme(),
             custom_color_scheme: None,
+            launch_window_policy: default_launch_window_policy(),
         }
     }
 }
@@ -127,6 +134,11 @@ pub struct StoredCustomColorSet {
     pub warning: String,
     #[serde(default)]
     pub danger: String,
+}
+
+/// 新装/旧数据缺字段的默认策略：每次触发启动都打开新窗口。
+fn default_launch_window_policy() -> String {
+    LAUNCH_WINDOW_POLICY_OPEN_NEW_WINDOW.to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,5 +277,35 @@ impl TaskQueueStore {
             rusqlite::params![USER_PREFERENCES_KEY, payload_json, crate::current_time_ms()],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod launch_window_policy_tests {
+    use super::*;
+
+    #[test]
+    fn missing_launch_window_policy_defaults_to_open_new_window() {
+        let stored = StoredUserPreferences::default();
+        let mut json = serde_json::to_value(&stored).expect("serialize preferences");
+        json.as_object_mut()
+            .expect("preferences serialize to an object")
+            .remove("launch_window_policy");
+
+        let parsed: StoredUserPreferences =
+            serde_json::from_value(json).expect("deserialize preferences");
+
+        assert_eq!(
+            parsed.launch_window_policy,
+            LAUNCH_WINDOW_POLICY_OPEN_NEW_WINDOW
+        );
+    }
+
+    #[test]
+    fn default_launch_window_policy_is_open_new_window() {
+        assert_eq!(
+            StoredUserPreferences::default().launch_window_policy,
+            LAUNCH_WINDOW_POLICY_OPEN_NEW_WINDOW
+        );
     }
 }

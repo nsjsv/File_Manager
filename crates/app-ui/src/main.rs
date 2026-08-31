@@ -118,8 +118,18 @@ fn main() -> std::process::ExitCode {
         .map(command_line::ApplicationLaunchRequest::activation_paths)
         .unwrap_or_default();
     startup_trace::mark("desktop_activation_claim_started");
-    let activation_claim =
-        desktop_linux::DesktopActivationRuntime::claim_or_forward(&activation_paths);
+    let desktop_launch_window_policy = match config::stored_launch_window_policy() {
+        config::LaunchWindowPolicy::MergeIntoExisting => {
+            desktop_linux::DesktopLaunchWindowPolicy::MergeIntoExisting
+        }
+        config::LaunchWindowPolicy::OpenNewWindow => {
+            desktop_linux::DesktopLaunchWindowPolicy::OpenNewWindow
+        }
+    };
+    let activation_claim = desktop_linux::DesktopActivationRuntime::claim_or_forward(
+        &activation_paths,
+        desktop_launch_window_policy,
+    );
     let activation_claim_outcome = match &activation_claim {
         Ok(desktop_linux::FileManagerActivationClaim::Primary(_)) => {
             startup_trace::DesktopActivationClaimOutcome::Primary
@@ -127,65 +137,77 @@ fn main() -> std::process::ExitCode {
         Ok(desktop_linux::FileManagerActivationClaim::Forwarded) => {
             startup_trace::DesktopActivationClaimOutcome::Forwarded
         }
+        Ok(desktop_linux::FileManagerActivationClaim::Detached) => {
+            startup_trace::DesktopActivationClaimOutcome::Detached
+        }
         Err(_) => startup_trace::DesktopActivationClaimOutcome::Failed,
     };
     startup_trace::mark_desktop_activation_claim_finished(activation_claim_outcome);
     let activation_controller = match activation_claim {
-        Ok(desktop_linux::FileManagerActivationClaim::Primary(controller)) => controller,
+        Ok(desktop_linux::FileManagerActivationClaim::Primary(controller)) => Some(controller),
         Ok(desktop_linux::FileManagerActivationClaim::Forwarded) => {
             return std::process::ExitCode::SUCCESS;
         }
+        Ok(desktop_linux::FileManagerActivationClaim::Detached) => None,
         Err(error) => {
             eprintln!("file-manager: desktop activation failed: {error}");
             return std::process::ExitCode::FAILURE;
         }
     };
 
-    let (application_launch_request, initial_desktop_activation) = if activation_service {
-        let first_event = match activation_controller.wait_for_initial_event() {
-            Ok(event) => event,
-            Err(error) => {
-                eprintln!("file-manager: desktop activation failed: {error}");
-                return std::process::ExitCode::FAILURE;
+    let (application_launch_request, initial_desktop_activation) =
+        match activation_controller.as_deref() {
+            Some(controller) if activation_service => {
+                let first_event = match controller.wait_for_initial_event() {
+                    Ok(event) => event,
+                    Err(error) => {
+                        eprintln!("file-manager: desktop activation failed: {error}");
+                        return std::process::ExitCode::FAILURE;
+                    }
+                };
+                match first_event {
+                    desktop_linux::DesktopActivationEvent::FocusMainWindow(_) => (
+                        command_line::ApplicationLaunchRequest::ConfiguredStartup,
+                        None,
+                    ),
+                    desktop_linux::DesktopActivationEvent::MergeWorkspace(workspace, _) => (
+                        command_line::ApplicationLaunchRequest::ExplicitWorkspace(
+                            command_line::ExplicitWorkspace::from_desktop_workspace(workspace),
+                        ),
+                        None,
+                    ),
+                    event @ desktop_linux::DesktopActivationEvent::OpenProperties(_, _) => (
+                        command_line::ApplicationLaunchRequest::ConfiguredStartup,
+                        Some(event),
+                    ),
+                }
             }
+            _ if activation_service => (
+                // Detached：带 --activation-service 启动，但主实例已占名且策略要求新窗口。
+                command_line::ApplicationLaunchRequest::ConfiguredStartup,
+                None,
+            ),
+            _ => (
+                application_launch_request.expect("ordinary launch has a request"),
+                None,
+            ),
         };
-        match first_event {
-            desktop_linux::DesktopActivationEvent::FocusMainWindow(_) => (
-                command_line::ApplicationLaunchRequest::ConfiguredStartup,
-                None,
-            ),
-            desktop_linux::DesktopActivationEvent::MergeWorkspace(workspace, _) => (
-                command_line::ApplicationLaunchRequest::ExplicitWorkspace(
-                    command_line::ExplicitWorkspace::from_desktop_workspace(workspace),
-                ),
-                None,
-            ),
-            event @ desktop_linux::DesktopActivationEvent::OpenProperties(_, _) => (
-                command_line::ApplicationLaunchRequest::ConfiguredStartup,
-                Some(event),
-            ),
-        }
-    } else {
-        (
-            application_launch_request.expect("ordinary launch has a request"),
-            None,
-        )
-    };
-
     runtime_logging::init();
     startup_trace::mark_runtime_logging_ready();
-    match activation_controller.standard_service_status() {
-        desktop_linux::StandardFileManagerServiceStatus::Owned => tracing::info!(
-            target: "app_ui::desktop_activation",
-            standard_name = desktop_linux::FILE_MANAGER1_BUS_NAME,
-            "standard file manager D-Bus interface is active"
-        ),
-        desktop_linux::StandardFileManagerServiceStatus::Occupied(reason) => tracing::warn!(
-            target: "app_ui::desktop_activation",
-            standard_name = desktop_linux::FILE_MANAGER1_BUS_NAME,
-            reason,
-            "standard file manager D-Bus name is unavailable; branded activation remains active"
-        ),
+    if let Some(controller) = activation_controller.as_deref() {
+        match controller.standard_service_status() {
+            desktop_linux::StandardFileManagerServiceStatus::Owned => tracing::info!(
+                target: "app_ui::desktop_activation",
+                standard_name = desktop_linux::FILE_MANAGER1_BUS_NAME,
+                "standard file manager D-Bus interface is active"
+            ),
+            desktop_linux::StandardFileManagerServiceStatus::Occupied(reason) => tracing::warn!(
+                target: "app_ui::desktop_activation",
+                standard_name = desktop_linux::FILE_MANAGER1_BUS_NAME,
+                reason,
+                "standard file manager D-Bus name is unavailable; branded activation remains active"
+            ),
+        }
     }
     tracing::info!(
         target: "app_ui::runtime",

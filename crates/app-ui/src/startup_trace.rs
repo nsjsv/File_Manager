@@ -13,6 +13,7 @@ static STARTUP_TRACE: OnceLock<Option<StartupTrace>> = OnceLock::new();
 pub(crate) enum DesktopActivationClaimOutcome {
     Primary,
     Forwarded,
+    Detached,
     Failed,
 }
 
@@ -21,6 +22,7 @@ impl DesktopActivationClaimOutcome {
         match self {
             Self::Primary => "primary",
             Self::Forwarded => "forwarded",
+            Self::Detached => "detached",
             Self::Failed => "failed",
         }
     }

@@ -419,7 +419,7 @@ impl FileBrowser {
 
     fn boot(
         application_launch_request: ApplicationLaunchRequest,
-        file_manager_activation: Arc<DesktopActivationRuntime>,
+        file_manager_activation: Option<Arc<DesktopActivationRuntime>>,
         initial_desktop_activation: Option<DesktopActivationEvent>,
         startup_rendering_environment: StartupRenderingEnvironment,
     ) -> (Self, Task<Message>) {
@@ -429,7 +429,7 @@ impl FileBrowser {
             user_config,
             main_window,
             application_launch_request,
-            Some(file_manager_activation),
+            file_manager_activation,
             startup_rendering_environment,
         );
 

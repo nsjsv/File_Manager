@@ -25,10 +25,10 @@ pub use file_clipboard::{
     FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
 };
 pub use file_manager_activation::{
-    DesktopActivationEvent, DesktopActivationRuntime, DesktopStartupId, FileManagerActivationClaim,
-    FileManagerActivationError, LocalPropertyTargets, LocalRequestError, LocalWorkspaceRequest,
-    LocalWorkspaceTab, StandardFileManagerServiceStatus, FILE_MANAGER1_BUS_NAME,
-    FILE_MANAGER1_OBJECT_PATH, FILE_MANAGER_ACTIVATION_BUS_NAME,
+    DesktopActivationEvent, DesktopActivationRuntime, DesktopLaunchWindowPolicy, DesktopStartupId,
+    FileManagerActivationClaim, FileManagerActivationError, LocalPropertyTargets,
+    LocalRequestError, LocalWorkspaceRequest, LocalWorkspaceTab, StandardFileManagerServiceStatus,
+    FILE_MANAGER1_BUS_NAME, FILE_MANAGER1_OBJECT_PATH, FILE_MANAGER_ACTIVATION_BUS_NAME,
     FILE_MANAGER_ACTIVATION_OBJECT_PATH,
 };
 pub use network_mounts::{

@@ -186,3 +186,54 @@ fn full_activation_channel_rejects_without_waiting() {
 
     assert!(matches!(error, zbus::fdo::Error::LimitsExceeded(_)));
 }
+
+#[test]
+fn name_taken_with_open_new_window_policy_detaches_without_forwarding() {
+    let mut forward_calls = 0;
+    let claim = super::resolve_name_taken_claim(
+        &[PathBuf::from("/tmp")],
+        super::DesktopLaunchWindowPolicy::OpenNewWindow,
+        |_| {
+            forward_calls += 1;
+            Ok(())
+        },
+    )
+    .expect("detached claim");
+
+    assert!(matches!(claim, super::FileManagerActivationClaim::Detached));
+    assert_eq!(forward_calls, 0);
+}
+
+#[test]
+fn name_taken_with_merge_policy_forwards_and_reports_forwarded() {
+    let mut forwarded_paths = None;
+    let claim = super::resolve_name_taken_claim(
+        &[PathBuf::from("/tmp")],
+        super::DesktopLaunchWindowPolicy::MergeIntoExisting,
+        |paths| {
+            forwarded_paths = Some(paths.to_vec());
+            Ok(())
+        },
+    )
+    .expect("forwarded claim");
+
+    assert!(matches!(
+        claim,
+        super::FileManagerActivationClaim::Forwarded
+    ));
+    assert_eq!(forwarded_paths, Some(vec![PathBuf::from("/tmp")]));
+}
+
+#[test]
+fn name_taken_with_merge_policy_propagates_forward_failure() {
+    let claim = super::resolve_name_taken_claim(
+        &[PathBuf::from("/tmp")],
+        super::DesktopLaunchWindowPolicy::MergeIntoExisting,
+        |_| Err(super::FileManagerActivationError::ReceiverClosed),
+    );
+
+    assert!(matches!(
+        claim,
+        Err(super::FileManagerActivationError::ReceiverClosed)
+    ));
+}
