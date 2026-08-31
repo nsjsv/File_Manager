@@ -19,6 +19,9 @@ fn desktop_and_brand_activation_files_expose_local_file_manager_contract() {
     assert!(desktop_entry
         .lines()
         .any(|line| line == "MimeType=inode/directory;"));
+    assert!(desktop_entry
+        .lines()
+        .any(|line| line == "Icon=file-manager"));
 
     let service_name = "io.github.nsjsv.FileManager.service";
     let activation_service = fs::read_to_string(root.join("packaging/linux").join(service_name))
@@ -35,6 +38,7 @@ fn desktop_and_brand_activation_files_expose_local_file_manager_contract() {
     assert!(release_workflow.contains("usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"));
     assert!(release_workflow.contains("usr/share/${APP_NAME}/matugen/file-manager-colors.toml"));
     assert!(release_workflow.contains("usr/share/doc/${APP_NAME}/matugen.md"));
+    assert!(release_workflow.contains("usr/share/icons/hicolor/512x512/apps/file-manager.png"));
 }
 
 #[test]

@@ -99,6 +99,7 @@ jobs:
           install -Dm644 "packaging/linux/${SEARCH_SERVICE_UNIT}" "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
           install -Dm644 LICENSE "${payload}/usr/share/licenses/${APP_NAME}/LICENSE"
           install -Dm644 packaging/linux/file-manager.desktop "${payload}/usr/share/applications/${APP_NAME}.desktop"
+          install -Dm644 packaging/linux/icons/hicolor/512x512/apps/file-manager.png "${payload}/usr/share/icons/hicolor/512x512/apps/file-manager.png"
           install -Dm644 packaging/matugen/file-manager-colors.toml "${payload}/usr/share/${APP_NAME}/matugen/file-manager-colors.toml"
           install -Dm644 packaging/matugen/README.md "${payload}/usr/share/doc/${APP_NAME}/matugen.md"
           install -Dm644 "packaging/linux/${ACTIVATION_SERVICE_FILE}" "${payload}/usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"
@@ -108,6 +109,7 @@ jobs:
           test -f "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
           test -f "${payload}/usr/share/${APP_NAME}/matugen/file-manager-colors.toml"
           test -f "${payload}/usr/share/doc/${APP_NAME}/matugen.md"
+          test -f "${payload}/usr/share/icons/hicolor/512x512/apps/file-manager.png"
           test -f "${payload}/usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"
 
           tar -C dist -czf "${asset_name}" "${package_dir}"

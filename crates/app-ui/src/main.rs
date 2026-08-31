@@ -26,6 +26,7 @@ mod anchored_popup;
 mod animated_image_preview;
 mod animation;
 mod app;
+mod app_icon;
 mod appearance;
 mod audio_preview;
 mod breadcrumb_drop_target_bounds;

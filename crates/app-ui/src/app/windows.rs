@@ -54,6 +54,7 @@ pub(super) fn main_window_settings() -> window::Settings {
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = MAIN_WINDOW_APP_ID.to_owned();
+    settings.icon = crate::app_icon::startup_window_icon();
     settings
 }
 
@@ -72,6 +73,7 @@ fn settings_window_settings() -> window::Settings {
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = SETTINGS_WINDOW_APP_ID.to_owned();
+    settings.icon = crate::app_icon::startup_window_icon();
     settings
 }
 
@@ -90,6 +92,7 @@ fn properties_window_settings() -> window::Settings {
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = PROPERTIES_WINDOW_APP_ID.to_owned();
+    settings.icon = crate::app_icon::startup_window_icon();
     settings
 }
 
@@ -107,6 +110,7 @@ fn preview_window_settings(profile: PreviewWindowProfile, size: PreviewSize) -> 
         ..window::Settings::default()
     };
     settings.platform_specific.application_id = PREVIEW_WINDOW_APP_ID.to_owned();
+    settings.icon = crate::app_icon::startup_window_icon();
     settings
 }
 
