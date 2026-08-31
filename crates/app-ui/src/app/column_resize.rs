@@ -6,7 +6,7 @@ use crate::app::FileBrowser;
 use crate::commands::save_column_width_overrides_command;
 use crate::config;
 use crate::model::Message;
-use crate::three_column_view::{COLUMN_RESIZE_DIVIDER_WIDTH, DEFAULT_VISIBLE_COLUMN_COUNT};
+use crate::three_column_view::COLUMN_RESIZE_DIVIDER_WIDTH;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ColumnResizeDrag {
@@ -70,7 +70,8 @@ impl FileBrowser {
     }
 
     fn default_column_width(&self) -> f32 {
-        let width = self.column_browser_content_width() / DEFAULT_VISIBLE_COLUMN_COUNT as f32;
+        let width =
+            self.column_browser_content_width() / self.user_config.visible_column_count as f32;
         if width.is_finite() {
             width.max(config::MIN_COLUMN_WIDTH)
         } else {
@@ -79,7 +80,11 @@ impl FileBrowser {
     }
 
     fn column_browser_content_width(&self) -> f32 {
-        column_browser_content_width_for_window(self.main_window_width, self.sidebar_width)
+        column_browser_content_width_for_window(
+            self.main_window_width,
+            self.sidebar_width,
+            self.user_config.visible_column_count,
+        )
     }
 
     pub(super) fn refresh_column_width_reference_content_widths(&mut self) {
@@ -129,8 +134,12 @@ impl FileBrowser {
     }
 }
 
-fn column_browser_content_width_for_window(main_window_width: f32, sidebar_width: f32) -> f32 {
-    let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
+fn column_browser_content_width_for_window(
+    main_window_width: f32,
+    sidebar_width: f32,
+    visible_column_count: usize,
+) -> f32 {
+    let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (visible_column_count - 1) as f32;
     (main_window_width - sidebar_width - divider_width).max(1.0)
 }
 
@@ -179,8 +188,9 @@ mod tests {
 
     #[test]
     fn column_browser_content_width_excludes_sidebar_slot() {
-        let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
-        let width = column_browser_content_width_for_window(900.0, 180.0);
+        let visible_column_count = 3;
+        let divider_width = COLUMN_RESIZE_DIVIDER_WIDTH * (visible_column_count - 1) as f32;
+        let width = column_browser_content_width_for_window(900.0, 180.0, visible_column_count);
 
         assert_close(width, 900.0 - 180.0 - divider_width);
     }

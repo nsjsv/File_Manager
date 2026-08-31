@@ -39,6 +39,9 @@ pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 140.0;
 pub(crate) const MAX_SIDEBAR_WIDTH: f32 = 360.0;
 pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
+pub(crate) const MIN_VISIBLE_COLUMN_COUNT: usize = 3;
+pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 3;
+pub(crate) const MAX_VISIBLE_COLUMN_COUNT: usize = 5;
 pub(crate) const PREVIEW_FILE_SIZE_UNIT_BYTES: u64 = 1024 * 1024;
 pub(crate) const DEFAULT_PREVIEW_TEXT_SIZE_BYTES: u64 = 25 * PREVIEW_FILE_SIZE_UNIT_BYTES;
 pub(crate) const DEFAULT_PREVIEW_IMAGE_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_SIZE_UNIT_BYTES;
@@ -362,6 +365,7 @@ pub(crate) struct UserConfig {
     pub(crate) custom_color_scheme: CustomColorScheme,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) visible_column_count: usize,
     pub(crate) window_controls: crate::model::WindowControlsConfig,
     pub(crate) icon_grid_size: u32,
     pub(crate) list_view_preferences: crate::model::ListViewPreferences,
@@ -412,6 +416,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         custom_color_scheme: default_custom_color_scheme(),
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        visible_column_count: DEFAULT_VISIBLE_COLUMN_COUNT,
         window_controls: crate::model::WindowControlsConfig::default(),
         icon_grid_size: DEFAULT_ICON_GRID_SIZE,
         list_view_preferences: crate::model::ListViewPreferences::default(),
@@ -445,6 +450,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         custom_color_scheme: default_custom_color_scheme(),
         file_operation_verification: DEFAULT_FILE_OPERATION_VERIFICATION,
         browser_view_mode: BrowserViewMode::Columns,
+        visible_column_count: DEFAULT_VISIBLE_COLUMN_COUNT,
         window_controls: crate::model::WindowControlsConfig::default(),
         icon_grid_size: DEFAULT_ICON_GRID_SIZE,
         list_view_preferences: crate::model::ListViewPreferences::default(),
@@ -475,6 +481,10 @@ pub(crate) fn normalize_sidebar_width(width: f32) -> f32 {
 
 pub(crate) fn normalize_icon_grid_size(size: u32) -> u32 {
     size.clamp(MIN_ICON_GRID_SIZE, MAX_ICON_GRID_SIZE)
+}
+
+pub(crate) fn normalize_visible_column_count(count: usize) -> usize {
+    count.clamp(MIN_VISIBLE_COLUMN_COUNT, MAX_VISIBLE_COLUMN_COUNT)
 }
 
 pub(super) fn app_config_dir_path() -> Option<PathBuf> {

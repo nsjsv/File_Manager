@@ -6,6 +6,7 @@ use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::load_expanded_directory_command;
+use crate::config::normalize_visible_column_count;
 use crate::model::{
     BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
     ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, ListExpansionFollowSessionId, Message,
@@ -30,6 +31,15 @@ struct DirectoryExpansionTransfer {
 }
 
 impl FileBrowser {
+    pub(crate) fn select_visible_column_count(&mut self, count: usize) -> Task<Message> {
+        let count = normalize_visible_column_count(count);
+        if self.user_config.visible_column_count == count {
+            return Task::none();
+        }
+        self.user_config.visible_column_count = count;
+        self.persist_user_preferences_command()
+    }
+
     pub(super) fn select_browser_view_mode(
         &mut self,
         pane_id: BrowserPaneId,
@@ -692,4 +702,23 @@ fn advance_expanded_directories(
         }
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_column_count_selection_normalizes_to_configured_range() {
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+
+        drop(browser.select_visible_column_count(2));
+        assert_eq!(browser.user_config.visible_column_count, 3);
+
+        drop(browser.select_visible_column_count(99));
+        assert_eq!(browser.user_config.visible_column_count, 5);
+
+        drop(browser.select_visible_column_count(4));
+        assert_eq!(browser.user_config.visible_column_count, 4);
+    }
 }

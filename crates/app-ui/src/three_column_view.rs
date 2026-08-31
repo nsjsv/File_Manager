@@ -31,7 +31,6 @@ use crate::typography::readable_text;
 use crate::view::{column_browser_scroll_id, rename_input_id, translated_with_width_overflow};
 use crate::virtual_range::{initial_virtual_range, virtual_range_for_viewport, VirtualRange};
 
-pub(crate) const DEFAULT_VISIBLE_COLUMN_COUNT: usize = 4;
 pub(crate) const COLUMN_RESIZE_DIVIDER_WIDTH: f32 = 5.0;
 const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 const CHEVRON_ICON_SIZE: f32 = 11.0;
@@ -78,7 +77,9 @@ pub(crate) fn column_browser_view<'a>(
     pane: BrowserPaneView<'a>,
 ) -> Element<'a, Message> {
     let rendered_directories = column_directories_for_pane(pane);
-    let visible_column_count = rendered_directories.len().max(DEFAULT_VISIBLE_COLUMN_COUNT);
+    let visible_column_count = rendered_directories
+        .len()
+        .max(browser.user_config().visible_column_count);
     let sidebar_underlay_width = sidebar_underlay_width_for_pane(browser, pane.id);
     let mut columns = Row::new().spacing(0).height(Length::Fill);
     if sidebar_underlay_width > f32::EPSILON {
@@ -112,9 +113,10 @@ pub(crate) fn column_browser_view<'a>(
             columns = columns.push(column_resize_divider(pane.id, index));
         }
     }
-    let scroll_spacer_width = end_scroll_spacer_width(rendered_directories.len(), |index| {
-        browser.column_width(index)
-    });
+    let scroll_spacer_width =
+        end_scroll_spacer_width(rendered_directories.len(), visible_column_count, |index| {
+            browser.column_width(index)
+        });
     if scroll_spacer_width > f32::EPSILON {
         columns = columns.push(end_scroll_spacer(scroll_spacer_width));
     }
@@ -356,13 +358,14 @@ fn end_scroll_spacer(width: f32) -> Element<'static, Message> {
 
 fn end_scroll_spacer_width(
     real_column_count: usize,
+    visible_column_count: usize,
     column_width_at: impl Fn(usize) -> f32,
 ) -> f32 {
-    if real_column_count < DEFAULT_VISIBLE_COLUMN_COUNT {
+    if real_column_count < visible_column_count {
         return 0.0;
     }
 
-    (real_column_count..real_column_count + DEFAULT_VISIBLE_COLUMN_COUNT - 1)
+    (real_column_count..real_column_count + visible_column_count - 1)
         .map(|index| column_width_at(index) + COLUMN_RESIZE_DIVIDER_WIDTH)
         .sum()
 }
@@ -864,23 +867,24 @@ mod tests {
     #[test]
     fn end_scroll_spacer_width_keeps_default_placeholders_and_terminal_scroll() {
         let column_width = 180.0;
-        let divider_count = (DEFAULT_VISIBLE_COLUMN_COUNT - 1) as f32;
+        let visible_column_count = 3;
+        let divider_count = (visible_column_count - 1) as f32;
         let expected_spacer = divider_count * (column_width + COLUMN_RESIZE_DIVIDER_WIDTH);
 
-        for real_column_count in [1, DEFAULT_VISIBLE_COLUMN_COUNT - 1] {
+        for real_column_count in [1, visible_column_count - 1] {
             assert_eq!(
-                end_scroll_spacer_width(real_column_count, |_| column_width),
+                end_scroll_spacer_width(real_column_count, visible_column_count, |_| column_width),
                 0.0
             );
         }
-        for real_column_count in [DEFAULT_VISIBLE_COLUMN_COUNT, 5] {
+        for real_column_count in [visible_column_count, 5] {
             assert_eq!(
-                end_scroll_spacer_width(real_column_count, |_| column_width),
+                end_scroll_spacer_width(real_column_count, visible_column_count, |_| column_width),
                 expected_spacer
             );
         }
 
-        let viewport_width = DEFAULT_VISIBLE_COLUMN_COUNT as f32 * column_width
+        let viewport_width = visible_column_count as f32 * column_width
             + divider_count * COLUMN_RESIZE_DIVIDER_WIDTH;
         assert_eq!(
             viewport_width + expected_spacer - viewport_width,

@@ -101,6 +101,17 @@ impl fmt::Display for LaunchWindowPickOption {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VisibleColumnCountPickOption(usize);
+
+impl fmt::Display for VisibleColumnCountPickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&crate::localization::translate_current(
+            visible_column_count_label(self.0),
+        ))
+    }
+}
+
 pub(crate) fn view_settings_window(
     browser: &FileBrowser,
     window: window::Id,
@@ -253,6 +264,13 @@ fn appearance_settings_detail(
             settings_group(
                 "Window controls",
                 vec![window_control_settings_row(browser)]
+            ),
+            settings_group(
+                "Columns view",
+                vec![labeled_setting_row(
+                    "Visible columns",
+                    visible_column_count_dropdown(browser),
+                )],
             ),
             settings_group(
                 "Rendering",
@@ -675,6 +693,14 @@ fn launch_window_label(policy: LaunchWindowPolicy) -> &'static str {
     }
 }
 
+fn visible_column_count_label(count: usize) -> &'static str {
+    match count {
+        4 => "4 columns",
+        5 => "5 columns",
+        _ => "3 columns",
+    }
+}
+
 fn launch_window_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
     let options = [
         LaunchWindowPolicy::MergeIntoExisting,
@@ -690,6 +716,25 @@ fn launch_window_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
             browser.user_config().launch_window_policy,
         )),
         |selected| Message::LaunchWindowPolicySelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
+}
+
+fn visible_column_count_dropdown(browser: &FileBrowser) -> Element<'static, Message> {
+    let options = [3, 4, 5]
+        .into_iter()
+        .map(VisibleColumnCountPickOption)
+        .collect::<Vec<_>>();
+
+    pick_list(
+        options,
+        Some(VisibleColumnCountPickOption(
+            browser.user_config().visible_column_count,
+        )),
+        |selected| Message::VisibleColumnCountSelected(selected.0),
     )
     .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
     .text_size(12)

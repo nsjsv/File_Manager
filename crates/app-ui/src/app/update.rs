@@ -808,6 +808,7 @@ impl FileBrowser {
             Message::LanguageSettingSelected(language_setting) => {
                 self.select_language_setting(language_setting)
             }
+            Message::VisibleColumnCountSelected(count) => self.select_visible_column_count(count),
             Message::StartupLocationPolicySelected(policy) => {
                 self.select_startup_location_policy(policy)
             }

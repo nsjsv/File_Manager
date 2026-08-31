@@ -16,9 +16,9 @@ use super::{
     file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
     list_directory_size_display_mode_from_config_value, normalize_icon_grid_size,
     normalize_preview_directory_expand_levels, normalize_sidebar_width,
-    sort_direction_config_value, sort_direction_from_config_value, sort_field_config_value,
-    sort_field_from_config_value, LaunchWindowPolicy, PreviewFileSizeLimits, SidebarFavoriteConfig,
-    UiLanguageSetting, UserConfig,
+    normalize_visible_column_count, sort_direction_config_value, sort_direction_from_config_value,
+    sort_field_config_value, sort_field_from_config_value, LaunchWindowPolicy,
+    PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting, UserConfig,
 };
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
@@ -43,6 +43,7 @@ pub(crate) struct UserPreferences {
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
+    pub(crate) visible_column_count: usize,
     pub(crate) window_controls: WindowControlsConfig,
     pub(crate) icon_grid_size: u32,
     pub(crate) list_view_preferences: ListViewPreferences,
@@ -73,6 +74,7 @@ impl UserPreferences {
             terminal_emulator: config.terminal_emulator,
             file_operation_verification: config.file_operation_verification,
             browser_view_mode: config.browser_view_mode,
+            visible_column_count: normalize_visible_column_count(config.visible_column_count),
             window_controls: config.window_controls.clone(),
             icon_grid_size: normalize_icon_grid_size(config.icon_grid_size),
             list_view_preferences: config.list_view_preferences.clone(),
@@ -102,6 +104,7 @@ impl UserPreferences {
         config.terminal_emulator = self.terminal_emulator;
         config.file_operation_verification = self.file_operation_verification;
         config.browser_view_mode = self.browser_view_mode;
+        config.visible_column_count = normalize_visible_column_count(self.visible_column_count);
         config.window_controls = self.window_controls.clone();
         config.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
         config.list_view_preferences = self.list_view_preferences.clone();
@@ -142,6 +145,8 @@ impl UserPreferences {
             file_operation_verification_config_value(self.file_operation_verification).to_owned();
         stored.browser_view_mode =
             browser_view_mode_config_value(self.browser_view_mode).to_owned();
+        stored.visible_column_count =
+            normalize_visible_column_count(self.visible_column_count) as u32;
         stored.window_chrome_layout = self.window_controls.layout().config_value().to_owned();
         stored.window_controls = stored_window_controls(&self.window_controls);
         stored.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
@@ -211,6 +216,9 @@ impl UserPreferences {
             .unwrap_or(default_preferences.file_operation_verification),
             browser_view_mode: browser_view_mode_from_config_value(&stored.browser_view_mode)
                 .unwrap_or(default_preferences.browser_view_mode),
+            visible_column_count: normalize_visible_column_count(
+                stored.visible_column_count as usize,
+            ),
             window_controls,
             icon_grid_size: normalize_icon_grid_size(stored.icon_grid_size),
             list_view_preferences,

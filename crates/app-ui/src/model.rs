@@ -626,6 +626,7 @@ pub(crate) enum Message {
     ApplicationLogThresholdSelected(ApplicationLogLevel),
     ShowHiddenFilesToggled,
     ListDirectorySizeDisplayModeToggled,
+    VisibleColumnCountSelected(usize),
     NetworkListThumbnailDownloadsToggled,
     SearchContentIndexingToggled,
     PreviewSizeLimitInputChanged(usize, String),

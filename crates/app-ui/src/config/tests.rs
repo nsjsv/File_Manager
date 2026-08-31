@@ -528,6 +528,23 @@ fn stored_icon_grid_size_is_normalized_at_config_boundary() {
 }
 
 #[test]
+fn stored_visible_column_count_is_normalized_at_config_boundary() {
+    let default = default_user_config();
+    let mut stored = default.user_preferences().to_stored();
+    stored.visible_column_count = 0;
+    assert_eq!(
+        UserPreferences::from_stored(stored.clone(), &default).visible_column_count,
+        MIN_VISIBLE_COLUMN_COUNT
+    );
+
+    stored.visible_column_count = u32::MAX;
+    assert_eq!(
+        UserPreferences::from_stored(stored, &default).visible_column_count,
+        MAX_VISIBLE_COLUMN_COUNT
+    );
+}
+
+#[test]
 fn legacy_icon_grid_preferences_are_loaded_and_normalized() {
     let parsed = legacy_toml::parse_toml_user_config(
         "browser_view_mode = \"icons\"\nicon_grid_size = 1000\n",
@@ -673,6 +690,7 @@ fn default_user_config_keeps_expected_preview_defaults() {
     assert_eq!(config.preview_directory_expand_levels, 1);
     assert_eq!(config.startup_location_policy, StartupLocationPolicy::Home);
     assert_eq!(config.icon_grid_size, DEFAULT_ICON_GRID_SIZE);
+    assert_eq!(config.visible_column_count, DEFAULT_VISIBLE_COLUMN_COUNT);
     assert!(!config.save_view_state);
     assert_eq!(
         config.list_directory_size_display_mode,

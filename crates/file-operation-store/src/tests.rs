@@ -638,6 +638,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("search_history");
     object.remove("theme_mode");
     object.remove("color_scheme");
+    object.remove("visible_column_count");
     let payload_json = serde_json::to_string(&payload).unwrap();
     let connection = Connection::open(store.db_path()).unwrap();
     connection
@@ -664,6 +665,7 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.language_setting, "system");
     assert_eq!(preferences.icon_grid_size, 96);
     assert_eq!(preferences.window_chrome_layout, "integrated_navigation");
+    assert_eq!(preferences.visible_column_count, 3);
     assert_eq!(preferences.window_controls.len(), 3);
     assert_eq!(preferences.window_controls[0].kind, "minimize");
     assert_eq!(preferences.window_controls[0].side, "right");

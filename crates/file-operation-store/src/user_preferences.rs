@@ -40,6 +40,8 @@ pub struct StoredUserPreferences {
     pub browser_view_mode: String,
     #[serde(default = "default_icon_grid_size")]
     pub icon_grid_size: u32,
+    #[serde(default = "default_visible_column_count")]
+    pub visible_column_count: u32,
     pub startup_location: String,
     pub startup_custom_directory: StoredPath,
     pub save_view_state: bool,
@@ -89,6 +91,7 @@ impl Default for StoredUserPreferences {
             file_operation_verification: "basic_metadata".to_owned(),
             browser_view_mode: "columns".to_owned(),
             icon_grid_size: default_icon_grid_size(),
+            visible_column_count: default_visible_column_count(),
             startup_location: "home".to_owned(),
             startup_custom_directory: StoredPath::from_path(Path::new("")),
             save_view_state: false,
@@ -223,6 +226,10 @@ fn default_language_setting() -> String {
 
 fn default_icon_grid_size() -> u32 {
     96
+}
+
+fn default_visible_column_count() -> u32 {
+    3
 }
 
 fn default_window_chrome_layout() -> String {
