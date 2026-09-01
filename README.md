@@ -30,7 +30,25 @@
 paru -S file-manager-bin
 ```
 
+### Debian / Ubuntu
+
+从 [Releases](https://github.com/nsjsv/File_Manager/releases) 下载 `.deb` 安装（兼容 Ubuntu 24.04+、Debian 13+）：
+
+```bash
+sudo apt install ./file-manager_0.2.6-1_amd64.deb
+```
+
+### Fedora / openSUSE
+
+从 [Releases](https://github.com/nsjsv/File_Manager/releases) 下载 `.rpm` 安装：
+
+```bash
+sudo dnf install ./file-manager-0.2.6-1.*.rpm
+```
+
 其他发行版可以先查看 [Releases](https://github.com/nsjsv/File_Manager/releases)。如果预编译包无法运行，请按下文从源码构建。
+
+以上预编译包均不自动启用后台服务，PDF/Office、视频、压缩包等预览依赖的可选软件（poppler、ffmpeg、7zip、gvfs 等）以弱依赖声明，需要时自行安装。
 
 ### 启用索引搜索
 

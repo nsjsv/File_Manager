@@ -1,5 +1,7 @@
 /target/
 **/*.rs.bk
 .idea/
-.vscode/Trellis Instructions
+.vscode/
+Trellis Instructions
 .macos-kvm
+dist/

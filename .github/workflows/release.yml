@@ -94,23 +94,10 @@ jobs:
           asset_name="${{ steps.metadata.outputs.asset_name }}"
           payload="dist/${package_dir}"
 
-          install -Dm755 "target/release/${CARGO_BINARY}" "${payload}/usr/bin/${APP_NAME}"
-          install -Dm755 "target/release/${DAEMON_BINARY}" "${payload}/usr/lib/${APP_NAME}/${DAEMON_BINARY}"
-          install -Dm644 "packaging/linux/${SEARCH_SERVICE_UNIT}" "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
-          install -Dm644 LICENSE "${payload}/usr/share/licenses/${APP_NAME}/LICENSE"
-          install -Dm644 packaging/linux/file-manager.desktop "${payload}/usr/share/applications/${APP_NAME}.desktop"
-          install -Dm644 packaging/linux/icons/hicolor/512x512/apps/file-manager.png "${payload}/usr/share/icons/hicolor/512x512/apps/file-manager.png"
-          install -Dm644 packaging/matugen/file-manager-colors.toml "${payload}/usr/share/${APP_NAME}/matugen/file-manager-colors.toml"
-          install -Dm644 packaging/matugen/README.md "${payload}/usr/share/doc/${APP_NAME}/matugen.md"
-          install -Dm644 "packaging/linux/${ACTIVATION_SERVICE_FILE}" "${payload}/usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"
-
-          test -x "${payload}/usr/bin/${APP_NAME}"
-          test -x "${payload}/usr/lib/${APP_NAME}/${DAEMON_BINARY}"
-          test -f "${payload}/usr/lib/systemd/user/${SEARCH_SERVICE_UNIT}"
-          test -f "${payload}/usr/share/${APP_NAME}/matugen/file-manager-colors.toml"
-          test -f "${payload}/usr/share/doc/${APP_NAME}/matugen.md"
-          test -f "${payload}/usr/share/icons/hicolor/512x512/apps/file-manager.png"
-          test -f "${payload}/usr/share/dbus-1/services/${ACTIVATION_SERVICE_FILE}"
+          bash packaging/common/install-payload.sh \
+            "${payload}" \
+            "target/release/${CARGO_BINARY}" \
+            "target/release/${DAEMON_BINARY}"
 
           tar -C dist -czf "${asset_name}" "${package_dir}"
           sha256sum "${asset_name}" > SHA256SUMS
@@ -193,3 +180,43 @@ jobs:
             git -C "${aur_repo}" commit -m "Update to ${PKGVER}"
             git -C "${aur_repo}" push
           fi
+
+  deb-release:
+    name: Build Debian package
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Debian package
+        run: packaging/deb/build-deb.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Publish Debian package
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*.deb
+            dist/SHA256SUMS.deb
+
+  rpm-release:
+    name: Build RPM package
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build RPM package
+        run: packaging/rpm/build-rpm.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Publish RPM package
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/x86_64/*.rpm
+            dist/SHA256SUMS.rpm
