@@ -1147,7 +1147,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1204,12 +1204,14 @@ mod recoverable_transfer_tests {
             panic!("recoverable copy should enqueue");
         };
         let running = queue.active_subscription().unwrap();
+        let stored_task_id = running.stored_id.unwrap();
+        let stored_task_id = running.stored_id.unwrap();
         let (mut output, _messages) = iced::futures::channel::mpsc::channel(8);
 
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1231,11 +1233,11 @@ mod recoverable_transfer_tests {
             )
         );
         assert_eq!(
-            store.read_task(task_id).unwrap().unwrap().status,
+            store.read_task(stored_task_id).unwrap().unwrap().status,
             file_operation_store::StoredTaskStatus::Failed
         );
         assert!(!store
-            .read_transfer_recovery(task_id)
+            .read_transfer_recovery(stored_task_id)
             .unwrap()
             .journal_entries
             .is_empty());
@@ -1265,7 +1267,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1326,7 +1328,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers.clone(),
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1434,7 +1436,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1489,7 +1491,9 @@ mod recoverable_transfer_tests {
             panic!("recoverable move should enqueue");
         };
         let running = queue.active_subscription().unwrap();
-        let mut records = load_recoverable_transfer_records(store.clone(), task_id)
+        let stored_task_id = running.stored_id.unwrap();
+        let stored_task_id = running.stored_id.unwrap();
+        let mut records = load_recoverable_transfer_records(store.clone(), stored_task_id)
             .await
             .unwrap();
         let journal = task_queue_transfer_journal(store.clone(), running.controls.clone());
@@ -1583,7 +1587,7 @@ mod recoverable_transfer_tests {
             tokio::fs::read(displaced_target).await.unwrap(),
             b"content-1"
         );
-        let restored = load_recoverable_transfer_records(store, task_id)
+        let restored = load_recoverable_transfer_records(store, stored_task_id)
             .await
             .unwrap();
         assert!(matches!(
@@ -1634,7 +1638,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1691,7 +1695,9 @@ mod recoverable_transfer_tests {
             panic!("recoverable move should enqueue");
         };
         let running = queue.active_subscription().unwrap();
-        let record = load_recoverable_transfer_records(store.clone(), task_id)
+        let stored_task_id = running.stored_id.unwrap();
+        let stored_task_id = running.stored_id.unwrap();
+        let record = load_recoverable_transfer_records(store.clone(), stored_task_id)
             .await
             .unwrap()
             .remove(0);
@@ -1710,7 +1716,7 @@ mod recoverable_transfer_tests {
             .await,
             Err(RecoverableTransferError::Journal { .. })
         ));
-        let snapshot = store.read_transfer_recovery(task_id).unwrap();
+        let snapshot = store.read_transfer_recovery(stored_task_id).unwrap();
         assert_eq!(
             snapshot.journal_entries[0].checkpoint.kind,
             file_operation_store::StoredTransferCheckpointKind::DirectMoveRenamed
@@ -1720,7 +1726,7 @@ mod recoverable_transfer_tests {
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1773,7 +1779,9 @@ mod recoverable_transfer_tests {
             panic!("recoverable move should enqueue");
         };
         let running = queue.active_subscription().unwrap();
-        let record = load_recoverable_transfer_records(store.clone(), task_id)
+        let stored_task_id = running.stored_id.unwrap();
+        let stored_task_id = running.stored_id.unwrap();
+        let record = load_recoverable_transfer_records(store.clone(), stored_task_id)
             .await
             .unwrap()
             .remove(0);
@@ -1788,7 +1796,7 @@ mod recoverable_transfer_tests {
         .await
         .unwrap();
 
-        let snapshot = store.read_transfer_recovery(task_id).unwrap();
+        let snapshot = store.read_transfer_recovery(stored_task_id).unwrap();
         assert_eq!(
             snapshot.journal_entries[0].checkpoint.kind,
             file_operation_store::StoredTransferCheckpointKind::Completed
@@ -1823,12 +1831,14 @@ mod recoverable_transfer_tests {
             panic!("recoverable replace copy should enqueue");
         };
         let running = queue.active_subscription().unwrap();
+        let stored_task_id = running.stored_id.unwrap();
+        let stored_task_id = running.stored_id.unwrap();
         let (mut output, _messages) = iced::futures::channel::mpsc::channel(32);
 
         let completion = run_queued_transfers(
             transfers,
             running.controls,
-            task_id,
+            running.stored_id.unwrap(),
             task_id,
             &mut output,
             running.store,
@@ -1838,7 +1848,7 @@ mod recoverable_transfer_tests {
         .await;
         assert!(matches!(completion, FileOperationCompletion::Succeeded(_)));
         assert_eq!(tokio::fs::read(&target).await.unwrap(), b"replacement");
-        let snapshot = store.read_transfer_recovery(task_id).unwrap();
+        let snapshot = store.read_transfer_recovery(stored_task_id).unwrap();
         assert!(!snapshot.replacement_manifest_entries.is_empty());
 
         assert_eq!(
@@ -1849,7 +1859,7 @@ mod recoverable_transfer_tests {
             )
         );
         assert!(store
-            .read_transfer_recovery(task_id)
+            .read_transfer_recovery(stored_task_id)
             .unwrap()
             .journal_entries
             .is_empty());
@@ -1886,7 +1896,8 @@ mod recoverable_transfer_tests {
         ));
         let task_id = original_queue.tasks()[0].id;
         let running = original_queue.active_subscription().unwrap();
-        let mut records = load_recoverable_transfer_records(store.clone(), task_id)
+        let stored_task_id = running.stored_id.unwrap();
+        let mut records = load_recoverable_transfer_records(store.clone(), stored_task_id)
             .await
             .unwrap();
         let journal = task_queue_transfer_journal(store.clone(), running.controls.clone());
@@ -1913,10 +1924,11 @@ mod recoverable_transfer_tests {
             .set_store_and_restore(store.clone())
             .is_none());
         let restored_running = restored_queue.active_subscription().unwrap();
+        let stored_task_id = restored_running.stored_id.unwrap();
         let completion = run_queued_transfers(
             transfers,
             restored_running.controls,
-            task_id,
+            restored_running.stored_id.unwrap(),
             task_id,
             &mut output,
             restored_running.store,
@@ -1940,14 +1952,14 @@ mod recoverable_transfer_tests {
         );
         assert!(tokio::fs::symlink_metadata(&second_source).await.is_err());
         assert_eq!(
-            restored_queue.finish(task_id, FileOperationFinish::Succeeded),
+            restored_queue.finish(stored_task_id, FileOperationFinish::Succeeded),
             (
                 Some(crate::operation_queue::FileOperationTerminalStatus::Completed),
                 None
             )
         );
         assert!(store
-            .read_transfer_recovery(task_id)
+            .read_transfer_recovery(stored_task_id)
             .unwrap()
             .journal_entries
             .is_empty());
@@ -1984,7 +1996,8 @@ mod recoverable_transfer_tests {
         ));
         let task_id = original_queue.tasks()[0].id;
         let running = original_queue.active_subscription().unwrap();
-        let mut records = load_recoverable_transfer_records(store.clone(), task_id)
+        let stored_task_id = running.stored_id.unwrap();
+        let mut records = load_recoverable_transfer_records(store.clone(), stored_task_id)
             .await
             .unwrap();
         let journal = task_queue_transfer_journal(store.clone(), running.controls.clone());
@@ -2013,10 +2026,12 @@ mod recoverable_transfer_tests {
             .set_store_and_restore(store.clone())
             .is_none());
         let restored_running = restored_queue.active_subscription().unwrap();
+        let stored_task_id = restored_running.stored_id.unwrap();
+        let stored_task_id = restored_running.stored_id.unwrap();
         let completion = run_queued_transfers(
             transfers,
             restored_running.controls,
-            task_id,
+            restored_running.stored_id.unwrap(),
             task_id,
             &mut output,
             restored_running.store,
@@ -2040,18 +2055,18 @@ mod recoverable_transfer_tests {
             b"second-original"
         );
         assert_eq!(
-            restored_queue.finish(task_id, FileOperationFinish::Succeeded),
+            restored_queue.finish(stored_task_id, FileOperationFinish::Succeeded),
             (
                 Some(crate::operation_queue::FileOperationTerminalStatus::Completed),
                 None
             )
         );
         assert_eq!(
-            store.read_task(task_id).unwrap().unwrap().status,
+            store.read_task(stored_task_id).unwrap().unwrap().status,
             file_operation_store::StoredTaskStatus::Completed
         );
         assert!(store
-            .read_transfer_recovery(task_id)
+            .read_transfer_recovery(stored_task_id)
             .unwrap()
             .journal_entries
             .is_empty());

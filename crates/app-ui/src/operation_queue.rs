@@ -166,7 +166,6 @@ impl QueuedFileOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileOperationStatus {
-    Persisting,
     Pending,
     Running,
     Paused,
@@ -199,7 +198,6 @@ pub(crate) enum FileOperationTerminalStatus {
 impl FileOperationStatus {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Persisting => "Saving",
             Self::Pending => "Pending",
             Self::Running => "Running",
             Self::Paused => "Paused",
@@ -216,7 +214,7 @@ impl FileOperationStatus {
 
     fn to_stored(self) -> StoredTaskStatus {
         match self {
-            Self::Persisting | Self::Pending => StoredTaskStatus::Pending,
+            Self::Pending => StoredTaskStatus::Pending,
             Self::Running => StoredTaskStatus::Running,
             Self::Paused => StoredTaskStatus::Paused,
             Self::Canceling => StoredTaskStatus::Canceling,
@@ -264,7 +262,7 @@ pub(crate) struct FileOperationTask {
     _runner_lease: Option<Arc<RecoverableTaskRunnerLease>>,
     run_state_sender: watch::Sender<FileOperationRunState>,
     run_state_receiver: watch::Receiver<FileOperationRunState>,
-    stored_id: Option<u64>,
+    pub(crate) stored_id: Option<u64>,
     execution_phase: Option<FileOperationExecutionPhase>,
     post_insert_disposition: PostInsertDisposition,
     terminal_persistence_pending: bool,
@@ -428,19 +426,13 @@ impl FileOperationQueue {
                         .to_owned(),
             };
         }
-
         let id = self.allocate_local_id();
-        let status = if self.store.is_some() {
-            FileOperationStatus::Persisting
-        } else {
-            FileOperationStatus::Pending
-        };
         let (run_state_sender, run_state_receiver) = watch::channel(FileOperationRunState::Running);
         let is_read = self.is_panel_open;
         self.tasks.push(FileOperationTask {
             id,
             operation: operation.clone(),
-            status,
+            status: FileOperationStatus::Pending,
             progress: FileOperationProgress::pending(),
             completion_warning: None,
             error: None,
@@ -463,8 +455,11 @@ impl FileOperationQueue {
                 operation: operation.to_stored(),
                 requires_recovery_journal,
             });
-        } else {
-            let _ = self.start_next();
+        }
+        let _ = self.start_next();
+        // TEMP-TRACE: 删除时搜索 TEMP-TRACE 移除
+        if std::env::var("FILE_MANAGER_TRACE").is_ok() {
+            eprintln!("[op-trace] task {id} enqueued title={}", operation.title());
         }
 
         #[cfg(test)]
@@ -608,9 +603,6 @@ impl FileOperationQueue {
     fn can_clear_terminal_task(&self, task: &FileOperationTask) -> bool {
         if task.stored_id.is_some() || self.store.is_none() {
             return !task.terminal_persistence_pending;
-        }
-        if task.status == FileOperationStatus::Persisting {
-            return false;
         }
         if task.status != FileOperationStatus::Canceled {
             return true;
@@ -840,8 +832,7 @@ impl FileOperationQueue {
             FileOperationStatus::Completed => FileOperationTerminalStatus::Completed,
             FileOperationStatus::Failed => FileOperationTerminalStatus::Failed,
             FileOperationStatus::Canceled => FileOperationTerminalStatus::Canceled,
-            FileOperationStatus::Persisting
-            | FileOperationStatus::Pending
+            FileOperationStatus::Pending
             | FileOperationStatus::Running
             | FileOperationStatus::Paused
             | FileOperationStatus::Canceling => {
@@ -879,18 +870,6 @@ impl FileOperationQueue {
         let position = self.tasks.iter().position(|task| task.id == id)?;
 
         match self.tasks[position].status {
-            FileOperationStatus::Persisting => {
-                let task = &mut self.tasks[position];
-                if task.operation.uses_recovery_journal() {
-                    task.cancel.cancel();
-                    let _ = task.run_state_sender.send(FileOperationRunState::Running);
-                    task.status = FileOperationStatus::Canceling;
-                } else {
-                    task.status = FileOperationStatus::Canceled;
-                }
-                task.error = None;
-                task.is_read = self.is_panel_open;
-            }
             FileOperationStatus::Pending
                 if self.tasks[position].operation.uses_recovery_journal() =>
             {
@@ -943,8 +922,11 @@ impl FileOperationQueue {
         for task in &mut self.tasks {
             let is_recoverable = task.operation.uses_recovery_journal();
             let is_waiting_for_insert = task.stored_id.is_none()
-                && (task.status == FileOperationStatus::Persisting
-                    || (is_recoverable && task.status == FileOperationStatus::Canceling)
+                && ((is_recoverable
+                    && matches!(
+                        task.status,
+                        FileOperationStatus::Pending | FileOperationStatus::Canceling
+                    ))
                     || (!is_recoverable && task.status == FileOperationStatus::Canceled));
             if is_waiting_for_insert {
                 match is_recoverable {

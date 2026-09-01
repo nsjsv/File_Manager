@@ -28,7 +28,10 @@ impl FileOperationQueue {
         if let Some(position) = self
             .tasks
             .iter()
-            .find(|task| task.status == FileOperationStatus::Pending)
+            .find(|task| {
+                task.status == FileOperationStatus::Pending
+                    && (!task.operation.uses_recovery_journal() || task.stored_id.is_some())
+            })
             .map(|task| task.id)
             .and_then(|id| self.tasks.iter().position(|task| task.id == id))
         {
@@ -214,7 +217,7 @@ impl FileOperationQueue {
                     acceptance.canceled_before_start_task_id = self
                         .tasks
                         .iter()
-                        .find(|task| task.id == stored_task_id)
+                        .find(|task| task.id == local_task_id)
                         .filter(|task| {
                             task.status == FileOperationStatus::Canceled
                                 && task.post_insert_disposition == PostInsertDisposition::Continue
@@ -243,8 +246,6 @@ impl FileOperationQueue {
                             }
                             #[cfg(not(test))]
                             self.tasks.remove(position);
-                        } else if self.tasks[position].status == FileOperationStatus::Persisting {
-                            self.tasks[position].status = FileOperationStatus::Pending;
                         } else if self.tasks[position].status == FileOperationStatus::Canceled {
                             acceptance.canceled_before_start_task_id = Some(ui_task_id);
                         }
@@ -317,7 +318,6 @@ impl FileOperationQueue {
             });
             return None;
         };
-        self.tasks[position].id = persisted.stored_task_id;
         self.tasks[position].stored_id = Some(persisted.stored_task_id);
         self.tasks[position]._runner_lease = persisted.runner_lease;
 
@@ -342,10 +342,17 @@ impl FileOperationQueue {
         }
 
         match self.tasks[position].status {
-            FileOperationStatus::Persisting => {
-                self.tasks[position].status = FileOperationStatus::Pending;
+            FileOperationStatus::Pending => {
                 let _ = self.start_next();
             }
+            FileOperationStatus::Running => {
+                self.queue_task_state(
+                    position,
+                    StoredTaskStatus::Running,
+                    TaskStatePersistence::Update,
+                );
+            }
+            FileOperationStatus::Paused => self.queue_task_status(position),
             FileOperationStatus::Canceling => self.queue_task_status(position),
             FileOperationStatus::Canceled => {
                 self.queue_task_state(
@@ -355,11 +362,10 @@ impl FileOperationQueue {
                 );
                 let _ = self.start_next();
             }
-            FileOperationStatus::Pending
-            | FileOperationStatus::Running
-            | FileOperationStatus::Paused
-            | FileOperationStatus::Failed
-            | FileOperationStatus::Completed => {}
+            FileOperationStatus::Failed | FileOperationStatus::Completed => {
+                let status = self.tasks[position].status;
+                self.queue_task_state(position, status.to_stored(), TaskStatePersistence::Update);
+            }
         }
         None
     }

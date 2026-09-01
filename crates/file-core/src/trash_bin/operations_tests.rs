@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
 
 use super::super::catalog::discover_trash_locations_from_mountinfo;
+use super::super::scan::scan_trash_with_catalog;
 use super::*;
 
 fn create_location(root: &Path) {
@@ -293,7 +294,7 @@ fn tracking_ignores_preexisting_matching_entry_after_directory_metadata_changes(
     create_location(&root);
     let original = fixture.path().join("original.txt");
     let original_text = original.display().to_string();
-    write_entry(&root, "existing", &original_text, b"existing");
+    write_entry(&root, "original.txt", &original_text, b"existing");
     let existing = scan_home_entries(fixture.path()).remove(0);
     let existing_identity = existing.identity.clone().unwrap();
     let plan = TrashTrackingPlan {
@@ -304,11 +305,11 @@ fn tracking_ignores_preexisting_matching_entry_after_directory_metadata_changes(
         mountinfo: Vec::new(),
         before_info_objects: vec![existing_identity.info.clone()],
     };
-    write_entry(&root, "new", &original_text, b"new");
+    write_entry(&root, "original.txt.2", &original_text, b"new");
 
     let tracked = plan.find_committed_entry().unwrap();
 
-    assert_eq!(tracked.trash_path, root.join("files/new"));
+    assert_eq!(tracked.trash_path, root.join("files/original.txt.2"));
 }
 
 #[test]
@@ -327,10 +328,10 @@ fn post_commit_tracking_rejects_ambiguous_new_entries() {
         before_info_objects: Vec::new(),
     };
     let original_text = original.display().to_string();
-    write_entry(&root, "first", &original_text, b"first");
-    write_entry(&root, "second", &original_text, b"second");
+    write_entry(&root, "original.txt", &original_text, b"first");
+    write_entry(&root, "original.txt.2", &original_text, b"second");
 
     let error = plan.find_committed_entry().unwrap_err();
 
-    assert!(error.contains("2 new matching entries"));
+    assert!(error.contains("2 matching entries"));
 }

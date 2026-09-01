@@ -1,7 +1,7 @@
 use super::*;
 
-async fn assert_all_records_canceled(store: &TaskQueueStore, task_id: u64, count: usize) {
-    let records = load_recoverable_transfer_records(store.clone(), task_id)
+async fn assert_all_records_canceled(store: &TaskQueueStore, stored_task_id: u64, count: usize) {
+    let records = load_recoverable_transfer_records(store.clone(), stored_task_id)
         .await
         .unwrap();
     assert_eq!(records.len(), count);
@@ -15,6 +15,7 @@ fn assert_canceled_task_finalizes(
     queue: &mut FileOperationQueue,
     store: &TaskQueueStore,
     task_id: u64,
+    stored_task_id: u64,
 ) {
     assert_eq!(
         queue.finish(task_id, FileOperationFinish::Canceled),
@@ -24,11 +25,11 @@ fn assert_canceled_task_finalizes(
         )
     );
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(stored_task_id).unwrap().unwrap().status,
         file_operation_store::StoredTaskStatus::Canceled
     );
     assert!(store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(stored_task_id)
         .unwrap()
         .journal_entries
         .is_empty());
@@ -58,13 +59,14 @@ async fn cancellation_before_manifest_preparation_terminalizes_every_record() {
         panic!("recoverable copy should enqueue");
     };
     let running = queue.active_subscription().unwrap();
+    let stored_task_id = running.stored_id.unwrap();
     assert!(queue.cancel(task_id).is_none());
     let (mut output, _messages) = iced::futures::channel::mpsc::channel(64);
 
     let completion = run_queued_transfers(
         transfers.clone(),
         running.controls,
-        task_id,
+        running.stored_id.unwrap(),
         task_id,
         &mut output,
         running.store,
@@ -74,12 +76,12 @@ async fn cancellation_before_manifest_preparation_terminalizes_every_record() {
     .await;
 
     assert!(matches!(&completion, FileOperationCompletion::Canceled(moved) if moved.is_empty()));
-    assert_all_records_canceled(&store, task_id, transfers.len()).await;
+    assert_all_records_canceled(&store, stored_task_id, transfers.len()).await;
     for transfer in &transfers {
         assert!(tokio::fs::symlink_metadata(&transfer.source).await.is_ok());
         assert!(tokio::fs::symlink_metadata(&transfer.target).await.is_err());
     }
-    assert_canceled_task_finalizes(&mut queue, &store, task_id);
+    assert_canceled_task_finalizes(&mut queue, &store, task_id, stored_task_id);
 }
 
 #[tokio::test]
@@ -106,9 +108,10 @@ async fn cancellation_after_direct_move_intents_terminalizes_every_record() {
         panic!("recoverable move should enqueue");
     };
     let running = queue.active_subscription().unwrap();
+    let stored_task_id = running.stored_id.unwrap();
     let controls = running.controls.clone();
     let journal = task_queue_transfer_journal(store.clone(), controls.clone());
-    let records = load_recoverable_transfer_records(store.clone(), task_id)
+    let records = load_recoverable_transfer_records(store.clone(), stored_task_id)
         .await
         .unwrap();
     for record in records {
@@ -123,21 +126,23 @@ async fn cancellation_after_direct_move_intents_terminalizes_every_record() {
             DirectMoveIntentBoundary::Intent(_)
         ));
     }
-    assert!(load_recoverable_transfer_records(store.clone(), task_id)
-        .await
-        .unwrap()
-        .iter()
-        .all(|record| matches!(
-            record.checkpoint,
-            file_core::TransferCheckpoint::DirectMoveIntent(_)
-        )));
+    assert!(
+        load_recoverable_transfer_records(store.clone(), stored_task_id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|record| matches!(
+                record.checkpoint,
+                file_core::TransferCheckpoint::DirectMoveIntent(_)
+            ))
+    );
     assert!(queue.cancel(task_id).is_none());
     let (mut output, _messages) = iced::futures::channel::mpsc::channel(64);
 
     let completion = run_queued_transfers(
         transfers.clone(),
         running.controls,
-        task_id,
+        running.stored_id.unwrap(),
         task_id,
         &mut output,
         running.store,
@@ -147,10 +152,10 @@ async fn cancellation_after_direct_move_intents_terminalizes_every_record() {
     .await;
 
     assert!(matches!(&completion, FileOperationCompletion::Canceled(moved) if moved.is_empty()));
-    assert_all_records_canceled(&store, task_id, transfers.len()).await;
+    assert_all_records_canceled(&store, stored_task_id, transfers.len()).await;
     for transfer in &transfers {
         assert!(tokio::fs::symlink_metadata(&transfer.source).await.is_ok());
         assert!(tokio::fs::symlink_metadata(&transfer.target).await.is_err());
     }
-    assert_canceled_task_finalizes(&mut queue, &store, task_id);
+    assert_canceled_task_finalizes(&mut queue, &store, task_id, stored_task_id);
 }

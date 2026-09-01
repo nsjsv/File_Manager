@@ -61,7 +61,8 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
         panic!("recoverable cross-filesystem move should enqueue");
     };
     let running = original_queue.active_subscription().unwrap();
-    let record = load_recoverable_transfer_records(store.clone(), task_id)
+    let stored_task_id = running.stored_id.unwrap();
+    let record = load_recoverable_transfer_records(store.clone(), stored_task_id)
         .await
         .unwrap()
         .remove(0);
@@ -93,7 +94,7 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
             None
         )
     );
-    let persisted = load_recoverable_transfer_records(store.clone(), task_id)
+    let persisted = load_recoverable_transfer_records(store.clone(), stored_task_id)
         .await
         .unwrap()
         .remove(0);
@@ -114,7 +115,7 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
     let completion = run_queued_transfers(
         transfers,
         restored_running.controls,
-        task_id,
+        restored_running.stored_id.unwrap(),
         task_id,
         &mut output,
         restored_running.store,
@@ -125,14 +126,14 @@ async fn sqlite_cross_filesystem_move_resumes_from_identified_retirement_artifac
     assert!(matches!(completion, FileOperationCompletion::Succeeded(_)));
     assert_eq!(tokio::fs::read(&target).await.unwrap(), b"cross-device");
     assert_eq!(
-        restored_queue.finish(task_id, FileOperationFinish::Succeeded),
+        restored_queue.finish(stored_task_id, FileOperationFinish::Succeeded),
         (
             Some(crate::operation_queue::FileOperationTerminalStatus::Completed),
             None
         )
     );
     assert!(store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(stored_task_id)
         .unwrap()
         .journal_entries
         .is_empty());

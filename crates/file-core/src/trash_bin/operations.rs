@@ -18,15 +18,15 @@ use crate::{FileError, ScanOptions, TransferConflictStrategy};
 use super::catalog::{
     discover_trash_locations_from_mountinfo,
     discover_trash_locations_from_mountinfo_with_cancellation, effective_user_id,
-    inspect_trash_object, revalidate_trash_location, trash_data_home,
+    inspect_trash_object, revalidate_trash_location, trash_data_home, trash_object_identity,
 };
 use super::model::{
-    TrashCommitOutcome, TrashEntryIdentity, TrashLocationGuard, TrashLocationKind,
+    TrashCommitOutcome, TrashEntry, TrashEntryIdentity, TrashLocationGuard, TrashLocationKind,
     TrashObjectIdentity, TrashRestoreEntry, TrashTrackingWarning,
 };
 use super::mountinfo::{parse_mountinfo, MOUNTINFO_PATH};
-use super::scan::scan_trash_with_catalog;
 use super::trash_info::{normalize_new_volume_trash_info, read_trash_info};
+use crate::scan::entry_from_metadata;
 
 pub async fn trash_path(path: impl AsRef<Path>) -> Result<(), FileError> {
     let path = path.as_ref().to_path_buf();
@@ -361,24 +361,49 @@ fn verify_trash_info_identity(
     Ok(())
 }
 
+// TEMP-TRACE: 删除链路分段计时，FILE_MANAGER_TRACE=1 启用；定位后整段删除（搜索 TEMP-TRACE）
+fn trash_trace(stage: &str, elapsed: std::time::Duration) {
+    if std::env::var("FILE_MANAGER_TRACE").is_ok() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        eprintln!(
+            "[trash-trace {}.{:03}] {stage}: {elapsed:?}",
+            now.as_secs(),
+            now.subsec_millis()
+        );
+    }
+}
+
 fn trash_path_with_tracking_blocking(
     path: PathBuf,
     cancellation: CancellationToken,
 ) -> Result<TrashCommitOutcome, FileError> {
+    let trace_total = std::time::Instant::now();
     if cancellation.is_cancelled() {
         return Err(FileError::Cancelled);
     }
+    let stage = std::time::Instant::now();
     let path = canonical_trash_source_path(&path)?;
+    trash_trace("canonicalize", stage.elapsed());
+    let stage = std::time::Instant::now();
     let tracking = TrashTrackingPlan::prepare(&path, cancellation.clone())?;
+    trash_trace("prepare(total)", stage.elapsed());
     if cancellation.is_cancelled() {
         return Err(FileError::Cancelled);
     }
+    let stage = std::time::Instant::now();
     trash::delete(&path).map_err(|error| FileError::Trash {
         path: path.clone(),
         message: error.to_string(),
     })?;
+    trash_trace("trash::delete", stage.elapsed());
 
-    match tracking.find_committed_entry() {
+    let stage = std::time::Instant::now();
+    let find_result = tracking.find_committed_entry();
+    trash_trace("find_committed_entry", stage.elapsed());
+    trash_trace("TOTAL", trace_total.elapsed());
+    match find_result {
         Ok(entry) => Ok(TrashCommitOutcome::Tracked(Box::new(entry))),
         Err(message) => Ok(TrashCommitOutcome::CommittedWithoutRestoreEntry(
             TrashTrackingWarning { path, message },
@@ -427,6 +452,7 @@ enum TrashTrackingScope {
 
 impl TrashTrackingPlan {
     fn prepare(path: &Path, cancellation: CancellationToken) -> Result<Self, FileError> {
+        let stage = std::time::Instant::now();
         let source_identity = inspect_trash_object(path).map_err(|source| FileError::Metadata {
             path: path.to_path_buf(),
             source,
@@ -438,6 +464,7 @@ impl TrashTrackingPlan {
             source,
         })?;
         let snapshot = parse_mountinfo(&mountinfo);
+        trash_trace("  inspect+mountinfo", stage.elapsed());
         let source_mount =
             deepest_mount_point(&snapshot.mount_points, path).ok_or_else(|| FileError::Trash {
                 path: path.to_path_buf(),
@@ -478,14 +505,18 @@ impl TrashTrackingPlan {
                 top_identity,
             }
         };
+        let stage = std::time::Instant::now();
         let catalog = discover_trash_locations_from_mountinfo_with_cancellation(
             &data_home,
             uid,
             &mountinfo,
             &cancellation,
         )?;
+        trash_trace("  discover_locations", stage.elapsed());
+        let stage = std::time::Instant::now();
         let before_info_objects =
             snapshot_scope_info_objects(&scope, &catalog.locations, &cancellation)?;
+        trash_trace("  snapshot_baseline", stage.elapsed());
         Ok(Self {
             original_path: path.to_path_buf(),
             scope,
@@ -556,48 +587,103 @@ impl TrashTrackingPlan {
     }
 
     fn find_committed_entry(self) -> Result<TrashRestoreEntry, String> {
+        let stage = std::time::Instant::now();
         let catalog =
             discover_trash_locations_from_mountinfo(&self.data_home, self.uid, &self.mountinfo)
                 .map_err(|error| {
                     format!("the item was moved to Trash, but refresh failed: {error}")
                 })?;
         self.normalize_new_volume_info_files(&catalog.locations)?;
-        let scan = scan_trash_with_catalog(
-            ScanOptions {
-                include_hidden: true,
-                ..ScanOptions::default()
-            },
-            CancellationToken::new(),
-            catalog,
-        )
-        .map_err(|error| format!("the item was moved to Trash, but refresh failed: {error}"))?;
-        let structural_warning =
-            structural_scan_warning(&self.scope, &self.data_home, self.uid, &scan.skipped);
-        let mut candidates = scan
-            .entries
-            .into_iter()
-            .filter(|entry| {
-                entry.original_path == self.original_path
-                    && entry.identity.as_ref().is_some_and(|identity| {
-                        self.scope.matches_identity(identity)
-                            && !self
-                                .before_info_objects
-                                .iter()
-                                .any(|before| before.same_object(&identity.info))
-                    })
-            })
-            .collect::<Vec<_>>();
+        let original_name = self
+            .original_path
+            .file_name()
+            .ok_or_else(|| {
+                "the item was moved to Trash, but its file name could not be determined".to_owned()
+            })?
+            .to_os_string();
+
+        let mut candidates = Vec::new();
+        for location in catalog
+            .locations
+            .iter()
+            .filter(|location| self.scope.matches_location(location))
+        {
+            let info_entries = fs::read_dir(&location.info.path).map_err(|error| {
+                format!(
+                    "the item was moved to Trash, but its info directory could not be read: {}: {error}",
+                    location.info.path.display()
+                )
+            })?;
+            for info_entry in info_entries {
+                let info_entry = info_entry.map_err(|error| {
+                    format!(
+                        "the item was moved to Trash, but an info entry could not be read: {}: {error}",
+                        location.info.path.display()
+                    )
+                })?;
+                let info_name = info_entry.file_name();
+                if !is_trash_info_name(&info_name) {
+                    continue;
+                }
+                let Some(item_name) = candidate_trash_item_name(&info_name, &original_name) else {
+                    continue;
+                };
+                let info_path = info_entry.path();
+                let parsed = match read_trash_info(
+                    &info_path,
+                    location.original_path_base,
+                    &location.top_directory,
+                ) {
+                    Ok(parsed) => parsed,
+                    Err(_) => continue,
+                };
+                if parsed.original_path != self.original_path {
+                    continue;
+                }
+                if self
+                    .before_info_objects
+                    .iter()
+                    .any(|before| before.same_object(&parsed.identity))
+                {
+                    continue;
+                }
+                let trash_path = location.files.path.join(&item_name);
+                let payload_metadata = match fs::symlink_metadata(&trash_path) {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                let payload_identity = trash_object_identity(&payload_metadata);
+                let is_broken_symlink = payload_metadata.file_type().is_symlink()
+                    && matches!(fs::metadata(&trash_path), Err(error) if error.kind() == io::ErrorKind::NotFound);
+                let entry = entry_from_metadata(
+                    trash_path.clone(),
+                    original_name.clone(),
+                    false,
+                    &payload_metadata,
+                    is_broken_symlink,
+                );
+                candidates.push(TrashEntry {
+                    trash_path,
+                    info_path,
+                    original_path: parsed.original_path,
+                    deletion_date: parsed.deletion_date,
+                    entry,
+                    identity: Some(TrashEntryIdentity {
+                        location: location.clone(),
+                        item_name,
+                        info: parsed.identity,
+                        payload: payload_identity,
+                    }),
+                });
+            }
+        }
+        trash_trace("  candidates_scan", stage.elapsed());
         if candidates.len() == 1 {
             return Ok(candidates.remove(0).restore_entry());
         }
-        let detail = structural_warning.unwrap_or_else(|| {
-            format!(
-                "post-commit scan found {} new matching entries instead of exactly one",
-                candidates.len()
-            )
-        });
         Err(format!(
-            "the item was moved to Trash, but no precise undo entry could be recorded: {detail}"
+            "the item was moved to Trash, but no precise undo entry could be recorded: post-commit lookup found {} matching entries",
+            candidates.len()
         ))
     }
 }
@@ -613,24 +699,6 @@ impl TrashTrackingScope {
                 location.kind != TrashLocationKind::Home
                     && location.top_directory == *top_directory
                     && location
-                        .top_identity
-                        .as_ref()
-                        .is_some_and(|identity| identity.same_object(top_identity))
-            }
-        }
-    }
-
-    fn matches_identity(&self, identity: &TrashEntryIdentity) -> bool {
-        match self {
-            Self::Home => identity.location.kind == TrashLocationKind::Home,
-            Self::Volume {
-                top_directory,
-                top_identity,
-            } => {
-                identity.location.kind != TrashLocationKind::Home
-                    && identity.location.top_directory == *top_directory
-                    && identity
-                        .location
                         .top_identity
                         .as_ref()
                         .is_some_and(|identity| identity.same_object(top_identity))
@@ -726,30 +794,44 @@ fn deepest_mount_point(mount_points: &[PathBuf], path: &Path) -> Option<PathBuf>
         .cloned()
 }
 
-fn structural_scan_warning(
-    scope: &TrashTrackingScope,
-    data_home: &Path,
-    uid: u32,
-    warnings: &[crate::ScanWarning],
-) -> Option<String> {
-    let roots = match scope {
-        TrashTrackingScope::Home => vec![data_home.join("Trash")],
-        TrashTrackingScope::Volume { top_directory, .. } => vec![
-            top_directory.join(".Trash"),
-            top_directory.join(".Trash").join(uid.to_string()),
-            top_directory.join(format!(".Trash-{uid}")),
-        ],
-    };
-    warnings
-        .iter()
-        .find(|warning| {
-            roots.iter().any(|root| {
-                warning.path == *root
-                    || warning.path == root.join("files")
-                    || warning.path == root.join("info")
-            })
-        })
-        .map(|warning| format!("{}: {}", warning.path.display(), warning.message))
+fn candidate_trash_item_name(
+    info_name: &std::ffi::OsStr,
+    original_name: &std::ffi::OsStr,
+) -> Option<OsString> {
+    // info 文件名 = {trash 条目名}.trashinfo。trash crate 的同名冲突规则是向条目名
+    // 追加 ".{n}" 后缀，因此候选 = 原文件名本身，或 原文件名 + ".数字"。
+    #[cfg(unix)]
+    {
+        let stem = info_name.as_bytes().strip_suffix(b".trashinfo")?.to_vec();
+        if stem.as_slice() == original_name.as_bytes() {
+            return Some(OsString::from_vec(stem));
+        }
+        let mut parts = stem.rsplitn(2, |byte| *byte == b'.');
+        let tail = parts.next()?;
+        let head = parts.next()?;
+        if !tail.is_empty()
+            && tail.iter().all(|byte| byte.is_ascii_digit())
+            && head == original_name.as_bytes()
+        {
+            return Some(OsString::from_vec(stem));
+        }
+        None
+    }
+    #[cfg(not(unix))]
+    {
+        let stem = info_name.to_string_lossy().strip_suffix(".trashinfo")?;
+        if stem == original_name {
+            return Some(OsString::from(stem));
+        }
+        let (head, tail) = stem.rsplit_once('.')?;
+        if !tail.is_empty()
+            && tail.bytes().all(|byte| byte.is_ascii_digit())
+            && head == original_name
+        {
+            return Some(OsString::from(stem));
+        }
+        None
+    }
 }
 
 fn trash_info_name(item_name: &std::ffi::OsStr) -> OsString {

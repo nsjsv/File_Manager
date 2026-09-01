@@ -5,3 +5,4 @@
 Trellis Instructions
 .macos-kvm
 dist/
+.oce-client/

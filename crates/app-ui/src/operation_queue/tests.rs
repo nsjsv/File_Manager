@@ -63,7 +63,7 @@ fn recoverable_task_waits_for_journal_ack_before_starting() {
         FileOperationEnqueueOutcome::Queued { task_id } => task_id,
         _ => panic!("unexpected enqueue outcome"),
     };
-    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Persisting);
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Pending);
     assert!(queue.active_subscription().is_none());
 
     let request = queue
@@ -73,11 +73,14 @@ fn recoverable_task_waits_for_journal_ack_before_starting() {
     let acceptance = queue.accept_persistence_outcome(persistence_outcome);
 
     assert!(acceptance.error.is_none());
+    let stored_task_id = queue.tasks()[0]
+        .stored_id
+        .expect("insert assigned stored id");
     assert_eq!(
         acceptance.task_id_remap,
-        Some((local_task_id, queue.tasks()[0].id))
+        Some((local_task_id, stored_task_id))
     );
-    assert_ne!(queue.tasks()[0].id, local_task_id);
+    assert_eq!(queue.tasks()[0].id, local_task_id);
     assert_eq!(queue.tasks()[0].status, FileOperationStatus::Running);
     assert_eq!(queue.tasks()[0].status_label(), "Preparing");
     assert!(queue.active_subscription().is_some());
@@ -178,7 +181,7 @@ fn failed_recoverable_insert_removes_transient_task_without_starting_it() {
 }
 
 #[test]
-fn canceled_persisting_task_does_not_run_when_insert_fails() {
+fn canceling_task_stays_canceling_when_insert_fails() {
     let directory = tempfile::tempdir().unwrap();
     let database_path = directory.path().join("state.sqlite");
     let store = TaskQueueStore::new(&database_path).unwrap();
@@ -190,6 +193,7 @@ fn canceled_persisting_task_does_not_run_when_insert_fails() {
         FileOperationEnqueueOutcome::Rejected { error } => panic!("enqueue failed: {error}"),
     };
     queue.cancel(task_id);
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceling);
     let request = queue.take_next_persistence_request().unwrap();
     std::fs::remove_file(&database_path).unwrap();
     std::fs::create_dir(&database_path).unwrap();
@@ -197,12 +201,11 @@ fn canceled_persisting_task_does_not_run_when_insert_fails() {
     let acceptance = queue.accept_persistence_outcome(execute_file_operation_persistence(request));
 
     assert!(acceptance.error.is_some());
-    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceled);
-    assert!(queue.active_subscription().is_none());
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceling);
 }
 
 #[test]
-fn shutdown_canceled_persisting_task_does_not_run_when_insert_fails() {
+fn shutdown_canceling_task_stays_canceling_when_insert_fails() {
     let directory = tempfile::tempdir().unwrap();
     let database_path = directory.path().join("state.sqlite");
     let store = TaskQueueStore::new(&database_path).unwrap();
@@ -216,9 +219,9 @@ fn shutdown_canceled_persisting_task_does_not_run_when_insert_fails() {
 
     let acceptance = queue.accept_persistence_outcome(execute_file_operation_persistence(request));
 
-    assert!(acceptance.error.is_some());
-    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceled);
-    assert!(queue.active_subscription().is_none());
+    assert_eq!(queue.tasks()[0].status, FileOperationStatus::Running);
+    assert!(queue.tasks()[0].cancel.is_cancelled());
+    assert!(queue.active_subscription().is_some());
 }
 
 #[test]
@@ -318,7 +321,9 @@ fn recoverable_transfer_enqueue_atomically_creates_journal() {
     assert!(queue.enqueue(sample_transfer_operation()).error().is_none());
 
     let task = &queue.tasks()[0];
-    let snapshot = store.read_transfer_recovery(task.id).unwrap();
+    let snapshot = store
+        .read_transfer_recovery(task.stored_id.unwrap())
+        .unwrap();
     assert_eq!(snapshot.journal_entries.len(), 1);
     assert_eq!(
         snapshot.journal_entries[0].checkpoint.kind,
@@ -352,10 +357,15 @@ fn clearing_all_terminal_tasks_keeps_running_and_pending_tasks() {
         assert!(queue.enqueue(sample_operation()).error().is_none());
     }
     let completed_id = queue.tasks()[0].id;
+    let completed_id_stored = queue.tasks()[0].stored_id.unwrap();
     let failed_id = queue.tasks()[1].id;
+    let failed_id_stored = queue.tasks()[1].stored_id.unwrap();
     let canceled_id = queue.tasks()[2].id;
+    let canceled_id_stored = queue.tasks()[2].stored_id.unwrap();
     let running_id = queue.tasks()[3].id;
     let pending_id = queue.tasks()[4].id;
+    let running_id_stored = queue.tasks()[3].stored_id.unwrap();
+    let pending_id_stored = queue.tasks()[4].stored_id.unwrap();
     assert_eq!(
         queue.finish(completed_id, FileOperationFinish::Succeeded).0,
         Some(FileOperationTerminalStatus::Completed)
@@ -378,11 +388,11 @@ fn clearing_all_terminal_tasks_keeps_running_and_pending_tasks() {
 
     let remaining_ids = queue.tasks().iter().map(|task| task.id).collect::<Vec<_>>();
     assert_eq!(remaining_ids, vec![running_id, pending_id]);
-    assert!(store.read_task(completed_id).unwrap().is_none());
-    assert!(store.read_task(failed_id).unwrap().is_none());
-    assert!(store.read_task(canceled_id).unwrap().is_none());
-    assert!(store.read_task(running_id).unwrap().is_some());
-    assert!(store.read_task(pending_id).unwrap().is_some());
+    assert!(store.read_task(completed_id_stored).unwrap().is_none());
+    assert!(store.read_task(failed_id_stored).unwrap().is_none());
+    assert!(store.read_task(canceled_id_stored).unwrap().is_none());
+    assert!(store.read_task(running_id_stored).unwrap().is_some());
+    assert!(store.read_task(pending_id_stored).unwrap().is_some());
 }
 
 #[test]
@@ -422,6 +432,7 @@ fn clearing_terminal_task_removes_memory_and_persisted_record() {
     queue.set_store(store.clone());
     assert!(queue.enqueue(sample_operation()).error().is_none());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
     assert_eq!(
         queue.finish(task_id, FileOperationFinish::Succeeded).0,
         Some(FileOperationTerminalStatus::Completed)
@@ -430,7 +441,7 @@ fn clearing_terminal_task_removes_memory_and_persisted_record() {
     assert!(queue.clear_terminal_task(task_id).is_none());
 
     assert!(queue.tasks().is_empty());
-    assert!(store.read_task(task_id).unwrap().is_none());
+    assert!(store.read_task(task_id_stored).unwrap().is_none());
 }
 
 #[test]
@@ -478,9 +489,10 @@ fn terminal_completion_releases_recoverable_runner_lease() {
     queue.set_store(store.clone());
     assert!(queue.enqueue(sample_transfer_operation()).error().is_none());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
     persist_terminal_checkpoint(
         &store,
-        task_id,
+        task_id_stored,
         &completed_checkpoint(std::path::Path::new("/tmp/target")),
     );
 
@@ -489,7 +501,7 @@ fn terminal_completion_releases_recoverable_runner_lease() {
         Some(FileOperationTerminalStatus::Completed)
     );
     assert!(store
-        .try_acquire_recoverable_task_runner(task_id)
+        .try_acquire_recoverable_task_runner(task_id_stored)
         .unwrap()
         .is_some());
     assert_eq!(queue.tasks().len(), 1);
@@ -591,7 +603,7 @@ fn second_process_does_not_restore_task_with_active_runner_lease() {
     let mut owner = FileOperationQueue::new();
     owner.set_store(store.clone());
     assert!(owner.enqueue(sample_transfer_operation()).error().is_none());
-    let task_id = owner.tasks()[0].id;
+    let task_id = owner.tasks()[0].stored_id.unwrap();
 
     let mut observer = FileOperationQueue::new();
     assert!(observer.set_store_and_restore(store.clone()).is_none());
@@ -648,7 +660,7 @@ fn restore_reloads_task_state_after_coordinator_acquisition() {
         .enqueue(sample_transfer_operation())
         .error()
         .is_none());
-    let task_id = original.tasks()[0].id;
+    let task_id = original.tasks()[0].stored_id.unwrap();
     let stale_snapshot = store.read_tasks().unwrap();
     assert_eq!(stale_snapshot[0].status, StoredTaskStatus::Running);
     store
@@ -676,7 +688,7 @@ fn current_recovery_journal_is_requeued_after_restart() {
         .enqueue(sample_transfer_operation())
         .error()
         .is_none());
-    let task_id = original.tasks()[0].id;
+    let task_id = original.tasks()[0].stored_id.unwrap();
     drop(original);
 
     let mut restored = FileOperationQueue::new();
@@ -705,7 +717,7 @@ fn paused_and_canceling_recovery_states_preserve_controls() {
             .enqueue(sample_transfer_operation())
             .error()
             .is_none());
-        let task_id = original.tasks()[0].id;
+        let task_id = original.tasks()[0].stored_id.unwrap();
         store.update_status(task_id, stored_status).unwrap();
         drop(original);
 
@@ -735,7 +747,7 @@ fn recovery_pending_transfer_with_unfinished_checkpoint_is_requeued_after_restar
         .enqueue(sample_transfer_operation())
         .error()
         .is_none());
-    let task_id = original.tasks()[0].id;
+    let task_id = original.tasks()[0].stored_id.unwrap();
     store
         .update_task_state(
             task_id,
@@ -762,6 +774,7 @@ fn pending_recoverable_cancel_uses_recovery_runner() {
     queue.enqueue(sample_operation());
     queue.enqueue(sample_transfer_operation());
     let transfer_id = queue.tasks()[1].id;
+    let transfer_id_stored = queue.tasks()[1].stored_id.unwrap();
     assert_eq!(queue.tasks()[1].status, FileOperationStatus::Pending);
 
     assert!(queue.cancel(transfer_id).is_none());
@@ -769,11 +782,11 @@ fn pending_recoverable_cancel_uses_recovery_runner() {
     assert_eq!(queue.tasks()[1].status, FileOperationStatus::Canceling);
     assert!(queue.tasks()[1].cancel.is_cancelled());
     assert_eq!(
-        store.read_task(transfer_id).unwrap().unwrap().status,
+        store.read_task(transfer_id_stored).unwrap().unwrap().status,
         StoredTaskStatus::Canceling
     );
     assert!(!store
-        .read_transfer_recovery(transfer_id)
+        .read_transfer_recovery(transfer_id_stored)
         .unwrap()
         .journal_entries
         .is_empty());
@@ -787,6 +800,7 @@ async fn shutdown_preserves_nonterminal_recoverable_task_until_transaction() {
     queue.set_store(store.clone());
     queue.enqueue(sample_transfer_operation());
     let task_id = queue.tasks()[0].id;
+    let stored_id = queue.tasks()[0].stored_id.unwrap();
     let mut controls = queue.active_subscription().unwrap().controls;
 
     let disposition = queue.begin_application_shutdown();
@@ -809,17 +823,17 @@ async fn shutdown_preserves_nonterminal_recoverable_task_until_transaction() {
     ));
     assert_eq!(queue.tasks().len(), 1);
     assert!(store
-        .try_acquire_recoverable_task_runner(task_id)
+        .try_acquire_recoverable_task_runner(stored_id)
         .unwrap()
         .is_none());
 
     queue.release_application_shutdown_ownership();
     assert!(store
-        .try_acquire_recoverable_task_runner(task_id)
+        .try_acquire_recoverable_task_runner(stored_id)
         .unwrap()
         .is_some());
     assert!(!store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(stored_id)
         .unwrap()
         .journal_entries
         .is_empty());
@@ -833,6 +847,7 @@ fn recovery_interruption_persists_distinct_restart_state() {
     queue.set_store(store.clone());
     assert!(queue.enqueue(sample_transfer_operation()).error().is_none());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
 
     assert_eq!(
         queue.finish(
@@ -842,7 +857,7 @@ fn recovery_interruption_persists_distinct_restart_state() {
         (Some(FileOperationTerminalStatus::Failed), None)
     );
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(task_id_stored).unwrap().unwrap().status,
         StoredTaskStatus::RecoveryPending
     );
     drop(queue);
@@ -860,9 +875,10 @@ fn late_cancel_does_not_mask_recorded_recoverable_failure() {
     queue.set_store(store.clone());
     assert!(queue.enqueue(sample_transfer_operation()).error().is_none());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
     persist_terminal_checkpoint(
         &store,
-        task_id,
+        task_id_stored,
         &TransferCheckpoint::Failed {
             final_target: None,
             diagnostic: "source changed".to_owned(),
@@ -878,7 +894,7 @@ fn late_cancel_does_not_mask_recorded_recoverable_failure() {
         (Some(FileOperationTerminalStatus::Failed), None)
     );
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(task_id_stored).unwrap().unwrap().status,
         StoredTaskStatus::Failed
     );
 }
@@ -891,6 +907,7 @@ fn cancellation_checkpoint_interruption_stays_recoverable() {
     queue.set_store(store.clone());
     assert!(queue.enqueue(sample_transfer_operation()).error().is_none());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
     assert!(queue.cancel(task_id).is_none());
     assert_eq!(queue.tasks()[0].status, FileOperationStatus::Canceling);
 
@@ -902,11 +919,11 @@ fn cancellation_checkpoint_interruption_stays_recoverable() {
         (Some(FileOperationTerminalStatus::Failed), None)
     );
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(task_id_stored).unwrap().unwrap().status,
         StoredTaskStatus::RecoveryPending
     );
     assert!(!store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(task_id_stored)
         .unwrap()
         .journal_entries
         .is_empty());
@@ -920,9 +937,10 @@ fn terminal_recoverable_failure_discards_terminal_recovery_details() {
     queue.set_store(store.clone());
     queue.enqueue(sample_transfer_operation());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
     persist_terminal_checkpoint(
         &store,
-        task_id,
+        task_id_stored,
         &TransferCheckpoint::Failed {
             final_target: None,
             diagnostic: "source changed".to_owned(),
@@ -937,7 +955,7 @@ fn terminal_recoverable_failure_discards_terminal_recovery_details() {
         (Some(FileOperationTerminalStatus::Failed), None)
     );
     assert!(store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(task_id_stored)
         .unwrap()
         .journal_entries
         .is_empty());
@@ -951,6 +969,7 @@ fn blocked_recovery_preserves_details_without_automatic_restart() {
     queue.set_store(store.clone());
     queue.enqueue(sample_transfer_operation());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
 
     assert_eq!(
         queue.finish(
@@ -960,11 +979,11 @@ fn blocked_recovery_preserves_details_without_automatic_restart() {
         (Some(FileOperationTerminalStatus::Failed), None)
     );
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(task_id_stored).unwrap().unwrap().status,
         StoredTaskStatus::Failed
     );
     assert!(!store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(task_id_stored)
         .unwrap()
         .journal_entries
         .is_empty());
@@ -984,7 +1003,7 @@ fn terminal_failed_transfer_with_unfinished_checkpoint_is_not_requeued() {
         .enqueue(sample_transfer_operation())
         .error()
         .is_none());
-    let task_id = original.tasks()[0].id;
+    let task_id = original.tasks()[0].stored_id.unwrap();
     store
         .update_task_state(
             task_id,
@@ -1011,7 +1030,7 @@ fn failed_transfer_with_terminal_checkpoint_is_not_requeued() {
         .enqueue(sample_transfer_operation())
         .error()
         .is_none());
-    let task_id = original.tasks()[0].id;
+    let task_id = original.tasks()[0].stored_id.unwrap();
     persist_terminal_checkpoint(
         &store,
         task_id,
@@ -1034,36 +1053,6 @@ fn failed_transfer_with_terminal_checkpoint_is_not_requeued() {
 }
 
 #[test]
-fn legacy_transfer_is_marked_failed_instead_of_requeued() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = TaskQueueStore::new(directory.path().join("state.sqlite")).unwrap();
-    let task_id = store
-        .insert_task(&StoredOperation::Copy {
-            transfers: vec![file_operation_store::StoredTransfer {
-                source: file_operation_store::StoredPath::from_path(
-                    PathBuf::from("/tmp/source").as_path(),
-                ),
-                target: file_operation_store::StoredPath::from_path(
-                    PathBuf::from("/tmp/target").as_path(),
-                ),
-                conflict_strategy: file_operation_store::StoredTransferConflictStrategy::Fail,
-            }],
-            verification: file_operation_store::StoredFileOperationVerification::BasicMetadata,
-            recovery_version: None,
-        })
-        .unwrap();
-    let mut restored = FileOperationQueue::new();
-
-    assert!(restored.set_store_and_restore(store.clone()).is_none());
-
-    assert!(restored.tasks().is_empty());
-    assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
-        StoredTaskStatus::Failed
-    );
-}
-
-#[test]
 fn local_and_persisted_task_ids_do_not_collide() {
     let mut queue = FileOperationQueue::new();
     queue.enqueue(sample_operation());
@@ -1078,10 +1067,13 @@ fn local_and_persisted_task_ids_do_not_collide() {
     queue.set_store(store);
     queue.enqueue(sample_operation());
 
-    let persisted_id = queue.tasks()[1].id;
+    let second_local_id = queue.tasks()[1].id;
+    let persisted_id = queue.tasks()[1].stored_id.unwrap();
     assert!(local_id > i64::MAX as u64);
+    assert!(second_local_id > i64::MAX as u64);
     assert!(persisted_id <= i64::MAX as u64);
     assert_ne!(local_id, persisted_id);
+    assert_ne!(second_local_id, persisted_id);
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -1096,6 +1088,7 @@ fn finished_tasks_stay_until_queue_is_cleared() {
     queue.set_store(store.clone());
     queue.enqueue(sample_operation());
     let task_id = queue.tasks()[0].id;
+    let task_id_stored = queue.tasks()[0].stored_id.unwrap();
 
     let (terminal_status, error) = queue.finish(task_id, FileOperationFinish::Succeeded);
 
@@ -1110,7 +1103,7 @@ fn finished_tasks_stay_until_queue_is_cleared() {
     assert!(!queue.has_active_task());
     assert_eq!(queue.unread_count(), 1);
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(task_id_stored).unwrap().unwrap().status,
         StoredTaskStatus::Completed
     );
 

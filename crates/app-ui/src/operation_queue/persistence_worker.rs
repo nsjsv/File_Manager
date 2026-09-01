@@ -116,12 +116,23 @@ pub(crate) fn file_operation_persistence_command(
     let worker_failure_target = persistence_worker_failure_target(&request.action);
     Task::perform(
         async move {
-            tokio::task::spawn_blocking(move || execute_file_operation_persistence(request))
-                .await
-                .unwrap_or_else(|error| FileOperationPersistenceOutcome {
-                    request_id,
-                    completion: worker_failure_target.completion(error),
-                })
+            // TEMP-TRACE: 删除时搜索 TEMP-TRACE 移除
+            let trace = std::env::var("FILE_MANAGER_TRACE").is_ok();
+            let started = std::time::Instant::now();
+            let outcome =
+                tokio::task::spawn_blocking(move || execute_file_operation_persistence(request))
+                    .await
+                    .unwrap_or_else(|error| FileOperationPersistenceOutcome {
+                        request_id,
+                        completion: worker_failure_target.completion(error),
+                    });
+            if trace {
+                eprintln!(
+                    "[op-trace] persistence request {request_id} done, {:?}",
+                    started.elapsed()
+                );
+            }
+            outcome
         },
         Message::FileOperationPersistenceFinished,
     )

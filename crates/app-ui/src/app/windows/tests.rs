@@ -917,6 +917,7 @@ async fn recoverable_runner_ack_precedes_one_shutdown_transaction_and_exit() {
     let task_id = browser.operation_queue.tasks()[0].id;
 
     let initial = shutdown_actions(browser.close_auxiliary_window(browser.main_window)).await;
+    let stored_task_id = browser.operation_queue.tasks()[0].stored_id.unwrap();
     assert!(initial.contains(&ShutdownAction::WindowClosed(browser.main_window)));
     assert!(!initial.contains(&ShutdownAction::PersistenceFinished));
     assert!(shutdown_actions(
@@ -925,7 +926,7 @@ async fn recoverable_runner_ack_precedes_one_shutdown_transaction_and_exit() {
     .await
     .is_empty());
     assert!(store
-        .try_acquire_recoverable_task_runner(task_id)
+        .try_acquire_recoverable_task_runner(stored_task_id)
         .unwrap()
         .is_none());
 
@@ -936,16 +937,16 @@ async fn recoverable_runner_ack_precedes_one_shutdown_transaction_and_exit() {
     .await;
     assert_eq!(persisted, vec![ShutdownAction::PersistenceFinished]);
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(stored_task_id).unwrap().unwrap().status,
         file_operation_store::StoredTaskStatus::RecoveryPending
     );
     assert!(!store
-        .read_transfer_recovery(task_id)
+        .read_transfer_recovery(stored_task_id)
         .unwrap()
         .journal_entries
         .is_empty());
     assert!(store
-        .try_acquire_recoverable_task_runner(task_id)
+        .try_acquire_recoverable_task_runner(stored_task_id)
         .unwrap()
         .is_none());
 
@@ -954,7 +955,7 @@ async fn recoverable_runner_ack_precedes_one_shutdown_transaction_and_exit() {
         vec![ShutdownAction::Exit]
     );
     assert!(store
-        .try_acquire_recoverable_task_runner(task_id)
+        .try_acquire_recoverable_task_runner(stored_task_id)
         .unwrap()
         .is_some());
 }
@@ -995,8 +996,9 @@ async fn terminal_recoverable_completion_is_not_rewritten_as_recovery_pending() 
     .await;
 
     assert_eq!(persisted, vec![ShutdownAction::PersistenceFinished]);
+    let stored_task_id = browser.operation_queue.tasks()[0].stored_id.unwrap();
     assert_eq!(
-        store.read_task(task_id).unwrap().unwrap().status,
+        store.read_task(stored_task_id).unwrap().unwrap().status,
         file_operation_store::StoredTaskStatus::Failed
     );
 }
