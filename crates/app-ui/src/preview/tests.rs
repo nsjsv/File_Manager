@@ -187,7 +187,7 @@ async fn load_preview_keeps_utf8_text_preview() {
     else {
         panic!("expected text preview");
     };
-    assert_eq!(rendered, "hello\n");
+    assert_eq!(rendered.as_ref(), "hello\n");
     assert_eq!(format, TextPreviewFormat::Plain);
 }
 
@@ -213,7 +213,7 @@ async fn load_preview_renders_markdown_text_preview() {
         panic!("expected text preview");
     };
     assert_eq!(format, TextPreviewFormat::Markdown);
-    assert_eq!(rendered, "# Title\n\nHello **world**.\n");
+    assert_eq!(rendered.as_ref(), "# Title\n\nHello **world**.\n");
 }
 
 #[tokio::test]

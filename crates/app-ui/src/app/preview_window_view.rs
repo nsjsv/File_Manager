@@ -23,6 +23,9 @@ impl FileBrowser {
             self.scrollbar_viewport_for(&ScrollbarRegion::PreviewArchive),
             self.scrollbar_visibility_for(&ScrollbarRegion::PreviewDocument),
             self.scrollbar_viewport_for(&ScrollbarRegion::PreviewDocument),
+            self.scrollbar_visibility_for(&ScrollbarRegion::TextPreview),
+            self.scrollbar_viewport_for(&ScrollbarRegion::TextPreview),
+            self.text_preview_content_height,
             self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
             self.scrollbar_viewport_for(&ScrollbarRegion::MarkdownPreview),
         )

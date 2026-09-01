@@ -1,28 +1,75 @@
 use std::path::{Path, PathBuf};
 
-use iced::widget::text_editor;
 use iced::Task;
 
 use super::FileBrowser;
 use crate::commands::text_preview_chunk_command;
 use crate::model::{
-    Message, PreviewContent, PreviewState, TextPreviewChunk, TextPreviewDocument, TextPreviewFormat,
+    Message, PreviewContent, PreviewState, ScrollbarRegion, TextPreviewChunk, TextPreviewDocument,
+    TextPreviewFormat,
 };
 
 impl FileBrowser {
-    pub(in crate::app) fn handle_text_preview_action(
+    pub(in crate::app) fn handle_text_preview_content_scrolled(
         &mut self,
-        action: text_editor::Action,
+        lines: i32,
         viewport_height: f32,
     ) -> Task<Message> {
-        let Some(document) = self.active_text_preview_document_mut() else {
-            return Task::none();
-        };
-
-        document
-            .perform(action, viewport_height)
-            .map(text_preview_chunk_command)
+        // 滚动几何宿主是输入源（滚轮动画/滚动条），查看器从动；
+        // 这里只镜像文档副本以预取分块，不回推宿主，避免滞后回拉振荡。
+        self.active_text_preview_document_mut()
+            .map(|document| {
+                document
+                    .scroll_by(lines, viewport_height)
+                    .map(text_preview_chunk_command)
+                    .unwrap_or_else(Task::none)
+            })
             .unwrap_or_else(Task::none)
+    }
+
+    pub(in crate::app) fn handle_text_preview_viewer_scrolled(
+        &mut self,
+        lines: i32,
+        offset_y: f32,
+        viewport_height: f32,
+    ) -> Task<Message> {
+        // 查看器内部滚动（键盘/光标跟随）镜像到文档副本以预取分块，
+        // 并把总偏移同步给滚动几何宿主（宿主此时是静止的，无竞争）。
+        let chunk_task = self
+            .active_text_preview_document_mut()
+            .map(|document| {
+                document
+                    .scroll_by(lines, viewport_height)
+                    .map(text_preview_chunk_command)
+                    .unwrap_or_else(Task::none)
+            })
+            .unwrap_or_else(Task::none);
+        Task::batch([chunk_task, self.scroll_text_preview_geometry(offset_y)])
+    }
+
+    pub(in crate::app) fn handle_text_preview_viewport_synced(
+        &mut self,
+        offset_y: f32,
+        _viewport_height: f32,
+    ) -> Task<Message> {
+        // 滚动几何宿主变化（滚轮动画/滚动条拖动）驱动查看器像素滚动。
+        iced::widget::operation::scroll_to(
+            iced::widget::Id::new(crate::text_preview_viewer::TEXT_PREVIEW_VIEWER_ID),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: offset_y,
+            },
+        )
+    }
+
+    fn scroll_text_preview_geometry(&mut self, offset_y: f32) -> Task<Message> {
+        iced::widget::operation::scroll_to(
+            crate::app::smooth_scroll::smooth_scroll_id(&ScrollbarRegion::TextPreview),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: offset_y,
+            },
+        )
     }
 
     pub(in crate::app) fn handle_markdown_preview_scrolled(
@@ -91,7 +138,7 @@ fn text_preview_state_from_document(
 ) -> PreviewState {
     PreviewState::Ready(PreviewContent::Text {
         path,
-        rendered: document.content_text(),
+        rendered: document.shared_content(),
         format,
         next_offset: document.next_offset(),
         loaded_line_count: document.loaded_line_count(),
@@ -117,6 +164,7 @@ fn active_text_preview_format(preview: Option<&PreviewState>) -> Option<TextPrev
 mod tests {
     use super::*;
     use crate::config;
+    use std::sync::Arc;
 
     fn browser_with_loading_text_preview() -> (FileBrowser, PathBuf) {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
@@ -128,7 +176,7 @@ mod tests {
         browser.text_preview_generation = 1;
         browser.preview = Some(PreviewState::Ready(PreviewContent::Text {
             path: path.clone(),
-            rendered: content.clone(),
+            rendered: Arc::from(content.as_str()),
             format: TextPreviewFormat::Plain,
             next_offset: Some(100),
             loaded_line_count: 50,
@@ -143,9 +191,7 @@ mod tests {
             50,
             None,
         );
-        document
-            .perform(text_editor::Action::Scroll { lines: 21 }, 400.0)
-            .expect("chunk request");
+        document.scroll_by(21, 400.0).expect("chunk request");
         browser.text_preview_document = Some(document);
         (browser, path)
     }
@@ -168,7 +214,7 @@ mod tests {
         ));
 
         let document = browser.text_preview_document.as_ref().expect("document");
-        assert!(!document.content_text().contains("stale"));
+        assert!(!document.content().contains("stale"));
     }
 
     #[test]
@@ -189,6 +235,6 @@ mod tests {
         ));
 
         let document = browser.text_preview_document.as_ref().expect("document");
-        assert!(!document.content_text().contains("stale"));
+        assert!(!document.content().contains("stale"));
     }
 }

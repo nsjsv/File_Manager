@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -19,7 +20,7 @@ pub(crate) async fn load_initial_text_preview(path: PathBuf) -> Result<PreviewCo
 
     Ok(PreviewContent::Text {
         path,
-        rendered,
+        rendered: Arc::from(rendered),
         format,
         next_offset: text_preview.next_offset,
         loaded_line_count: text_preview.line_count,

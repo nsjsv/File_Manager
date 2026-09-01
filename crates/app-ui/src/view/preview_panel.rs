@@ -71,6 +71,9 @@ pub(crate) fn view_preview_window<'a>(
     archive_scrollbar_viewport: Option<ScrollbarViewport>,
     document_scrollbar_visibility: ScrollbarVisibility,
     document_scrollbar_viewport: Option<ScrollbarViewport>,
+    text_scrollbar_visibility: ScrollbarVisibility,
+    text_scrollbar_viewport: Option<ScrollbarViewport>,
+    text_preview_content_height: f32,
     markdown_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
@@ -90,6 +93,9 @@ pub(crate) fn view_preview_window<'a>(
                 archive_scrollbar_viewport,
                 document_scrollbar_visibility,
                 document_scrollbar_viewport,
+                text_scrollbar_visibility,
+                text_scrollbar_viewport,
+                text_preview_content_height,
                 markdown_scrollbar_visibility,
                 markdown_scrollbar_viewport,
             )
@@ -117,6 +123,9 @@ fn preview_panel<'a>(
     archive_scrollbar_viewport: Option<ScrollbarViewport>,
     document_scrollbar_visibility: ScrollbarVisibility,
     document_scrollbar_viewport: Option<ScrollbarViewport>,
+    text_scrollbar_visibility: ScrollbarVisibility,
+    text_scrollbar_viewport: Option<ScrollbarViewport>,
+    text_preview_content_height: f32,
     markdown_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
@@ -145,6 +154,9 @@ fn preview_panel<'a>(
             *line_limit_notice,
             text_preview_document.filter(|document| document.path() == path.as_path()),
             scroll_height,
+            text_preview_content_height,
+            text_scrollbar_visibility,
+            text_scrollbar_viewport,
             markdown_scrollbar_visibility,
             markdown_scrollbar_viewport,
         )

@@ -19,7 +19,6 @@ use file_search::{
     VersionedSearchPathPreferences,
 };
 use iced::keyboard;
-use iced::widget::text_editor;
 use iced::{event, mouse, window, Point, Theme};
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
@@ -197,6 +196,7 @@ pub(crate) enum ScrollbarRegion {
     PreviewDirectory,
     PreviewArchive,
     PreviewDocument,
+    TextPreview,
     MarkdownPreview,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -342,10 +342,20 @@ pub(crate) enum Message {
     RetryImagePreview(PathBuf),
     FileProperties(FilePropertiesMessage),
     PreviewDirectoryChildrenLoaded(PathBuf, Result<Vec<DirectoryEntry>, String>),
-    TextPreviewAction {
-        action: text_editor::Action,
+    TextPreviewContentScrolled {
+        lines: i32,
         viewport_height: f32,
     },
+    TextPreviewViewerScrolled {
+        lines: i32,
+        offset_y: f32,
+        viewport_height: f32,
+    },
+    TextPreviewViewportSynced {
+        offset_y: f32,
+        viewport_height: f32,
+    },
+    TextPreviewContentHeightChanged(f32),
     TextPreviewChunkLoaded {
         path: PathBuf,
         generation: u64,

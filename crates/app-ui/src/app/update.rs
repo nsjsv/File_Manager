@@ -121,10 +121,23 @@ impl FileBrowser {
             Message::PreviewDirectoryChildrenLoaded(parent_path, children_outcome) => {
                 self.accept_preview_directory_children(parent_path, children_outcome)
             }
-            Message::TextPreviewAction {
-                action,
+            Message::TextPreviewContentScrolled {
+                lines,
                 viewport_height,
-            } => self.handle_text_preview_action(action, viewport_height),
+            } => self.handle_text_preview_content_scrolled(lines, viewport_height),
+            Message::TextPreviewViewerScrolled {
+                lines,
+                offset_y,
+                viewport_height,
+            } => self.handle_text_preview_viewer_scrolled(lines, offset_y, viewport_height),
+            Message::TextPreviewViewportSynced {
+                offset_y,
+                viewport_height,
+            } => self.handle_text_preview_viewport_synced(offset_y, viewport_height),
+            Message::TextPreviewContentHeightChanged(content_height) => {
+                self.text_preview_content_height = content_height;
+                Task::none()
+            }
             Message::TextPreviewChunkLoaded {
                 path,
                 generation,
@@ -446,7 +459,8 @@ impl FileBrowser {
                     self.cancel_preview_window_initial_chrome_hide();
                     self.preview_window_pointer_y = None;
                     self.preview_window_bottom_controls.start_hide();
-                    if !self.preview_window_drag_active {
+                    if !self.preview_window_drag_active && !self.preview_window_uses_window_chrome()
+                    {
                         self.preview_window_chrome.start_hide();
                     }
                 }

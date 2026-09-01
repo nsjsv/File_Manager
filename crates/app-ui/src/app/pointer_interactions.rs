@@ -56,6 +56,9 @@ impl FileBrowser {
         position: Point,
     ) -> Task<Message> {
         if self.preview_window == Some(window) {
+            if self.preview_window_uses_window_chrome() {
+                return Task::none();
+            }
             self.cancel_preview_window_initial_chrome_hide();
             self.preview_window_pointer_y = Some(position.y);
             self.refresh_preview_window_bottom_controls();

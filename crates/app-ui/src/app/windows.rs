@@ -588,7 +588,19 @@ impl FileBrowser {
         )
     }
 
+    // 文本预览使用标准窗口壳（标题栏 + 控制按钮）；媒体类内容保持悬浮 chrome。
+    pub(crate) fn preview_window_uses_window_chrome(&self) -> bool {
+        matches!(
+            self.preview,
+            Some(PreviewState::Ready(PreviewContent::Text { .. }))
+        )
+    }
+
     fn start_preview_window_initial_chrome(&mut self) -> Task<Message> {
+        if self.preview_window_uses_window_chrome() {
+            return Task::none();
+        }
+
         self.cancel_preview_window_initial_chrome_hide();
         self.preview_window_chrome.start_reveal();
         if self.preview_window_has_bottom_media_controls() {
@@ -609,8 +621,10 @@ impl FileBrowser {
         if generation != self.preview_window_initial_chrome_generation {
             return;
         }
+        if self.preview_window_uses_window_chrome() {
+            return;
+        }
         self.preview_window_chrome.start_hide();
-
         if !self.preview_window_has_bottom_media_controls() {
             self.preview_window_bottom_controls.reset_hidden();
         } else if self.preview_window_pointer_y.is_some() {

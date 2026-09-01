@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use file_core::{DirectoryEntry, FileKind};
@@ -83,7 +84,7 @@ pub(crate) enum PreviewContent {
     },
     Text {
         path: PathBuf,
-        rendered: String,
+        rendered: Arc<str>,
         format: TextPreviewFormat,
         next_offset: Option<u64>,
         loaded_line_count: usize,

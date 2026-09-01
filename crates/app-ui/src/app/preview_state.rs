@@ -66,7 +66,7 @@ impl FileBrowser {
                         self.text_preview_generation = self.text_preview_generation.wrapping_add(1);
                         self.text_preview_document = Some(TextPreviewDocument::new_initial(
                             path.clone(),
-                            rendered,
+                            &rendered,
                             *format,
                             self.text_preview_generation,
                             *next_offset,

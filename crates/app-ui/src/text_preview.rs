@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
-
-use iced::widget::text_editor;
+use std::sync::Arc;
 
 pub(crate) const TEXT_PREVIEW_LINE_LIMIT: usize = 10_000;
 pub(crate) const TEXT_PREVIEW_INITIAL_LINE_LIMIT: usize = 50;
@@ -68,7 +67,10 @@ pub(crate) struct TextPreviewChunk {
 
 pub(crate) struct TextPreviewDocument {
     path: PathBuf,
-    content: text_editor::Content,
+    content: String,
+    // 每行起始 byte offset（首项 0）；行数即 line_starts.len()。
+    // 追加 chunk 时按追加段增量扩展，避免整篇重扫。
+    line_starts: Vec<u32>,
     markdown_preview_mode: MarkdownPreviewMode,
     generation: u64,
     next_offset: Option<u64>,
@@ -77,7 +79,6 @@ pub(crate) struct TextPreviewDocument {
     line_limit_notice: Option<TextPreviewLineLimitNotice>,
     chunk_error: Option<String>,
     scroll_top_line: i32,
-    visual_scroll_line_offset: i32,
     is_scrolled_to_preview_end: bool,
     content_revision: u64,
 }
@@ -92,11 +93,10 @@ impl TextPreviewDocument {
         loaded_line_count: usize,
         line_limit_notice: Option<TextPreviewLineLimitNotice>,
     ) -> Self {
-        let content_state = text_editor::Content::with_text(content);
-
         Self {
             path,
-            content: content_state,
+            content: content.to_owned(),
+            line_starts: build_line_starts(content),
             markdown_preview_mode: initial_markdown_preview_mode(format),
             generation,
             next_offset,
@@ -105,7 +105,6 @@ impl TextPreviewDocument {
             line_limit_notice,
             chunk_error: None,
             scroll_top_line: 0,
-            visual_scroll_line_offset: 0,
             is_scrolled_to_preview_end: false,
             content_revision: 0,
         }
@@ -115,20 +114,33 @@ impl TextPreviewDocument {
         self.path.as_path()
     }
 
-    pub(crate) fn content_text(&self) -> String {
-        self.content.text()
+    pub(crate) fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// 与 PreviewState 共享渲染文本，避免每次追加全文拷贝。
+    pub(crate) fn shared_content(&self) -> Arc<str> {
+        Arc::from(self.content.as_str())
+    }
+
+    pub(crate) fn line(&self, index: usize) -> Option<&str> {
+        let start = *self.line_starts.get(index)? as usize;
+        let end = self
+            .line_starts
+            .get(index + 1)
+            .map(|end| *end as usize)
+            .unwrap_or(self.content.len());
+        let text = self.content.get(start..end)?;
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        Some(text.strip_suffix('\r').unwrap_or(text))
     }
 
     pub(crate) fn line_count(&self) -> usize {
-        self.content.line_count().max(1)
+        self.line_starts.len().max(1)
     }
 
     pub(crate) fn line_number_digit_count(&self) -> usize {
         self.line_count().to_string().len()
-    }
-
-    pub(crate) fn visual_scroll_line_offset(&self) -> usize {
-        self.visual_scroll_line_offset.max(0) as usize
     }
 
     pub(crate) fn content_revision(&self) -> u64 {
@@ -167,17 +179,16 @@ impl TextPreviewDocument {
         self.is_scrolled_to_preview_end
     }
 
-    pub(crate) fn perform(
+    /// 查看器锚定行变化时驱动分块预取；滚动计数自管，不再经过编辑器。
+    pub(crate) fn scroll_by(
         &mut self,
-        action: text_editor::Action,
+        lines: i32,
         viewport_height: f32,
     ) -> Option<TextPreviewChunkRequest> {
-        if action.is_edit() {
-            return None;
-        }
-
-        self.update_preview_end_visibility(&action, viewport_height);
-        self.content.perform(action);
+        let max_scroll_top_line = self.max_scroll_top_line(viewport_height);
+        self.scroll_top_line = (self.scroll_top_line + lines).clamp(0, max_scroll_top_line);
+        self.is_scrolled_to_preview_end =
+            max_scroll_top_line > 0 && self.scroll_top_line >= max_scroll_top_line;
         self.request_next_chunk_for_text_view(viewport_height)
     }
 
@@ -211,7 +222,7 @@ impl TextPreviewDocument {
         }
 
         if !chunk.content.is_empty() {
-            self.append_chunk_text_preserving_editor_viewport(&chunk.content);
+            self.append_chunk_text(&chunk.content);
         }
 
         self.loaded_line_count = self
@@ -279,64 +290,27 @@ impl TextPreviewDocument {
         })
     }
 
-    fn append_chunk_text_preserving_editor_viewport(&mut self, chunk_content: &str) {
-        let mut content = self.content.text();
-        let cursor = self.content.cursor();
-
-        if !content.is_empty() && !content.ends_with('\n') && !content.ends_with('\r') {
-            content.push('\n');
+    /// 追加只触碰追加段：补齐上一行行尾后 push_str，并按段内换行增量扩展
+    /// 行索引，避免整篇重建。
+    fn append_chunk_text(&mut self, chunk_content: &str) {
+        if !self.content.is_empty()
+            && !self.content.ends_with('\n')
+            && !self.content.ends_with('\r')
+        {
+            self.content.push('\n');
+            self.line_starts.push(self.content.len() as u32);
         }
-        content.push_str(chunk_content);
 
-        self.content = text_editor::Content::with_text(&content);
-        self.apply_visual_scroll_to_content();
-        self.content.move_to(cursor);
+        let segment_start = self.content.len();
+        self.content.push_str(chunk_content);
+        let segment = &self.content[segment_start..];
+        for (offset, byte) in segment.bytes().enumerate() {
+            if byte == b'\n' {
+                self.line_starts.push((segment_start + offset + 1) as u32);
+            }
+        }
         self.content_revision = self.content_revision.wrapping_add(1);
     }
-
-    fn apply_visual_scroll_to_content(&mut self) {
-        let lines = self.visual_scroll_line_offset.max(0);
-        if lines == 0 {
-            return;
-        }
-
-        self.content.perform(text_editor::Action::Scroll { lines });
-    }
-
-    fn update_preview_end_visibility(
-        &mut self,
-        action: &text_editor::Action,
-        viewport_height: f32,
-    ) {
-        let max_scroll_top_line = self.max_scroll_top_line(viewport_height);
-        match action {
-            text_editor::Action::Scroll { lines } => {
-                self.scroll_top_line =
-                    (self.scroll_top_line + *lines).clamp(0, max_scroll_top_line);
-                self.visual_scroll_line_offset = (self.visual_scroll_line_offset + *lines).max(0);
-            }
-            text_editor::Action::Move(motion) | text_editor::Action::Select(motion) => {
-                let visible_lines = visible_text_preview_lines(viewport_height);
-                self.scroll_top_line = scroll_line_after_motion(
-                    self.scroll_top_line,
-                    *motion,
-                    visible_lines,
-                    max_scroll_top_line,
-                );
-                self.visual_scroll_line_offset = scroll_line_after_motion(
-                    self.visual_scroll_line_offset,
-                    *motion,
-                    visible_lines,
-                    self.visual_scroll_line_offset.max(max_scroll_top_line),
-                );
-            }
-            _ => {}
-        }
-
-        self.is_scrolled_to_preview_end =
-            max_scroll_top_line > 0 && self.scroll_top_line >= max_scroll_top_line;
-    }
-
     fn update_preview_end_after_content_change(&mut self, viewport_height: f32) {
         let max_scroll_top_line = self.max_scroll_top_line(viewport_height);
         self.scroll_top_line = self.scroll_top_line.clamp(0, max_scroll_top_line);
@@ -346,8 +320,7 @@ impl TextPreviewDocument {
 
     fn max_scroll_top_line(&self, viewport_height: f32) -> i32 {
         let visible_lines = visible_text_preview_lines(viewport_height);
-        self.content
-            .line_count()
+        self.line_count()
             .saturating_sub(visible_lines)
             .try_into()
             .unwrap_or(i32::MAX)
@@ -361,21 +334,15 @@ fn initial_markdown_preview_mode(format: TextPreviewFormat) -> MarkdownPreviewMo
     }
 }
 
-fn scroll_line_after_motion(
-    current_scroll_top_line: i32,
-    motion: text_editor::Motion,
-    visible_lines: usize,
-    max_scroll_top_line: i32,
-) -> i32 {
-    let visible_lines = i32::try_from(visible_lines).unwrap_or(i32::MAX);
-    match motion {
-        text_editor::Motion::DocumentEnd => max_scroll_top_line,
-        text_editor::Motion::DocumentStart => 0,
-        text_editor::Motion::PageDown => current_scroll_top_line.saturating_add(visible_lines),
-        text_editor::Motion::PageUp => current_scroll_top_line.saturating_sub(visible_lines),
-        _ => current_scroll_top_line,
+/// 每行起始 byte offset；空文本视为单空行。
+fn build_line_starts(content: &str) -> Vec<u32> {
+    let mut starts = vec![0u32];
+    for (index, byte) in content.bytes().enumerate() {
+        if byte == b'\n' {
+            starts.push((index + 1) as u32);
+        }
     }
-    .clamp(0, max_scroll_top_line)
+    starts
 }
 
 fn visible_text_preview_lines(viewport_height: f32) -> usize {
@@ -450,7 +417,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(document.content_text(), content);
+        assert_eq!(document.content(), content);
         assert_eq!(document.line_count(), 3);
     }
 
@@ -466,7 +433,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(document.content_text(), "");
+        assert_eq!(document.content(), "");
         assert_eq!(document.line_count(), 1);
     }
 
@@ -475,20 +442,16 @@ mod tests {
         let mut document = document_with_lines(50, Some(100));
         let viewport_height = TEXT_PREVIEW_TEXT_SIZE * TEXT_PREVIEW_LINE_HEIGHT * 20.0;
 
-        assert!(document
-            .perform(text_editor::Action::Scroll { lines: 19 }, viewport_height)
-            .is_none());
+        assert!(document.scroll_by(19, viewport_height).is_none());
 
         let request = document
-            .perform(text_editor::Action::Scroll { lines: 1 }, viewport_height)
+            .scroll_by(1, viewport_height)
             .expect("chunk request");
         assert_eq!(request.start_offset, 100);
         assert_eq!(request.generation, 7);
         assert_eq!(request.line_limit, TEXT_PREVIEW_CHUNK_LINE_LIMIT);
 
-        assert!(document
-            .perform(text_editor::Action::Scroll { lines: 1 }, viewport_height)
-            .is_none());
+        assert!(document.scroll_by(1, viewport_height).is_none());
     }
 
     #[test]
@@ -496,9 +459,8 @@ mod tests {
         let mut document = document_with_lines(50, Some(100));
         let viewport_height = TEXT_PREVIEW_TEXT_SIZE * TEXT_PREVIEW_LINE_HEIGHT * 20.0;
         let request = document
-            .perform(text_editor::Action::Scroll { lines: 20 }, viewport_height)
+            .scroll_by(20, viewport_height)
             .expect("chunk request");
-        let scroll_line_offset = document.visual_scroll_line_offset();
 
         assert!(document.append_chunk(
             TextPreviewChunk {
@@ -511,10 +473,16 @@ mod tests {
             viewport_height,
         ));
 
-        assert!(document.content_text().contains("line 49\nline 50"));
-        assert!(document.content_text().contains("line 51"));
-        assert_eq!(document.visual_scroll_line_offset(), scroll_line_offset);
+        assert!(document.content().contains("line 49\nline 50"));
+        assert!(document.content().contains("line 51"));
         assert_eq!(document.content_revision(), 1);
+
+        // 行索引与内容一致：行数正确、逐行可读、越界为空。
+        assert_eq!(document.line_count(), 52);
+        assert_eq!(document.line(49), Some("line 49"));
+        assert_eq!(document.line(50), Some("line 50"));
+        assert_eq!(document.line(51), Some("line 51"));
+        assert_eq!(document.line(52), None);
     }
 
     #[test]
@@ -541,7 +509,7 @@ mod tests {
         let mut document = document_with_lines(50, Some(100));
         let viewport_height = TEXT_PREVIEW_TEXT_SIZE * TEXT_PREVIEW_LINE_HEIGHT * 20.0;
         document
-            .perform(text_editor::Action::Scroll { lines: 20 }, viewport_height)
+            .scroll_by(20, viewport_height)
             .expect("chunk request");
 
         assert!(!document.append_chunk(
@@ -554,7 +522,7 @@ mod tests {
             },
             viewport_height,
         ));
-        assert!(!document.content_text().contains("stale"));
+        assert!(!document.content().contains("stale"));
     }
 
     #[test]
@@ -562,12 +530,12 @@ mod tests {
         let mut document = document_with_lines(50, Some(100));
         let viewport_height = TEXT_PREVIEW_TEXT_SIZE * TEXT_PREVIEW_LINE_HEIGHT * 20.0;
         let request = document
-            .perform(text_editor::Action::Scroll { lines: 20 }, viewport_height)
+            .scroll_by(20, viewport_height)
             .expect("chunk request");
 
         assert!(document.accept_chunk_error(request.start_offset, "could not read".to_owned()));
         assert_eq!(document.chunk_error(), Some("could not read"));
-        assert!(document.content_text().contains("line 49"));
+        assert!(document.content().contains("line 49"));
     }
 
     #[test]

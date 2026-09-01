@@ -199,6 +199,7 @@ pub(crate) struct FileBrowser {
     pub(crate) audio_preview: Option<AudioPreviewPlayback>,
     pub(crate) video_preview: Option<VideoPreviewPlayback>,
     pub(crate) preview_size: PreviewSize,
+    pub(crate) text_preview_content_height: f32,
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
     preview_window_chrome: PreviewWindowChromeState,
@@ -550,6 +551,7 @@ impl FileBrowser {
             audio_preview: None,
             video_preview: None,
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
+            text_preview_content_height: 0.0,
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
             preview_window_chrome: PreviewWindowChromeState::default(),
@@ -911,15 +913,21 @@ impl FileBrowser {
             );
             self.view_with_window_chrome(window, "Properties", content)
         } else if self.preview_window == Some(window) {
-            let frame_state = self.window_frame_state(window);
-            let content = floating_preview_window_content(
-                self.preview_window_content(self.preview_window_bottom_controls.opacity()),
-                &self.user_config.window_controls,
-                window,
-                frame_state,
-                self.preview_window_chrome.opacity(),
-            );
-            window_resize_frame(content, window, frame_state)
+            let content =
+                self.preview_window_content(self.preview_window_bottom_controls.opacity());
+            if self.preview_window_uses_window_chrome() {
+                self.view_with_window_chrome(window, "Preview", content)
+            } else {
+                let frame_state = self.window_frame_state(window);
+                let content = floating_preview_window_content(
+                    content,
+                    &self.user_config.window_controls,
+                    window,
+                    frame_state,
+                    self.preview_window_chrome.opacity(),
+                );
+                window_resize_frame(content, window, frame_state)
+            }
         } else if window == self.main_window {
             startup_trace::mark_once("first_main_window_view");
             if !self.directory_collection_phase.is_discovering()
