@@ -92,10 +92,12 @@ pub(crate) fn operation_queue_panel(
             6.0,
         ))
         .style(enhanced_scrollbar_style(scrollbar_visibility))
-        .height(Length::Fixed(TASK_LIST_MAX_HEIGHT))
         .on_scroll(scrollbar_on_scroll(scroll_region.clone(), |_| {
             Message::OperationQueueScrolled
         }));
+    let scroller = container(scroller)
+        .width(Length::Fill)
+        .max_height(TASK_LIST_MAX_HEIGHT);
     let scroller = enhanced_scrollbar(
         scroller,
         scrollbar_visibility,

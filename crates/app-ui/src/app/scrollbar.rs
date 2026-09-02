@@ -221,9 +221,10 @@ pub(crate) fn enhanced_scrollbar<'a>(
     };
 
     // 视觉层不参与命中测试，避免覆盖 Scrollable 原生的轨道点击和拖动区域。
+    // Stack 必须跟随 base 高度：Fill 会在无界浮层（任务面板、历史弹窗）里把宿主撑满整窗。
     Stack::with_children([base, overlay])
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Shrink)
         .into()
 }
 
@@ -263,9 +264,10 @@ pub(crate) fn enhanced_scrollbar_both<'a>(
     .align_y(Vertical::Bottom)
     .into();
 
+    // 同上：跟随 base 高度，避免在无界浮层中撑满整窗。
     Stack::with_children([base, vertical_overlay, horizontal_overlay])
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Shrink)
         .into()
 }
 
