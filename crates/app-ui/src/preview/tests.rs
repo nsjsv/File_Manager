@@ -294,6 +294,10 @@ fn preview_file_size_kind_matches_preview_dispatch() {
         PreviewFileSizeKind::Archive
     );
     assert_eq!(
+        preview_file_size_kind(Path::new("backup.db3")),
+        PreviewFileSizeKind::Sqlite
+    );
+    assert_eq!(
         preview_file_size_kind(Path::new("clip.mp4")),
         PreviewFileSizeKind::Video
     );

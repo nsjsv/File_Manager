@@ -1,3 +1,4 @@
+use crate::app::preview_state::SqlitePreviewState;
 use std::path::Path;
 use std::time::Duration;
 
@@ -60,6 +61,7 @@ const MINI_PROGRESS_BAR_HEIGHT: f32 = 3.0;
 pub(crate) fn view_preview_window<'a>(
     preview: Option<&'a PreviewState>,
     text_preview_document: Option<&'a TextPreviewDocument>,
+    sqlite_preview_state: Option<&'a SqlitePreviewState>,
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
@@ -76,12 +78,17 @@ pub(crate) fn view_preview_window<'a>(
     text_preview_content_height: f32,
     markdown_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_viewport: Option<ScrollbarViewport>,
+    sqlite_tables_visibility: ScrollbarVisibility,
+    sqlite_tables_viewport: Option<ScrollbarViewport>,
+    sqlite_data_visibility: ScrollbarVisibility,
+    sqlite_data_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     preview
         .map(|preview| {
             preview_panel(
                 preview,
                 text_preview_document,
+                sqlite_preview_state,
                 size,
                 audio_preview,
                 video_preview,
@@ -98,6 +105,10 @@ pub(crate) fn view_preview_window<'a>(
                 text_preview_content_height,
                 markdown_scrollbar_visibility,
                 markdown_scrollbar_viewport,
+                sqlite_tables_visibility,
+                sqlite_tables_viewport,
+                sqlite_data_visibility,
+                sqlite_data_viewport,
             )
         })
         .unwrap_or_else(|| {
@@ -112,6 +123,7 @@ pub(crate) fn view_preview_window<'a>(
 fn preview_panel<'a>(
     preview: &'a PreviewState,
     text_preview_document: Option<&'a TextPreviewDocument>,
+    sqlite_preview_state: Option<&'a SqlitePreviewState>,
     size: PreviewSize,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
@@ -128,6 +140,10 @@ fn preview_panel<'a>(
     text_preview_content_height: f32,
     markdown_scrollbar_visibility: ScrollbarVisibility,
     markdown_scrollbar_viewport: Option<ScrollbarViewport>,
+    sqlite_tables_visibility: ScrollbarVisibility,
+    sqlite_tables_viewport: Option<ScrollbarViewport>,
+    sqlite_data_visibility: ScrollbarVisibility,
+    sqlite_data_viewport: Option<ScrollbarViewport>,
 ) -> Element<'a, Message> {
     let scroll_height = preview_scroll_height(size);
     let panel: Element<'a, Message> = match preview {
@@ -168,6 +184,16 @@ fn preview_panel<'a>(
             archive_scrollbar_viewport,
         )
         .into(),
+        PreviewState::Ready(PreviewContent::Sqlite(database)) => {
+            super::sqlite_preview_panel::sqlite_preview_panel(
+                database,
+                sqlite_preview_state,
+                sqlite_tables_visibility,
+                sqlite_tables_viewport,
+                sqlite_data_visibility,
+                sqlite_data_viewport,
+            )
+        }
         PreviewState::Ready(PreviewContent::PagedDocument(document)) => document_preview_panel(
             document,
             size,

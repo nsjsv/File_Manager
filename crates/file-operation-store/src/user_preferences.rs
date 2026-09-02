@@ -28,6 +28,8 @@ pub struct StoredUserPreferences {
     #[serde(default)]
     pub preview_document_size_bytes: Option<u64>,
     #[serde(default)]
+    pub preview_sqlite_size_bytes: Option<u64>,
+    #[serde(default)]
     pub preview_directory_expand_levels: Option<u8>,
     pub show_hidden_files: bool,
     #[serde(default = "default_language_setting")]
@@ -81,6 +83,7 @@ impl Default for StoredUserPreferences {
             preview_audio_size_bytes: None,
             preview_archive_size_bytes: None,
             preview_document_size_bytes: None,
+            preview_sqlite_size_bytes: None,
             preview_directory_expand_levels: None,
             show_hidden_files: false,
             language_setting: default_language_setting(),

@@ -13,6 +13,7 @@ use crate::config::PreviewFileSizeKind;
 use crate::document_preview::document_preview_format_for_path;
 use crate::formatting::format_file_size;
 use crate::model::{PreviewContent, PreviewTreeDirectoryChildren, PreviewTreeEntry};
+use crate::sqlite_preview::{is_supported_sqlite_path, load_sqlite_preview};
 use crate::text_preview_loading::load_initial_text_preview;
 use thumbnails::is_supported_thumbnail_path;
 
@@ -41,6 +42,8 @@ pub(crate) async fn load_preview(
                 load_audio_preview(path).await
             } else if is_supported_video_path(&path) {
                 load_video_preview(path).await
+            } else if is_supported_sqlite_path(&path) {
+                load_sqlite_preview(path).await.map(PreviewContent::Sqlite)
             } else {
                 load_text_preview(path).await
             }
@@ -73,6 +76,8 @@ pub(crate) fn preview_file_size_kind(path: &Path) -> PreviewFileSizeKind {
         PreviewFileSizeKind::Document
     } else if archive_extraction_format_for_path(path).is_some() {
         PreviewFileSizeKind::Archive
+    } else if is_supported_sqlite_path(path) {
+        PreviewFileSizeKind::Sqlite
     } else if is_animated_image_preview_path(path) {
         PreviewFileSizeKind::Image
     } else if is_supported_thumbnail_path(path) && !is_supported_video_path(path) {

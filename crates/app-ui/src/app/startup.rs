@@ -164,7 +164,7 @@ impl FileBrowser {
         self.view_mode = user_config.browser_view_mode;
         self.preview_size_limit_mib_inputs =
             crate::config::preview_size_limit_mib_inputs(&user_config.preview_size_limits);
-        self.preview_size_limit_mib_errors = [const { None }; 6];
+        self.preview_size_limit_mib_errors = [const { None }; 7];
         self.preview_directory_expand_levels_input =
             user_config.preview_directory_expand_levels.to_string();
         self.preview_directory_expand_levels_error = None;

@@ -131,6 +131,7 @@ impl UserPreferences {
         stored.preview_audio_size_bytes = Some(self.preview_size_limits.audio_bytes);
         stored.preview_archive_size_bytes = Some(self.preview_size_limits.archive_bytes);
         stored.preview_document_size_bytes = Some(self.preview_size_limits.document_bytes);
+        stored.preview_sqlite_size_bytes = Some(self.preview_size_limits.sqlite_bytes);
         stored.preview_directory_expand_levels = Some(self.preview_directory_expand_levels);
         stored.show_hidden_files = self.show_hidden_files;
         stored.language_setting = self.language_setting.config_value().to_owned();
@@ -276,6 +277,10 @@ fn preview_size_limits_from_stored(
         document_bytes: limit(
             stored.preview_document_size_bytes,
             default.preview_size_limits.document_bytes,
+        ),
+        sqlite_bytes: limit(
+            stored.preview_sqlite_size_bytes,
+            default.preview_size_limits.sqlite_bytes,
         ),
     }
 }

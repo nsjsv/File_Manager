@@ -12,6 +12,7 @@ impl FileBrowser {
         view_preview_window(
             self.preview.as_ref(),
             self.text_preview_document.as_ref(),
+            self.sqlite_preview.as_ref(),
             self.preview_size,
             self.audio_preview.as_ref(),
             self.video_preview.as_ref(),
@@ -28,6 +29,10 @@ impl FileBrowser {
             self.text_preview_content_height,
             self.scrollbar_visibility_for(&ScrollbarRegion::MarkdownPreview),
             self.scrollbar_viewport_for(&ScrollbarRegion::MarkdownPreview),
+            self.scrollbar_visibility_for(&ScrollbarRegion::PreviewSqliteTables),
+            self.scrollbar_viewport_for(&ScrollbarRegion::PreviewSqliteTables),
+            self.scrollbar_visibility_for(&ScrollbarRegion::PreviewSqliteData),
+            self.scrollbar_viewport_for(&ScrollbarRegion::PreviewSqliteData),
         )
     }
 }

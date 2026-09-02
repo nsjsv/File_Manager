@@ -18,7 +18,9 @@ mod animated_image;
 mod document;
 mod original_image;
 mod remote_cache;
+mod sqlite;
 pub(super) use original_image::PendingOriginalImagePreview;
+pub(crate) use sqlite::{SqlitePreviewState, SqliteTablesResizeDrag, SQLITE_DEFAULT_TABLES_WIDTH};
 #[cfg(test)]
 mod tests;
 mod text;
@@ -84,6 +86,12 @@ impl FileBrowser {
                         self.text_preview_document = None;
                         self.clear_audio_preview();
                         self.start_video_preview_playback(path.clone(), *duration)
+                    }
+                    PreviewContent::Sqlite(database) => {
+                        self.text_preview_document = None;
+                        self.clear_audio_preview();
+                        self.clear_video_preview();
+                        self.start_sqlite_preview(path.clone(), database)
                     }
                     _ => {
                         self.text_preview_document = None;
@@ -535,6 +543,7 @@ impl FileBrowser {
         self.cancel_document_preview();
         self.cancel_remote_preview_download();
         self.text_preview_document = None;
+        self.clear_sqlite_preview();
         self.clear_audio_preview();
         self.clear_video_preview();
         let preview = self.preview.take();

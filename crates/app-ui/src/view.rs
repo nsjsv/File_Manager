@@ -20,6 +20,7 @@ mod settings_group;
 mod settings_window;
 mod shortcut_settings;
 mod sidebar_panel;
+mod sqlite_preview_panel;
 mod tab_bar;
 mod tab_motion;
 mod text_preview_panel;

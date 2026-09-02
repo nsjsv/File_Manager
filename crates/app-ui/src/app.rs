@@ -34,7 +34,7 @@ mod path_suggestions;
 mod paths;
 mod persistence_feedback;
 mod pointer_interactions;
-mod preview_state;
+pub(crate) mod preview_state;
 mod preview_window_view;
 mod properties;
 mod remote_mounts;
@@ -92,6 +92,8 @@ use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::events::global_event_message;
 use crate::app::preview_state::PendingOriginalImagePreview;
+use crate::app::preview_state::SqlitePreviewState;
+use crate::app::preview_state::SqliteTablesResizeDrag;
 use crate::app::runtime::{
     desktop_activation_subscription, directory_watch_subscription, matugen_theme_subscription,
     sidebar_device_refresh_subscription, system_theme_command, wayland_file_dnd_subscription,
@@ -193,6 +195,9 @@ pub(crate) struct FileBrowser {
     remote_preview_download_generation: u64,
     text_preview_generation: u64,
     directory_load_generation: u64,
+    pub(crate) sqlite_preview: Option<SqlitePreviewState>,
+    sqlite_preview_generation: u64,
+    sqlite_tables_resize_drag: Option<SqliteTablesResizeDrag>,
     directory_load_cancel: Option<tokio_util::sync::CancellationToken>,
     next_directory_metadata_request_generation: u64,
     directory_metadata_in_flight: HashSet<DirectoryMetadataDemandKey>,
@@ -266,8 +271,8 @@ pub(crate) struct FileBrowser {
     pub(crate) options: ScanOptions,
     application_launch_request: ApplicationLaunchRequest,
     user_config: config::UserConfig,
-    pub(crate) preview_size_limit_mib_inputs: [String; 6],
-    pub(crate) preview_size_limit_mib_errors: [Option<String>; 6],
+    pub(crate) preview_size_limit_mib_inputs: [String; 7],
+    pub(crate) preview_size_limit_mib_errors: [Option<String>; 7],
     pub(crate) preview_directory_expand_levels_input: String,
     pub(crate) preview_directory_expand_levels_error: Option<String>,
     pub(crate) startup_custom_directory_input: String,
@@ -550,6 +555,9 @@ impl FileBrowser {
             next_directory_metadata_request_generation: 1,
             directory_metadata_in_flight: HashSet::new(),
             audio_preview: None,
+            sqlite_tables_resize_drag: None,
+            sqlite_preview: None,
+            sqlite_preview_generation: 0,
             video_preview: None,
             preview_size: default_preview_size(PreviewWindowProfile::Regular),
             text_preview_content_height: 0.0,
@@ -624,7 +632,7 @@ impl FileBrowser {
             preview_size_limit_mib_inputs: config::preview_size_limit_mib_inputs(
                 &user_config.preview_size_limits,
             ),
-            preview_size_limit_mib_errors: [const { None }; 6],
+            preview_size_limit_mib_errors: [const { None }; 7],
             preview_directory_expand_levels_input: user_config
                 .preview_directory_expand_levels
                 .to_string(),

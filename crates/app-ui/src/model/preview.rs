@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use file_core::{DirectoryEntry, FileKind};
 use iced::widget::{image, svg};
 
+use super::sqlite_preview::SqliteDatabasePreview;
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::document_preview::PagedDocumentPreview;
@@ -94,6 +95,7 @@ pub(crate) enum PreviewContent {
         entries: Vec<PreviewTreeEntry>,
     },
     PagedDocument(Box<PagedDocumentPreview>),
+    Sqlite(SqliteDatabasePreview),
     Image(ImagePreviewContent),
     AnimatedImage(AnimatedImagePreview),
     Audio {

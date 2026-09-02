@@ -67,6 +67,7 @@ mod selection_marquee;
 mod shortcuts;
 mod sidebar;
 mod sidebar_devices;
+mod sqlite_preview;
 mod startup_rendering;
 mod startup_trace;
 mod text_preview;

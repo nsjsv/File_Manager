@@ -227,6 +227,48 @@ pub(crate) fn enhanced_scrollbar<'a>(
         .into()
 }
 
+/// 双向（竖向 + 横向）增强滚动条：两个视觉 overlay 叠在 Scrollable 上。
+pub(crate) fn enhanced_scrollbar_both<'a>(
+    scrollable: impl Into<Element<'a, Message>>,
+    visibility: ScrollbarVisibility,
+    viewport: Option<ScrollbarViewport>,
+    base_width: f32,
+) -> Element<'a, Message> {
+    let max_width = base_width.max(SCROLLBAR_HOVER_WIDTH);
+    let base: Element<'a, Message> = scrollable.into();
+    let overlay = |axis| {
+        canvas::Canvas::new(ScrollbarOverlay {
+            visibility,
+            viewport,
+            axis,
+            base_width,
+        })
+    };
+    let vertical_overlay: Element<'a, Message> = container(
+        overlay(ScrollbarAxis::Vertical)
+            .width(Length::Fixed(max_width))
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(Horizontal::Right)
+    .into();
+    let horizontal_overlay: Element<'a, Message> = container(
+        overlay(ScrollbarAxis::Horizontal)
+            .width(Length::Fill)
+            .height(Length::Fixed(max_width)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(Vertical::Bottom)
+    .into();
+
+    Stack::with_children([base, vertical_overlay, horizontal_overlay])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
 #[derive(Debug)]
 struct ScrollbarOverlay {
     visibility: ScrollbarVisibility,

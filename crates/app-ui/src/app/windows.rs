@@ -599,11 +599,12 @@ impl FileBrowser {
         )
     }
 
-    // 文本预览使用标准窗口壳（标题栏 + 控制按钮）；媒体类内容保持悬浮 chrome。
+    // 文本与 SQLite 预览使用标准窗口壳（标题栏 + 控制按钮）；媒体类内容保持悬浮 chrome。
     pub(crate) fn preview_window_uses_window_chrome(&self) -> bool {
         matches!(
             self.preview,
             Some(PreviewState::Ready(PreviewContent::Text { .. }))
+                | Some(PreviewState::Ready(PreviewContent::Sqlite(_)))
         )
     }
 
@@ -647,6 +648,8 @@ impl FileBrowser {
 
     pub(super) fn close_preview_window(&mut self) -> Task<Message> {
         self.clear_preview();
+        self.forget_scrollbar_viewport(&ScrollbarRegion::PreviewSqliteTables);
+        self.forget_scrollbar_viewport(&ScrollbarRegion::PreviewSqliteData);
         self.pending_preview_resize = None;
         self.preview_window_drag_active = false;
         self.preview_window_pointer_y = None;

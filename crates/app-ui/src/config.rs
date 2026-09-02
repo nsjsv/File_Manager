@@ -48,6 +48,7 @@ pub(crate) const DEFAULT_PREVIEW_IMAGE_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_SIZE
 pub(crate) const DEFAULT_PREVIEW_VIDEO_SIZE_BYTES: u64 = 1024 * PREVIEW_FILE_SIZE_UNIT_BYTES;
 pub(crate) const DEFAULT_PREVIEW_AUDIO_SIZE_BYTES: u64 = 200 * PREVIEW_FILE_SIZE_UNIT_BYTES;
 pub(crate) const DEFAULT_PREVIEW_ARCHIVE_SIZE_BYTES: u64 = 25 * PREVIEW_FILE_SIZE_UNIT_BYTES;
+pub(crate) const DEFAULT_PREVIEW_SQLITE_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_SIZE_UNIT_BYTES;
 pub(crate) const DEFAULT_PREVIEW_DOCUMENT_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_SIZE_UNIT_BYTES;
 pub(crate) const MIN_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 0;
 pub(crate) const MAX_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 3;
@@ -259,16 +260,18 @@ pub(crate) enum PreviewFileSizeKind {
     Audio,
     Archive,
     Document,
+    Sqlite,
 }
 
 impl PreviewFileSizeKind {
-    pub(crate) const ALL: [PreviewFileSizeKind; 6] = [
+    pub(crate) const ALL: [PreviewFileSizeKind; 7] = [
         Self::Text,
         Self::Image,
         Self::Video,
         Self::Audio,
         Self::Archive,
         Self::Document,
+        Self::Sqlite,
     ];
 }
 
@@ -280,6 +283,7 @@ pub(crate) struct PreviewFileSizeLimits {
     pub(crate) audio_bytes: u64,
     pub(crate) archive_bytes: u64,
     pub(crate) document_bytes: u64,
+    pub(crate) sqlite_bytes: u64,
 }
 
 impl PreviewFileSizeLimits {
@@ -291,6 +295,7 @@ impl PreviewFileSizeLimits {
             audio_bytes: DEFAULT_PREVIEW_AUDIO_SIZE_BYTES,
             archive_bytes: DEFAULT_PREVIEW_ARCHIVE_SIZE_BYTES,
             document_bytes: DEFAULT_PREVIEW_DOCUMENT_SIZE_BYTES,
+            sqlite_bytes: DEFAULT_PREVIEW_SQLITE_SIZE_BYTES,
         }
     }
 
@@ -302,6 +307,7 @@ impl PreviewFileSizeLimits {
             PreviewFileSizeKind::Audio => self.audio_bytes,
             PreviewFileSizeKind::Archive => self.archive_bytes,
             PreviewFileSizeKind::Document => self.document_bytes,
+            PreviewFileSizeKind::Sqlite => self.sqlite_bytes,
         }
     }
 
@@ -313,6 +319,7 @@ impl PreviewFileSizeLimits {
             PreviewFileSizeKind::Audio => self.audio_bytes = bytes,
             PreviewFileSizeKind::Archive => self.archive_bytes = bytes,
             PreviewFileSizeKind::Document => self.document_bytes = bytes,
+            PreviewFileSizeKind::Sqlite => self.sqlite_bytes = bytes,
         }
     }
 
@@ -325,6 +332,7 @@ impl PreviewFileSizeLimits {
             audio_bytes: bytes,
             archive_bytes: bytes,
             document_bytes: bytes,
+            sqlite_bytes: bytes,
         }
     }
 }
@@ -491,7 +499,7 @@ pub(super) fn app_config_dir_path() -> Option<PathBuf> {
     dirs::config_dir().map(|path| path.join(APP_DIR_NAME))
 }
 
-pub(crate) fn preview_size_limit_mib_inputs(limits: &PreviewFileSizeLimits) -> [String; 6] {
+pub(crate) fn preview_size_limit_mib_inputs(limits: &PreviewFileSizeLimits) -> [String; 7] {
     PreviewFileSizeKind::ALL.map(|kind| preview_size_limit_mib(limits.limit(kind)).to_string())
 }
 

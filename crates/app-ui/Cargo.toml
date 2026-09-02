@@ -27,6 +27,7 @@ rodio = "0.22.2"
 rustix.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json.workspace = true
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 thumbnails = { path = "../thumbnails" }
 time.workspace = true
 tempfile.workspace = true
@@ -41,4 +42,3 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 chrono-tz = "0.10.4"
 iced_runtime = "0.14"
-rusqlite = { version = "0.32.1", features = ["bundled"] }

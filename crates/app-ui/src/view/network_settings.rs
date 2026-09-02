@@ -39,6 +39,7 @@ fn preview_size_limit_row(
         config::PreviewFileSizeKind::Audio => "Max Audio Preview",
         config::PreviewFileSizeKind::Archive => "Max Archive Preview",
         config::PreviewFileSizeKind::Document => "Max Document Preview",
+        config::PreviewFileSizeKind::Sqlite => "Max SQLite Preview",
     };
     let input = text_input("0", &browser.preview_size_limit_mib_inputs[kind_index])
         .on_input(move |value| Message::PreviewSizeLimitInputChanged(kind_index, value))

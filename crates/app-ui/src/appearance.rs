@@ -212,6 +212,17 @@ pub(crate) fn enhanced_horizontal_scrollbar_direction(
     ))
 }
 
+pub(crate) fn enhanced_both_scrollbar_direction(
+    visibility: ScrollbarVisibility,
+    width: f32,
+) -> scrollable::Direction {
+    let bar = auto_hide_scrollbar_properties(visibility, width.max(SCROLLBAR_HOVER_WIDTH));
+    scrollable::Direction::Both {
+        vertical: bar.clone(),
+        horizontal: bar,
+    }
+}
+
 fn auto_hide_scrollbar_properties(
     visibility: ScrollbarVisibility,
     width: f32,

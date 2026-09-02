@@ -405,6 +405,8 @@ pub(crate) fn smooth_scroll_id(region: &ScrollbarRegion) -> iced::widget::Id {
         ScrollbarRegion::PreviewDocument => iced::widget::Id::new("preview-document"),
         ScrollbarRegion::TextPreview => iced::widget::Id::new("text-preview"),
         ScrollbarRegion::MarkdownPreview => iced::widget::Id::new("markdown-preview"),
+        ScrollbarRegion::PreviewSqliteTables => iced::widget::Id::new("preview-sqlite-tables"),
+        ScrollbarRegion::PreviewSqliteData => iced::widget::Id::new("preview-sqlite-data"),
     }
 }
 

@@ -105,6 +105,8 @@ impl FileBrowser {
             }
             Message::PreviewLoaded(path, outcome) => self.accept_preview(path, outcome),
             Message::DocumentPreview(message) => self.handle_document_preview_message(message),
+            Message::SqlitePreview(message) => self.handle_sqlite_preview_message(message),
+            Message::SqliteTablesResizeStarted => self.start_sqlite_tables_resize_drag(),
             Message::RemotePreviewCache(message) => {
                 self.accept_remote_preview_cache_message(message)
             }
@@ -873,6 +875,12 @@ impl FileBrowser {
             }
             Message::SidebarScrolled => self.show_scrollbars_temporarily(Region::Sidebar),
             Message::SettingsScrolled => self.show_scrollbars_temporarily(Region::Settings),
+            Message::SqlitePreviewTablesScrolled => {
+                self.show_scrollbars_temporarily(Region::PreviewSqliteTables)
+            }
+            Message::SqlitePreviewDataScrolled => {
+                self.show_scrollbars_temporarily(Region::PreviewSqliteData)
+            }
             Message::PropertiesScrolled => self.show_scrollbars_temporarily(Region::Properties),
             Message::OpenWithApplicationsScrolled => {
                 self.show_scrollbars_temporarily(Region::OpenWithApplications)

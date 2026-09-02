@@ -112,6 +112,11 @@ pub(crate) use properties::{
     FilePropertiesRequest, FilePropertiesSnapshot, FilePropertiesState, FilePropertiesTargetSet,
     PermissionBatchOutcome, PermissionBatchPathFailure,
 };
+mod sqlite_preview;
+pub(crate) use sqlite_preview::{
+    SqlQueryOutcome, SqliteCellValue, SqliteDatabasePreview, SqlitePreviewMessage,
+    SqlitePreviewTab, SqliteTableData, SqliteTableSummary, SQLITE_ROW_LIMIT,
+};
 mod preview;
 pub(crate) use preview::{
     AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, PreviewContent,
@@ -198,6 +203,8 @@ pub(crate) enum ScrollbarRegion {
     PreviewDocument,
     TextPreview,
     MarkdownPreview,
+    PreviewSqliteTables,
+    PreviewSqliteData,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ScrollbarViewport {
@@ -332,6 +339,7 @@ pub(crate) enum Message {
     OpenTerminalFinished(Result<(), String>),
     PreviewLoaded(PathBuf, Result<PreviewContent, String>),
     DocumentPreview(DocumentPreviewMessage),
+    SqlitePreview(SqlitePreviewMessage),
     RemotePreviewCache(RemotePreviewCacheMessage),
     AnimatedImagePreviewLoaded(PathBuf, u64, Result<AnimatedImagePreview, String>),
     OriginalImagePreviewLoaded(
@@ -447,6 +455,7 @@ pub(crate) enum Message {
     SidebarBookmarkReleased,
     SidebarBookmarkDeleteRequested(PathBuf),
     SidebarResizeStarted,
+    SqliteTablesResizeStarted,
     SplitResizeStarted,
     CursorMoved {
         window: window::Id,
@@ -672,6 +681,8 @@ pub(crate) enum Message {
     ScrollbarAutoHideElapsed(u64),
     WindowChromeAnimationTick,
     PreviewWindowInitialChromeElapsed(u64),
+    SqlitePreviewTablesScrolled,
+    SqlitePreviewDataScrolled,
     SidebarScrolled,
     SettingsScrolled,
     PropertiesScrolled,

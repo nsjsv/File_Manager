@@ -40,6 +40,7 @@ impl FileBrowser {
             self.finish_sidebar_bookmark_drag(),
             self.finish_sidebar_resize_drag_command(),
             self.finish_column_resize_drag_command(),
+            self.finish_sqlite_tables_resize_drag(),
             self.finish_list_column_resize_drag_command(),
             self.finish_list_column_reorder_drag_command(),
             self.finish_split_resize(),
@@ -57,6 +58,8 @@ impl FileBrowser {
     ) -> Task<Message> {
         if self.preview_window == Some(window) {
             if self.preview_window_uses_window_chrome() {
+                self.cursor_position = position;
+                self.update_sqlite_tables_resize_drag(position);
                 return Task::none();
             }
             self.cancel_preview_window_initial_chrome_hide();

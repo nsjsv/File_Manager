@@ -23,6 +23,7 @@ const MAX_PREVIEW_VIDEO_BYTES_KEY: &str = "max_preview_video_bytes";
 const MAX_PREVIEW_AUDIO_BYTES_KEY: &str = "max_preview_audio_bytes";
 const MAX_PREVIEW_ARCHIVE_BYTES_KEY: &str = "max_preview_archive_bytes";
 const MAX_PREVIEW_DOCUMENT_BYTES_KEY: &str = "max_preview_document_bytes";
+const MAX_PREVIEW_SQLITE_BYTES_KEY: &str = "max_preview_sqlite_bytes";
 const PREVIEW_DIRECTORY_EXPAND_LEVELS_KEY: &str = "preview_directory_expand_levels";
 
 const PREVIEW_SIZE_LIMIT_KEYS: &[(&str, PreviewFileSizeKind)] = &[
@@ -35,6 +36,7 @@ const PREVIEW_SIZE_LIMIT_KEYS: &[(&str, PreviewFileSizeKind)] = &[
         MAX_PREVIEW_DOCUMENT_BYTES_KEY,
         PreviewFileSizeKind::Document,
     ),
+    (MAX_PREVIEW_SQLITE_BYTES_KEY, PreviewFileSizeKind::Sqlite),
 ];
 const SHOW_HIDDEN_FILES_KEY: &str = "show_hidden_files";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar_width";
