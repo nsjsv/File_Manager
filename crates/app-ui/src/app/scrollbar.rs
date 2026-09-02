@@ -92,6 +92,10 @@ impl FileBrowser {
         self.scrollbar.viewport_by_region.insert(region, viewport);
     }
 
+    pub(super) fn forget_scrollbar_viewport(&mut self, region: &ScrollbarRegion) {
+        self.scrollbar.viewport_by_region.remove(region);
+    }
+
     pub(super) fn show_scrollbars_temporarily(&mut self, region: ScrollbarRegion) -> Task<Message> {
         let scrollbar = &mut self.scrollbar;
         scrollbar.active_region = Some(region);

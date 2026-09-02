@@ -561,7 +561,7 @@ impl FileBrowser {
             .is_some_and(|pane| !pane.is_trash_view)
     }
 
-    fn entry_parent_directory(&self, path: &Path) -> PathBuf {
+    pub(in crate::app) fn entry_parent_directory(&self, path: &Path) -> PathBuf {
         path.parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.current_dir.clone())

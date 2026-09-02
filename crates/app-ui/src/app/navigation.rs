@@ -734,6 +734,7 @@ impl FileBrowser {
         self.last_activation_click = None;
         self.column_return_targets.clear();
         self.pending_keyboard_column_focus = None;
+        self.pending_view_switch_reveal = None;
         self.clear_preview();
         self.context_menu = None;
         self.renaming = None;

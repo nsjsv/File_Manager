@@ -199,12 +199,14 @@ impl FileBrowser {
         } else {
             Task::none()
         };
+        let view_switch_reveal = self.complete_pending_view_switch_reveal(&loaded_path);
         let command = self.focus_created_entry_for_rename();
         self.sync_active_tab_state();
         self.resort_size_sorted_list_panes();
         Task::batch([
             pending_keyboard_focus,
             expansion_follow,
+            view_switch_reveal,
             command,
             self.schedule_visible_list_directory_summaries_for_pane(pane_id),
             self.schedule_visible_directory_metadata(pane_id, None),

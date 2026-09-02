@@ -5,12 +5,17 @@ use file_core::FileKind;
 use iced::Task;
 
 use super::FileBrowser;
+use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::commands::load_expanded_directory_command;
 use crate::config::normalize_visible_column_count;
+use crate::list_view::{LIST_HEADER_HEIGHT, LIST_ROW_HEIGHT};
 use crate::model::{
     BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
     ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, ListExpansionFollowSessionId, Message,
+    ScrollbarRegion,
 };
+use crate::thumbnail_cache::ColumnViewport;
+use crate::virtual_range::vertical_scroll_delta_to_reveal;
 
 const LIST_DIRECTORY_ANIMATION_STEP: f32 = 0.18;
 
@@ -106,13 +111,101 @@ impl FileBrowser {
         } else {
             Task::none()
         };
+        let view_switch_reveal = self.reveal_selected_after_view_switch();
         Task::batch([
             transition_command,
             list_directory_summary_command,
+            view_switch_reveal,
             self.persist_user_preferences_command(),
             self.schedule_thumbnail_refresh(),
             self.request_browser_session_save(),
         ])
+    }
+
+    /// 视图切换后让主选中项在新视图中可见；切到多栏时同时横向滚到选中列。
+    fn reveal_selected_after_view_switch(&mut self) -> Task<Message> {
+        self.pending_view_switch_reveal = None;
+        let Some(path) = self.selected.clone() else {
+            return Task::none();
+        };
+        let pane_id = self.active_pane_id();
+        let vertical = match self.view_switch_reveal_scroll(&path) {
+            Some(task) => task,
+            // 选中项所在目录仍在加载：挂起等待加载完成后补聚焦
+            None => {
+                self.pending_view_switch_reveal = Some((pane_id, path.clone()));
+                Task::none()
+            }
+        };
+        let horizontal = if self.view_mode == BrowserViewMode::Columns {
+            self.focus_column_containing_path(&path)
+        } else {
+            Task::none()
+        };
+        Task::batch([vertical, horizontal])
+    }
+
+    /// 主选中项在当前视图中的纵向定位任务；目录内容尚未就绪时返回 None。
+    pub(super) fn view_switch_reveal_scroll(&self, path: &Path) -> Option<Task<Message>> {
+        let pane_id = self.active_pane_id();
+        let (region, target_y) = match self.view_mode {
+            BrowserViewMode::Icons => {
+                let pane = self.pane_view(pane_id)?;
+                let viewport = pane.icon_grid_viewport;
+                let delta = self
+                    .icon_grid_layout_for_pane(pane)
+                    .scroll_delta_to_reveal(viewport, path);
+                (
+                    ScrollbarRegion::PaneIcons(pane_id),
+                    viewport.offset_y + delta,
+                )
+            }
+            BrowserViewMode::List => {
+                let (item_offset, item_height) =
+                    crate::visible_entries::list_entry_vertical_bounds(
+                        &self.entries,
+                        &self.expanded_directories,
+                        path,
+                        LIST_ROW_HEIGHT,
+                        LIST_HEADER_HEIGHT,
+                    )?;
+                let viewport = self.column_viewports.get(&self.current_dir);
+                (
+                    ScrollbarRegion::PaneList(pane_id),
+                    reveal_target_y(viewport, item_offset, item_height),
+                )
+            }
+            BrowserViewMode::Columns => {
+                let directory = self.entry_parent_directory(path);
+                let entries = if directory == self.current_dir {
+                    self.entries.as_ref()
+                } else {
+                    self.expanded_directories
+                        .get(&directory)?
+                        .entries
+                        .as_slice()
+                };
+                let row_index = entries.iter().position(|entry| entry.path == path)?;
+                let item_offset = crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
+                    + row_index as f32 * crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT;
+                let viewport = self.column_viewports.get(&directory);
+                (
+                    ScrollbarRegion::Column { pane_id, directory },
+                    reveal_target_y(
+                        viewport,
+                        item_offset,
+                        crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+                    ),
+                )
+            }
+        };
+        Some(iced::widget::operation::scroll_to(
+            smooth_scroll_id(&region),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(target_y.max(0.0)),
+            },
+        ))
     }
 
     pub(super) fn retain_direct_entry_selection(&mut self) {
@@ -413,7 +506,14 @@ impl FileBrowser {
             &self.entries,
             &self.expanded_directories,
         ) {
-            self.select_path(target_selection);
+            self.select_path(target_selection.clone());
+            match self.view_switch_reveal_scroll(&target_selection) {
+                Some(task) => return task,
+                None => {
+                    self.pending_view_switch_reveal =
+                        Some((self.active_pane_id(), target_selection));
+                }
+            }
         }
         Task::none()
     }
@@ -643,6 +743,47 @@ impl FileBrowser {
                 Task::none()
             }
         }
+    }
+
+    /// 目录加载完成后补做视图切换聚焦：匹配挂起的选中项时纵向定位一次。
+    pub(super) fn complete_pending_view_switch_reveal(
+        &mut self,
+        loaded_path: &Path,
+    ) -> Task<Message> {
+        let Some((pane_id, path)) = self.pending_view_switch_reveal.clone() else {
+            return Task::none();
+        };
+        if pane_id != self.active_pane_id() || path.parent() != Some(loaded_path) {
+            return Task::none();
+        }
+        self.pending_view_switch_reveal = None;
+        if self.selected.as_deref() != Some(path.as_path()) {
+            return Task::none();
+        }
+        match self.view_switch_reveal_scroll(&path) {
+            Some(task) => task,
+            // 链式展开仍在继续：保留等待最后一环加载
+            None => {
+                self.pending_view_switch_reveal = Some((pane_id, path));
+                Task::none()
+            }
+        }
+    }
+}
+
+/// 视口已有记录时做最小滚动揭示；从未记录过视口时把选中项滚到顶部可见。
+fn reveal_target_y(viewport: Option<&ColumnViewport>, item_offset: f32, item_height: f32) -> f32 {
+    match viewport {
+        Some(viewport) => {
+            viewport.offset_y
+                + vertical_scroll_delta_to_reveal(
+                    viewport.offset_y,
+                    viewport.height,
+                    item_offset,
+                    item_height,
+                )
+        }
+        None => item_offset,
     }
 }
 

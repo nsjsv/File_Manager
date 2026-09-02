@@ -109,7 +109,7 @@ impl MosScrollState {
             || self.filter.pending().magnitude() > MOS_SCROLL_DEAD_ZONE
     }
 
-    fn stop(&mut self) {
+    pub(super) fn stop(&mut self) {
         *self = Self::default();
     }
 }

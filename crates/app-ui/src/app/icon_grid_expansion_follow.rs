@@ -78,8 +78,14 @@ impl FileBrowser {
                         state.set_selection_directory(parent);
                     }
                 }
-                self.select_path(path);
-                Task::none()
+                self.select_path(path.clone());
+                match self.view_switch_reveal_scroll(&path) {
+                    Some(task) => task,
+                    None => {
+                        self.pending_view_switch_reveal = Some((self.active_pane_id(), path));
+                        Task::none()
+                    }
+                }
             }
         }
     }

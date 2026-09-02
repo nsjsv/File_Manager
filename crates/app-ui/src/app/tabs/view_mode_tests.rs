@@ -800,3 +800,126 @@ fn activating_split_panes_preserves_each_pane_view_mode() {
         .pane_by_id(BrowserPaneId(1))
         .is_some_and(|pane| pane.view_mode == BrowserViewMode::Columns));
 }
+
+#[test]
+fn switching_from_columns_to_list_reveals_selected_entry_immediately() {
+    let root = PathBuf::from("/workspace");
+    let notes = root.join("notes.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![test_entry(notes.clone(), FileKind::File)].into();
+    browser.selected = Some(notes.clone());
+    browser.selected_paths = HashSet::from([notes.clone()]);
+    browser.view_mode = BrowserViewMode::Columns;
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+
+    assert_eq!(browser.pending_view_switch_reveal, None);
+    assert!(browser.view_switch_reveal_scroll(&notes).is_some());
+}
+
+#[test]
+fn switching_from_list_to_columns_reveals_selected_entry_immediately() {
+    let root = PathBuf::from("/workspace");
+    let notes = root.join("notes.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![test_entry(notes.clone(), FileKind::File)].into();
+    browser.selected = Some(notes.clone());
+    browser.selected_paths = HashSet::from([notes.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+
+    assert_eq!(browser.pending_view_switch_reveal, None);
+    assert!(browser.view_switch_reveal_scroll(&notes).is_some());
+}
+
+#[test]
+fn switching_from_list_to_icons_reveals_selected_entry_immediately() {
+    let root = PathBuf::from("/workspace");
+    let notes = root.join("notes.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![test_entry(notes.clone(), FileKind::File)].into();
+    browser.selected = Some(notes.clone());
+    browser.selected_paths = HashSet::from([notes.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Icons));
+
+    assert_eq!(browser.pending_view_switch_reveal, None);
+    assert!(browser.view_switch_reveal_scroll(&notes).is_some());
+}
+
+#[test]
+fn switching_with_loading_directory_parks_pending_reveal() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let notes = project.join("notes.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root.clone();
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)].into();
+    browser.selected = Some(notes.clone());
+    browser.selected_paths = HashSet::from([notes.clone()]);
+    browser.view_mode = BrowserViewMode::List;
+    let mut loading = loaded_directory(vec![]);
+    loading.status = ExpandedDirectoryStatus::Loading;
+    browser
+        .expanded_directories
+        .insert(project.clone(), loading);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+
+    assert_eq!(
+        browser.pending_view_switch_reveal,
+        Some((BrowserPaneId::PRIMARY, notes.clone()))
+    );
+
+    browser.expanded_directories.insert(
+        project.clone(),
+        loaded_directory(vec![test_entry(notes.clone(), FileKind::File)]),
+    );
+    drop(browser.complete_pending_view_switch_reveal(&project));
+
+    assert_eq!(browser.pending_view_switch_reveal, None);
+}
+
+#[test]
+fn pending_view_switch_reveal_discarded_when_selection_changes() {
+    let root = PathBuf::from("/workspace");
+    let project = root.join("project");
+    let notes = project.join("notes.txt");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.entries = vec![test_entry(project.clone(), FileKind::Directory)].into();
+    browser.selected = Some(notes.clone());
+    browser.selected_paths = HashSet::from([notes]);
+    browser.view_mode = BrowserViewMode::List;
+    let mut loading = loaded_directory(vec![]);
+    loading.status = ExpandedDirectoryStatus::Loading;
+    browser
+        .expanded_directories
+        .insert(project.clone(), loading);
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::Columns));
+    assert!(browser.pending_view_switch_reveal.is_some());
+
+    browser.selected = None;
+    browser.selected_paths.clear();
+    drop(browser.complete_pending_view_switch_reveal(&project));
+
+    assert_eq!(browser.pending_view_switch_reveal, None);
+}
+
+#[test]
+fn switching_without_selection_skips_pending_reveal() {
+    let root = PathBuf::from("/workspace");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.current_dir = root;
+    browser.view_mode = BrowserViewMode::Columns;
+
+    drop(browser.select_browser_view_mode(BrowserPaneId::PRIMARY, BrowserViewMode::List));
+
+    assert_eq!(browser.pending_view_switch_reveal, None);
+}

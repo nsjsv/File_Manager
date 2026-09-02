@@ -1,12 +1,14 @@
 use iced::advanced::widget as advanced_widget;
 use iced::advanced::widget::operation::{Focusable, Operation, Outcome};
+use iced::widget::scrollable;
 use iced::{event, mouse, window, Rectangle, Size, Task};
 
 use super::FileBrowser;
 use crate::app::runtime::preview_window_initial_chrome_command;
+use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::model::{
-    Message, PreviewContent, PreviewSize, PreviewState, PreviewWindowProfile, SettingsCategory,
-    WINDOW_TOP_BAR_HEIGHT,
+    Message, PreviewContent, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarRegion,
+    SettingsCategory, WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::view::{address_input_id, rename_input_id};
 
@@ -371,7 +373,15 @@ impl FileBrowser {
             self.invalidate_startup_directory_validation();
         }
         self.selected_settings_category = category;
-        match category {
+        // 六个分类共用 ScrollbarRegion::Settings 的 scrollable 状态，切页必须归零，
+        // 否则上一页的滚动偏移、平滑滚动动画和 thumb 几何会泄漏到新页。
+        self.smooth_scroll.stop();
+        self.forget_scrollbar_viewport(&ScrollbarRegion::Settings);
+        let reset_scroll = iced::widget::operation::scroll_to(
+            smooth_scroll_id(&ScrollbarRegion::Settings),
+            scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+        );
+        let refresh = match category {
             SettingsCategory::Search => Task::batch([
                 self.refresh_search_service_status(),
                 self.refresh_search_path_configuration(),
@@ -381,7 +391,8 @@ impl FileBrowser {
             | SettingsCategory::Appearance
             | SettingsCategory::Files
             | SettingsCategory::Shortcuts => Task::none(),
-        }
+        };
+        Task::batch([reset_scroll, refresh])
     }
 
     pub(super) fn ensure_settings_window(&mut self) -> Task<Message> {
