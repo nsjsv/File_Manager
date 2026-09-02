@@ -496,60 +496,47 @@ fn color_scheme_family_card(
     family: ColorSchemeFamily,
     mode: crate::matugen_theme::AppearanceMode,
     selected: ColorSchemePreset,
-) -> Button<'static, Message> {
+) -> Element<'static, Message> {
     let preview_preset = if selected.family() == family {
         browser.user_config().color_scheme
     } else {
         family.default_preset()
     };
     let is_selected = selected.family() == family;
-    let has_styles = family.styles(mode).len() > 1;
-    let check: Element<'static, Message> = if is_selected {
-        super::themed_icon(IconSymbol::Check, IconTone::Selected, 13.0).into()
-    } else {
-        Space::new()
-            .width(Length::Fixed(13.0))
-            .height(Length::Fixed(13.0))
-            .into()
-    };
-    let disclosure: Element<'static, Message> = if has_styles {
-        rotated_chevron_right_view(
-            if browser.expanded_color_scheme_family == Some(family) {
-                90.0
-            } else {
-                0.0
-            },
-            13.0,
-        )
-        .style(super::icon_tone_style(IconTone::Normal))
-        .into()
-    } else {
-        Space::new()
-            .width(Length::Fixed(13.0))
-            .height(Length::Fixed(13.0))
-            .into()
-    };
-    let indicators = row![check, disclosure]
-        .spacing(5)
-        .height(Length::Fixed(14.0))
+    // 展开箭头放在标题右侧，整组居中；单样式家族不渲染箭头。
+    let mut title = row![localized_text(family.label()).size(11)]
+        .spacing(4)
         .align_y(Alignment::Center);
-
-    button(
-        column![
-            theme_preview(browser.theme_preview_colors(preview_preset), 48.0),
-            container(localized_text(family.label()).size(11))
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            indicators,
-        ]
-        .spacing(6)
-        .align_x(Alignment::Center),
-    )
-    .on_press(Message::ColorSchemeFamilySelected(family))
-    .width(Length::FillPortion(1))
-    .height(Length::Fixed(112.0))
-    .padding(8)
-    .style(segmented_choice_button_style(is_selected))
+    if family.styles(mode).len() > 1 {
+        let expanded = browser.expanded_color_scheme_family == Some(family);
+        title = title.push(
+            rotated_chevron_right_view(if expanded { 90.0 } else { 0.0 }, 13.0)
+                .style(super::icon_tone_style(IconTone::Normal)),
+        );
+    }
+    // 列必须占满按钮宽度，align_x 居中才以卡片中线为基准。
+    let mut content = column![
+        theme_preview(browser.theme_preview_colors(preview_preset), 48.0),
+        title,
+    ]
+    .spacing(6)
+    .align_x(Alignment::Center)
+    .width(Length::Fill);
+    // 勾居中放在卡片正下方；未选中不渲染勾，标题保持居中。
+    if is_selected {
+        content = content.push(super::themed_icon(
+            IconSymbol::Check,
+            IconTone::Selected,
+            13.0,
+        ));
+    }
+    button(content)
+        .on_press(Message::ColorSchemeFamilySelected(family))
+        .width(Length::FillPortion(1))
+        .height(Length::Fixed(112.0))
+        .padding(8)
+        .style(segmented_choice_button_style(is_selected))
+        .into()
 }
 
 fn color_scheme_style_row(
@@ -561,30 +548,26 @@ fn color_scheme_style_row(
     let mut styles = row![].spacing(6).width(Length::Fill);
     for preset in family.styles(mode) {
         let is_selected = selected == *preset;
-        let check: Element<'static, Message> = if is_selected {
-            super::themed_icon(IconSymbol::Check, IconTone::Selected, 12.0).into()
-        } else {
-            Space::new()
-                .width(Length::Fixed(12.0))
-                .height(Length::Fixed(12.0))
-                .into()
-        };
+        // 勾放在标题右侧，整组居中；未选中不渲染勾。
+        let mut label = row![localized_text(preset.style_label(mode)).size(10)]
+            .spacing(4)
+            .align_y(Alignment::Center);
+        if is_selected {
+            label = label.push(super::themed_icon(
+                IconSymbol::Check,
+                IconTone::Selected,
+                12.0,
+            ));
+        }
         styles = styles.push(
             button(
                 column![
                     theme_preview(browser.theme_preview_colors(*preset), 28.0),
-                    row![
-                        container(localized_text(preset.style_label(mode)).size(10))
-                            .width(Length::Fill)
-                            .center_x(Length::Fill),
-                        check,
-                    ]
-                    .spacing(4)
-                    .align_y(Alignment::Center)
-                    .width(Length::Fill),
+                    label,
                 ]
                 .spacing(4)
-                .align_x(Alignment::Center),
+                .align_x(Alignment::Center)
+                .width(Length::Fill),
             )
             .on_press(Message::ColorSchemePresetSelected(*preset))
             .width(Length::FillPortion(1))

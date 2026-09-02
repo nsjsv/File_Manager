@@ -588,7 +588,8 @@ impl TrashTrackingPlan {
 
     fn find_committed_entry(self) -> Result<TrashRestoreEntry, String> {
         let stage = std::time::Instant::now();
-        主题选择勾不在中间，优化展开箭头显示
+        let catalog =
+            discover_trash_locations_from_mountinfo(&self.data_home, self.uid, &self.mountinfo)
                 .map_err(|error| {
                     format!("the item was moved to Trash, but refresh failed: {error}")
                 })?;
