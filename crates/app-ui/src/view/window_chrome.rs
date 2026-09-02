@@ -1,6 +1,6 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, container, mouse_area, tooltip, Column, Row, Space, Stack};
-use iced::{mouse, window, Element, Length};
+use iced::{mouse, window, Background, Element, Length};
 
 use crate::appearance::{
     context_menu_style, floating_window_close_button_style, floating_window_control_button_style,
@@ -8,6 +8,7 @@ use crate::appearance::{
     window_title_bar_style, window_top_bar_style,
 };
 use crate::icons::IconSymbol;
+use crate::matugen_theme::ui_colors;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, Message, PreviewWindowChromeState, SplitAxis,
     WindowChromeLayout, WindowControlKind, WindowControlSide, WindowControlsConfig,
@@ -253,11 +254,17 @@ pub(crate) fn auxiliary_window_content<'a>(
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
+    preview_pin: Option<bool>,
 ) -> Element<'a, Message> {
     match config.layout() {
-        WindowChromeLayout::IntegratedNavigation => {
-            window_content_with_top_bar(integrated_title, content, config, window, frame_state)
-        }
+        WindowChromeLayout::IntegratedNavigation => window_content_with_top_bar(
+            integrated_title,
+            content,
+            config,
+            window,
+            frame_state,
+            preview_pin,
+        ),
         WindowChromeLayout::SeparateTitleBar => separate_window_content_with_height(
             separate_title,
             content,
@@ -265,16 +272,17 @@ pub(crate) fn auxiliary_window_content<'a>(
             window,
             frame_state,
             WINDOW_TOP_BAR_HEIGHT,
+            preview_pin,
         ),
     }
 }
-
 pub(crate) fn floating_preview_window_content<'a>(
     content: Element<'a, Message>,
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
     chrome_opacity: f32,
+    pinned: bool,
 ) -> Element<'a, Message> {
     let chrome_opacity = chrome_opacity.clamp(0.0, 1.0);
     let top_bar: Element<'a, Message> = if chrome_opacity > f32::EPSILON {
@@ -293,6 +301,12 @@ pub(crate) fn floating_preview_window_content<'a>(
                 window,
                 frame_state,
                 chrome_opacity,
+            ))
+            .push(preview_pin_button(
+                pinned,
+                WindowControlPresentation::Floating {
+                    opacity: chrome_opacity,
+                },
             ))
             .push(Space::new().width(Length::Fill))
             .push(floating_window_control_group(
@@ -333,10 +347,17 @@ fn window_content_with_top_bar<'a>(
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
+    preview_pin: Option<bool>,
 ) -> Element<'a, Message> {
     Column::new()
         .spacing(0)
-        .push(window_top_bar(title, config, window, frame_state))
+        .push(window_top_bar(
+            title,
+            config,
+            window,
+            frame_state,
+            preview_pin,
+        ))
         .push(content)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -348,13 +369,14 @@ fn window_top_bar(
     config: &WindowControlsConfig,
     window: window::Id,
     frame_state: WindowFrameState,
+    preview_pin: Option<bool>,
 ) -> Element<'static, Message> {
     let drag_surface = container(Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(WINDOW_TOP_BAR_HEIGHT))
         .style(window_top_bar_style);
     let drag_surface = window_drag_region(drag_surface.into(), window);
-    let content = Row::new()
+    let mut content = Row::new()
         .spacing(10)
         .padding([8, 12])
         .align_y(iced::Alignment::Center)
@@ -363,7 +385,15 @@ fn window_top_bar(
             WindowControlSide::Left,
             window,
             frame_state,
-        ))
+        ));
+    // 固定按钮放标题旁边：紧跟左侧控制组，位于标题左侧。
+    if let Some(pinned) = preview_pin {
+        content = content.push(preview_pin_button(
+            pinned,
+            WindowControlPresentation::Standard,
+        ));
+    }
+    let content = content
         .push(localized_text(title).size(16))
         .push(Space::new().width(Length::Fill))
         .push(window_control_group(
@@ -395,6 +425,7 @@ pub(crate) fn separate_window_content<'a>(
         window,
         frame_state,
         WINDOW_TITLE_BAR_HEIGHT,
+        None,
     )
 }
 
@@ -405,6 +436,7 @@ fn separate_window_content_with_height<'a>(
     window: window::Id,
     frame_state: WindowFrameState,
     height: f32,
+    preview_pin: Option<bool>,
 ) -> Element<'a, Message> {
     Column::new()
         .spacing(0)
@@ -414,6 +446,7 @@ fn separate_window_content_with_height<'a>(
             window,
             frame_state,
             height,
+            preview_pin,
         ))
         .push(content)
         .width(Length::Fill)
@@ -427,6 +460,7 @@ fn separate_window_title_bar(
     window: window::Id,
     frame_state: WindowFrameState,
     height: f32,
+    preview_pin: Option<bool>,
 ) -> Element<'static, Message> {
     let drag_surface = container(Space::new())
         .width(Length::Fill)
@@ -438,7 +472,7 @@ fn separate_window_title_bar(
         .center_x(Length::Fill)
         .center_y(Length::Fixed(height))
         .clip(true);
-    let controls = Row::new()
+    let mut controls = Row::new()
         .spacing(0)
         .padding([4, 4])
         .align_y(iced::Alignment::Center)
@@ -447,7 +481,15 @@ fn separate_window_title_bar(
             WindowControlSide::Left,
             window,
             frame_state,
-        ))
+        ));
+    // 标题居中覆盖；固定按钮紧跟左侧控制组，落在标题左侧。
+    if let Some(pinned) = preview_pin {
+        controls = controls.push(preview_pin_button(
+            pinned,
+            WindowControlPresentation::Standard,
+        ));
+    }
+    let controls = controls
         .push(Space::new().width(Length::Fill))
         .push(window_control_group(
             config,
@@ -462,6 +504,53 @@ fn separate_window_title_bar(
         .width(Length::Fill)
         .height(Length::Fixed(height))
         .into()
+}
+
+// 预览固定按钮：固定时用主题 primary 高亮，点击发送 PreviewWindowPinToggled。
+fn preview_pin_button(
+    pinned: bool,
+    presentation: WindowControlPresentation,
+) -> Element<'static, Message> {
+    let (base_style, opacity): (fn(&iced::Theme, button::Status) -> button::Style, f32) =
+        match presentation {
+            WindowControlPresentation::Floating { opacity } => (
+                floating_window_control_button_style,
+                opacity.clamp(0.0, 1.0),
+            ),
+            WindowControlPresentation::Standard => (window_control_button_style, 1.0),
+        };
+    let control = button(
+        themed_icon(IconSymbol::Pin, IconTone::Normal, WINDOW_CONTROL_ICON_SIZE).opacity(opacity),
+    )
+    .on_press(Message::PreviewWindowPinToggled)
+    .padding([
+        WINDOW_CONTROL_VERTICAL_PADDING,
+        WINDOW_CONTROL_HORIZONTAL_PADDING,
+    ])
+    .width(Length::Fixed(WINDOW_CONTROL_WIDTH))
+    .height(Length::Fixed(WINDOW_CONTROL_HEIGHT))
+    .style(move |theme, status| {
+        let mut style = base_style(theme, status);
+        if pinned {
+            let colors = ui_colors(theme);
+            style.background = Some(Background::Color(colors.primary));
+            style.text_color = colors.on_primary;
+        }
+        style.background = style
+            .background
+            .map(|background| background.scale_alpha(opacity));
+        style.text_color = style.text_color.scale_alpha(opacity);
+        style
+    });
+
+    tooltip(
+        control,
+        container(readable_text(if pinned { "Unpin" } else { "Pin" }).size(11))
+            .padding([5, 7])
+            .style(context_menu_style),
+        tooltip::Position::Bottom,
+    )
+    .into()
 }
 
 pub(crate) fn window_resize_frame<'a>(

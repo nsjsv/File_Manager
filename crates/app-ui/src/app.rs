@@ -207,6 +207,10 @@ pub(crate) struct FileBrowser {
     pub(crate) text_preview_content_height: f32,
     pending_preview_resize: Option<PreviewSize>,
     preview_window_profile: PreviewWindowProfile,
+    preview_window_pinned: bool,
+    // 当前预览窗口展示的目标路径；Ready 态的目录/归档/原图变体不携带路径，
+    // 空格 toggle 需要它判断“预览的仍是当前选中项”。
+    preview_shown_path: Option<PathBuf>,
     preview_window_chrome: PreviewWindowChromeState,
     preview_window_bottom_controls: PreviewWindowChromeState,
     preview_window_drag_active: bool,
@@ -563,6 +567,8 @@ impl FileBrowser {
             text_preview_content_height: 0.0,
             pending_preview_resize: None,
             preview_window_profile: PreviewWindowProfile::Regular,
+            preview_window_pinned: false,
+            preview_shown_path: None,
             preview_window_chrome: PreviewWindowChromeState::default(),
             preview_window_bottom_controls: PreviewWindowChromeState::default(),
             preview_window_drag_active: false,
@@ -899,6 +905,7 @@ impl FileBrowser {
         window: window::Id,
         integrated_title: &'static str,
         content: Element<'a, Message>,
+        preview_pin: Option<bool>,
     ) -> Element<'a, Message> {
         let frame_state = self.window_frame_state(window);
         let content = auxiliary_window_content(
@@ -908,6 +915,7 @@ impl FileBrowser {
             &self.user_config.window_controls,
             window,
             frame_state,
+            preview_pin,
         );
         window_resize_frame(content, window, frame_state)
     }
@@ -921,12 +929,17 @@ impl FileBrowser {
                 self.scrollbar_visibility_for(&ScrollbarRegion::Properties),
                 self.scrollbar_viewport_for(&ScrollbarRegion::Properties),
             );
-            self.view_with_window_chrome(window, "Properties", content)
+            self.view_with_window_chrome(window, "Properties", content, None)
         } else if self.preview_window == Some(window) {
             let content =
                 self.preview_window_content(self.preview_window_bottom_controls.opacity());
             if self.preview_window_uses_window_chrome() {
-                self.view_with_window_chrome(window, "Preview", content)
+                self.view_with_window_chrome(
+                    window,
+                    "Preview",
+                    content,
+                    Some(self.preview_window_pinned),
+                )
             } else {
                 let frame_state = self.window_frame_state(window);
                 let content = floating_preview_window_content(
@@ -935,6 +948,7 @@ impl FileBrowser {
                     window,
                     frame_state,
                     self.preview_window_chrome.opacity(),
+                    self.preview_window_pinned,
                 );
                 window_resize_frame(content, window, frame_state)
             }

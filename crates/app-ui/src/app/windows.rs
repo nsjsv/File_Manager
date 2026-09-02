@@ -484,6 +484,11 @@ impl FileBrowser {
         }
     }
 
+    pub(super) fn toggle_preview_window_pin(&mut self) -> Task<Message> {
+        self.preview_window_pinned = !self.preview_window_pinned;
+        Task::none()
+    }
+
     pub(super) fn open_image_preview_window_for_dimensions(
         &mut self,
         width: u32,
@@ -647,6 +652,9 @@ impl FileBrowser {
     }
 
     pub(super) fn close_preview_window(&mut self) -> Task<Message> {
+        // 先复位固定，保证 clear_preview 的固定守卫不会跳过内容清理。
+        self.preview_window_pinned = false;
+        self.preview_shown_path = None;
         self.clear_preview();
         self.forget_scrollbar_viewport(&ScrollbarRegion::PreviewSqliteTables);
         self.forget_scrollbar_viewport(&ScrollbarRegion::PreviewSqliteData);
@@ -692,7 +700,7 @@ impl FileBrowser {
         if window == self.main_window {
             self.search_history_interaction.reset();
         }
-        if self.preview_window == Some(window) {
+        if self.preview_window == Some(window) && !self.preview_window_pinned {
             self.close_preview_window()
         } else {
             Task::none()
@@ -777,7 +785,7 @@ impl FileBrowser {
             _ => Task::none(),
         };
 
-        if self.preview_window.is_some() {
+        if self.preview_window.is_some() && !self.preview_window_pinned {
             Task::batch([self.close_preview_window(), pointer_command])
         } else {
             pointer_command

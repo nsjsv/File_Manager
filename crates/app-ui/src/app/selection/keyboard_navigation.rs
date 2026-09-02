@@ -325,7 +325,12 @@ impl FileBrowser {
     }
 
     pub(crate) fn request_preview(&mut self) -> Task<Message> {
-        if self.preview.is_some() {
+        // 鼠标未悬停在文件条目上（空白处）时，空格不触发预览。
+        if self.hovered_entry.is_none() {
+            return Task::none();
+        }
+        if self.preview.is_some() && self.preview_shown_path.as_deref() == self.selected.as_deref()
+        {
             self.context_menu = None;
             return self.close_preview_window();
         }
@@ -421,25 +426,28 @@ impl FileBrowser {
 
     fn open_preview(&mut self) -> Task<Message> {
         self.context_menu = None;
+        // 内部“先关后开”会复位固定状态；切换预览内容时必须保留用户设定的固定。
+        let pinned = self.preview_window_pinned;
         let close_window_command = self.close_preview_window();
 
+        // 悬停在条目上但没有选中项：无操作。
         let Some(path) = self.selected.clone() else {
-            let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
-            self.clear_preview();
-            self.preview = Some(PreviewState::Error("Select an item to preview".to_owned()));
-            return close_window_command.chain(window_command);
+            return Task::none();
         };
 
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
+        self.preview_shown_path = Some(path.clone());
         if kind == FileKind::File {
             if let Some(command) = self.reject_oversized_file_preview(&path) {
                 return close_window_command.chain(command);
             }
         }
         if kind == FileKind::File && self.path_is_remote_mount(&path) {
+            self.preview_window_pinned = pinned;
             return close_window_command.chain(self.start_remote_preview_download(path));
         }
 
+        self.preview_window_pinned = pinned;
         close_window_command.chain(self.open_preview_for_resolved_path(path, kind))
     }
 

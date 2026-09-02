@@ -538,6 +538,11 @@ impl FileBrowser {
     }
 
     pub(super) fn clear_preview(&mut self) {
+        // 固定生效期间，主窗口的点击/框选等交互不得清空预览内容。
+        // 打开预览的流程总是先经 close_preview_window（preview 已为 None），不受此守卫影响。
+        if self.preview_window_pinned && self.preview_window.is_some() && self.preview.is_some() {
+            return;
+        }
         self.invalidate_animated_image_preview();
         self.invalidate_original_image_preview();
         self.cancel_document_preview();

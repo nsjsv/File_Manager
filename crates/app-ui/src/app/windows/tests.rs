@@ -1208,3 +1208,133 @@ fn video_preview_size_fits_large_portrait_frame_to_max_height() {
     assert_close(size.height, max_size.height);
     assert_close(size.height / size.width, 1280.0 / 720.0);
 }
+
+#[test]
+fn pinned_preview_survives_main_window_pointer_press() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let preview_window = window::Id::unique();
+    browser.preview_window = Some(preview_window);
+    browser.preview_window_pinned = true;
+
+    drop(browser.update(Message::WindowPointerPressed {
+        window: browser.main_window,
+        button: iced::mouse::Button::Left,
+        status: iced::event::Status::Ignored,
+    }));
+
+    assert_eq!(browser.preview_window, Some(preview_window));
+    assert!(browser.preview_window_pinned);
+}
+
+#[test]
+fn unpinned_preview_closes_on_main_window_pointer_press() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.preview_window = Some(window::Id::unique());
+
+    drop(browser.update(Message::WindowPointerPressed {
+        window: browser.main_window,
+        button: iced::mouse::Button::Left,
+        status: iced::event::Status::Ignored,
+    }));
+
+    assert!(browser.preview_window.is_none());
+}
+
+#[test]
+fn pinned_preview_content_survives_interaction_clears_until_closed() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.preview_window = Some(window::Id::unique());
+    browser.preview_window_pinned = true;
+    browser.preview = Some(PreviewState::Loading(PathBuf::from("photo.png")));
+
+    browser.clear_preview();
+    assert!(browser.preview.is_some());
+
+    drop(browser.close_preview_window());
+    assert!(browser.preview.is_none());
+    assert!(!browser.preview_window_pinned);
+}
+
+#[test]
+fn request_preview_without_hovered_entry_is_noop() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+    drop(browser.request_preview());
+
+    assert!(browser.preview.is_none());
+    assert!(browser.preview_window.is_none());
+}
+
+#[test]
+fn request_preview_with_hover_but_no_selection_is_noop() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.hovered_entry = Some(PathBuf::from("note.txt"));
+
+    drop(browser.request_preview());
+
+    assert!(browser.preview.is_none());
+    assert!(browser.preview_window.is_none());
+}
+
+#[test]
+fn request_preview_toggles_closed_for_same_target() {
+    let path = PathBuf::from("clip.mp4");
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.preview_window = Some(window::Id::unique());
+    browser.hovered_entry = Some(path.clone());
+    browser.selected = Some(path.clone());
+    browser.preview_shown_path = Some(path);
+    browser.preview = Some(PreviewState::Loading(PathBuf::from("clip.mp4")));
+
+    drop(browser.request_preview());
+
+    assert!(browser.preview.is_none());
+    assert!(browser.preview_window.is_none());
+    assert!(!browser.preview_window_pinned);
+}
+
+#[test]
+fn pinned_space_switches_to_newly_selected_file_and_keeps_pin() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.preview_window = Some(window::Id::unique());
+    browser.preview_window_pinned = true;
+    browser.preview_shown_path = Some(PathBuf::from("first.png"));
+    browser.preview = Some(PreviewState::Loading(PathBuf::from("first.png")));
+
+    let next = PathBuf::from("second.png");
+    browser.hovered_entry = Some(next.clone());
+    browser.selected = Some(next.clone());
+
+    drop(browser.request_preview());
+
+    assert_eq!(browser.preview_shown_path.as_deref(), Some(next.as_path()));
+    assert!(matches!(
+        &browser.preview,
+        Some(PreviewState::Loading(path)) if path == &next
+    ));
+    assert!(browser.preview_window.is_some());
+    assert!(browser.preview_window_pinned);
+}
+
+#[test]
+fn pinned_preview_survives_preview_window_unfocus() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let preview_window = window::Id::unique();
+    browser.preview_window = Some(preview_window);
+    browser.preview_window_pinned = true;
+
+    drop(browser.update(Message::WindowUnfocused(preview_window)));
+
+    assert_eq!(browser.preview_window, Some(preview_window));
+    assert!(browser.preview_window_pinned);
+}
+
+#[test]
+fn unpinned_preview_closes_when_preview_window_unfocuses() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.preview_window = Some(window::Id::unique());
+
+    drop(browser.update(Message::WindowUnfocused(browser.preview_window.unwrap())));
+
+    assert!(browser.preview_window.is_none());
+}

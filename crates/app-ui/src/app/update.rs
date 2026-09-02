@@ -571,6 +571,7 @@ impl FileBrowser {
             Message::DestructiveActionConfirmed => self.confirm_destructive_action(),
             Message::DestructiveActionCanceled => self.cancel_destructive_action(),
             Message::AuxiliaryWindowCloseRequested(window) => self.close_auxiliary_window(window),
+            Message::PreviewWindowPinToggled => self.toggle_preview_window_pin(),
             Message::AuxiliaryWindowResized(window, width, height) => {
                 let resize_command = self.handle_auxiliary_window_resized(window, width, height);
                 Task::batch([resize_command, self.observe_window_maximized(window)])

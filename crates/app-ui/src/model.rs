@@ -495,6 +495,7 @@ pub(crate) enum Message {
     DestructiveActionConfirmed,
     DestructiveActionCanceled,
     AuxiliaryWindowCloseRequested(window::Id),
+    PreviewWindowPinToggled,
     AuxiliaryWindowResized(window::Id, f32, f32),
     X11Dnd(X11DndMessage),
     WindowMinimizeRequested(window::Id),
