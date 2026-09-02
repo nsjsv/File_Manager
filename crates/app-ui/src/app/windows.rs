@@ -13,7 +13,7 @@ use crate::model::{
 use crate::view::{address_input_id, rename_input_id};
 
 const DEFAULT_PREVIEW_WIDTH: f32 = 720.0;
-const DEFAULT_PREVIEW_HEIGHT: f32 = 440.0;
+const DEFAULT_PREVIEW_HEIGHT: f32 = 900.0;
 const MIN_PREVIEW_WIDTH: f32 = 420.0;
 const MIN_PREVIEW_HEIGHT: f32 = 260.0;
 const DEFAULT_IMAGE_PREVIEW_WIDTH: f32 = 748.0;
