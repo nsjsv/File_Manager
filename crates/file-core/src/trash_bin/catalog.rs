@@ -14,7 +14,8 @@ use super::model::{
     OriginalPathBase, TrashLocationGuard, TrashLocationKind, TrashObjectIdentity, TrashObjectKind,
     VerifiedTrashDirectory,
 };
-use super::mountinfo::{parse_mountinfo, MOUNTINFO_PATH};
+use super::mountinfo::{mounts_candidate_for_trash_probing, parse_mountinfo, MOUNTINFO_PATH};
+use crate::mount_table::MountTableEntry;
 
 #[derive(Debug)]
 pub(super) struct TrashLocationCatalog {
@@ -95,12 +96,8 @@ pub(super) fn discover_trash_locations_from_mountinfo_with_cancellation(
 ) -> Result<TrashLocationCatalog, FileError> {
     check_cancellation(cancellation)?;
     let snapshot = parse_mountinfo(mountinfo);
-    let mut catalog = discover_trash_locations_from_mount_points(
-        data_home,
-        uid,
-        &snapshot.mount_points,
-        cancellation,
-    )?;
+    let mut catalog =
+        discover_trash_locations_from_mount_points(data_home, uid, &snapshot.mounts, cancellation)?;
     catalog.warnings.splice(0..0, snapshot.warnings);
     Ok(catalog)
 }
@@ -108,7 +105,7 @@ pub(super) fn discover_trash_locations_from_mountinfo_with_cancellation(
 fn discover_trash_locations_from_mount_points(
     data_home: &Path,
     uid: u32,
-    mount_points: &[PathBuf],
+    mounts: &[MountTableEntry],
     cancellation: &tokio_util::sync::CancellationToken,
 ) -> Result<TrashLocationCatalog, FileError> {
     check_cancellation(cancellation)?;
@@ -120,7 +117,11 @@ fn discover_trash_locations_from_mount_points(
         locations.push(location);
     }
 
-    for top_directory in mount_points {
+    for entry in mounts
+        .iter()
+        .filter(|mount| mounts_candidate_for_trash_probing(mount))
+    {
+        let top_directory = &entry.mount_point;
         check_cancellation(cancellation)?;
         let shared_root_path = top_directory.join(".Trash");
         let private_root = top_directory.join(format!(".Trash-{uid}"));
@@ -521,6 +522,23 @@ pub(super) fn trash_data_home() -> Result<PathBuf, FileError> {
         .ok_or(FileError::Unsupported(
             "trash requires HOME or XDG_DATA_HOME",
         ))
+}
+
+/// Home trash directories worth watching for change-driven refresh: the
+/// trash root plus its `info` and `files` children. Watching the root also
+/// captures creation and removal of the child directories. Empty when
+/// HOME/XDG_DATA_HOME is unavailable.
+pub fn trash_watch_directories() -> Vec<PathBuf> {
+    trash_data_home()
+        .map(|data_home| {
+            let trash_root = data_home.join("Trash");
+            vec![
+                trash_root.clone(),
+                trash_root.join("info"),
+                trash_root.join("files"),
+            ]
+        })
+        .unwrap_or_default()
 }
 
 pub(super) fn effective_user_id() -> u32 {

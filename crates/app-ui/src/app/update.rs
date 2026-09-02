@@ -70,7 +70,6 @@ impl FileBrowser {
             Message::TrashLoaded(generation, outcome) => {
                 self.accept_trash_refresh_completion(generation, outcome)
             }
-            Message::TrashRefreshTick => self.refresh_trash_snapshot_on_tick(),
             Message::TrashWarningsToggled => {
                 self.trash_refresh.toggle_warning_details();
                 Task::none()

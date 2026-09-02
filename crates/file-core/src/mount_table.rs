@@ -14,13 +14,20 @@ pub struct MountTableWarning {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub struct MountTableEntry {
+    pub mount_point: PathBuf,
+    pub fs_type: OsString,
+    pub device: OsString,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct MountTableSnapshot {
-    pub mount_points: Vec<PathBuf>,
+    pub mounts: Vec<MountTableEntry>,
     pub warnings: Vec<MountTableWarning>,
 }
 
 pub fn parse_mount_table(content: &[u8]) -> MountTableSnapshot {
-    let mut mount_points = Vec::new();
+    let mut mounts = Vec::new();
     let mut warnings = Vec::new();
     let mut seen = HashSet::new();
 
@@ -57,14 +64,17 @@ pub fn parse_mount_table(content: &[u8]) -> MountTableSnapshot {
             continue;
         }
         if seen.insert(path_bytes(&mount_point)) {
-            mount_points.push(mount_point);
+            // Like glib's mountinfo parsing, fs_type and device are kept as raw
+            // fields: only the path fields carry \040-style escapes.
+            mounts.push(MountTableEntry {
+                mount_point,
+                fs_type: os_string_from_bytes(fields[separator_index + 1].to_vec()),
+                device: os_string_from_bytes(fields[separator_index + 2].to_vec()),
+            });
         }
     }
 
-    MountTableSnapshot {
-        mount_points,
-        warnings,
-    }
+    MountTableSnapshot { mounts, warnings }
 }
 
 fn decode_mount_path(encoded: &[u8]) -> Result<Vec<u8>, &'static str> {
@@ -103,13 +113,17 @@ fn mount_table_warning(line_index: usize, message: &'static str) -> MountTableWa
 }
 
 #[cfg(unix)]
-fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
-    PathBuf::from(OsString::from_vec(bytes))
+fn os_string_from_bytes(bytes: Vec<u8>) -> OsString {
+    OsString::from_vec(bytes)
 }
 
 #[cfg(not(unix))]
+fn os_string_from_bytes(bytes: Vec<u8>) -> OsString {
+    OsString::from(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+    PathBuf::from(os_string_from_bytes(bytes))
 }
 
 #[cfg(unix)]
@@ -126,7 +140,6 @@ fn path_bytes(path: &Path) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    #[test]
     fn parser_preserves_bytes_order_and_distinct_mounts() {
         let snapshot = parse_mount_table(
             b"1 0 8:1 / / rw - ext4 /dev/root rw\n\
@@ -135,14 +148,34 @@ mod tests {
               4 1 8:3 / /media/tab\\011line\\012slash\\134 rw - ext4 /dev/sdc rw\n",
         );
 
+        let mount_points = snapshot
+            .mounts
+            .iter()
+            .map(|mount| mount.mount_point.clone())
+            .collect::<Vec<_>>();
         assert_eq!(
-            snapshot.mount_points,
+            mount_points,
             vec![
                 PathBuf::from("/"),
                 PathBuf::from("/media/My Disk"),
                 PathBuf::from("/media/tab\tline\nslash\\"),
             ]
         );
+        assert!(snapshot.warnings.is_empty());
+    }
+
+    #[test]
+    fn parser_captures_fs_type_and_device_per_mount() {
+        let snapshot = parse_mount_table(
+            b"1 0 8:1 / / rw - btrfs /dev/nvme0n1p2 rw,compress=zstd\n\
+              2 1 0:75 / /mnt/cloud rw - fuse.rclone TG: rw\n",
+        );
+
+        assert_eq!(snapshot.mounts.len(), 2);
+        assert_eq!(snapshot.mounts[0].fs_type, OsString::from("btrfs"));
+        assert_eq!(snapshot.mounts[0].device, OsString::from("/dev/nvme0n1p2"));
+        assert_eq!(snapshot.mounts[1].fs_type, OsString::from("fuse.rclone"));
+        assert_eq!(snapshot.mounts[1].device, OsString::from("TG:"));
         assert!(snapshot.warnings.is_empty());
     }
 
@@ -155,7 +188,12 @@ mod tests {
               4 1 8:4 / /valid rw - ext4 /dev/sdd rw\n",
         );
 
-        assert_eq!(snapshot.mount_points, vec![PathBuf::from("/valid")]);
+        let mount_points = snapshot
+            .mounts
+            .iter()
+            .map(|mount| mount.mount_point.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(mount_points, vec![PathBuf::from("/valid")]);
         assert_eq!(snapshot.warnings.len(), 3);
         assert_eq!(snapshot.warnings[0].line_number, 1);
     }

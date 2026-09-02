@@ -17,7 +17,7 @@ impl FileBrowser {
         match self.trash_refresh.classify_completion(generation) {
             TrashRefreshCompletionDecision::Discard => return Task::none(),
             TrashRefreshCompletionDecision::StartReplacement => {
-                return self.refresh_trash_snapshot_on_tick();
+                return self.refresh_trash_snapshot_for_trash_tabs();
             }
             TrashRefreshCompletionDecision::Apply => {}
         }
@@ -116,7 +116,7 @@ impl FileBrowser {
                 .any(|tab| tab.is_trash_view)
     }
 
-    pub(super) fn refresh_trash_snapshot_on_tick(&mut self) -> Task<Message> {
+    pub(super) fn refresh_trash_snapshot_for_trash_tabs(&mut self) -> Task<Message> {
         if !self.has_trash_tab() {
             return Task::none();
         }

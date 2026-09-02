@@ -31,12 +31,16 @@ fn mount_points_from(content: &[u8]) -> SearchResult<Vec<PathBuf>> {
             warning.line_number, warning.message
         )));
     }
-    if snapshot.mount_points.is_empty() {
+    if snapshot.mounts.is_empty() {
         return Err(SearchError::InvalidConfiguration(
             "could not resolve any mount points from /proc/self/mountinfo".to_owned(),
         ));
     }
-    Ok(snapshot.mount_points)
+    Ok(snapshot
+        .mounts
+        .into_iter()
+        .map(|mount| mount.mount_point)
+        .collect())
 }
 
 fn observe_root_mount(root: &Path, mount_points: &[PathBuf]) -> SearchResult<SearchRootMount> {

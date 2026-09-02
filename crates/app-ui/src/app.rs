@@ -156,7 +156,6 @@ const AUDIO_PREVIEW_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const NETWORK_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const SEARCH_SERVICE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const APPLICATION_LOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
-const TRASH_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DirectoryMetadataDemandKey {
@@ -819,8 +818,11 @@ impl FileBrowser {
         }
 
         if self.has_trash_tab() {
-            subscriptions
-                .push(time::every(TRASH_REFRESH_INTERVAL).map(|_| Message::TrashRefreshTick));
+            subscriptions.extend(
+                file_core::trash_bin::trash_watch_directories()
+                    .into_iter()
+                    .map(directory_watch_subscription),
+            );
         }
 
         if !self.network_connections.entries.is_empty() {

@@ -328,7 +328,6 @@ pub(crate) enum Message {
         Result<DirectoryMetadataResolution, DirectoryMetadataLoadFailure>,
     ),
     TrashLoaded(u64, Result<TrashScan, String>),
-    TrashRefreshTick,
     TrashWarningsToggled,
     OpenFileFinished(PathBuf, Result<(), String>),
     OpenWithRequested(PathBuf),

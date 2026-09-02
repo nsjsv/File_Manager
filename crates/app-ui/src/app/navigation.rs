@@ -529,6 +529,14 @@ impl FileBrowser {
     }
 
     pub(super) fn reload_observed_directory(&mut self, path: PathBuf) -> Task<Message> {
+        if self.has_trash_tab()
+            && file_core::trash_bin::trash_watch_directories()
+                .iter()
+                .any(|watched| path.starts_with(watched))
+        {
+            return self.refresh_trash_snapshot_for_trash_tabs();
+        }
+
         if self.is_trash_view {
             return Task::none();
         }

@@ -5,6 +5,7 @@ mod operations;
 mod scan;
 mod trash_info;
 
+pub use catalog::trash_watch_directories;
 pub use model::{
     TrashCommitOutcome, TrashEntry, TrashRestoreEntry, TrashScan, TrashTrackingWarning,
 };

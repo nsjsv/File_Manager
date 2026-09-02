@@ -253,3 +253,19 @@ fn completed_refresh_survives_initiating_tab_close_and_updates_other_trash_pane(
         1
     );
 }
+
+#[test]
+fn trash_watch_event_refreshes_snapshot_but_unrelated_paths_do_not() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.is_trash_view = true;
+    let watch_root = file_core::trash_bin::trash_watch_directories()
+        .into_iter()
+        .next()
+        .expect("home trash watch root");
+
+    drop(browser.reload_observed_directory(watch_root.join("info")));
+    assert!(browser.trash_refresh.begin_if_idle().is_none());
+
+    drop(browser.reload_observed_directory(PathBuf::from("/tmp/unrelated-directory")));
+    assert!(browser.trash_refresh.begin_if_idle().is_none());
+}

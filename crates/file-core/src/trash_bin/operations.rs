@@ -464,9 +464,16 @@ impl TrashTrackingPlan {
             source,
         })?;
         let snapshot = parse_mountinfo(&mountinfo);
+        // Mount resolution here backs Trash tracking scope detection, not the
+        // discovery-time probe filter, so no mount is excluded.
+        let mount_points: Vec<PathBuf> = snapshot
+            .mounts
+            .iter()
+            .map(|mount| mount.mount_point.clone())
+            .collect();
         trash_trace("  inspect+mountinfo", stage.elapsed());
         let source_mount =
-            deepest_mount_point(&snapshot.mount_points, path).ok_or_else(|| FileError::Trash {
+            deepest_mount_point(&mount_points, path).ok_or_else(|| FileError::Trash {
                 path: path.to_path_buf(),
                 message: "could not identify the mounted top-level directory for Trash tracking"
                     .to_owned(),
@@ -479,11 +486,9 @@ impl TrashTrackingPlan {
                 }
             })?;
         let home_mount =
-            deepest_mount_point(&snapshot.mount_points, &home_trash).ok_or_else(|| {
-                FileError::Trash {
-                    path: data_home.clone(),
-                    message: "could not identify the Home Trash mount point".to_owned(),
-                }
+            deepest_mount_point(&mount_points, &home_trash).ok_or_else(|| FileError::Trash {
+                path: data_home.clone(),
+                message: "could not identify the Home Trash mount point".to_owned(),
             })?;
         let scope = if source_mount == home_mount {
             TrashTrackingScope::Home
