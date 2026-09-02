@@ -75,6 +75,7 @@ mod text_preview_loading;
 mod text_preview_viewer;
 mod three_column_view;
 mod thumbnail_cache;
+mod translated_surface;
 mod typography;
 mod ui_pacing;
 mod video_preview;

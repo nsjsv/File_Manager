@@ -3,9 +3,15 @@ use std::path::{Path, PathBuf};
 use file_core::{DirectoryEntry, EntryMetadata, FileKind};
 use iced::widget::image;
 
+use iced::mouse;
+use iced::Point;
+
 use crate::app::FileBrowser;
 use crate::config::ui_thread_startup_config;
-use crate::model::{ImagePreviewContent, PreviewContent, PreviewState};
+use crate::model::{
+    ImagePreviewContent, ImagePreviewViewport, Message, PreviewContent,
+    PreviewImageViewportMessage, PreviewState,
+};
 
 fn browser_with_image(path: &Path) -> FileBrowser {
     let (mut browser, _) = FileBrowser::new(ui_thread_startup_config());
@@ -357,4 +363,61 @@ fn directory_preview_children_expand_up_to_configured_levels() {
         .find(|entry| entry.name == "deep")
         .expect("deep entry");
     assert!(!deep.is_expanded);
+}
+
+#[test]
+fn opening_a_new_preview_session_resets_the_image_viewport() {
+    let path = PathBuf::from("/workspace/photo.png");
+    let mut browser = browser_with_image(&path);
+    browser.preview_image_viewport.scale = 4.0;
+    browser.preview_image_viewport.offset = Point::new(40.0, -20.0);
+
+    drop(browser.open_preview_for_resolved_path(path.clone(), FileKind::File));
+
+    assert_eq!(
+        browser.preview_image_viewport,
+        ImagePreviewViewport::default()
+    );
+}
+
+#[test]
+fn image_viewport_messages_are_ignored_without_a_ready_image_preview() {
+    let path = PathBuf::from("/workspace/photo.png");
+    let mut browser = browser_with_image(&path);
+    browser.preview = Some(PreviewState::Loading(path));
+    browser.preview_image_viewport.panning = true;
+
+    drop(browser.update(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::Zoomed(mouse::ScrollDelta::Lines { x: 0.0, y: 3.0 }),
+    )));
+
+    assert_eq!(browser.preview_image_viewport.scale, 1.0);
+}
+
+#[test]
+fn zoom_and_reset_update_the_viewport_for_ready_image_previews() {
+    let path = PathBuf::from("/workspace/photo.png");
+    let mut browser = browser_with_image(&path);
+    browser.preview = Some(PreviewState::Ready(thumbnail_content(
+        path,
+        image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+    )));
+
+    drop(browser.update(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::PointerMoved(Point::new(300.0, 200.0)),
+    )));
+    drop(browser.update(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::Zoomed(mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 }),
+    )));
+
+    assert!(browser.preview_image_viewport.scale > 1.0);
+    assert!(browser.preview_image_viewport.is_zoomed());
+
+    drop(browser.update(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::ResetRequested,
+    )));
+    assert_eq!(
+        browser.preview_image_viewport,
+        ImagePreviewViewport::default()
+    );
 }

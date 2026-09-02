@@ -16,6 +16,7 @@ use crate::model::{
 };
 mod animated_image;
 mod document;
+mod image_viewport;
 mod original_image;
 mod remote_cache;
 mod sqlite;

@@ -26,6 +26,9 @@ impl FileBrowser {
         self.finish_tab_drag();
         self.finish_pane_drag();
         self.finish_batch_rename_preview_drag();
+        // 任何窗口里的左键释放都结束图片平移；面板内释放由
+        // mouse_area 的 PanEnded 先行处理，这里只是兜底。
+        self.preview_image_viewport.panning = false;
         if self.preview_window == Some(window) && self.preview_window_drag_active {
             self.preview_window_drag_active = false;
             if let Some(pointer_y) = self.preview_window_pointer_y {

@@ -17,8 +17,8 @@ use crate::formatting::format_file_size;
 use crate::list_view::{LIST_HEADER_HEIGHT, LIST_ROW_HEIGHT};
 use crate::model::{
     AudioPreviewPlayback, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
-    ExpandedDirectoryStatus, Message, NavigationMode, PreviewState, PreviewWindowProfile,
-    ScrollbarRegion,
+    ExpandedDirectoryStatus, ImagePreviewViewport, Message, NavigationMode, PreviewState,
+    PreviewWindowProfile, ScrollbarRegion,
 };
 use crate::shortcuts::FileSelectionDirection;
 use crate::virtual_range::vertical_scroll_delta_to_reveal;
@@ -456,6 +456,9 @@ impl FileBrowser {
         path: PathBuf,
         kind: FileKind,
     ) -> Task<Message> {
+        // 新预览会话不复用上一个文件的缩放/平移；同会话内的
+        // 缩略图→原图替换不经过这里，视口得以保留。
+        self.preview_image_viewport = ImagePreviewViewport::default();
         let document_format = (kind == FileKind::File)
             .then(|| document_preview_format_for_path(&path))
             .flatten();

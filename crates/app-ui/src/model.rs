@@ -119,7 +119,8 @@ pub(crate) use sqlite_preview::{
 };
 mod preview;
 pub(crate) use preview::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, PreviewContent,
+    image_preview_zoom_multiplier, AudioPreviewPlayback, AudioPreviewPlaybackStatus,
+    ImagePreviewContent, ImagePreviewViewport, PreviewContent, PreviewImageViewportMessage,
     PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry,
     PreviewWindowChromeState, PreviewWindowProfile, RemotePreviewCacheFinished,
     RemotePreviewCacheMessage, RemotePreviewCacheProgress, RemotePreviewDownload,
@@ -376,6 +377,7 @@ pub(crate) enum Message {
     },
     MarkdownPreviewModeSelected(MarkdownPreviewMode),
     ImagePreviewDimensionsLoaded(PathBuf, u64, Result<(u32, u32), String>),
+    PreviewImageViewport(PreviewImageViewportMessage),
     AnimatedImageFrameLoaded(AnimatedImageFrame),
     AnimatedImagePreviewFinished(PathBuf, u64),
     AnimatedImagePreviewFailed(PathBuf, u64, String),

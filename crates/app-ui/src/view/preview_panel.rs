@@ -7,7 +7,7 @@ use iced::widget::{
     button, column, container, image, mouse_area, progress_bar, row, scrollable, slider, svg,
     Button, Column, Space, Stack,
 };
-use iced::{Alignment, Background, Border, Element, Length, Theme};
+use iced::{Alignment, Background, Border, Element, Length, Theme, Vector};
 
 use crate::animated_image_preview::AnimatedImagePreview;
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
@@ -21,12 +21,13 @@ use crate::formatting::{format_duration, format_file_size, format_middle_ellipsi
 use crate::icons::{preview_entry_icon_symbol, rotated_chevron_right_view, IconSymbol};
 use crate::matugen_theme::ui_colors;
 use crate::model::{
-    AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, Message, PreviewContent,
-    PreviewSize, PreviewState, PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion,
-    ScrollbarViewport, ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback,
-    VideoPreviewPlaybackStatus,
+    AudioPreviewPlayback, AudioPreviewPlaybackStatus, ImagePreviewContent, ImagePreviewViewport,
+    Message, PreviewContent, PreviewImageViewportMessage, PreviewSize, PreviewState,
+    PreviewTreeDirectoryChildren, PreviewTreeEntry, ScrollbarRegion, ScrollbarViewport,
+    ScrollbarVisibility, TextPreviewDocument, VideoPreviewPlayback, VideoPreviewPlaybackStatus,
 };
 use crate::operation_progress::remote_preview_download_panel;
+use crate::translated_surface::translated_surface;
 use crate::typography::{localized_text, readable_text};
 
 use super::{
@@ -63,6 +64,7 @@ pub(crate) fn view_preview_window<'a>(
     text_preview_document: Option<&'a TextPreviewDocument>,
     sqlite_preview_state: Option<&'a SqlitePreviewState>,
     size: PreviewSize,
+    image_preview_viewport: &ImagePreviewViewport,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
     preview_bottom_controls_opacity: f32,
@@ -90,6 +92,7 @@ pub(crate) fn view_preview_window<'a>(
                 text_preview_document,
                 sqlite_preview_state,
                 size,
+                image_preview_viewport,
                 audio_preview,
                 video_preview,
                 preview_bottom_controls_opacity,
@@ -125,6 +128,7 @@ fn preview_panel<'a>(
     text_preview_document: Option<&'a TextPreviewDocument>,
     sqlite_preview_state: Option<&'a SqlitePreviewState>,
     size: PreviewSize,
+    image_preview_viewport: &ImagePreviewViewport,
     audio_preview: Option<&'a AudioPreviewPlayback>,
     video_preview: Option<&'a VideoPreviewPlayback>,
     preview_bottom_controls_opacity: f32,
@@ -206,21 +210,26 @@ fn preview_panel<'a>(
                 width,
                 height,
                 ..
-            } => image_preview_panel(handle, *width, *height, size),
+            } => image_preview_panel(handle, *width, *height, size, image_preview_viewport),
             ImagePreviewContent::OriginalRaster {
                 raster_handle,
                 placeholder_handle,
                 width,
                 height,
-            } => {
-                raster_image_preview_panel(placeholder_handle, raster_handle, *width, *height, size)
-            }
+            } => raster_image_preview_panel(
+                placeholder_handle,
+                raster_handle,
+                *width,
+                *height,
+                size,
+                image_preview_viewport,
+            ),
             ImagePreviewContent::OriginalSvg {
                 handle,
                 width,
                 height,
                 ..
-            } => svg_preview_panel(handle, *width, *height, size),
+            } => svg_preview_panel(handle, *width, *height, size, image_preview_viewport),
         },
         PreviewState::Ready(PreviewContent::AnimatedImage(preview)) => {
             animated_image_preview_panel(preview, size, preview_bottom_controls_opacity)
@@ -458,15 +467,16 @@ fn image_preview_panel(
     width: u32,
     height: u32,
     size: PreviewSize,
+    viewport: &ImagePreviewViewport,
 ) -> Element<'static, Message> {
-    let (image_width, image_height) = image_preview_size(size, width, height);
-    container(preview_image_frame(handle, image_width, image_height))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(preview_media_style)
-        .into()
+    let (fit_width, fit_height) = image_preview_size(size, width, height);
+    zoomable_media_area(
+        fit_width,
+        fit_height,
+        size,
+        viewport,
+        |image_width, image_height| preview_image_frame(handle, image_width, image_height).into(),
+    )
 }
 
 fn raster_image_preview_panel(
@@ -475,28 +485,31 @@ fn raster_image_preview_panel(
     width: u32,
     height: u32,
     size: PreviewSize,
+    viewport: &ImagePreviewViewport,
 ) -> Element<'static, Message> {
-    let (image_width, image_height) = image_preview_size(size, width, height);
-    let image = image::Image::new(raster_handle.clone())
-        .width(Length::Fixed(image_width))
-        .height(Length::Fixed(image_height))
-        .content_fit(iced::ContentFit::Contain);
-    let placeholder = image::Image::new(placeholder_handle.clone())
-        .width(Length::Fixed(image_width))
-        .height(Length::Fixed(image_height))
-        .content_fit(iced::ContentFit::Contain);
-    let images = Stack::new()
-        .width(Length::Fixed(image_width))
-        .height(Length::Fixed(image_height))
-        .push(placeholder)
-        .push(image);
-    container(images)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(preview_media_style)
-        .into()
+    let (fit_width, fit_height) = image_preview_size(size, width, height);
+    zoomable_media_area(
+        fit_width,
+        fit_height,
+        size,
+        viewport,
+        |image_width, image_height| {
+            let image = image::Image::new(raster_handle.clone())
+                .width(Length::Fixed(image_width))
+                .height(Length::Fixed(image_height))
+                .content_fit(iced::ContentFit::Contain);
+            let placeholder = image::Image::new(placeholder_handle.clone())
+                .width(Length::Fixed(image_width))
+                .height(Length::Fixed(image_height))
+                .content_fit(iced::ContentFit::Contain);
+            Stack::new()
+                .width(Length::Fixed(image_width))
+                .height(Length::Fixed(image_height))
+                .push(placeholder)
+                .push(image)
+                .into()
+        },
+    )
 }
 
 fn svg_preview_panel(
@@ -504,19 +517,71 @@ fn svg_preview_panel(
     width: u32,
     height: u32,
     size: PreviewSize,
+    viewport: &ImagePreviewViewport,
 ) -> Element<'static, Message> {
-    let (render_width, render_height) = image_preview_size(size, width, height);
-    container(
-        svg::Svg::new(handle.clone())
-            .width(Length::Fixed(render_width))
-            .height(Length::Fixed(render_height))
-            .content_fit(iced::ContentFit::Contain),
+    let (fit_width, fit_height) = image_preview_size(size, width, height);
+    zoomable_media_area(
+        fit_width,
+        fit_height,
+        size,
+        viewport,
+        |render_width, render_height| {
+            svg::Svg::new(handle.clone())
+                .width(Length::Fixed(render_width))
+                .height(Length::Fixed(render_height))
+                .content_fit(iced::ContentFit::Contain)
+                .into()
+        },
     )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .style(preview_media_style)
+}
+
+/// 静态图片媒体区：适应窗口时居中；缩放后按视口位移摆放，
+/// 并用 mouse_area 提供滚轮缩放、拖动平移与双击重置。
+fn zoomable_media_area(
+    fit_width: f32,
+    fit_height: f32,
+    size: PreviewSize,
+    viewport: &ImagePreviewViewport,
+    content_at_scaled_size: impl Fn(f32, f32) -> Element<'static, Message>,
+) -> Element<'static, Message> {
+    let media: Element<'static, Message> = if viewport.is_zoomed() {
+        let scaled_width = fit_width * viewport.scale;
+        let scaled_height = fit_height * viewport.scale;
+        let x = size.width / 2.0 + viewport.offset.x - scaled_width / 2.0;
+        let y = size.height / 2.0 + viewport.offset.y - scaled_height / 2.0;
+        translated_surface(
+            content_at_scaled_size(scaled_width, scaled_height),
+            Vector::new(x, y),
+        )
+    } else {
+        container(content_at_scaled_size(fit_width, fit_height))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
+    };
+
+    mouse_area(
+        container(media)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(preview_media_style),
+    )
+    .on_move(|position| {
+        Message::PreviewImageViewport(PreviewImageViewportMessage::PointerMoved(position))
+    })
+    .on_press(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::PanStarted,
+    ))
+    .on_release(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::PanEnded,
+    ))
+    .on_double_click(Message::PreviewImageViewport(
+        PreviewImageViewportMessage::ResetRequested,
+    ))
+    .on_scroll(|delta| Message::PreviewImageViewport(PreviewImageViewportMessage::Zoomed(delta)))
+    .interaction(iced::mouse::Interaction::Grab)
     .into()
 }
 

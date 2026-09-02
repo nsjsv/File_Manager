@@ -116,6 +116,7 @@ impl FileBrowser {
                 self.accept_original_image_preview(path, generation, outcome)
             }
             Message::RetryImagePreview(path) => self.retry_image_preview(path),
+            Message::PreviewImageViewport(message) => self.update_preview_image_viewport(message),
             Message::FileProperties(properties_message) => {
                 self.accept_file_properties_message(properties_message)
             }
@@ -459,6 +460,9 @@ impl FileBrowser {
                 if self.preview_window == Some(window) {
                     self.cancel_preview_window_initial_chrome_hide();
                     self.preview_window_pointer_y = None;
+                    // 指针带着按下的左键离开预览窗口时，窗口外收不到
+                    // release，就地结束平移，避免回进窗口后误跳偏移。
+                    self.preview_image_viewport.panning = false;
                     self.preview_window_bottom_controls.start_hide();
                     if !self.preview_window_drag_active && !self.preview_window_uses_window_chrome()
                     {

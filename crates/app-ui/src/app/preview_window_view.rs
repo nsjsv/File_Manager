@@ -14,6 +14,7 @@ impl FileBrowser {
             self.text_preview_document.as_ref(),
             self.sqlite_preview.as_ref(),
             self.preview_size,
+            &self.preview_image_viewport,
             self.audio_preview.as_ref(),
             self.video_preview.as_ref(),
             preview_bottom_controls_opacity,
