@@ -6,7 +6,12 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -25,6 +30,9 @@ env:
 jobs:
   linux-release:
     name: Build Linux release
+    outputs:
+      semver: ${{ steps.metadata.outputs.semver }}
+      sha256_x86_64: ${{ steps.package.outputs.sha256_x86_64 }}
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
@@ -47,7 +55,7 @@ jobs:
             wayland
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve release metadata
         id: metadata
@@ -104,24 +112,40 @@ jobs:
           read -r tarball_sha256 _ < SHA256SUMS
           echo "sha256_x86_64=${tarball_sha256}" >> "${GITHUB_OUTPUT}"
 
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Stage Linux release assets
+        run: |
+          mkdir -p release-assets
+          cp "${{ steps.metadata.outputs.asset_name }}" SHA256SUMS release-assets/
+
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@v7
         with:
-          tag_name: ${{ steps.metadata.outputs.version }}
-          name: ${{ steps.metadata.outputs.version }}
-          files: |
-            ${{ steps.metadata.outputs.asset_name }}
-            SHA256SUMS
+          name: linux-release-assets
+          path: release-assets
+          if-no-files-found: error
+
+  aur-release:
+    name: Publish AUR package
+    needs: linux-release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install AUR dependencies
+        run: pacman -Syu --noconfirm --needed git openssh
+
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Publish AUR package
-        if: github.event_name == 'push'
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
           AUR_COMMIT_NAME: ${{ secrets.AUR_COMMIT_NAME }}
           AUR_COMMIT_EMAIL: ${{ secrets.AUR_COMMIT_EMAIL }}
-          PKGVER: ${{ steps.metadata.outputs.semver }}
-          SHA256_X86_64: ${{ steps.package.outputs.sha256_x86_64 }}
+          PKGVER: ${{ needs.linux-release.outputs.semver }}
+          SHA256_X86_64: ${{ needs.linux-release.outputs.sha256_x86_64 }}
         run: |
           if [[ -z "${AUR_SSH_PRIVATE_KEY}" ]]; then
             echo "::error::AUR_SSH_PRIVATE_KEY secret is required to publish file-manager-bin"
@@ -188,18 +212,22 @@ jobs:
       image: ubuntu:24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build Debian package
         run: packaging/deb/build-deb.sh "${GITHUB_REF_NAME#v}"
 
-      - name: Publish Debian package
-        uses: softprops/action-gh-release@v2
+      - name: Stage Debian release assets
+        run: |
+          mkdir -p release-assets
+          cp dist/*.deb dist/SHA256SUMS.deb release-assets/
+
+      - name: Upload Debian release assets
+        uses: actions/upload-artifact@v7
         with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            dist/*.deb
-            dist/SHA256SUMS.deb
+          name: deb-release-assets
+          path: release-assets
+          if-no-files-found: error
 
   rpm-release:
     name: Build RPM package
@@ -208,15 +236,65 @@ jobs:
       image: fedora:latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build RPM package
         run: packaging/rpm/build-rpm.sh "${GITHUB_REF_NAME#v}"
 
-      - name: Publish RPM package
-        uses: softprops/action-gh-release@v2
+      - name: Stage RPM release assets
+        run: |
+          mkdir -p release-assets
+          cp dist/x86_64/*.rpm dist/SHA256SUMS.rpm release-assets/
+
+      - name: Upload RPM release assets
+        uses: actions/upload-artifact@v7
         with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            dist/x86_64/*.rpm
+          name: rpm-release-assets
+          path: release-assets
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs:
+      - linux-release
+      - deb-release
+      - rpm-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: "*-release-assets"
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          assets=(
+            dist/file-manager-v*.tar.gz
+            dist/SHA256SUMS
+            dist/file-manager_*.deb
+            dist/SHA256SUMS.deb
+            dist/file-manager-*.rpm
             dist/SHA256SUMS.rpm
+          )
+
+          if ((${#assets[@]} != 6)); then
+            echo "::error::Expected six release assets, found ${#assets[@]}"
+            printf '%s\n' "${assets[@]}"
+            exit 1
+          fi
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create \
+              "${GITHUB_REF_NAME}" \
+              "${assets[@]}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}"
+          fi
