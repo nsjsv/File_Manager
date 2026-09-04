@@ -142,23 +142,11 @@ impl FileBrowser {
         region: ScrollbarRegion,
         delta: mouse::ScrollDelta,
     ) -> Task<Message> {
-        if matches!(region, ScrollbarRegion::PaneIcons(_)) && self.keyboard_modifiers.control() {
-            self.smooth_scroll.stop();
-            let Some(zoom) = icon_grid_zoom_from_wheel(delta) else {
-                return Task::none();
-            };
-            let next_size = crate::icon_grid_geometry::stepped_icon_grid_size(
-                self.user_config.icon_grid_size,
-                zoom,
-            );
-            if next_size == self.user_config.icon_grid_size {
-                return Task::none();
+        // Ctrl+滚轮在浏览内容区统一走密度档位路径；其他区域保持原滚动语义。
+        if self.keyboard_modifiers.control() {
+            if let Some(target) = view_density_target(&region) {
+                return self.adjust_view_density(target, delta);
             }
-            self.user_config.icon_grid_size = next_size;
-            return Task::batch([
-                self.persist_user_preferences_command(),
-                self.schedule_thumbnail_refresh(),
-            ]);
         }
 
         let Some(scroll_delta) = self.smooth_scroll_delta_for_region(&region, delta) else {
@@ -182,6 +170,39 @@ impl FileBrowser {
                 Task::batch([self.show_scrollbars_temporarily(region), scroll_task])
             }
         }
+    }
+
+    // Ctrl+滚轮调档的唯一状态入口：每个非零事件走一档，停止旧惯性，
+    // 立即走用户偏好保存队列；边界档位静默保持，不产生滚动位移。
+    fn adjust_view_density(
+        &mut self,
+        target: ViewDensityTarget,
+        delta: mouse::ScrollDelta,
+    ) -> Task<Message> {
+        self.smooth_scroll.stop();
+        let Some(step) = view_density_step_from_wheel(delta) else {
+            return Task::none();
+        };
+        let current = match target {
+            ViewDensityTarget::Columns => self.user_config.columns_view_density,
+            ViewDensityTarget::List => self.user_config.list_view_density,
+            ViewDensityTarget::Icons => self.user_config.icons_view_density,
+        };
+        let next = current.step(step);
+        if next == current {
+            return Task::none();
+        }
+        match target {
+            ViewDensityTarget::Columns => self.user_config.columns_view_density = next,
+            ViewDensityTarget::List => self.user_config.list_view_density = next,
+            // icon_grid_size 是旧配置的兼容镜像，必须与档位同步写回。
+            ViewDensityTarget::Icons => self.user_config.set_icons_view_density(next),
+        }
+        // 换档改变可见范围，三种视图统一重新调度可见缩略图。
+        Task::batch([
+            self.persist_user_preferences_command(),
+            self.schedule_thumbnail_refresh(),
+        ])
     }
 
     pub(super) fn smooth_scroll_animation_is_active(&self) -> bool {
@@ -439,9 +460,29 @@ fn wheel_delta_for_region(
     (!delta.delta.is_resting()).then_some(delta)
 }
 
-fn icon_grid_zoom_from_wheel(
+// 浏览内容区到密度档位的映射：侧栏、地址栏、预览和设置不参与密度缩放。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewDensityTarget {
+    Columns,
+    List,
+    Icons,
+}
+
+fn view_density_target(region: &ScrollbarRegion) -> Option<ViewDensityTarget> {
+    match region {
+        ScrollbarRegion::PaneList(_) => Some(ViewDensityTarget::List),
+        ScrollbarRegion::PaneIcons(_) => Some(ViewDensityTarget::Icons),
+        ScrollbarRegion::Column { .. } | ScrollbarRegion::ColumnBrowser(_) => {
+            Some(ViewDensityTarget::Columns)
+        }
+        _ => None,
+    }
+}
+
+// 优先竖轴，竖轴为零时回退横轴；正方向放大，负方向缩小，零增量不移动档位。
+fn view_density_step_from_wheel(
     delta: mouse::ScrollDelta,
-) -> Option<crate::icon_grid_geometry::IconGridZoom> {
+) -> Option<crate::config::ViewDensityStep> {
     let primary_delta = match delta {
         mouse::ScrollDelta::Lines { x, y } | mouse::ScrollDelta::Pixels { x, y } => {
             if y.abs() > f32::EPSILON {
@@ -452,9 +493,9 @@ fn icon_grid_zoom_from_wheel(
         }
     };
     if primary_delta > f32::EPSILON {
-        Some(crate::icon_grid_geometry::IconGridZoom::In)
+        Some(crate::config::ViewDensityStep::Increase)
     } else if primary_delta < -f32::EPSILON {
-        Some(crate::icon_grid_geometry::IconGridZoom::Out)
+        Some(crate::config::ViewDensityStep::Decrease)
     } else {
         None
     }

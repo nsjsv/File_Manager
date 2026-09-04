@@ -324,13 +324,15 @@ impl FileBrowser {
             return Vec::new();
         }
 
+        let list_density = self.user_config.list_view_density;
+        let row_height = crate::list_view::ListGeometry::for_level(list_density).row_height;
         let range = viewport_override
             .or_else(|| pane.column_viewports.get(pane.current_dir).copied())
             .map(|viewport| {
                 crate::visible_entries::list_entry_range_for_viewport(
                     pane.entries,
                     pane.expanded_directories,
-                    crate::list_view::LIST_ROW_HEIGHT,
+                    row_height,
                     crate::list_view::LIST_HEADER_HEIGHT,
                     viewport.offset_y,
                     viewport.height,
@@ -341,8 +343,8 @@ impl FileBrowser {
                 crate::visible_entries::initial_list_entry_range(
                     pane.entries,
                     pane.expanded_directories,
-                    crate::list_view::LIST_ROW_HEIGHT,
-                    crate::list_view::list_initial_rows(window_height),
+                    row_height,
+                    crate::list_view::list_initial_rows(window_height, list_density),
                 )
             });
 

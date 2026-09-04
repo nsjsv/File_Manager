@@ -52,12 +52,15 @@ fn measured_viewport_schedules_list_rows_from_shared_geometry() {
 
 #[test]
 fn column_thumbnail_range_uses_shared_column_geometry() {
+    let geometry = crate::three_column_view::ColumnGeometry::for_level(
+        crate::config::ViewDensityLevel::DEFAULT,
+    );
     let range = crate::three_column_view::column_virtual_range_for_viewport(
         120,
-        crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
-            + crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 40.0,
-        crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT * 3.0,
+        geometry.entries_top_padding + geometry.entry_scroll_height * 40.0,
+        geometry.entry_scroll_height * 3.0,
         OVERSCAN_ROWS,
+        geometry,
     );
 
     assert_eq!((range.start, range.end), (28, 55));
@@ -162,7 +165,7 @@ fn list_scrolled_schedules_visible_list_thumbnail_requests() {
 #[test]
 fn icon_grid_schedules_only_shared_visible_range_at_dynamic_edge() {
     let mut config = crate::config::default_user_config();
-    config.icon_grid_size = 112;
+    config.set_icons_view_density(crate::config::ViewDensityLevel::from_icon_grid_size(112));
     let (mut browser, _) = FileBrowser::new(config);
     browser.current_dir = PathBuf::from("/workspace");
     browser.view_mode = BrowserViewMode::Icons;

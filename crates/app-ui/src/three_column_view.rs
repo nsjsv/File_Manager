@@ -14,6 +14,7 @@ use crate::appearance::{
     enhanced_vertical_scrollbar_direction,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
+use crate::config::ViewDensityLevel;
 use crate::file_drag_hit_test_bounds::FileDragHitTestMarker;
 use crate::file_drag_hit_test_marker::track_file_drag_hit_test_marker;
 use crate::file_entry_presentation::SelectionRunPosition;
@@ -36,20 +37,61 @@ const COLUMN_RESIZE_LINE_WIDTH: f32 = 1.0;
 const CHEVRON_ICON_SIZE: f32 = 11.0;
 const COLUMN_CONTENT_SPACING: u32 = 2;
 const COLUMN_PADDING: [u16; 2] = [5, 5];
-pub(crate) const COLUMN_ENTRIES_TOP_PADDING: f32 =
-    COLUMN_PADDING[0] as f32 + COLUMN_CONTENT_SPACING as f32;
 const COLUMN_ENTRY_TEXT_SIZE: u32 = 13;
 pub(crate) const COLUMN_ENTRY_HEIGHT: f32 = 24.0;
-pub(crate) const COLUMN_ENTRY_SCROLL_HEIGHT: f32 =
-    COLUMN_ENTRY_HEIGHT + COLUMN_CONTENT_SPACING as f32;
 const COLUMN_OVERSCAN_ROWS: usize = 16;
 const COLUMN_ENTRY_SPACING: u32 = 4;
 const COLUMN_ENTRY_PADDING: [u16; 2] = [1, 4];
 
-pub(crate) fn column_initial_rows(window_height: f32) -> usize {
+/// 多栏条目几何按当前档位比例缩放；列宽、列间距和面板外层留白固定。
+/// `entries_top_padding` 表达 padding 加 top spacer 后首个行间距的真实首行起点。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ColumnGeometry {
+    pub(crate) entry_height: f32,
+    pub(crate) entry_scroll_height: f32,
+    pub(crate) entries_top_padding: f32,
+    pub(crate) content_spacing: f32,
+    pub(crate) text_size: f32,
+    pub(crate) chevron_icon_size: f32,
+    pub(crate) entry_spacing: f32,
+    pub(crate) entry_padding: iced::Padding,
+    pub(crate) icon_density: FileEntryIconDensity,
+}
+
+impl ColumnGeometry {
+    pub(crate) fn for_level(level: ViewDensityLevel) -> Self {
+        let scale = level.scale();
+        // 缩放尺寸一律取整到整数像素：行槽高等整数几何让整行对齐的 viewport
+        // 运算保持精确，虚拟范围、键盘揭示与缩略图调度不会各舍入到不同行。
+        let scaled = |base: f32| (base * scale).round();
+        let entry_height = scaled(COLUMN_ENTRY_HEIGHT);
+        let content_spacing = scaled(COLUMN_CONTENT_SPACING as f32);
+        let entry_padding_vertical = scaled(COLUMN_ENTRY_PADDING[0] as f32);
+        let entry_padding_horizontal = scaled(COLUMN_ENTRY_PADDING[1] as f32);
+        Self {
+            entry_height,
+            entry_scroll_height: entry_height + content_spacing,
+            entries_top_padding: COLUMN_PADDING[0] as f32 + content_spacing,
+            content_spacing,
+            text_size: scaled(COLUMN_ENTRY_TEXT_SIZE as f32),
+            chevron_icon_size: scaled(CHEVRON_ICON_SIZE),
+            entry_spacing: scaled(COLUMN_ENTRY_SPACING as f32),
+            entry_padding: iced::Padding {
+                top: entry_padding_vertical,
+                right: entry_padding_horizontal,
+                bottom: entry_padding_vertical,
+                left: entry_padding_horizontal,
+            },
+            icon_density: FileEntryIconDensity::Column(level),
+        }
+    }
+}
+
+pub(crate) fn column_initial_rows(window_height: f32, level: ViewDensityLevel) -> usize {
+    let geometry = ColumnGeometry::for_level(level);
     crate::virtual_range::initial_rows_for_height(
-        window_height - COLUMN_ENTRIES_TOP_PADDING,
-        COLUMN_ENTRY_SCROLL_HEIGHT,
+        window_height - geometry.entries_top_padding,
+        geometry.entry_scroll_height,
         COLUMN_OVERSCAN_ROWS,
     )
 }
@@ -58,14 +100,15 @@ pub(crate) fn column_virtual_range_for_viewport(
     viewport_offset: f32,
     viewport_height: f32,
     overscan_rows: usize,
+    geometry: ColumnGeometry,
 ) -> VirtualRange {
     let viewport_top = viewport_offset.max(0.0);
-    let entry_viewport_top = (viewport_top - COLUMN_ENTRIES_TOP_PADDING).max(0.0);
+    let entry_viewport_top = (viewport_top - geometry.entries_top_padding).max(0.0);
     let entry_viewport_bottom =
-        (viewport_top + viewport_height - COLUMN_ENTRIES_TOP_PADDING).max(0.0);
+        (viewport_top + viewport_height - geometry.entries_top_padding).max(0.0);
     virtual_range_for_viewport(
         total_rows,
-        COLUMN_ENTRY_SCROLL_HEIGHT,
+        geometry.entry_scroll_height,
         entry_viewport_top,
         entry_viewport_bottom - entry_viewport_top,
         overscan_rows,
@@ -217,8 +260,9 @@ fn directory_column<'a>(
     directory: &Path,
     active_child: Option<&Path>,
 ) -> Element<'a, Message> {
+    let geometry = ColumnGeometry::for_level(browser.user_config().columns_view_density);
     let mut content = Column::new()
-        .spacing(COLUMN_CONTENT_SPACING)
+        .spacing(geometry.content_spacing)
         .padding(COLUMN_PADDING)
         .width(Length::Fill);
 
@@ -233,13 +277,17 @@ fn directory_column<'a>(
                         viewport.offset_y,
                         viewport.height,
                         COLUMN_OVERSCAN_ROWS,
+                        geometry,
                     )
                 })
                 .unwrap_or_else(|| {
                     initial_virtual_range(
                         entries.len(),
-                        COLUMN_ENTRY_SCROLL_HEIGHT,
-                        column_initial_rows(browser.main_window_height),
+                        geometry.entry_scroll_height,
+                        column_initial_rows(
+                            browser.main_window_height,
+                            browser.user_config().columns_view_density,
+                        ),
                     )
                 });
             content = content.push(vertical_spacer(range.before_height));
@@ -391,6 +439,7 @@ fn column_resize_divider(pane_id: BrowserPaneId, column_index: usize) -> Element
 }
 
 fn column_message(message: &'static str) -> Element<'static, Message> {
+    // 空目录提示属于面板 chrome，保持基础字号，不随密度档位缩放。
     container(readable_text(message).size(COLUMN_ENTRY_TEXT_SIZE))
         .padding(COLUMN_ENTRY_PADDING)
         .width(Length::Fill)
@@ -409,6 +458,7 @@ fn column_entry_row<'a>(
     entry: &DirectoryEntry,
     active_child: Option<&Path>,
 ) -> Element<'a, Message> {
+    let geometry = ColumnGeometry::for_level(browser.user_config().columns_view_density);
     let visual_state = FileEntryVisualState::from_entry_context(
         pane,
         &entry.path,
@@ -431,7 +481,7 @@ fn column_entry_row<'a>(
     } else {
         container(measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),
-            COLUMN_ENTRY_TEXT_SIZE,
+            geometry.text_size as u32,
         ))
         .style(visual_state.content_style(modifier))
         .into()
@@ -439,22 +489,29 @@ fn column_entry_row<'a>(
 
     let trailing: Element<'static, Message> =
         if entry.kind == FileKind::Directory && !pane.is_trash_view {
-            themed_icon(IconSymbol::ChevronRight, icon_tone, CHEVRON_ICON_SIZE).into()
+            themed_icon(
+                IconSymbol::ChevronRight,
+                icon_tone,
+                geometry.chevron_icon_size,
+            )
+            .into()
         } else {
-            Space::new().width(Length::Fixed(CHEVRON_ICON_SIZE)).into()
+            Space::new()
+                .width(Length::Fixed(geometry.chevron_icon_size))
+                .into()
         };
 
     let row_content = row![
-        entry_thumbnail_or_icon(browser, entry, icon_tone, FileEntryIconDensity::Column),
+        entry_thumbnail_or_icon(browser, entry, icon_tone, geometry.icon_density),
         name,
         trailing
     ]
-    .spacing(COLUMN_ENTRY_SPACING)
+    .spacing(geometry.entry_spacing)
     .align_y(Alignment::Center);
     let row_container = container(row_content)
-        .padding(COLUMN_ENTRY_PADDING)
-        .height(Length::Fixed(COLUMN_ENTRY_HEIGHT))
-        .center_y(Length::Fixed(COLUMN_ENTRY_HEIGHT))
+        .padding(geometry.entry_padding)
+        .height(Length::Fixed(geometry.entry_height))
+        .center_y(Length::Fixed(geometry.entry_height))
         .width(Length::Fill);
     let selection_run_position =
         selection_run_position_for_entry_index(entries, entry_index, pane.selected_paths);
@@ -690,21 +747,25 @@ mod tests {
 
     #[test]
     fn column_virtual_range_uses_padding_and_top_spacer_gap() {
-        assert_eq!(COLUMN_ENTRIES_TOP_PADDING, 7.0);
+        let geometry = ColumnGeometry::for_level(crate::config::ViewDensityLevel::DEFAULT);
+        // 回归锚点：padding 加 top spacer 后首个行间距 = 7.0。
+        assert_eq!(geometry.entries_top_padding, 7.0);
 
         let first = column_virtual_range_for_viewport(
             10,
-            COLUMN_ENTRIES_TOP_PADDING,
-            COLUMN_ENTRY_HEIGHT,
+            geometry.entries_top_padding,
+            geometry.entry_height,
             0,
+            geometry,
         );
         assert_eq!((first.start, first.end), (0, 1));
 
         let second = column_virtual_range_for_viewport(
             10,
-            COLUMN_ENTRIES_TOP_PADDING + COLUMN_ENTRY_SCROLL_HEIGHT,
-            COLUMN_ENTRY_HEIGHT,
+            geometry.entries_top_padding + geometry.entry_scroll_height,
+            geometry.entry_height,
             0,
+            geometry,
         );
         assert_eq!((second.start, second.end), (1, 2));
     }
@@ -713,13 +774,62 @@ mod tests {
     fn column_initial_rows_cover_full_window_without_scroll() {
         // 回归：34 条目目录在内容不溢出列高、永远不会产生滚动事件时，
         // 初始窗口也必须完整覆盖最后一行。
-        let range =
-            initial_virtual_range(34, COLUMN_ENTRY_SCROLL_HEIGHT, column_initial_rows(900.0));
+        let default_level = crate::config::ViewDensityLevel::DEFAULT;
+        let geometry = ColumnGeometry::for_level(default_level);
+        let range = initial_virtual_range(
+            34,
+            geometry.entry_scroll_height,
+            column_initial_rows(900.0, default_level),
+        );
         assert_eq!(range.end, 34);
         assert_eq!(range.after_height, 0.0);
 
-        let rows = column_initial_rows(900.0);
-        assert!(rows as f32 * COLUMN_ENTRY_SCROLL_HEIGHT >= 900.0 - COLUMN_ENTRIES_TOP_PADDING);
+        let rows = column_initial_rows(900.0, default_level);
+        assert!(rows as f32 * geometry.entry_scroll_height >= 900.0 - geometry.entries_top_padding);
+    }
+
+    #[test]
+    fn column_geometry_scales_entry_dimensions_and_keeps_column_width_chrome() {
+        let default_geometry = ColumnGeometry::for_level(crate::config::ViewDensityLevel::DEFAULT);
+        assert_eq!(default_geometry.entry_height, COLUMN_ENTRY_HEIGHT);
+        assert_eq!(
+            default_geometry.entry_scroll_height,
+            COLUMN_ENTRY_HEIGHT + COLUMN_CONTENT_SPACING as f32
+        );
+        assert_eq!(
+            default_geometry.entries_top_padding,
+            COLUMN_PADDING[0] as f32 + COLUMN_CONTENT_SPACING as f32
+        );
+        assert_eq!(
+            default_geometry.content_spacing,
+            COLUMN_CONTENT_SPACING as f32
+        );
+        assert_eq!(default_geometry.text_size, COLUMN_ENTRY_TEXT_SIZE as f32);
+        assert_eq!(default_geometry.chevron_icon_size, CHEVRON_ICON_SIZE);
+        assert_eq!(default_geometry.entry_spacing, COLUMN_ENTRY_SPACING as f32);
+
+        let level = crate::config::ViewDensityLevel::from_index(6);
+        let scale = level.scale();
+        let geometry = ColumnGeometry::for_level(level);
+        // 缩放尺寸按设计四舍五入到整数像素。
+        assert_eq!(geometry.entry_height, (COLUMN_ENTRY_HEIGHT * scale).round());
+        assert_eq!(
+            geometry.content_spacing,
+            (COLUMN_CONTENT_SPACING as f32 * scale).round()
+        );
+        // 面板 padding 固定，只有行间距部分缩放。
+        assert_eq!(
+            geometry.entries_top_padding,
+            COLUMN_PADDING[0] as f32 + (COLUMN_CONTENT_SPACING as f32 * scale).round()
+        );
+        assert_eq!(
+            geometry.text_size,
+            (COLUMN_ENTRY_TEXT_SIZE as f32 * scale).round()
+        );
+        assert_eq!(
+            geometry.entry_padding.right,
+            (COLUMN_ENTRY_PADDING[1] as f32 * scale).round()
+        );
     }
 
     #[test]

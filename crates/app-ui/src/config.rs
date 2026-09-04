@@ -60,6 +60,66 @@ pub(crate) const MAX_ICON_GRID_SIZE: u32 = 192;
 pub(crate) const ICON_GRID_SIZE_STEP: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ViewDensityLevel(u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewDensityStep {
+    Increase,
+    Decrease,
+}
+
+impl ViewDensityLevel {
+    const MAX_INDEX: u8 = ((MAX_ICON_GRID_SIZE - MIN_ICON_GRID_SIZE) / ICON_GRID_SIZE_STEP) as u8;
+    pub(crate) const DEFAULT: Self =
+        Self(((DEFAULT_ICON_GRID_SIZE - MIN_ICON_GRID_SIZE) / ICON_GRID_SIZE_STEP) as u8);
+
+    pub(crate) const fn from_index(index: u8) -> Self {
+        Self(if index > Self::MAX_INDEX {
+            Self::MAX_INDEX
+        } else {
+            index
+        })
+    }
+
+    pub(crate) const fn index(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) const fn icon_grid_size(self) -> u32 {
+        MIN_ICON_GRID_SIZE + self.0 as u32 * ICON_GRID_SIZE_STEP
+    }
+
+    pub(crate) fn scale(self) -> f32 {
+        self.icon_grid_size() as f32 / DEFAULT_ICON_GRID_SIZE as f32
+    }
+
+    pub(crate) fn from_icon_grid_size(size: u32) -> Self {
+        let size = normalize_icon_grid_size(size);
+        let index = (size - MIN_ICON_GRID_SIZE + ICON_GRID_SIZE_STEP / 2) / ICON_GRID_SIZE_STEP;
+        Self::from_index(index as u8)
+    }
+
+    pub(crate) const fn step(self, step: ViewDensityStep) -> Self {
+        match step {
+            ViewDensityStep::Increase => Self::from_index(self.0.saturating_add(1)),
+            ViewDensityStep::Decrease => Self(self.0.saturating_sub(1)),
+        }
+    }
+}
+
+impl UserConfig {
+    /// Icons 视图活动几何的唯一读取入口；`icon_grid_size` 字段只保留兼容镜像用途。
+    pub(crate) fn icons_icon_edge(&self) -> u32 {
+        self.icons_view_density.icon_grid_size()
+    }
+
+    pub(crate) fn set_icons_view_density(&mut self, level: ViewDensityLevel) {
+        self.icons_view_density = level;
+        self.icon_grid_size = level.icon_grid_size();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiLanguage {
     English,
     Chinese,
@@ -376,6 +436,9 @@ pub(crate) struct UserConfig {
     pub(crate) visible_column_count: usize,
     pub(crate) window_controls: crate::model::WindowControlsConfig,
     pub(crate) icon_grid_size: u32,
+    pub(crate) columns_view_density: ViewDensityLevel,
+    pub(crate) list_view_density: ViewDensityLevel,
+    pub(crate) icons_view_density: ViewDensityLevel,
     pub(crate) list_view_preferences: crate::model::ListViewPreferences,
     pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
@@ -427,6 +490,9 @@ pub(crate) fn default_user_config() -> UserConfig {
         visible_column_count: DEFAULT_VISIBLE_COLUMN_COUNT,
         window_controls: crate::model::WindowControlsConfig::default(),
         icon_grid_size: DEFAULT_ICON_GRID_SIZE,
+        columns_view_density: ViewDensityLevel::DEFAULT,
+        list_view_density: ViewDensityLevel::DEFAULT,
+        icons_view_density: ViewDensityLevel::DEFAULT,
         list_view_preferences: crate::model::ListViewPreferences::default(),
         list_directory_size_display_mode: ListDirectorySizeDisplayMode::ItemCount,
         startup_location_policy: StartupLocationPolicy::Home,
@@ -461,6 +527,9 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         visible_column_count: DEFAULT_VISIBLE_COLUMN_COUNT,
         window_controls: crate::model::WindowControlsConfig::default(),
         icon_grid_size: DEFAULT_ICON_GRID_SIZE,
+        columns_view_density: ViewDensityLevel::DEFAULT,
+        list_view_density: ViewDensityLevel::DEFAULT,
+        icons_view_density: ViewDensityLevel::DEFAULT,
         list_view_preferences: crate::model::ListViewPreferences::default(),
         list_directory_size_display_mode: ListDirectorySizeDisplayMode::ItemCount,
         startup_location_policy: StartupLocationPolicy::Home,
@@ -512,6 +581,58 @@ pub(crate) fn toml_string<'a>(document: &'a toml::Table, key: &str) -> Option<&'
         .get(key)
         .and_then(toml::Value::as_str)
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod view_density_tests {
+    use super::*;
+
+    #[test]
+    fn levels_map_all_sizes_and_clamp_inputs() {
+        for (index, size) in [64, 80, 96, 112, 128, 144, 160, 176, 192]
+            .into_iter()
+            .enumerate()
+        {
+            let level = ViewDensityLevel::from_index(index as u8);
+            assert_eq!((level.index(), level.icon_grid_size()), (index as u8, size));
+        }
+
+        assert_eq!(ViewDensityLevel::DEFAULT.index(), 2);
+        assert_eq!(ViewDensityLevel::DEFAULT.scale(), 1.0);
+        assert_eq!(ViewDensityLevel::from_index(u8::MAX).index(), 8);
+        assert_eq!(ViewDensityLevel::from_icon_grid_size(0).index(), 0);
+        assert_eq!(ViewDensityLevel::from_icon_grid_size(71).index(), 0);
+        assert_eq!(ViewDensityLevel::from_icon_grid_size(72).index(), 1);
+        assert_eq!(ViewDensityLevel::from_icon_grid_size(u32::MAX).index(), 8);
+    }
+
+    #[test]
+    fn stepping_uses_direction_and_stops_at_boundaries() {
+        assert_eq!(
+            ViewDensityLevel::from_index(0)
+                .step(ViewDensityStep::Decrease)
+                .index(),
+            0
+        );
+        assert_eq!(
+            ViewDensityLevel::from_index(0)
+                .step(ViewDensityStep::Increase)
+                .index(),
+            1
+        );
+        assert_eq!(
+            ViewDensityLevel::from_index(8)
+                .step(ViewDensityStep::Increase)
+                .index(),
+            8
+        );
+        assert_eq!(
+            ViewDensityLevel::from_index(8)
+                .step(ViewDensityStep::Decrease)
+                .index(),
+            7
+        );
+    }
 }
 
 #[cfg(test)]

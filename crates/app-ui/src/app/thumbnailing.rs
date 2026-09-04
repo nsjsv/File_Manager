@@ -283,7 +283,7 @@ impl FileBrowser {
     }
 
     fn schedule_visible_icon_grid_thumbnails_for_pane(&mut self, pane_id: BrowserPaneId) {
-        let icon_edge = self.user_config.icon_grid_size;
+        let icon_edge = self.user_config.icons_icon_edge();
         let thumbnail_edge = crate::icon_grid_geometry::thumbnail_edge(icon_edge);
         let Some((directory, requests)) = self.pane_view(pane_id).map(|pane| {
             let layout = self.icon_grid_layout_for_pane(pane);
@@ -323,13 +323,15 @@ impl FileBrowser {
         let Some(pane) = self.pane_view(pane_id) else {
             return;
         };
+        let geometry =
+            crate::list_view::ListGeometry::for_level(self.user_config.list_view_density);
         let directory = pane.current_dir.clone();
         let range = viewport
             .map(|viewport| {
                 crate::visible_entries::list_entry_range_for_viewport(
                     pane.entries,
                     pane.expanded_directories,
-                    crate::list_view::LIST_ROW_HEIGHT,
+                    geometry.row_height,
                     crate::list_view::LIST_HEADER_HEIGHT,
                     viewport.offset_y,
                     viewport.height,
@@ -340,7 +342,7 @@ impl FileBrowser {
                 crate::visible_entries::initial_list_entry_range(
                     pane.entries,
                     pane.expanded_directories,
-                    crate::list_view::LIST_ROW_HEIGHT,
+                    geometry.row_height,
                     INITIAL_THUMBNAIL_ROWS,
                 )
             });
@@ -539,6 +541,9 @@ impl FileBrowser {
         directory: &Path,
         len: usize,
     ) -> (usize, usize) {
+        let geometry = crate::three_column_view::ColumnGeometry::for_level(
+            self.user_config.columns_view_density,
+        );
         let range = self
             .column_viewport_for_pane_directory(pane_id, directory)
             .map(|viewport| {
@@ -547,14 +552,11 @@ impl FileBrowser {
                     viewport.offset_y,
                     viewport.height,
                     OVERSCAN_ROWS,
+                    geometry,
                 )
             })
             .unwrap_or_else(|| {
-                initial_virtual_range(
-                    len,
-                    crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
-                    INITIAL_THUMBNAIL_ROWS,
-                )
+                initial_virtual_range(len, geometry.entry_scroll_height, INITIAL_THUMBNAIL_ROWS)
             });
         (range.start, range.end)
     }
@@ -592,7 +594,7 @@ impl FileBrowser {
         {
             Some(BrowserViewMode::Columns) => COLUMN_THUMBNAIL_EDGE,
             Some(BrowserViewMode::Icons) => {
-                crate::icon_grid_geometry::thumbnail_edge(self.user_config.icon_grid_size)
+                crate::icon_grid_geometry::thumbnail_edge(self.user_config.icons_icon_edge())
             }
             Some(BrowserViewMode::List) | None => LIST_THUMBNAIL_EDGE,
         }

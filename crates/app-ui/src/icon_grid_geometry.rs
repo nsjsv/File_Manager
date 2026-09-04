@@ -1,6 +1,4 @@
-use crate::config::{
-    normalize_icon_grid_size, ICON_GRID_SIZE_STEP, MAX_ICON_GRID_SIZE, MIN_ICON_GRID_SIZE,
-};
+use crate::config::DEFAULT_ICON_GRID_SIZE;
 #[cfg(test)]
 use crate::model::IconGridViewport;
 #[cfg(test)]
@@ -30,10 +28,44 @@ pub(crate) enum IconGridDirection {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IconGridZoom {
-    In,
-    Out,
+// 图标边长是档位的唯一输入：卡片内边距、标签、间距等辅助几何按
+// 96px 基准档同比例缩放，保证所有调用点传入同一 icon_edge 即得到一致几何。
+// 缩放结果一律取整到整数像素：整数几何让整行对齐的 viewport 运算保持精确，
+// 避免虚拟范围与缩略图调度在浮点临界点上各舍入到不同行。
+fn icon_grid_scale(icon_edge: u32) -> f32 {
+    icon_edge as f32 / DEFAULT_ICON_GRID_SIZE as f32
+}
+
+fn scaled_by_icon_grid(base: f32, icon_edge: u32) -> f32 {
+    (base * icon_grid_scale(icon_edge)).round()
+}
+
+pub(crate) fn grid_gap(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(ICON_GRID_GAP, icon_edge)
+}
+
+pub(crate) fn tile_padding_vertical(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(f32::from(ICON_GRID_TILE_VERTICAL_PADDING), icon_edge)
+}
+
+pub(crate) fn tile_padding_horizontal(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(f32::from(ICON_GRID_TILE_HORIZONTAL_PADDING), icon_edge)
+}
+
+pub(crate) fn icon_label_spacing(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(ICON_GRID_ICON_LABEL_SPACING as f32, icon_edge)
+}
+
+pub(crate) fn label_size(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(ICON_GRID_LABEL_SIZE, icon_edge)
+}
+
+pub(crate) fn label_line_height(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(ICON_GRID_LABEL_LINE_HEIGHT_PX, icon_edge)
+}
+
+pub(crate) fn label_height(icon_edge: u32) -> f32 {
+    scaled_by_icon_grid(ICON_GRID_LABEL_HEIGHT, icon_edge)
 }
 
 #[cfg(test)]
@@ -48,24 +80,24 @@ pub(crate) struct IconGridVisibleRange {
 }
 
 pub(crate) fn tile_width(icon_edge: u32) -> f32 {
-    icon_edge as f32 + ICON_GRID_TILE_EXTRA_WIDTH
+    icon_edge as f32 + scaled_by_icon_grid(ICON_GRID_TILE_EXTRA_WIDTH, icon_edge)
 }
 
 pub(crate) fn tile_visual_height(icon_edge: u32) -> f32 {
     icon_edge as f32
-        + f32::from(ICON_GRID_TILE_VERTICAL_PADDING) * 2.0
-        + ICON_GRID_ICON_LABEL_SPACING as f32
-        + ICON_GRID_LABEL_HEIGHT
+        + tile_padding_vertical(icon_edge) * 2.0
+        + icon_label_spacing(icon_edge)
+        + label_height(icon_edge)
 }
 
 pub(crate) fn row_height(icon_edge: u32) -> f32 {
-    tile_visual_height(icon_edge) + ICON_GRID_GAP
+    tile_visual_height(icon_edge) + grid_gap(icon_edge)
 }
 
 pub(crate) fn column_count_for_width(viewport_width: f32, icon_edge: u32) -> usize {
     let available_width = (viewport_width - ICON_GRID_CONTENT_PADDING * 2.0).max(0.0);
-    let column_slot_width = tile_width(icon_edge) + ICON_GRID_GAP;
-    ((available_width + ICON_GRID_GAP) / column_slot_width)
+    let column_slot_width = tile_width(icon_edge) + grid_gap(icon_edge);
+    ((available_width + grid_gap(icon_edge)) / column_slot_width)
         .floor()
         .max(1.0) as usize
 }
@@ -151,18 +183,6 @@ pub(crate) fn scroll_delta_to_reveal_row(
     )
 }
 
-pub(crate) fn stepped_icon_grid_size(current: u32, zoom: IconGridZoom) -> u32 {
-    let current = normalize_icon_grid_size(current);
-    match zoom {
-        IconGridZoom::In => current
-            .saturating_add(ICON_GRID_SIZE_STEP)
-            .min(MAX_ICON_GRID_SIZE),
-        IconGridZoom::Out => current
-            .saturating_sub(ICON_GRID_SIZE_STEP)
-            .max(MIN_ICON_GRID_SIZE),
-    }
-}
-
 pub(crate) fn thumbnail_edge(icon_edge: u32) -> u32 {
     icon_edge.saturating_mul(2)
 }
@@ -170,6 +190,8 @@ pub(crate) fn thumbnail_edge(icon_edge: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ViewDensityLevel, ViewDensityStep};
+    use crate::config::{MAX_ICON_GRID_SIZE, MIN_ICON_GRID_SIZE};
 
     #[test]
     fn narrow_width_always_keeps_one_column() {
@@ -268,16 +290,58 @@ mod tests {
     }
 
     #[test]
-    fn zoom_steps_and_clamps_at_limits() {
-        assert_eq!(stepped_icon_grid_size(96, IconGridZoom::In), 112);
-        assert_eq!(stepped_icon_grid_size(96, IconGridZoom::Out), 80);
+    fn zoom_steps_and_clamp_at_limits() {
+        assert_eq!(ViewDensityLevel::DEFAULT.icon_grid_size(), 96);
         assert_eq!(
-            stepped_icon_grid_size(MAX_ICON_GRID_SIZE, IconGridZoom::In),
+            ViewDensityLevel::from_index(8)
+                .step(ViewDensityStep::Increase)
+                .icon_grid_size(),
             MAX_ICON_GRID_SIZE
         );
         assert_eq!(
-            stepped_icon_grid_size(MIN_ICON_GRID_SIZE, IconGridZoom::Out),
+            ViewDensityLevel::from_index(0)
+                .step(ViewDensityStep::Decrease)
+                .icon_grid_size(),
             MIN_ICON_GRID_SIZE
+        );
+    }
+
+    #[test]
+    fn default_edge_keeps_legacy_geometry_and_edges_scale_auxiliary_dimensions() {
+        let default_edge = ViewDensityLevel::DEFAULT.icon_grid_size();
+        assert_eq!(icon_grid_scale(default_edge), 1.0);
+        assert_eq!(tile_width(default_edge), 96.0 + ICON_GRID_TILE_EXTRA_WIDTH);
+        assert_eq!(grid_gap(default_edge), ICON_GRID_GAP);
+        assert_eq!(label_size(default_edge), ICON_GRID_LABEL_SIZE);
+        assert_eq!(
+            tile_visual_height(default_edge),
+            96.0 + f32::from(ICON_GRID_TILE_VERTICAL_PADDING) * 2.0
+                + ICON_GRID_ICON_LABEL_SPACING as f32
+                + ICON_GRID_LABEL_HEIGHT
+        );
+
+        let max_edge = MAX_ICON_GRID_SIZE;
+        assert_eq!(icon_grid_scale(max_edge), 2.0);
+        assert_eq!(
+            tile_width(max_edge),
+            192.0 + ICON_GRID_TILE_EXTRA_WIDTH * 2.0
+        );
+        assert_eq!(grid_gap(max_edge), ICON_GRID_GAP * 2.0);
+        assert_eq!(
+            label_line_height(max_edge),
+            ICON_GRID_LABEL_LINE_HEIGHT_PX * 2.0
+        );
+        assert_eq!(
+            row_height(max_edge),
+            tile_visual_height(max_edge) + ICON_GRID_GAP * 2.0
+        );
+
+        let min_edge = MIN_ICON_GRID_SIZE;
+        assert!((icon_grid_scale(min_edge) - 64.0 / 96.0).abs() < f32::EPSILON);
+        // 缩放尺寸四舍五入到整数像素。
+        assert_eq!(
+            tile_width(min_edge),
+            64.0 + (ICON_GRID_TILE_EXTRA_WIDTH * 2.0 / 3.0).round()
         );
     }
 

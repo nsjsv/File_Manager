@@ -7,9 +7,9 @@ use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, Ter
 use super::startup;
 use super::{
     browser_view_mode_from_config_value, file_operation_verification_from_config_value,
-    normalize_icon_grid_size, normalize_preview_directory_expand_levels, normalize_sidebar_width,
-    toml_string, PreviewFileSizeKind, PreviewFileSizeLimits, SidebarFavoriteConfig, UserConfig,
-    CONFIG_FILE_NAME,
+    normalize_preview_directory_expand_levels, normalize_sidebar_width, toml_string,
+    PreviewFileSizeKind, PreviewFileSizeLimits, SidebarFavoriteConfig, UserConfig,
+    ViewDensityLevel, CONFIG_FILE_NAME,
 };
 use crate::network_connections::SavedNetworkConnection;
 
@@ -54,6 +54,9 @@ const RENDERING_BACKEND_KEY: &str = "rendering_backend";
 const FILE_OPERATION_VERIFICATION_KEY: &str = "file_operation_verification";
 const BROWSER_VIEW_MODE_KEY: &str = "browser_view_mode";
 const ICON_GRID_SIZE_KEY: &str = "icon_grid_size";
+const COLUMNS_VIEW_DENSITY_KEY: &str = "columns_view_density";
+const LIST_VIEW_DENSITY_KEY: &str = "list_view_density";
+const ICONS_VIEW_DENSITY_KEY: &str = "icons_view_density";
 const SHORTCUTS_KEY: &str = "shortcuts";
 
 pub(super) fn load_legacy_user_config_from_dir(
@@ -143,7 +146,18 @@ pub(super) fn parse_toml_user_config(content: &str, default: UserConfig) -> User
         .and_then(toml_positive_integer_as_u64)
         .and_then(|size| u32::try_from(size).ok())
     {
-        config.icon_grid_size = normalize_icon_grid_size(size);
+        config.icons_view_density = ViewDensityLevel::from_icon_grid_size(size);
+        config.icon_grid_size = config.icons_view_density.icon_grid_size();
+    }
+    if let Some(level) = parse_toml_view_density(&document, COLUMNS_VIEW_DENSITY_KEY) {
+        config.columns_view_density = level;
+    }
+    if let Some(level) = parse_toml_view_density(&document, LIST_VIEW_DENSITY_KEY) {
+        config.list_view_density = level;
+    }
+    if let Some(level) = parse_toml_view_density(&document, ICONS_VIEW_DENSITY_KEY) {
+        config.icons_view_density = level;
+        config.icon_grid_size = level.icon_grid_size();
     }
     startup::apply_toml_startup_config(&mut config, &document);
     if let Some(table) = document.get(SHORTCUTS_KEY).and_then(toml::Value::as_table) {
@@ -235,6 +249,12 @@ fn toml_number_as_f32(value: &toml::Value) -> Option<f32> {
         toml::Value::Integer(value) => Some(*value as f32),
         _ => None,
     }
+}
+
+fn parse_toml_view_density(document: &toml::Table, key: &str) -> Option<ViewDensityLevel> {
+    let index = document.get(key)?.as_integer()?;
+    let index = index.clamp(0, i64::from(u8::MAX)) as u8;
+    Some(ViewDensityLevel::from_index(index))
 }
 
 fn toml_positive_integer_as_u64(value: &toml::Value) -> Option<u64> {

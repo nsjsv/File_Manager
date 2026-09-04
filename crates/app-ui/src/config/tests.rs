@@ -514,6 +514,7 @@ fn icon_grid_mode_uses_stable_config_value() {
 fn stored_icon_grid_size_is_normalized_at_config_boundary() {
     let default = default_user_config();
     let mut stored = default.user_preferences().to_stored();
+    stored.icons_view_density = None;
     stored.icon_grid_size = 1;
     assert_eq!(
         UserPreferences::from_stored(stored.clone(), &default).icon_grid_size,
@@ -553,6 +554,21 @@ fn legacy_icon_grid_preferences_are_loaded_and_normalized() {
 
     assert_eq!(parsed.browser_view_mode, BrowserViewMode::Icons);
     assert_eq!(parsed.icon_grid_size, MAX_ICON_GRID_SIZE);
+    assert_eq!(parsed.icons_view_density.index(), 8);
+
+    let parsed = legacy_toml::parse_toml_user_config(
+        "icon_grid_size = 80\ncolumns_view_density = 255\nlist_view_density = -1\nicons_view_density = 4\n",
+        default_user_config(),
+    );
+    assert_eq!(
+        (
+            parsed.columns_view_density.index(),
+            parsed.list_view_density.index(),
+            parsed.icons_view_density.index(),
+            parsed.icon_grid_size,
+        ),
+        (8, 0, 4, 128)
+    );
 }
 
 #[test]

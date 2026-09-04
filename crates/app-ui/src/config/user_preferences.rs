@@ -14,11 +14,11 @@ use super::{
     app_config_dir_path, browser_view_mode_config_value, browser_view_mode_from_config_value,
     default_state_database_path, default_user_config, file_operation_verification_config_value,
     file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
-    list_directory_size_display_mode_from_config_value, normalize_icon_grid_size,
-    normalize_preview_directory_expand_levels, normalize_sidebar_width,
-    normalize_visible_column_count, sort_direction_config_value, sort_direction_from_config_value,
-    sort_field_config_value, sort_field_from_config_value, LaunchWindowPolicy,
-    PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting, UserConfig,
+    list_directory_size_display_mode_from_config_value, normalize_preview_directory_expand_levels,
+    normalize_sidebar_width, normalize_visible_column_count, sort_direction_config_value,
+    sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
+    LaunchWindowPolicy, PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting,
+    UserConfig, ViewDensityLevel,
 };
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
@@ -46,6 +46,9 @@ pub(crate) struct UserPreferences {
     pub(crate) visible_column_count: usize,
     pub(crate) window_controls: WindowControlsConfig,
     pub(crate) icon_grid_size: u32,
+    pub(crate) columns_view_density: ViewDensityLevel,
+    pub(crate) list_view_density: ViewDensityLevel,
+    pub(crate) icons_view_density: ViewDensityLevel,
     pub(crate) list_view_preferences: ListViewPreferences,
     pub(crate) list_directory_size_display_mode: ListDirectorySizeDisplayMode,
     pub(crate) startup_location_policy: StartupLocationPolicy,
@@ -60,7 +63,20 @@ pub(crate) struct UserPreferences {
 }
 
 impl UserPreferences {
+    fn icons_view_density_from_user_config(config: &UserConfig) -> ViewDensityLevel {
+        // 旧调用点可能只更新 icon_grid_size，默认档位时仍需由兼容字段迁移。
+        let legacy_level = ViewDensityLevel::from_icon_grid_size(config.icon_grid_size);
+        if config.icons_view_density == ViewDensityLevel::DEFAULT
+            && legacy_level != ViewDensityLevel::DEFAULT
+        {
+            legacy_level
+        } else {
+            config.icons_view_density
+        }
+    }
+
     pub(crate) fn from_user_config(config: &UserConfig) -> Self {
+        let icons_view_density = Self::icons_view_density_from_user_config(config);
         Self {
             network_list_thumbnail_downloads_enabled: config
                 .network_list_thumbnail_downloads_enabled,
@@ -76,7 +92,10 @@ impl UserPreferences {
             browser_view_mode: config.browser_view_mode,
             visible_column_count: normalize_visible_column_count(config.visible_column_count),
             window_controls: config.window_controls.clone(),
-            icon_grid_size: normalize_icon_grid_size(config.icon_grid_size),
+            icon_grid_size: icons_view_density.icon_grid_size(),
+            columns_view_density: config.columns_view_density,
+            list_view_density: config.list_view_density,
+            icons_view_density,
             list_view_preferences: config.list_view_preferences.clone(),
             list_directory_size_display_mode: config.list_directory_size_display_mode,
             startup_location_policy: config.startup_location_policy,
@@ -106,7 +125,10 @@ impl UserPreferences {
         config.browser_view_mode = self.browser_view_mode;
         config.visible_column_count = normalize_visible_column_count(self.visible_column_count);
         config.window_controls = self.window_controls.clone();
-        config.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
+        config.columns_view_density = self.columns_view_density;
+        config.list_view_density = self.list_view_density;
+        config.icons_view_density = self.icons_view_density;
+        config.icon_grid_size = self.icons_view_density.icon_grid_size();
         config.list_view_preferences = self.list_view_preferences.clone();
         config.list_directory_size_display_mode = self.list_directory_size_display_mode;
         config.startup_location_policy = self.startup_location_policy;
@@ -150,7 +172,10 @@ impl UserPreferences {
             normalize_visible_column_count(self.visible_column_count) as u32;
         stored.window_chrome_layout = self.window_controls.layout().config_value().to_owned();
         stored.window_controls = stored_window_controls(&self.window_controls);
-        stored.icon_grid_size = normalize_icon_grid_size(self.icon_grid_size);
+        stored.columns_view_density = Some(self.columns_view_density.index());
+        stored.list_view_density = Some(self.list_view_density.index());
+        stored.icons_view_density = Some(self.icons_view_density.index());
+        stored.icon_grid_size = self.icons_view_density.icon_grid_size();
         stored.list_view_columns = stored_list_view_columns(&self.list_view_preferences);
         stored.list_sort_field =
             sort_field_config_value(self.list_view_preferences.sort().field).to_owned();
@@ -193,6 +218,18 @@ impl UserPreferences {
             &default_preferences.custom_color_scheme,
         );
         let window_controls = window_controls_from_stored(&stored, &default_preferences);
+        let columns_view_density = stored
+            .columns_view_density
+            .map(ViewDensityLevel::from_index)
+            .unwrap_or(default_preferences.columns_view_density);
+        let list_view_density = stored
+            .list_view_density
+            .map(ViewDensityLevel::from_index)
+            .unwrap_or(default_preferences.list_view_density);
+        let icons_view_density = stored
+            .icons_view_density
+            .map(ViewDensityLevel::from_index)
+            .unwrap_or_else(|| ViewDensityLevel::from_icon_grid_size(stored.icon_grid_size));
         Self {
             network_list_thumbnail_downloads_enabled: stored
                 .network_list_thumbnail_downloads_enabled,
@@ -221,7 +258,10 @@ impl UserPreferences {
                 stored.visible_column_count as usize,
             ),
             window_controls,
-            icon_grid_size: normalize_icon_grid_size(stored.icon_grid_size),
+            icon_grid_size: icons_view_density.icon_grid_size(),
+            columns_view_density,
+            list_view_density,
+            icons_view_density,
             list_view_preferences,
             list_directory_size_display_mode: list_directory_size_display_mode_from_config_value(
                 &stored.list_directory_size_display_mode,
@@ -602,5 +642,72 @@ mod tests {
             assert_eq!(restored.theme_mode, ThemeMode::Automatic);
             assert_eq!(restored.color_scheme, ColorSchemePreset::Default);
         }
+    }
+
+    #[test]
+    fn density_levels_roundtrip_independently_with_icon_mirror() {
+        let default = default_user_config();
+        let mut config = default.clone();
+        config.columns_view_density = ViewDensityLevel::from_index(1);
+        config.list_view_density = ViewDensityLevel::from_index(4);
+        config.icons_view_density = ViewDensityLevel::from_index(6);
+        config.icon_grid_size = config.icons_view_density.icon_grid_size();
+
+        let stored = config.user_preferences().to_stored();
+        assert_eq!(
+            (
+                stored.columns_view_density,
+                stored.list_view_density,
+                stored.icons_view_density,
+                stored.icon_grid_size,
+            ),
+            (Some(1), Some(4), Some(6), 160)
+        );
+
+        let restored = UserPreferences::from_stored(stored, &default);
+        assert_eq!(restored.columns_view_density.index(), 1);
+        assert_eq!(restored.list_view_density.index(), 4);
+        assert_eq!(restored.icons_view_density.index(), 6);
+        assert_eq!(restored.icon_grid_size, 160);
+    }
+
+    #[test]
+    fn density_boundary_migrates_legacy_values_and_clamps_new_indexes() {
+        let default = default_user_config();
+        let mut legacy_config = default.clone();
+        legacy_config.icon_grid_size = 160;
+        assert_eq!(
+            legacy_config.user_preferences().icons_view_density.index(),
+            6
+        );
+
+        let mut stored = default.user_preferences().to_stored();
+        stored.columns_view_density = None;
+        stored.list_view_density = None;
+        stored.icons_view_density = None;
+        stored.icon_grid_size = 120;
+        let migrated = UserPreferences::from_stored(stored, &default);
+        assert_eq!(migrated.columns_view_density, ViewDensityLevel::DEFAULT);
+        assert_eq!(migrated.list_view_density, ViewDensityLevel::DEFAULT);
+        assert_eq!(migrated.icons_view_density.index(), 4);
+        assert_eq!(migrated.icon_grid_size, 128);
+
+        let mut stored = migrated.to_stored();
+        stored.columns_view_density = Some(u8::MAX);
+        stored.list_view_density = Some(0);
+        stored.icons_view_density = Some(u8::MAX);
+        stored.icon_grid_size = 64;
+        let normalized = UserPreferences::from_stored(stored, &default);
+        assert_eq!(normalized.columns_view_density.index(), 8);
+        assert_eq!(normalized.list_view_density.index(), 0);
+        assert_eq!(normalized.icons_view_density.index(), 8);
+        assert_eq!(normalized.to_stored().icon_grid_size, 192);
+
+        let mut stored = normalized.to_stored();
+        stored.icons_view_density = Some(1);
+        stored.icon_grid_size = 192;
+        let preferred = UserPreferences::from_stored(stored, &default);
+        assert_eq!(preferred.icons_view_density.index(), 1);
+        assert_eq!(preferred.icon_grid_size, 80);
     }
 }

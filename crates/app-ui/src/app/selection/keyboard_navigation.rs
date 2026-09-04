@@ -14,7 +14,7 @@ use crate::commands::{
 };
 use crate::document_preview::document_preview_format_for_path;
 use crate::formatting::format_file_size;
-use crate::list_view::{LIST_HEADER_HEIGHT, LIST_ROW_HEIGHT};
+use crate::list_view::LIST_HEADER_HEIGHT;
 use crate::model::{
     AudioPreviewPlayback, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
     ExpandedDirectoryStatus, ImagePreviewViewport, Message, NavigationMode, PreviewState,
@@ -279,12 +279,14 @@ impl FileBrowser {
             }
             BrowserViewMode::List => {
                 let viewport = self.column_viewports.get(&self.current_dir)?;
+                let geometry =
+                    crate::list_view::ListGeometry::for_level(self.user_config.list_view_density);
                 let (item_offset, item_height) =
                     crate::visible_entries::list_entry_vertical_bounds(
                         &self.entries,
                         &self.expanded_directories,
                         path,
-                        LIST_ROW_HEIGHT,
+                        geometry.row_height,
                         LIST_HEADER_HEIGHT,
                     )?;
                 (
@@ -309,15 +311,17 @@ impl FileBrowser {
                         .as_slice()
                 };
                 let row_index = entries.iter().position(|entry| entry.path == path)?;
+                let geometry = crate::three_column_view::ColumnGeometry::for_level(
+                    self.user_config.columns_view_density,
+                );
                 (
                     ScrollbarRegion::Column { pane_id, directory },
                     vertical_scroll_delta_to_reveal(
                         viewport.offset_y,
                         viewport.height,
-                        crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
-                            + row_index as f32
-                                * crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
-                        crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+                        geometry.entries_top_padding
+                            + row_index as f32 * geometry.entry_scroll_height,
+                        geometry.entry_height,
                     ),
                 )
             }
@@ -578,7 +582,12 @@ mod tests {
 
     use super::*;
     use crate::config;
+    use crate::list_view::LIST_ROW_HEIGHT;
     use crate::thumbnail_cache::ColumnViewport;
+
+    fn default_column_geometry() -> crate::three_column_view::ColumnGeometry {
+        crate::three_column_view::ColumnGeometry::for_level(config::ViewDensityLevel::DEFAULT)
+    }
 
     async fn widget_action_count(task: Task<Message>) -> usize {
         let Some(mut stream) = iced_runtime::task::into_stream(task) else {
@@ -646,6 +655,7 @@ mod tests {
 
     #[test]
     fn keyboard_reveal_uses_scroll_content_offsets() {
+        let column_geometry = default_column_geometry();
         for (view_mode, viewport_height, expected_delta) in [
             (
                 BrowserViewMode::List,
@@ -654,9 +664,8 @@ mod tests {
             ),
             (
                 BrowserViewMode::Columns,
-                crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
-                    + crate::three_column_view::COLUMN_ENTRY_HEIGHT,
-                crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT,
+                column_geometry.entries_top_padding + column_geometry.entry_height,
+                column_geometry.entry_scroll_height,
             ),
         ] {
             let browser = browser_for_vertical_keyboard_navigation(view_mode, viewport_height);
@@ -738,8 +747,7 @@ mod tests {
     async fn column_keyboard_navigation_reveals_offscreen_selection() {
         let mut browser = browser_for_vertical_keyboard_navigation(
             BrowserViewMode::Columns,
-            crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
-                + crate::three_column_view::COLUMN_ENTRY_HEIGHT,
+            default_column_geometry().entries_top_padding + default_column_geometry().entry_height,
         );
 
         let widget_actions =

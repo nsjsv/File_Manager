@@ -8,7 +8,7 @@ use super::FileBrowser;
 use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::commands::load_expanded_directory_command;
 use crate::config::normalize_visible_column_count;
-use crate::list_view::{LIST_HEADER_HEIGHT, LIST_ROW_HEIGHT};
+use crate::list_view::LIST_HEADER_HEIGHT;
 use crate::model::{
     BrowserPaneId, BrowserViewMode, DirectoryExpansionLoadContext, ExpandedDirectory,
     ExpandedDirectoryLoadRequest, ExpandedDirectoryStatus, ListExpansionFollowSessionId, Message,
@@ -161,12 +161,14 @@ impl FileBrowser {
                 )
             }
             BrowserViewMode::List => {
+                let geometry =
+                    crate::list_view::ListGeometry::for_level(self.user_config.list_view_density);
                 let (item_offset, item_height) =
                     crate::visible_entries::list_entry_vertical_bounds(
                         &self.entries,
                         &self.expanded_directories,
                         path,
-                        LIST_ROW_HEIGHT,
+                        geometry.row_height,
                         LIST_HEADER_HEIGHT,
                     )?;
                 let viewport = self.column_viewports.get(&self.current_dir);
@@ -186,16 +188,15 @@ impl FileBrowser {
                         .as_slice()
                 };
                 let row_index = entries.iter().position(|entry| entry.path == path)?;
-                let item_offset = crate::three_column_view::COLUMN_ENTRIES_TOP_PADDING
-                    + row_index as f32 * crate::three_column_view::COLUMN_ENTRY_SCROLL_HEIGHT;
+                let geometry = crate::three_column_view::ColumnGeometry::for_level(
+                    self.user_config.columns_view_density,
+                );
+                let item_offset =
+                    geometry.entries_top_padding + row_index as f32 * geometry.entry_scroll_height;
                 let viewport = self.column_viewports.get(&directory);
                 (
                     ScrollbarRegion::Column { pane_id, directory },
-                    reveal_target_y(
-                        viewport,
-                        item_offset,
-                        crate::three_column_view::COLUMN_ENTRY_HEIGHT,
-                    ),
+                    reveal_target_y(viewport, item_offset, geometry.entry_height),
                 )
             }
         };

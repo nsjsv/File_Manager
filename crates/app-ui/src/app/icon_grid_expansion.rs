@@ -42,7 +42,7 @@ impl FileBrowser {
             pane.entries,
             pane.icon_grid_viewport.width,
             self.main_window_height,
-            self.user_config.icon_grid_size,
+            self.user_config.icons_icon_edge(),
             expansion,
         )
     }

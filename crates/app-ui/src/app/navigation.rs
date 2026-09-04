@@ -669,6 +669,9 @@ impl FileBrowser {
             return None;
         }
 
+        let row_height =
+            crate::list_view::ListGeometry::for_level(self.user_config.list_view_density)
+                .row_height;
         let range = self
             .column_viewports
             .get(&self.current_dir)
@@ -676,7 +679,7 @@ impl FileBrowser {
                 crate::visible_entries::list_entry_range_for_viewport(
                     &self.entries,
                     &self.expanded_directories,
-                    crate::list_view::LIST_ROW_HEIGHT,
+                    row_height,
                     crate::list_view::LIST_HEADER_HEIGHT,
                     viewport.offset_y,
                     viewport.height,
@@ -687,8 +690,11 @@ impl FileBrowser {
                 crate::visible_entries::initial_list_entry_range(
                     &self.entries,
                     &self.expanded_directories,
-                    crate::list_view::LIST_ROW_HEIGHT,
-                    crate::list_view::list_initial_rows(self.main_window_height),
+                    row_height,
+                    crate::list_view::list_initial_rows(
+                        self.main_window_height,
+                        self.user_config.list_view_density,
+                    ),
                 )
             });
         let entries = crate::visible_entries::visible_entries_in_range(
@@ -710,8 +716,7 @@ impl FileBrowser {
                     .get(&visible_entry.entry.path)
                     .map(|expanded| {
                         crate::visible_entries::visible_entry_status_row_height(
-                            expanded,
-                            crate::list_view::LIST_ROW_HEIGHT,
+                            expanded, row_height,
                         )
                     })
                     .unwrap_or(0.0),

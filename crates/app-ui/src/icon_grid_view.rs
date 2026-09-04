@@ -24,9 +24,9 @@ use crate::file_entry_view::{
     entry_text_input_style, entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryVisualState,
 };
 use crate::icon_grid_geometry::{
-    row_height, tile_visual_height, tile_width, ICON_GRID_CONTENT_PADDING, ICON_GRID_GAP,
-    ICON_GRID_ICON_LABEL_SPACING, ICON_GRID_LABEL_HEIGHT, ICON_GRID_LABEL_LINE_HEIGHT_PX,
-    ICON_GRID_LABEL_SIZE, ICON_GRID_TILE_HORIZONTAL_PADDING, ICON_GRID_TILE_VERTICAL_PADDING,
+    grid_gap, icon_label_spacing, label_height, label_line_height, label_size, row_height,
+    tile_padding_horizontal, tile_padding_vertical, tile_visual_height, tile_width,
+    ICON_GRID_CONTENT_PADDING, ICON_GRID_LABEL_SIZE,
 };
 use crate::icon_grid_layout::{
     IconGridBandLayout, IconGridFlowSegment, IconGridPanelLayout, IconGridPanelStatus,
@@ -39,12 +39,7 @@ use crate::model::{IconGridExpansionAnchor, IconGridViewport, Message, Scrollbar
 use crate::typography::readable_text;
 use crate::view::rename_input_id;
 
-const GRID_GAP: f32 = ICON_GRID_GAP;
 const GRID_PADDING: f32 = ICON_GRID_CONTENT_PADDING;
-const ICON_GRID_TILE_PADDING: [u16; 2] = [
-    ICON_GRID_TILE_VERTICAL_PADDING,
-    ICON_GRID_TILE_HORIZONTAL_PADDING,
-];
 const DISCLOSURE_BUTTON_SIZE: f32 = 24.0;
 const DISCLOSURE_ICON_SIZE: f32 = 14.0;
 const PANEL_INDICATOR_SIZE: f32 = 14.0;
@@ -192,11 +187,12 @@ fn render_rows<'a>(
     clip_bottom: f32,
     input: IconGridPanelInput,
 ) -> Element<'a, Message> {
+    let icon_edge = browser.user_config().icons_icon_edge();
     let Some(visible) = rows.visible_rows(
         panel_top,
         clip_bottom,
         viewport,
-        browser.user_config().icon_grid_size,
+        icon_edge,
         browser.main_window_height,
     ) else {
         return vertical_spacer(rows.height);
@@ -205,7 +201,7 @@ fn render_rows<'a>(
     let mut content = Column::new()
         .spacing(0)
         .push(vertical_spacer(visible.before_height));
-    let row_height = row_height(browser.user_config().icon_grid_size);
+    let row_height = row_height(icon_edge);
     for row_index in visible.start_row..visible.end_row {
         let start = row_index
             .saturating_mul(rows.column_count)
@@ -214,7 +210,7 @@ fn render_rows<'a>(
             .saturating_add(rows.column_count)
             .min(rows.entries.len());
         let mut row = Row::new()
-            .spacing(GRID_GAP)
+            .spacing(grid_gap(icon_edge))
             .align_y(Alignment::Start)
             .height(Length::Fixed(row_height));
         for (entry_index, entry) in rows.entries[start..end].iter().enumerate() {
@@ -264,9 +260,10 @@ fn render_band<'a>(
         input,
         depth,
     );
+    let icon_edge = browser.user_config().icons_icon_edge();
     let indicator_offset = GRID_PADDING
-        + band.anchor_column as f32 * (tile_width(browser.user_config().icon_grid_size) + GRID_GAP)
-        + (tile_width(browser.user_config().icon_grid_size) - PANEL_INDICATOR_SIZE) / 2.0;
+        + band.anchor_column as f32 * (tile_width(icon_edge) + grid_gap(icon_edge))
+        + (tile_width(icon_edge) - PANEL_INDICATOR_SIZE) / 2.0;
     let indicator = Row::new()
         .push(Space::new().width(Length::Fixed(indicator_offset.max(0.0))))
         .push(rotated_chevron_right_view(-90.0, PANEL_INDICATOR_SIZE).style(icon_svg_style()))
@@ -322,7 +319,7 @@ fn icon_grid_entry<'a>(
     let visual_state = FileEntryVisualState::from_entry_context(pane, &entry.path, false);
     let content_modifier = browser.file_entry_content_modifier(&entry.path);
     let icon_tone = visual_state.icon_tone();
-    let icon_edge = browser.user_config().icon_grid_size;
+    let icon_edge = browser.user_config().icons_icon_edge();
     let tile_width = tile_width(icon_edge);
     let is_directory = entry.kind == FileKind::Directory && !pane.is_trash_view;
     let disclosure = is_directory
@@ -397,10 +394,10 @@ fn icon_grid_entry<'a>(
             .on_submit(Message::RenameSelected)
             .style(entry_text_input_style(content_modifier))
             .padding(4)
-            .size(ICON_GRID_LABEL_SIZE)
+            .size(label_size(icon_edge))
             .width(Length::Fill),
         )
-        .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT))
+        .height(Length::Fixed(label_height(icon_edge)))
         .clip(true)
         .into()
     } else {
@@ -416,25 +413,30 @@ fn icon_grid_entry<'a>(
         .style(context_menu_style);
         container(measured_middle_ellipsized_wrapped_text_with_tooltip(
             full_name,
-            ICON_GRID_LABEL_SIZE,
-            ICON_GRID_LABEL_LINE_HEIGHT_PX,
+            label_size(icon_edge),
+            label_line_height(icon_edge),
             full_name_tooltip,
             ICON_GRID_NAME_TOOLTIP_DELAY,
         ))
         .style(visual_state.content_style(content_modifier))
         .width(Length::Fill)
-        .height(Length::Fixed(ICON_GRID_LABEL_HEIGHT))
+        .height(Length::Fixed(label_height(icon_edge)))
         .into()
     };
 
     let tile = container(
         Column::new()
             .align_x(Alignment::Center)
-            .spacing(ICON_GRID_ICON_LABEL_SPACING)
+            .spacing(icon_label_spacing(icon_edge))
             .push(icon)
             .push(label),
     )
-    .padding(ICON_GRID_TILE_PADDING)
+    .padding(iced::Padding {
+        top: tile_padding_vertical(icon_edge),
+        right: tile_padding_horizontal(icon_edge),
+        bottom: tile_padding_vertical(icon_edge),
+        left: tile_padding_horizontal(icon_edge),
+    })
     .width(Length::Fixed(tile_width))
     .height(Length::Fixed(tile_visual_height(icon_edge)));
     let tile = match visual_state.row_style_for_selection_run(None) {

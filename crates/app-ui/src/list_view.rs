@@ -14,6 +14,7 @@ use crate::appearance::{
     list_panel_style, list_row_style, ListHeaderCellVisualState,
 };
 use crate::column_entry_bounds::track_column_entry_bounds;
+use crate::config::ViewDensityLevel;
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::file_entry_view::{
     entry_text_input_style, entry_thumbnail_or_icon, FileEntryIconDensity, FileEntryIconTone,
@@ -41,10 +42,51 @@ const LIST_CONTENT_PADDING: iced::Padding = iced::Padding {
 pub(crate) const LIST_ROW_HEIGHT: f32 = 46.0;
 pub(crate) const LIST_OVERSCAN_ROWS: usize = 16;
 
-pub(crate) fn list_initial_rows(window_height: f32) -> usize {
+/// 列表条目几何在 100% 基础上按当前档位比例缩放；
+/// 表头、列宽和面板外层留白不参与密度缩放。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ListGeometry {
+    pub(crate) scale: f32,
+    pub(crate) row_height: f32,
+    pub(crate) text_size: f32,
+    pub(crate) row_padding: iced::Padding,
+    pub(crate) row_spacing: f32,
+    pub(crate) indent_width: f32,
+    pub(crate) toggle_width: f32,
+    pub(crate) toggle_icon_size: f32,
+    pub(crate) icon_density: FileEntryIconDensity,
+}
+
+impl ListGeometry {
+    pub(crate) fn for_level(level: ViewDensityLevel) -> Self {
+        let scale = level.scale();
+        // 缩放尺寸一律取整到整数像素：行高等整数几何让整行对齐的 viewport
+        // 运算保持精确，虚拟范围、键盘揭示与缩略图调度不会各舍入到不同行。
+        let scaled = |base: f32| (base * scale).round();
+        let row_padding_horizontal = scaled(LIST_ROW_PADDING[1] as f32);
+        Self {
+            scale,
+            row_height: scaled(LIST_ROW_HEIGHT),
+            text_size: scaled(LIST_ROW_TEXT_SIZE as f32),
+            row_padding: iced::Padding {
+                top: 0.0,
+                right: row_padding_horizontal,
+                bottom: 0.0,
+                left: row_padding_horizontal,
+            },
+            row_spacing: scaled(LIST_ROW_SPACING as f32),
+            indent_width: scaled(LIST_INDENT_WIDTH),
+            toggle_width: scaled(LIST_TOGGLE_WIDTH),
+            toggle_icon_size: scaled(LIST_TOGGLE_ICON_SIZE),
+            icon_density: FileEntryIconDensity::List(level),
+        }
+    }
+}
+
+pub(crate) fn list_initial_rows(window_height: f32, level: ViewDensityLevel) -> usize {
     crate::virtual_range::initial_rows_for_height(
         window_height - LIST_HEADER_HEIGHT,
-        LIST_ROW_HEIGHT,
+        ListGeometry::for_level(level).row_height,
         LIST_OVERSCAN_ROWS,
     )
 }
@@ -64,6 +106,7 @@ pub(crate) fn list_browser_view<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
 ) -> Element<'a, Message> {
+    let geometry = ListGeometry::for_level(browser.user_config().list_view_density);
     let mut rows = Column::new().spacing(0).width(Length::Fill);
     rows = rows.push(list_header(browser, pane.id));
 
@@ -78,6 +121,7 @@ pub(crate) fn list_browser_view<'a>(
             for placeholder_entry in &placeholder.entries {
                 rows = rows.push(list_placeholder_entry_row(
                     browser,
+                    &geometry,
                     &visible_columns,
                     placeholder_entry,
                 ));
@@ -101,7 +145,7 @@ pub(crate) fn list_browser_view<'a>(
                 crate::visible_entries::list_entry_range_for_viewport(
                     pane.entries,
                     pane.expanded_directories,
-                    LIST_ROW_HEIGHT,
+                    geometry.row_height,
                     LIST_HEADER_HEIGHT,
                     viewport.offset_y,
                     viewport.height,
@@ -112,8 +156,11 @@ pub(crate) fn list_browser_view<'a>(
                 crate::visible_entries::initial_list_entry_range(
                     pane.entries,
                     pane.expanded_directories,
-                    LIST_ROW_HEIGHT,
-                    list_initial_rows(browser.main_window_height),
+                    geometry.row_height,
+                    list_initial_rows(
+                        browser.main_window_height,
+                        browser.user_config().list_view_density,
+                    ),
                 )
             });
         rows = rows.push(vertical_spacer(range.before_height));
@@ -137,6 +184,7 @@ pub(crate) fn list_browser_view<'a>(
             rows = rows.push(list_entry_row(
                 browser,
                 pane,
+                &geometry,
                 &visible_columns,
                 visible_entry.entry,
                 visible_entry.depth,
@@ -150,6 +198,7 @@ pub(crate) fn list_browser_view<'a>(
             ));
             if let Some(status_row) = list_directory_status_for_entry(
                 pane,
+                &geometry,
                 visible_entry.entry,
                 visible_entry.depth + 1,
                 row_index,
@@ -235,6 +284,7 @@ fn vertical_spacer(height: f32) -> Element<'static, Message> {
 
 fn list_directory_status_for_entry<'a>(
     pane: BrowserPaneView<'a>,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
     depth: usize,
     parent_row_index: usize,
@@ -248,7 +298,8 @@ fn list_directory_status_for_entry<'a>(
         message,
         depth,
         parent_row_index,
-        crate::visible_entries::visible_entry_status_row_height(expanded, LIST_ROW_HEIGHT),
+        crate::visible_entries::visible_entry_status_row_height(expanded, geometry.row_height),
+        geometry,
     ))
 }
 
@@ -402,16 +453,19 @@ fn list_directory_status_row(
     depth: usize,
     row_index: usize,
     height: f32,
+    geometry: &ListGeometry,
 ) -> Element<'static, Message> {
-    let indent_width = depth as f32 * LIST_INDENT_WIDTH + LIST_TOGGLE_WIDTH + 26.0;
+    // 状态行的缩进与名称列的组合槽位同源，整体随档位比例缩放。
+    let indent_width =
+        (depth as f32 * LIST_INDENT_WIDTH + LIST_TOGGLE_WIDTH + 26.0) * geometry.scale;
     container(
         container(row![
             Space::new().width(Length::Fixed(indent_width)),
-            readable_text(message).size(LIST_ROW_TEXT_SIZE),
+            readable_text(message).size(geometry.text_size),
         ])
-        .height(Length::Fixed(LIST_ROW_HEIGHT))
-        .center_y(Length::Fixed(LIST_ROW_HEIGHT))
-        .padding(LIST_ROW_PADDING)
+        .height(Length::Fixed(geometry.row_height))
+        .center_y(Length::Fixed(geometry.row_height))
+        .padding(geometry.row_padding)
         .width(Length::Fill)
         .style(list_row_style(depth, row_index)),
     )
@@ -423,6 +477,7 @@ fn list_directory_status_row(
 fn list_entry_row<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    geometry: &ListGeometry,
     visible_columns: &[ListColumnConfig],
     entry: &DirectoryEntry,
     depth: usize,
@@ -436,6 +491,7 @@ fn list_entry_row<'a>(
     let row_content = container(list_entry_cells(
         browser,
         pane,
+        geometry,
         visible_columns,
         entry,
         depth,
@@ -445,9 +501,9 @@ fn list_entry_row<'a>(
     .style(visual_state.content_style(modifier));
 
     let row_container = container(row_content)
-        .padding(LIST_ROW_PADDING)
-        .height(Length::Fixed(LIST_ROW_HEIGHT))
-        .center_y(Length::Fixed(LIST_ROW_HEIGHT))
+        .padding(geometry.row_padding)
+        .height(Length::Fixed(geometry.row_height))
+        .center_y(Length::Fixed(geometry.row_height))
         .width(Length::Fill);
     let row_container =
         if let Some(style) = visual_state.row_style_for_selection_run(selection_run_position) {
@@ -475,7 +531,7 @@ fn list_entry_row<'a>(
 
     let animated_row = container(row_area)
         .height(Length::Fixed(
-            LIST_ROW_HEIGHT * animation_progress.clamp(0.0, 1.0),
+            geometry.row_height * animation_progress.clamp(0.0, 1.0),
         ))
         .clip(true);
     track_column_entry_bounds(animated_row, pane.id, entry.path.clone())
@@ -483,6 +539,7 @@ fn list_entry_row<'a>(
 
 fn list_placeholder_entry_row<'a>(
     browser: &'a FileBrowser,
+    geometry: &ListGeometry,
     visible_columns: &[ListColumnConfig],
     placeholder: &'a DirectoryLoadingPlaceholderEntry,
 ) -> Element<'a, Message> {
@@ -490,6 +547,7 @@ fn list_placeholder_entry_row<'a>(
     let modifier = browser.file_entry_content_modifier(&entry.path);
     let row_content = container(list_placeholder_entry_cells(
         browser,
+        geometry,
         entry,
         placeholder.depth,
         visible_columns,
@@ -499,14 +557,14 @@ fn list_placeholder_entry_row<'a>(
 
     container(
         container(row_content)
-            .padding(LIST_ROW_PADDING)
-            .height(Length::Fixed(LIST_ROW_HEIGHT))
-            .center_y(Length::Fixed(LIST_ROW_HEIGHT))
+            .padding(geometry.row_padding)
+            .height(Length::Fixed(geometry.row_height))
+            .center_y(Length::Fixed(geometry.row_height))
             .width(Length::Fill)
             .style(list_row_style(placeholder.depth, placeholder.row_index)),
     )
     .height(Length::Fixed(
-        LIST_ROW_HEIGHT * placeholder.animation_progress.clamp(0.0, 1.0),
+        geometry.row_height * placeholder.animation_progress.clamp(0.0, 1.0),
     ))
     .clip(true)
     .into()
@@ -515,6 +573,7 @@ fn list_placeholder_entry_row<'a>(
 fn list_entry_cells<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    geometry: &ListGeometry,
     visible_columns: &[ListColumnConfig],
     entry: &DirectoryEntry,
     depth: usize,
@@ -531,7 +590,7 @@ fn list_entry_cells<'a>(
             row_content = row_content.push(list_column_gap());
         }
         row_content = row_content.push(list_entry_cell(
-            browser, pane, entry, depth, icon_tone, &metadata, column,
+            browser, pane, geometry, entry, depth, icon_tone, &metadata, column,
         ));
     }
     row_content.push(list_column_gap())
@@ -548,6 +607,7 @@ fn list_visible_columns(browser: &FileBrowser) -> Vec<ListColumnConfig> {
 
 fn list_placeholder_entry_cells<'a>(
     browser: &'a FileBrowser,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
     depth: usize,
     visible_columns: &[ListColumnConfig],
@@ -560,7 +620,9 @@ fn list_placeholder_entry_cells<'a>(
         if index > 0 {
             row_content = row_content.push(list_column_gap());
         }
-        row_content = row_content.push(list_placeholder_entry_cell(browser, entry, depth, column));
+        row_content = row_content.push(list_placeholder_entry_cell(
+            browser, geometry, entry, depth, column,
+        ));
     }
     row_content.push(list_column_gap())
 }
@@ -568,6 +630,7 @@ fn list_placeholder_entry_cells<'a>(
 fn list_entry_cell<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
     depth: usize,
     icon_tone: FileEntryIconTone,
@@ -575,42 +638,61 @@ fn list_entry_cell<'a>(
     column: &ListColumnConfig,
 ) -> Element<'a, Message> {
     match column.kind {
-        ListColumnKind::Name => {
-            list_name_cell(browser, pane, entry, depth, icon_tone, column.width)
-        }
-        ListColumnKind::Modified => text_cell(modified_text(&metadata), column.width),
-        ListColumnKind::Size => text_cell(
-            browser.list_directory_size_text(entry, &metadata),
+        ListColumnKind::Name => list_name_cell(
+            browser,
+            pane,
+            geometry,
+            entry,
+            depth,
+            icon_tone,
             column.width,
         ),
-        ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
-        ListColumnKind::Owner => text_cell(owner_text(&metadata), column.width),
-        ListColumnKind::Group => text_cell(group_text(&metadata), column.width),
-        ListColumnKind::Permissions => text_cell(permissions_text(&metadata), column.width),
-        ListColumnKind::Accessed => text_cell(accessed_text(&metadata), column.width),
-        ListColumnKind::Created => text_cell(created_text(&metadata), column.width),
+        ListColumnKind::Modified => text_cell(modified_text(&metadata), geometry, column.width),
+        ListColumnKind::Size => text_cell(
+            browser.list_directory_size_text(entry, &metadata),
+            geometry,
+            column.width,
+        ),
+        ListColumnKind::Kind => text_cell(kind_text(entry), geometry, column.width),
+        ListColumnKind::Owner => text_cell(owner_text(&metadata), geometry, column.width),
+        ListColumnKind::Group => text_cell(group_text(&metadata), geometry, column.width),
+        ListColumnKind::Permissions => {
+            text_cell(permissions_text(&metadata), geometry, column.width)
+        }
+        ListColumnKind::Accessed => text_cell(accessed_text(&metadata), geometry, column.width),
+        ListColumnKind::Created => text_cell(created_text(&metadata), geometry, column.width),
     }
 }
 
 fn list_placeholder_entry_cell<'a>(
     browser: &'a FileBrowser,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
     depth: usize,
     column: &ListColumnConfig,
 ) -> Element<'a, Message> {
     match column.kind {
-        ListColumnKind::Name => list_placeholder_name_cell(browser, entry, depth, column.width),
-        ListColumnKind::Modified => text_cell(modified_text(&entry.metadata), column.width),
+        ListColumnKind::Name => {
+            list_placeholder_name_cell(browser, geometry, entry, depth, column.width)
+        }
+        ListColumnKind::Modified => {
+            text_cell(modified_text(&entry.metadata), geometry, column.width)
+        }
         ListColumnKind::Size => text_cell(
             browser.list_directory_size_text(entry, &entry.metadata),
+            geometry,
             column.width,
         ),
-        ListColumnKind::Kind => text_cell(kind_text(entry), column.width),
-        ListColumnKind::Owner => text_cell(owner_text(&entry.metadata), column.width),
-        ListColumnKind::Group => text_cell(group_text(&entry.metadata), column.width),
-        ListColumnKind::Permissions => text_cell(permissions_text(&entry.metadata), column.width),
-        ListColumnKind::Accessed => text_cell(accessed_text(&entry.metadata), column.width),
-        ListColumnKind::Created => text_cell(created_text(&entry.metadata), column.width),
+        ListColumnKind::Kind => text_cell(kind_text(entry), geometry, column.width),
+        ListColumnKind::Owner => text_cell(owner_text(&entry.metadata), geometry, column.width),
+        ListColumnKind::Group => text_cell(group_text(&entry.metadata), geometry, column.width),
+        ListColumnKind::Permissions => {
+            text_cell(permissions_text(&entry.metadata), geometry, column.width)
+        }
+        ListColumnKind::Accessed => {
+            text_cell(accessed_text(&entry.metadata), geometry, column.width)
+        }
+        ListColumnKind::Created => text_cell(created_text(&entry.metadata), geometry, column.width),
     }
 }
 
@@ -626,25 +708,26 @@ fn list_column_width(width: f32) -> Length {
 
 fn list_placeholder_name_cell<'a>(
     browser: &'a FileBrowser,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
     depth: usize,
     width: f32,
 ) -> Element<'a, Message> {
     row![
-        Space::new().width(Length::Fixed(depth as f32 * LIST_INDENT_WIDTH)),
-        Space::new().width(Length::Fixed(LIST_TOGGLE_WIDTH)),
+        Space::new().width(Length::Fixed(depth as f32 * geometry.indent_width)),
+        Space::new().width(Length::Fixed(geometry.toggle_width)),
         entry_thumbnail_or_icon(
             browser,
             entry,
             FileEntryIconTone::Normal,
-            FileEntryIconDensity::List,
+            geometry.icon_density
         ),
         measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),
-            LIST_ROW_TEXT_SIZE,
+            geometry.text_size as u32,
         )
     ]
-    .spacing(LIST_ROW_SPACING)
+    .spacing(geometry.row_spacing)
     .align_y(Alignment::Center)
     .width(list_column_width(width))
     .into()
@@ -653,14 +736,15 @@ fn list_placeholder_name_cell<'a>(
 fn list_name_cell<'a>(
     browser: &'a FileBrowser,
     pane: BrowserPaneView<'a>,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
     depth: usize,
     icon_tone: FileEntryIconTone,
     width: f32,
 ) -> Element<'a, Message> {
     let modifier = browser.file_entry_content_modifier(&entry.path);
-    let indent = Space::new().width(Length::Fixed(depth as f32 * LIST_INDENT_WIDTH));
-    let toggle = list_directory_toggle(pane, entry);
+    let indent = Space::new().width(Length::Fixed(depth as f32 * geometry.indent_width));
+    let toggle = list_directory_toggle(pane, geometry, entry);
     let name: Element<'a, Message> = if pane.renaming == Some(&entry.path) {
         text_input(
             &crate::localization::translate_current("File name"),
@@ -675,17 +759,17 @@ fn list_name_cell<'a>(
     } else {
         measured_middle_ellipsized_text(
             entry.name().to_string_lossy().into_owned(),
-            LIST_ROW_TEXT_SIZE,
+            geometry.text_size as u32,
         )
     };
 
     row![
         indent,
         toggle,
-        entry_thumbnail_or_icon(browser, entry, icon_tone, FileEntryIconDensity::List),
+        entry_thumbnail_or_icon(browser, entry, icon_tone, geometry.icon_density),
         name
     ]
-    .spacing(LIST_ROW_SPACING)
+    .spacing(geometry.row_spacing)
     .align_y(Alignment::Center)
     .width(list_column_width(width))
     .into()
@@ -693,10 +777,13 @@ fn list_name_cell<'a>(
 
 fn list_directory_toggle<'a>(
     pane: BrowserPaneView<'a>,
+    geometry: &ListGeometry,
     entry: &DirectoryEntry,
 ) -> Element<'a, Message> {
     if entry.kind != FileKind::Directory || pane.is_trash_view {
-        return Space::new().width(Length::Fixed(LIST_TOGGLE_WIDTH)).into();
+        return Space::new()
+            .width(Length::Fixed(geometry.toggle_width))
+            .into();
     }
 
     let rotation = pane
@@ -705,11 +792,12 @@ fn list_directory_toggle<'a>(
         .filter(|expanded| expanded.is_expanded)
         .map(|expanded| 90.0 * expanded.animation_progress.clamp(0.0, 1.0))
         .unwrap_or(0.0);
-    let icon = rotated_chevron_right_view(rotation, LIST_TOGGLE_ICON_SIZE).style(icon_svg_style());
+    let icon =
+        rotated_chevron_right_view(rotation, geometry.toggle_icon_size).style(icon_svg_style());
     mouse_area(
         container(icon)
-            .center_x(Length::Fixed(LIST_TOGGLE_WIDTH))
-            .center_y(Length::Fixed(LIST_TOGGLE_WIDTH)),
+            .center_x(Length::Fixed(geometry.toggle_width))
+            .center_y(Length::Fixed(geometry.toggle_width)),
     )
     .on_press(Message::ListDirectoryToggled(pane.id, entry.path.clone()))
     .interaction(iced::mouse::Interaction::Pointer)
@@ -728,9 +816,10 @@ fn kind_text(entry: &DirectoryEntry) -> std::borrow::Cow<'static, str> {
 }
 fn text_cell(
     text: impl crate::typography::ReadableTextContent,
+    geometry: &ListGeometry,
     width: f32,
 ) -> Element<'static, Message> {
-    container(readable_text(text).size(LIST_ROW_TEXT_SIZE))
+    container(readable_text(text).size(geometry.text_size))
         .width(list_column_width(width))
         .clip(true)
         .into()
@@ -864,6 +953,7 @@ mod tests {
 
     #[test]
     fn list_initial_rows_cover_full_window_without_scroll() {
+        let default_level = crate::config::ViewDensityLevel::DEFAULT;
         let range = crate::visible_entries::initial_list_entry_range(
             &(0..34)
                 .map(|index| {
@@ -879,11 +969,57 @@ mod tests {
                 .collect::<Vec<_>>(),
             &std::collections::HashMap::new(),
             LIST_ROW_HEIGHT,
-            list_initial_rows(900.0),
+            list_initial_rows(900.0, default_level),
         );
         assert_eq!(range.end, 34);
 
-        let rows = list_initial_rows(900.0);
+        let rows = list_initial_rows(900.0, default_level);
         assert!(rows as f32 * LIST_ROW_HEIGHT >= 900.0 - LIST_HEADER_HEIGHT);
+    }
+
+    #[test]
+    fn list_geometry_scales_entry_dimensions_and_keeps_header_fixed() {
+        let default_geometry = ListGeometry::for_level(crate::config::ViewDensityLevel::DEFAULT);
+        assert_eq!(default_geometry.row_height, LIST_ROW_HEIGHT);
+        assert_eq!(default_geometry.text_size, LIST_ROW_TEXT_SIZE as f32);
+        assert_eq!(default_geometry.row_spacing, LIST_ROW_SPACING as f32);
+        assert_eq!(default_geometry.indent_width, LIST_INDENT_WIDTH);
+        assert_eq!(default_geometry.toggle_width, LIST_TOGGLE_WIDTH);
+        assert_eq!(default_geometry.toggle_icon_size, LIST_TOGGLE_ICON_SIZE);
+        assert_eq!(
+            default_geometry.row_padding,
+            iced::Padding {
+                top: 0.0,
+                right: LIST_ROW_PADDING[1] as f32,
+                bottom: 0.0,
+                left: LIST_ROW_PADDING[1] as f32,
+            }
+        );
+
+        let level = crate::config::ViewDensityLevel::from_index(4);
+        let scale = level.scale();
+        let geometry = ListGeometry::for_level(level);
+        // 缩放尺寸按设计四舍五入到整数像素。
+        assert_eq!(geometry.row_height, (LIST_ROW_HEIGHT * scale).round());
+        assert_eq!(
+            geometry.text_size,
+            (LIST_ROW_TEXT_SIZE as f32 * scale).round()
+        );
+        assert_eq!(
+            geometry.row_spacing,
+            (LIST_ROW_SPACING as f32 * scale).round()
+        );
+        assert_eq!(geometry.indent_width, (LIST_INDENT_WIDTH * scale).round());
+        assert_eq!(geometry.toggle_width, (LIST_TOGGLE_WIDTH * scale).round());
+        assert_eq!(
+            geometry.row_padding.right,
+            (LIST_ROW_PADDING[1] as f32 * scale).round()
+        );
+
+        // 表头高度是面板 chrome，不随档位缩放；初始窗口仍按真实行高推导。
+        assert_eq!(LIST_HEADER_HEIGHT, LIST_HEADER_CELL_HEIGHT + 8.0);
+        let expected_rows = ((900.0 - LIST_HEADER_HEIGHT) / geometry.row_height).ceil() as usize
+            + LIST_OVERSCAN_ROWS;
+        assert_eq!(list_initial_rows(900.0, level), expected_rows);
     }
 }

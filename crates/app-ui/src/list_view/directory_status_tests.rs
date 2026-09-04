@@ -52,7 +52,8 @@ fn expanded_directory_status_row_exists(browser: &FileBrowser) -> bool {
         .pane_view(browser.active_pane_id())
         .expect("active pane");
     let directory = browser.entries.first().expect("expanded directory");
-    list_directory_status_for_entry(pane, directory, 1, 0).is_some()
+    let geometry = ListGeometry::for_level(browser.user_config().list_view_density);
+    list_directory_status_for_entry(pane, &geometry, directory, 1, 0).is_some()
 }
 
 #[test]

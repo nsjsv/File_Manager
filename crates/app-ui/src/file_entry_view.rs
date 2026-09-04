@@ -12,6 +12,7 @@ use crate::appearance::{
     open_child_row_style, selected_icon_svg_style, selected_row_style, selected_row_style_for_run,
     warning_icon_svg_style,
 };
+use crate::config::ViewDensityLevel;
 use crate::file_entry_presentation::SelectionRunPosition;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::matugen_theme::ui_colors;
@@ -29,32 +30,34 @@ const CUT_BADGE_MAX_SIZE: f32 = 24.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum FileEntryIconDensity {
-    List,
-    Column,
+    List(ViewDensityLevel),
+    Column(ViewDensityLevel),
     Grid(u32),
 }
 
 impl FileEntryIconDensity {
     fn thumbnail_edge(self) -> u32 {
         match self {
-            Self::List => LIST_THUMBNAIL_EDGE,
-            Self::Column => COLUMN_THUMBNAIL_EDGE,
+            // List/Columns 的缩略图源尺寸固定，只有显示槽随密度档位缩放。
+            Self::List(_) => LIST_THUMBNAIL_EDGE,
+            Self::Column(_) => COLUMN_THUMBNAIL_EDGE,
             Self::Grid(icon_edge) => crate::icon_grid_geometry::thumbnail_edge(icon_edge),
         }
     }
 
+    // 显示槽与密度几何一致取整到整数像素；缩略图源尺寸保持固定。
     fn thumbnail_size(self) -> f32 {
         match self {
-            Self::List => LIST_THUMBNAIL_SIZE,
-            Self::Column => COLUMN_THUMBNAIL_SIZE,
+            Self::List(level) => (LIST_THUMBNAIL_SIZE * level.scale()).round(),
+            Self::Column(level) => (COLUMN_THUMBNAIL_SIZE * level.scale()).round(),
             Self::Grid(icon_edge) => icon_edge as f32,
         }
     }
 
     fn icon_size(self) -> f32 {
         match self {
-            Self::List => ENTRY_ICON_SIZE,
-            Self::Column => COLUMN_ENTRY_ICON_SIZE,
+            Self::List(level) => (ENTRY_ICON_SIZE * level.scale()).round(),
+            Self::Column(level) => (COLUMN_ENTRY_ICON_SIZE * level.scale()).round(),
             Self::Grid(icon_edge) => icon_edge as f32 * 0.68,
         }
     }
@@ -474,8 +477,9 @@ mod tests {
 
     #[test]
     fn list_fallback_icon_is_centered_in_the_thumbnail_sized_slot() {
-        let icon_size = FileEntryIconDensity::List.icon_size();
-        let slot_size = FileEntryIconDensity::List.thumbnail_size();
+        let density = FileEntryIconDensity::List(crate::config::ViewDensityLevel::DEFAULT);
+        let icon_size = density.icon_size();
+        let slot_size = density.thumbnail_size();
         let body: Element<'_, Message, Theme, RecordingRenderer> = IconSymbol::File
             .view(icon_size)
             .style(icon_svg_style())

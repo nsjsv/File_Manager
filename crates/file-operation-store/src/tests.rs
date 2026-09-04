@@ -489,9 +489,15 @@ fn icon_browser_view_mode_uses_stable_json_value() {
 fn user_preferences_roundtrip_replace() {
     let (store, root) = test_store();
     assert_eq!(store.read_user_preferences().unwrap(), None);
+    let defaults = StoredUserPreferences::default();
+    assert_eq!(defaults.preview_text_size_bytes, None);
     assert_eq!(
-        StoredUserPreferences::default().preview_text_size_bytes,
-        None
+        (
+            defaults.columns_view_density,
+            defaults.list_view_density,
+            defaults.icons_view_density,
+        ),
+        (Some(2), Some(2), Some(2))
     );
     let first = StoredUserPreferences {
         network_list_thumbnail_downloads_enabled: true,
@@ -514,7 +520,10 @@ fn user_preferences_roundtrip_replace() {
         terminal_emulator: "ghostty".to_owned(),
         file_operation_verification: "strong".to_owned(),
         browser_view_mode: "list".to_owned(),
-        icon_grid_size: 144,
+        icon_grid_size: 160,
+        columns_view_density: Some(1),
+        list_view_density: Some(4),
+        icons_view_density: Some(6),
         startup_location: "previous_session".to_owned(),
         startup_custom_directory: StoredPath::from_path(Path::new("/workspace")),
         save_view_state: true,
@@ -580,7 +589,7 @@ fn user_preferences_roundtrip_replace() {
                 danger: "#f85149".to_owned(),
             }),
         }),
-        ..StoredUserPreferences::default()
+        ..defaults
     };
 
     store.replace_user_preferences(&first).unwrap();
@@ -624,7 +633,7 @@ fn unreadable_user_preferences_payload_is_deleted_on_read() {
 }
 
 #[test]
-fn legacy_user_preferences_without_list_view_fields_get_defaults() {
+fn legacy_user_preferences_without_optional_fields_get_defaults() {
     let (store, root) = test_store();
     let mut payload = serde_json::to_value(StoredUserPreferences::default()).unwrap();
     let object = payload.as_object_mut().expect("preferences payload object");
@@ -633,6 +642,9 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     object.remove("list_sort_direction");
     object.remove("list_directory_size_display_mode");
     object.remove("icon_grid_size");
+    object.remove("columns_view_density");
+    object.remove("list_view_density");
+    object.remove("icons_view_density");
     object.remove("window_chrome_layout");
     object.remove("window_controls");
     object.remove("search_history");
@@ -664,6 +676,9 @@ fn legacy_user_preferences_without_list_view_fields_get_defaults() {
     assert_eq!(preferences.list_directory_size_display_mode, "item_count");
     assert_eq!(preferences.language_setting, "system");
     assert_eq!(preferences.icon_grid_size, 96);
+    assert_eq!(preferences.columns_view_density, None);
+    assert_eq!(preferences.list_view_density, None);
+    assert_eq!(preferences.icons_view_density, None);
     assert_eq!(preferences.window_chrome_layout, "integrated_navigation");
     assert_eq!(preferences.visible_column_count, 3);
     assert_eq!(preferences.window_controls.len(), 3);

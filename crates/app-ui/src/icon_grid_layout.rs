@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use file_core::DirectoryEntry;
 
 use crate::icon_grid_geometry::{
-    column_count_for_width, keyboard_target_index, row_count_for_entries, row_height,
-    tile_visual_height, tile_width, IconGridDirection, ICON_GRID_CONTENT_PADDING, ICON_GRID_GAP,
+    column_count_for_width, grid_gap, keyboard_target_index, row_count_for_entries, row_height,
+    tile_visual_height, tile_width, IconGridDirection, ICON_GRID_CONTENT_PADDING,
     ICON_GRID_OVERSCAN_ROWS,
 };
 use crate::model::{
@@ -534,7 +534,7 @@ fn collect_interactive_entries<'a>(
                             entry,
                             center_x: panel_left
                                 + ICON_GRID_CONTENT_PADDING
-                                + column as f32 * (tile_width(icon_edge) + ICON_GRID_GAP)
+                                + column as f32 * (tile_width(icon_edge) + grid_gap(icon_edge))
                                 + tile_width(icon_edge) / 2.0,
                             center_y: top + tile_visual_height(icon_edge) / 2.0,
                             top,
@@ -627,7 +627,7 @@ fn find_interactive_entry<'a>(
                     entry: &rows.entries[index],
                     center_x: panel_left
                         + ICON_GRID_CONTENT_PADDING
-                        + column as f32 * (tile_width(icon_edge) + ICON_GRID_GAP)
+                        + column as f32 * (tile_width(icon_edge) + grid_gap(icon_edge))
                         + tile_width(icon_edge) / 2.0,
                     center_y: top + tile_visual_height(icon_edge) / 2.0,
                     top,

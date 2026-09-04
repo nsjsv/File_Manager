@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::{StoreError, StoreResult, StoredPath, TaskQueueStore};
 
 pub const USER_PREFERENCES_KEY: &str = "main";
+const DEFAULT_VIEW_DENSITY_INDEX: u8 = 2;
 
 /// StoredUserPreferences.launch_window_policy 的合法取值。
 pub const LAUNCH_WINDOW_POLICY_MERGE_INTO_EXISTING: &str = "merge_into_existing";
@@ -42,6 +43,12 @@ pub struct StoredUserPreferences {
     pub browser_view_mode: String,
     #[serde(default = "default_icon_grid_size")]
     pub icon_grid_size: u32,
+    #[serde(default)]
+    pub columns_view_density: Option<u8>,
+    #[serde(default)]
+    pub list_view_density: Option<u8>,
+    #[serde(default)]
+    pub icons_view_density: Option<u8>,
     #[serde(default = "default_visible_column_count")]
     pub visible_column_count: u32,
     pub startup_location: String,
@@ -94,6 +101,9 @@ impl Default for StoredUserPreferences {
             file_operation_verification: "basic_metadata".to_owned(),
             browser_view_mode: "columns".to_owned(),
             icon_grid_size: default_icon_grid_size(),
+            columns_view_density: Some(DEFAULT_VIEW_DENSITY_INDEX),
+            list_view_density: Some(DEFAULT_VIEW_DENSITY_INDEX),
+            icons_view_density: Some(DEFAULT_VIEW_DENSITY_INDEX),
             visible_column_count: default_visible_column_count(),
             startup_location: "home".to_owned(),
             startup_custom_directory: StoredPath::from_path(Path::new("")),
