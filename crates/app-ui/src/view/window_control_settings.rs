@@ -1,14 +1,12 @@
-use iced::mouse;
-use iced::widget::{button, column, container, mouse_area, row, tooltip, Column};
-use iced::{Alignment, Background, Border, Element, Length, Theme};
+use iced::widget::{button, column, container, row, Column};
+use iced::{Alignment, Border, Element, Length, Theme};
 
 use crate::app::FileBrowser;
-use crate::appearance::{
-    button_hover_surface_color, context_menu_button_style, context_menu_style, subtle_border_color,
-};
+use crate::appearance::{context_menu_button_style, subtle_border_color};
 use crate::icons::IconSymbol;
 use crate::model::{
-    Message, WindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
+    Message, WindowChromeLayout, WindowControlKind, WindowControlMoveDirection,
+    WindowControlPlacement, WindowControlSide,
 };
 use crate::typography::readable_text;
 
@@ -20,7 +18,9 @@ use super::{themed_icon, IconTone};
 const WINDOW_CONTROL_ROW_HEIGHT: f32 = 46.0;
 const WINDOW_CONTROL_SIDE_WIDTH: f32 = 150.0;
 const WINDOW_CONTROL_VISIBILITY_WIDTH: f32 = 126.0;
-const WINDOW_CONTROL_GRIP_SIZE: f32 = 16.0;
+// Two stacked 12px arrows + padding + spacing fill the 34px content box of a
+// 46px row without stretching it.
+const WINDOW_CONTROL_ARROW_ICON_SIZE: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowControlVisibilityControl {
@@ -81,61 +81,82 @@ fn side_control_group(browser: &FileBrowser, side: WindowControlSide) -> Element
                 .width(Length::Fill),
         );
     } else {
-        for placement in placements {
-            controls = controls.push(window_control_row(browser, placement));
+        let last_index = placements.len() - 1;
+        for (index, placement) in placements.into_iter().enumerate() {
+            controls = controls.push(window_control_row(
+                placement,
+                // Boundary rows hide their arrow instead of rendering a
+                // click that could never change anything.
+                index > 0,
+                index < last_index,
+            ));
         }
     }
     controls.into()
 }
 
 fn window_control_row(
-    browser: &FileBrowser,
     placement: WindowControlPlacement,
+    can_move_up: bool,
+    can_move_down: bool,
 ) -> Element<'static, Message> {
     let kind = placement.kind();
-    let dragged = browser.dragged_window_control() == Some(kind);
-    let drop_target = browser.window_control_reorder_target() == Some(kind);
     let content = row![
-        reorder_handle(kind),
+        reorder_arrows(kind, can_move_up, can_move_down),
         readable_text(kind.label()).size(12).width(Length::Fill),
         visibility_control(placement),
         side_selector(placement),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
-    let row = container(content)
+    container(content)
         .padding([6, 8])
         .width(Length::Fill)
         .height(Length::Fixed(WINDOW_CONTROL_ROW_HEIGHT))
-        .style(move |theme| window_control_row_style(theme, dragged, drop_target));
-
-    mouse_area(row)
-        .on_enter(Message::WindowControlReorderTargetEntered(kind))
-        .on_exit(Message::WindowControlReorderTargetExited(kind))
-        .on_release(Message::WindowControlReorderFinished)
+        .style(window_control_row_style)
         .into()
 }
 
-fn reorder_handle(kind: WindowControlKind) -> Element<'static, Message> {
-    let grip = container(themed_icon(
-        IconSymbol::GripVertical,
-        IconTone::Normal,
-        WINDOW_CONTROL_GRIP_SIZE,
-    ))
-    .padding(7)
-    .center_x(Length::Shrink)
-    .center_y(Length::Shrink);
-    let grip = mouse_area(grip)
-        .on_press(Message::WindowControlReorderStarted(kind))
-        .interaction(mouse::Interaction::Grab);
+fn reorder_arrows(
+    kind: WindowControlKind,
+    can_move_up: bool,
+    can_move_down: bool,
+) -> Element<'static, Message> {
+    let mut arrows = Column::new().spacing(1);
+    if can_move_up {
+        arrows = arrows.push(reorder_arrow_button(
+            kind,
+            WindowControlMoveDirection::Up,
+            IconSymbol::ArrowUp,
+        ));
+    }
+    if can_move_down {
+        arrows = arrows.push(reorder_arrow_button(
+            kind,
+            WindowControlMoveDirection::Down,
+            IconSymbol::ArrowDown,
+        ));
+    }
+    arrows.into()
+}
 
-    tooltip(
-        grip,
-        container(readable_text("Drag to reorder").size(11))
-            .padding([5, 7])
-            .style(context_menu_style),
-        tooltip::Position::Bottom,
+fn reorder_arrow_button(
+    kind: WindowControlKind,
+    direction: WindowControlMoveDirection,
+    symbol: IconSymbol,
+) -> Element<'static, Message> {
+    button(
+        container(themed_icon(symbol, IconTone::Normal, WINDOW_CONTROL_ARROW_ICON_SIZE))
+            .padding(1)
+            .center_x(Length::Shrink)
+            .center_y(Length::Shrink),
     )
+    // Both arrows must fit the 34px content box of a 46px row: with the
+    // 1px button border the pair is 2 * (12 + 2 + 2) + 1 spacing = 33px,
+    // so the button's own 5px default padding has to go.
+    .padding(0)
+    .on_press(Message::WindowControlMoveRequested(kind, direction))
+    .style(context_menu_button_style())
     .into()
 }
 
@@ -190,13 +211,11 @@ fn side_selector(placement: WindowControlPlacement) -> Element<'static, Message>
     .into()
 }
 
-fn window_control_row_style(theme: &Theme, dragged: bool, drop_target: bool) -> container::Style {
+fn window_control_row_style(theme: &Theme) -> container::Style {
     container::Style {
-        background: (dragged || drop_target)
-            .then(|| Background::Color(button_hover_surface_color(theme))),
         border: Border {
             color: subtle_border_color(theme),
-            width: if drop_target { 2.0 } else { 1.0 },
+            width: 1.0,
             radius: 6.0.into(),
         },
         ..container::Style::default()

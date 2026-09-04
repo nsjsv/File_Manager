@@ -335,7 +335,6 @@ impl FileBrowser {
     }
 
     pub(super) fn open_settings(&mut self) -> Task<Message> {
-        self.cancel_window_control_reorder();
         self.context_menu = None;
         self.open_with = None;
         self.archive_creation = None;
@@ -366,7 +365,6 @@ impl FileBrowser {
     }
 
     pub(super) fn select_settings_category(&mut self, category: SettingsCategory) -> Task<Message> {
-        self.cancel_window_control_reorder();
         self.shortcut_capture = None;
         self.search_service.cancel_force_restart_confirmation();
         if category != SettingsCategory::General {
@@ -424,7 +422,6 @@ impl FileBrowser {
     }
 
     pub(super) fn close_settings_window(&mut self) -> Task<Message> {
-        self.cancel_window_control_reorder();
         self.shortcut_capture = None;
         self.search_service.cancel_force_restart_confirmation();
         self.invalidate_startup_directory_validation();

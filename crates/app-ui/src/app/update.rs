@@ -791,14 +791,9 @@ impl FileBrowser {
             Message::WindowControlSideSelected(kind, side) => {
                 self.select_window_control_side(kind, side)
             }
-            Message::WindowControlReorderStarted(kind) => self.start_window_control_reorder(kind),
-            Message::WindowControlReorderTargetEntered(kind) => {
-                self.enter_window_control_reorder_target(kind)
+            Message::WindowControlMoveRequested(kind, direction) => {
+                self.move_window_control_within_side(kind, direction)
             }
-            Message::WindowControlReorderTargetExited(kind) => {
-                self.exit_window_control_reorder_target(kind)
-            }
-            Message::WindowControlReorderFinished => self.finish_window_control_reorder(),
             Message::WindowControlsReset => self.reset_window_controls(),
             Message::ApplicationLogsRefreshRequested => self.refresh_application_logs(),
             Message::ApplicationLogsLoaded(request, outcome) => {

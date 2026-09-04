@@ -1,21 +1,15 @@
 use iced::Task;
 
 use super::FileBrowser;
-use crate::model::{Message, WindowChromeLayout, WindowControlKind, WindowControlSide};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct WindowControlReorderDrag {
-    dragged: WindowControlKind,
-    side: WindowControlSide,
-    target: Option<WindowControlKind>,
-}
+use crate::model::{
+    Message, WindowChromeLayout, WindowControlKind, WindowControlMoveDirection, WindowControlSide,
+};
 
 impl FileBrowser {
     pub(super) fn select_window_chrome_layout(
         &mut self,
         layout: WindowChromeLayout,
     ) -> Task<Message> {
-        self.window_control_reorder_drag = None;
         if self.user_config.window_controls.select_layout(layout) {
             self.persist_user_preferences_command()
         } else {
@@ -27,7 +21,6 @@ impl FileBrowser {
         &mut self,
         kind: WindowControlKind,
     ) -> Task<Message> {
-        self.window_control_reorder_drag = None;
         let visibility = self
             .user_config
             .window_controls
@@ -50,7 +43,6 @@ impl FileBrowser {
         kind: WindowControlKind,
         side: WindowControlSide,
     ) -> Task<Message> {
-        self.window_control_reorder_drag = None;
         if self.user_config.window_controls.move_to_side(kind, side) {
             self.persist_user_preferences_command()
         } else {
@@ -58,54 +50,14 @@ impl FileBrowser {
         }
     }
 
-    pub(super) fn start_window_control_reorder(
+    pub(super) fn move_window_control_within_side(
         &mut self,
         kind: WindowControlKind,
+        direction: WindowControlMoveDirection,
     ) -> Task<Message> {
-        self.window_control_reorder_drag = Some(WindowControlReorderDrag {
-            dragged: kind,
-            side: self.user_config.window_controls.placement(kind).side(),
-            target: None,
-        });
-        Task::none()
-    }
-
-    pub(super) fn enter_window_control_reorder_target(
-        &mut self,
-        target: WindowControlKind,
-    ) -> Task<Message> {
-        let Some(drag) = self.window_control_reorder_drag.as_mut() else {
-            return Task::none();
-        };
-        let target_side = self.user_config.window_controls.placement(target).side();
-        drag.target = (target != drag.dragged && target_side == drag.side).then_some(target);
-        Task::none()
-    }
-
-    pub(super) fn exit_window_control_reorder_target(
-        &mut self,
-        target: WindowControlKind,
-    ) -> Task<Message> {
-        if let Some(drag) = self.window_control_reorder_drag.as_mut() {
-            if drag.target == Some(target) {
-                drag.target = None;
-            }
-        }
-        Task::none()
-    }
-
-    pub(super) fn finish_window_control_reorder(&mut self) -> Task<Message> {
-        let Some(drag) = self.window_control_reorder_drag.take() else {
-            return Task::none();
-        };
-        let Some(target) = drag.target else {
-            return Task::none();
-        };
-        if self
-            .user_config
-            .window_controls
-            .move_before_on_same_side(drag.dragged, target)
-        {
+        // The model refuses boundary moves, and the view hides those arrows,
+        // so a persisting click always follows a real reorder.
+        if self.user_config.window_controls.move_within_side(kind, direction) {
             self.persist_user_preferences_command()
         } else {
             Task::none()
@@ -113,28 +65,11 @@ impl FileBrowser {
     }
 
     pub(super) fn reset_window_controls(&mut self) -> Task<Message> {
-        self.window_control_reorder_drag = None;
         if self.user_config.window_controls.reset() {
             self.persist_user_preferences_command()
         } else {
             Task::none()
         }
-    }
-
-    pub(super) fn cancel_window_control_reorder(&mut self) {
-        self.window_control_reorder_drag = None;
-    }
-
-    pub(crate) fn dragged_window_control(&self) -> Option<WindowControlKind> {
-        self.window_control_reorder_drag
-            .as_ref()
-            .map(|drag| drag.dragged)
-    }
-
-    pub(crate) fn window_control_reorder_target(&self) -> Option<WindowControlKind> {
-        self.window_control_reorder_drag
-            .as_ref()
-            .and_then(|drag| drag.target)
     }
 }
 
@@ -213,67 +148,76 @@ mod tests {
     }
 
     #[test]
-    fn reorder_commits_once_on_release_and_rejects_cross_side_target() {
-        let (mut browser, _) = FileBrowser::new(config::default_user_config());
-        drop(browser.select_window_control_side(WindowControlKind::Close, WindowControlSide::Left));
-        drop(browser.accept_user_preferences_saved(Ok(())));
-        drop(browser.start_window_control_reorder(WindowControlKind::Minimize));
-        drop(browser.enter_window_control_reorder_target(WindowControlKind::Close));
-        assert_eq!(browser.window_control_reorder_target(), None);
-        assert!(into_stream(browser.finish_window_control_reorder()).is_none());
-
-        drop(
-            browser
-                .select_window_control_side(WindowControlKind::Minimize, WindowControlSide::Left),
-        );
-        drop(browser.accept_user_preferences_saved(Ok(())));
-        drop(browser.start_window_control_reorder(WindowControlKind::Minimize));
-        drop(browser.enter_window_control_reorder_target(WindowControlKind::Close));
-        assert_eq!(
-            browser.window_control_reorder_target(),
-            Some(WindowControlKind::Close)
-        );
-        assert!(into_stream(browser.finish_window_control_reorder()).is_some());
-        drop(browser.accept_user_preferences_saved(Ok(())));
-        assert_eq!(
-            kinds_on(&browser, WindowControlSide::Left),
-            vec![WindowControlKind::Minimize, WindowControlKind::Close]
-        );
-        assert!(into_stream(browser.finish_window_control_reorder()).is_none());
-    }
-
-    #[test]
-    fn settings_lifecycle_clears_reorder_drag() {
+    fn move_within_side_persists_only_real_moves() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
 
-        drop(browser.start_window_control_reorder(WindowControlKind::Minimize));
-        assert_eq!(
-            browser.dragged_window_control(),
-            Some(WindowControlKind::Minimize)
-        );
-        drop(browser.select_settings_category(crate::model::SettingsCategory::Logs));
-        assert_eq!(browser.dragged_window_control(), None);
+        // First row of its side: the up arrow is not rendered, and the model
+        // refusal must skip persistence too.
+        assert!(into_stream(
+            browser.move_window_control_within_side(
+                WindowControlKind::Minimize,
+                WindowControlMoveDirection::Up
+            )
+        )
+        .is_none());
 
-        drop(browser.start_window_control_reorder(WindowControlKind::Close));
-        drop(browser.close_settings_window());
-        assert_eq!(browser.dragged_window_control(), None);
-
-        drop(browser.start_window_control_reorder(WindowControlKind::Close));
-        drop(browser.enter_window_control_reorder_target(WindowControlKind::Minimize));
-        drop(browser.finish_pointer_drag_interactions(browser.main_window));
+        assert!(into_stream(
+            browser.move_window_control_within_side(
+                WindowControlKind::Minimize,
+                WindowControlMoveDirection::Down
+            )
+        )
+        .is_some());
+        drop(browser.accept_user_preferences_saved(Ok(())));
         assert_eq!(
             kinds_on(&browser, WindowControlSide::Right),
             vec![
-                WindowControlKind::Close,
-                WindowControlKind::Minimize,
                 WindowControlKind::MaximizeRestore,
+                WindowControlKind::Minimize,
+                WindowControlKind::Close,
             ]
         );
-        assert_eq!(browser.dragged_window_control(), None);
 
-        drop(browser.start_window_control_reorder(WindowControlKind::MaximizeRestore));
+        // Each further down move keeps persisting until the side tail, where
+        // the model refuses again.
+        assert!(into_stream(
+            browser.move_window_control_within_side(
+                WindowControlKind::Minimize,
+                WindowControlMoveDirection::Down
+            )
+        )
+        .is_some());
+        drop(browser.accept_user_preferences_saved(Ok(())));
+        assert!(into_stream(
+            browser.move_window_control_within_side(
+                WindowControlKind::Minimize,
+                WindowControlMoveDirection::Down
+            )
+        )
+        .is_none());
+        assert_eq!(
+            kinds_on(&browser, WindowControlSide::Right),
+            vec![
+                WindowControlKind::MaximizeRestore,
+                WindowControlKind::Close,
+                WindowControlKind::Minimize,
+            ]
+        );
+    }
+
+    #[test]
+    fn settings_and_pointer_lifecycle_leave_window_controls_untouched() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+
+        drop(browser.select_settings_category(crate::model::SettingsCategory::Logs));
+        drop(browser.close_settings_window());
+        drop(browser.finish_pointer_drag_interactions(browser.main_window));
         browser.clear_pointer_driven_interaction_state();
-        assert_eq!(browser.dragged_window_control(), None);
+
+        assert_eq!(
+            browser.user_config().window_controls,
+            crate::model::WindowControlsConfig::default()
+        );
     }
 
     #[test]

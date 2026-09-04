@@ -337,8 +337,6 @@ pub(crate) struct FileBrowser {
     column_resize_drag: Option<ColumnResizeDrag>,
     list_column_resize_drag: Option<crate::app::list_view_settings::ListColumnResizeDrag>,
     list_column_reorder_drag: Option<crate::app::list_view_settings::ListColumnReorderDrag>,
-    window_control_reorder_drag:
-        Option<crate::app::window_control_settings::WindowControlReorderDrag>,
     last_activation_click: Option<crate::model::LastActivationClick>,
     pub(crate) operation_queue: FileOperationQueue,
     pub(crate) operation_progress_animation_frame: u8,
@@ -718,7 +716,6 @@ impl FileBrowser {
             column_resize_drag: None,
             list_column_resize_drag: None,
             list_column_reorder_drag: None,
-            window_control_reorder_drag: None,
             last_activation_click: None,
             operation_queue: FileOperationQueue::new(),
             operation_progress_animation_frame: 0,

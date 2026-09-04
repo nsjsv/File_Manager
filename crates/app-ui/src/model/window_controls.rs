@@ -36,6 +36,14 @@ impl WindowControlKind {
     }
 }
 
+/// One-slot reorder inside a side's row sequence, driven by the row's
+/// up/down arrow buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowControlMoveDirection {
+    Up,
+    Down,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowControlSide {
     Left,
@@ -275,36 +283,34 @@ impl WindowControlsConfig {
         true
     }
 
-    pub(crate) fn move_before_on_same_side(
+    // Both sides share one placements Vec, so a side-local neighbour is the
+    // nearest same-side entry scanned in the move direction, not the
+    // Vec-adjacent slot. Swapping the two entries leaves every other slot
+    // untouched, so "swapped" is exactly "order changed" and drives
+    // persistence.
+    pub(crate) fn move_within_side(
         &mut self,
         kind: WindowControlKind,
-        target: WindowControlKind,
+        direction: WindowControlMoveDirection,
     ) -> bool {
-        if kind == target {
-            return false;
-        }
-        let kind_index = self
+        let index = self
             .placements
             .iter()
             .position(|placement| placement.kind == kind)
             .expect("normalized window controls contain every kind");
-        let target_index = self
-            .placements
-            .iter()
-            .position(|placement| placement.kind == target)
-            .expect("normalized window controls contain every kind");
-        if self.placements[kind_index].side != self.placements[target_index].side {
+        let side = self.placements[index].side;
+        let neighbour = match direction {
+            WindowControlMoveDirection::Up => (0..index)
+                .rev()
+                .find(|candidate| self.placements[*candidate].side == side),
+            WindowControlMoveDirection::Down => (index + 1..self.placements.len())
+                .find(|candidate| self.placements[*candidate].side == side),
+        };
+        let Some(neighbour) = neighbour else {
             return false;
-        }
-
-        let placement = self.placements.remove(kind_index);
-        let insertion_index = self
-            .placements
-            .iter()
-            .position(|candidate| candidate.kind == target)
-            .expect("target remains after removing a different control");
-        self.placements.insert(insertion_index, placement);
-        kind_index != insertion_index
+        };
+        self.placements.swap(index, neighbour);
+        true
     }
 
     pub(crate) fn reset(&mut self) -> bool {
@@ -434,23 +440,150 @@ mod tests {
     }
 
     #[test]
-    fn reorder_accepts_only_same_side_target() {
+    fn move_down_swaps_with_next_same_side_control() {
         let mut config = WindowControlsConfig::default();
-        assert!(config.move_to_side(WindowControlKind::Close, WindowControlSide::Left));
-        assert!(
-            !config.move_before_on_same_side(WindowControlKind::Minimize, WindowControlKind::Close)
+
+        assert!(config.move_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Down
+        ));
+
+        assert_eq!(
+            kinds_on(&config, WindowControlSide::Right),
+            vec![
+                WindowControlKind::MaximizeRestore,
+                WindowControlKind::Minimize,
+                WindowControlKind::Close,
+            ]
+        );
+    }
+
+    #[test]
+    fn move_up_swaps_with_previous_same_side_control() {
+        let mut config = WindowControlsConfig::default();
+
+        assert!(config.move_within_side(
+            WindowControlKind::Close,
+            WindowControlMoveDirection::Up
+        ));
+
+        assert_eq!(
+            kinds_on(&config, WindowControlSide::Right),
+            vec![
+                WindowControlKind::Minimize,
+                WindowControlKind::Close,
+                WindowControlKind::MaximizeRestore,
+            ]
+        );
+    }
+
+    #[test]
+    fn move_past_side_boundary_reports_false() {
+        let mut config = WindowControlsConfig::default();
+
+        // The side's first row has no up neighbour and the last row no down
+        // neighbour: the arrows are not rendered, so the model must refuse
+        // too, otherwise a hidden click path could still mutate state.
+        assert!(!config.move_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Up
+        ));
+        assert!(!config.move_within_side(
+            WindowControlKind::Close,
+            WindowControlMoveDirection::Down
+        ));
+        assert_eq!(
+            kinds_on(&config, WindowControlSide::Right),
+            WindowControlKind::ALL
+        );
+    }
+
+    #[test]
+    fn move_within_side_skips_foreign_side_entries() {
+        // Pin the exact interleaved Vec [Close(L), Min(R), Max(R)]; plain
+        // move_to_side appends to the Vec tail and cannot reach this order.
+        let mut config = WindowControlsConfig::from_partial_placements(
+            WindowChromeLayout::IntegratedNavigation,
+            vec![
+                WindowControlPlacement::new(
+                    WindowControlKind::Close,
+                    WindowControlSide::Left,
+                    WindowControlVisibility::Visible,
+                ),
+                WindowControlPlacement::new(
+                    WindowControlKind::Minimize,
+                    WindowControlSide::Right,
+                    WindowControlVisibility::Visible,
+                ),
+                WindowControlPlacement::new(
+                    WindowControlKind::MaximizeRestore,
+                    WindowControlSide::Right,
+                    WindowControlVisibility::Visible,
+                ),
+            ],
         );
 
-        assert!(
-            !config.move_before_on_same_side(WindowControlKind::Close, WindowControlKind::Close)
-        );
-        assert!(config.move_to_side(WindowControlKind::Minimize, WindowControlSide::Left));
-        assert!(
-            config.move_before_on_same_side(WindowControlKind::Minimize, WindowControlKind::Close)
+        // Ahead of Minimize the Vec holds only the foreign-side Close: the
+        // nearest same-side scan must skip it and refuse, never swap across
+        // sides.
+        assert!(!config.move_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Up
+        ));
+
+        assert!(config.move_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Down
+        ));
+
+        // The swap happens between the two right-side entries; the left-side
+        // Close keeps its Vec slot and order.
+        assert_eq!(
+            config
+                .placements()
+                .iter()
+                .copied()
+                .map(WindowControlPlacement::kind)
+                .collect::<Vec<_>>(),
+            vec![
+                WindowControlKind::Close,
+                WindowControlKind::MaximizeRestore,
+                WindowControlKind::Minimize,
+            ]
         );
         assert_eq!(
             kinds_on(&config, WindowControlSide::Left),
-            vec![WindowControlKind::Minimize, WindowControlKind::Close]
+            vec![WindowControlKind::Close]
+        );
+    }
+
+    #[test]
+    fn move_within_side_leaves_other_side_untouched() {
+        let mut config = WindowControlsConfig::default();
+        assert!(config.move_to_side(WindowControlKind::Close, WindowControlSide::Left));
+        // The shared Vec is now [Min(R), Max(R), Close(L)]: MaximizeRestore's
+        // only Vec entry behind it is the left-side Close, so the down move
+        // must be refused instead of crossing sides.
+        assert!(!config.move_within_side(
+            WindowControlKind::MaximizeRestore,
+            WindowControlMoveDirection::Down
+        ));
+
+        assert!(config.move_within_side(
+            WindowControlKind::MaximizeRestore,
+            WindowControlMoveDirection::Up
+        ));
+
+        assert_eq!(
+            kinds_on(&config, WindowControlSide::Left),
+            vec![WindowControlKind::Close]
+        );
+        assert_eq!(
+            kinds_on(&config, WindowControlSide::Right),
+            vec![
+                WindowControlKind::MaximizeRestore,
+                WindowControlKind::Minimize,
+            ]
         );
     }
 

@@ -7,6 +7,7 @@ use iced::{Length, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IconSymbol {
+    ArrowDown,
     ArrowLeft,
     ArrowRight,
     ArrowUp,
@@ -25,7 +26,6 @@ pub(crate) enum IconSymbol {
     Folder,
     FolderOpen,
     Grid,
-    GripVertical,
     HardDrive,
     House,
     Link,
@@ -154,6 +154,7 @@ impl IconSymbol {
 
     pub(crate) fn bytes(self) -> &'static [u8] {
         match self {
+            Self::ArrowDown => include_bytes!("../assets/icons/lucide/arrow-down.svg"),
             Self::ArrowLeft => include_bytes!("../assets/icons/lucide/arrow-left.svg"),
             Self::ArrowRight => include_bytes!("../assets/icons/lucide/arrow-right.svg"),
             Self::ArrowUp => include_bytes!("../assets/icons/lucide/arrow-up.svg"),
@@ -172,7 +173,6 @@ impl IconSymbol {
             Self::Folder => include_bytes!("../assets/icons/lucide/folder.svg"),
             Self::FolderOpen => include_bytes!("../assets/icons/lucide/folder-open.svg"),
             Self::Grid => GRID_ICON,
-            Self::GripVertical => include_bytes!("../assets/icons/lucide/grip-vertical.svg"),
             Self::HardDrive => HARD_DRIVE_ICON,
             Self::House => include_bytes!("../assets/icons/lucide/house.svg"),
             Self::Link => include_bytes!("../assets/icons/lucide/link.svg"),

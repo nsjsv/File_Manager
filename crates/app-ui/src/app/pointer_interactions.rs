@@ -18,7 +18,6 @@ impl FileBrowser {
         self.list_column_resize_drag = None;
         self.list_column_reorder_drag = None;
         self.split_resize_drag = None;
-        self.cancel_window_control_reorder();
         self.hovered_list_header_column = None;
     }
 
@@ -47,7 +46,6 @@ impl FileBrowser {
             self.finish_list_column_resize_drag_command(),
             self.finish_list_column_reorder_drag_command(),
             self.finish_split_resize(),
-            self.finish_window_control_reorder(),
             self.finish_drag_selection(None),
             self.schedule_thumbnail_refresh(),
             self.request_breadcrumb_drop_target_bounds_measurement(),
