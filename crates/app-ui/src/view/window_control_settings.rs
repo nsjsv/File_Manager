@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, row, Column};
+use iced::widget::{button, container, row, Column};
 use iced::{Alignment, Border, Element, Length, Theme};
 
 use crate::app::FileBrowser;
@@ -29,17 +29,20 @@ enum WindowControlVisibilityControl {
 }
 
 pub(super) fn window_control_settings_row(browser: &FileBrowser) -> Element<'_, Message> {
-    info_setting_row(
-        column![
-            muted_setting_text("Window layout", 12),
-            window_layout_selector(browser),
-            side_control_group(browser, WindowControlSide::Left),
-            side_control_group(browser, WindowControlSide::Right),
-            secondary_action_button("Restore defaults", Message::WindowControlsReset),
-        ]
+    let mut content = Column::new()
         .spacing(8)
         .width(Length::Fill)
-        .into(),
+        .push(muted_setting_text("Window layout", 12))
+        .push(window_layout_selector(browser));
+    for side in WindowControlSide::ALL {
+        if let Some(group) = side_control_group(browser, side) {
+            content = content.push(group);
+        }
+    }
+    info_setting_row(
+        content
+            .push(secondary_action_button("Restore defaults", Message::WindowControlsReset))
+            .into(),
     )
 }
 
@@ -57,12 +60,23 @@ fn window_layout_selector(browser: &FileBrowser) -> Element<'static, Message> {
     )
 }
 
-fn side_control_group(browser: &FileBrowser, side: WindowControlSide) -> Element<'_, Message> {
+// A side with no placements renders nothing at all — not even its header.
+// Rows on the other side keep the Left/Right selector, so an emptied side
+// stays reachable and reappears as soon as a control moves back.
+fn side_control_group(
+    browser: &FileBrowser,
+    side: WindowControlSide,
+) -> Option<Element<'static, Message>> {
     let placements = browser
         .user_config()
         .window_controls
         .placements_on(side)
         .collect::<Vec<_>>();
+    if placements.is_empty() {
+        return None;
+    }
+
+    let last_index = placements.len() - 1;
     let mut controls = Column::new()
         .spacing(5)
         .width(Length::Fill)
@@ -73,26 +87,16 @@ fn side_control_group(browser: &FileBrowser, side: WindowControlSide) -> Element
             },
             12,
         ));
-
-    if placements.is_empty() {
-        controls = controls.push(
-            container(readable_text("No controls").size(11))
-                .padding([7, 10])
-                .width(Length::Fill),
-        );
-    } else {
-        let last_index = placements.len() - 1;
-        for (index, placement) in placements.into_iter().enumerate() {
-            controls = controls.push(window_control_row(
-                placement,
-                // Boundary rows hide their arrow instead of rendering a
-                // click that could never change anything.
-                index > 0,
-                index < last_index,
-            ));
-        }
+    for (index, placement) in placements.into_iter().enumerate() {
+        controls = controls.push(window_control_row(
+            placement,
+            // Boundary rows hide their arrow instead of rendering a
+            // click that could never change anything.
+            index > 0,
+            index < last_index,
+        ));
     }
-    controls.into()
+    Some(controls.into())
 }
 
 fn window_control_row(

@@ -370,7 +370,6 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Separate title bar" => Some("独立标题栏"),
         "Left side" => Some("左侧"),
         "Right side" => Some("右侧"),
-        "No controls" => Some("无按钮"),
         "Minimize" => Some("最小化"),
         "Maximize" => Some("最大化"),
         "Maximize / Restore" => Some("最大化 / 还原"),
