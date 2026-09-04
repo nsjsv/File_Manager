@@ -1256,13 +1256,28 @@ fn pinned_preview_content_survives_interaction_clears_until_closed() {
 }
 
 #[test]
-fn request_preview_without_hovered_entry_is_noop() {
+fn request_preview_without_hover_or_preview_is_noop() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
 
     drop(browser.request_preview());
 
     assert!(browser.preview.is_none());
     assert!(browser.preview_window.is_none());
+}
+
+#[test]
+fn request_preview_without_hover_closes_open_preview() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.preview_window = Some(window::Id::unique());
+    browser.preview_window_pinned = true;
+    browser.preview_shown_path = Some(PathBuf::from("photo.png"));
+    browser.preview = Some(PreviewState::Loading(PathBuf::from("photo.png")));
+
+    drop(browser.request_preview());
+
+    assert!(browser.preview.is_none());
+    assert!(browser.preview_window.is_none());
+    assert!(!browser.preview_window_pinned);
 }
 
 #[test]

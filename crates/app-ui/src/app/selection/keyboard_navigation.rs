@@ -325,9 +325,14 @@ impl FileBrowser {
     }
 
     pub(crate) fn request_preview(&mut self) -> Task<Message> {
-        // 鼠标未悬停在文件条目上（空白处）时，空格不触发预览。
+        // 鼠标未悬停在文件条目上（空白处、预览窗口聚焦时）：预览开着就关闭，没开则不误开。
         if self.hovered_entry.is_none() {
-            return Task::none();
+            self.context_menu = None;
+            return if self.preview.is_some() {
+                self.close_preview_window()
+            } else {
+                Task::none()
+            };
         }
         if self.preview.is_some() && self.preview_shown_path.as_deref() == self.selected.as_deref()
         {
