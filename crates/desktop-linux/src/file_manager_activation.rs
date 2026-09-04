@@ -149,6 +149,9 @@ pub enum FileManagerActivationClaim {
 
 #[derive(Debug)]
 pub struct DesktopActivationRuntime {
+    // zbus 内部任务只持弱引用：没有这个字段，连接会在 claim_or_forward 返回时被
+    // drop，总线名随即注销、激活事件通道立即关闭。
+    _connection: zbus::blocking::Connection,
     event_receiver: Mutex<Option<Receiver<DesktopActivationEvent>>>,
     standard_service_status: StandardFileManagerServiceStatus,
 }
@@ -163,6 +166,7 @@ impl DesktopActivationRuntime {
             Ok(connection) => {
                 let standard_service_status = claim_file_manager1_name(&connection);
                 Ok(FileManagerActivationClaim::Primary(Arc::new(Self {
+                    _connection: connection,
                     event_receiver: Mutex::new(Some(event_receiver)),
                     standard_service_status,
                 })))
