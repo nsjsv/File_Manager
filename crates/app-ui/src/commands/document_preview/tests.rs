@@ -32,7 +32,6 @@ fn request(path: PathBuf, max_file_bytes: u64) -> DocumentPrepareRequest {
             source_path: path,
             document_generation: 9,
         },
-        format: DocumentPreviewFormat::Pdf,
         max_file_bytes,
         cancellation: CancellationToken::new(),
     }

@@ -12,6 +12,7 @@ mod network_connections;
 mod network_settings;
 mod option_controls;
 mod preview_panel;
+mod preview_settings;
 mod properties_window;
 mod rendering_settings;
 mod search_panel;

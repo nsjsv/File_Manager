@@ -23,6 +23,16 @@ pub async fn list_archive_members(
     let format = archive_extraction_format_for_path(&archive).ok_or(FileError::Unsupported(
         "archive format is not supported for listing",
     ))?;
+    list_archive_members_with_format(archive, format).await
+}
+
+/// 供预览管道在嗅探文件头后显式指定格式：自定义归档后缀无法从
+/// 扩展名推断解压后端，必须由内容嗅探结果决定。
+pub async fn list_archive_members_with_format(
+    archive: impl Into<PathBuf>,
+    format: ArchiveExtractionFormat,
+) -> Result<Vec<ArchiveListingEntry>, FileError> {
+    let archive = archive.into();
 
     match format {
         ArchiveExtractionFormat::Zip => {
@@ -44,6 +54,45 @@ pub async fn list_archive_members(
             read_seven_zip_members(&archive, archive_format_label(format)).await
         }
     }
+}
+
+/// 读取文件头识别归档格式。调用方已确认该路径属于归档类型，
+/// 无法识别魔数时按 tar 兜底——识别错误由解压/列成员环节报错。
+pub async fn sniff_archive_extraction_format(
+    archive: impl Into<PathBuf>,
+) -> ArchiveExtractionFormat {
+    let archive = archive.into();
+    let Some(header) = read_archive_header(&archive).await else {
+        return ArchiveExtractionFormat::Tar;
+    };
+
+    if header.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
+        return ArchiveExtractionFormat::Zip;
+    }
+    if header.starts_with(&[0x1f, 0x8b]) {
+        // gzip 单文件归档不在预览支持范围，维持内置 .tar.gz 语义。
+        return ArchiveExtractionFormat::TarGz;
+    }
+    if header.starts_with(&[0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]) {
+        return ArchiveExtractionFormat::SevenZip;
+    }
+    if header.starts_with(&[0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]) {
+        return ArchiveExtractionFormat::Rar;
+    }
+    // ustar 魔数位于偏移 257；旧式 tar 无魔数，靠上面的兜底处理。
+    if header.len() >= 262 && &header[257..262] == b"ustar" {
+        return ArchiveExtractionFormat::Tar;
+    }
+    ArchiveExtractionFormat::Tar
+}
+
+async fn read_archive_header(path: &Path) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut header = [0u8; 512];
+    let read = file.read(&mut header).await.ok()?;
+    Some(header[..read].to_vec())
 }
 
 async fn spawn_archive_listing(
@@ -327,5 +376,69 @@ Attributes = A_ -rw-r--r--
         assert_eq!(members[1].kind, FileKind::File);
         assert_eq!(members[2].path, "docs\\guide.md");
         assert_eq!(members[2].kind, FileKind::File);
+    }
+}
+
+#[cfg(test)]
+mod sniff_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sniffs_archive_formats_from_file_headers() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let cases: Vec<(&str, Vec<u8>, ArchiveExtractionFormat)> = vec![
+            (
+                "a.zip",
+                b"PK\x03\x04rest".to_vec(),
+                ArchiveExtractionFormat::Zip,
+            ),
+            (
+                "a.tgz",
+                [0x1f, 0x8b]
+                    .iter()
+                    .copied()
+                    .chain(b"rest".iter().copied())
+                    .collect(),
+                ArchiveExtractionFormat::TarGz,
+            ),
+            (
+                "a.7z",
+                [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]
+                    .iter()
+                    .copied()
+                    .chain(b"rest".iter().copied())
+                    .collect(),
+                ArchiveExtractionFormat::SevenZip,
+            ),
+            (
+                "a.rar",
+                [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]
+                    .iter()
+                    .copied()
+                    .chain(b"rest".iter().copied())
+                    .collect(),
+                ArchiveExtractionFormat::Rar,
+            ),
+        ];
+        for (name, bytes, expected) in cases {
+            let path = directory.path().join(name);
+            std::fs::write(&path, bytes).expect("write fixture");
+            assert_eq!(
+                sniff_archive_extraction_format(&path).await,
+                expected,
+                "sniffing {name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sniff_falls_back_to_tar_for_unrecognized_headers() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("a.datpack");
+        std::fs::write(&path, b"not a known archive").expect("write fixture");
+        assert_eq!(
+            sniff_archive_extraction_format(&path).await,
+            ArchiveExtractionFormat::Tar
+        );
     }
 }

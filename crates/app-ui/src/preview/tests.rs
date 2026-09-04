@@ -9,6 +9,10 @@ use crate::text_preview_loading::PREVIEW_TEXT_LIMIT;
 
 use super::*;
 
+fn default_rules() -> crate::config::PreviewExtensionRules {
+    crate::config::PreviewExtensionRules::default_rules()
+}
+
 const TEST_MAX_PREVIEW_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const TEST_LARGE_MAX_PREVIEW_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -21,6 +25,7 @@ async fn load_preview_reads_zip_archive_tree() {
     let preview_content = load_preview(
         archive_path.clone(),
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -47,6 +52,7 @@ async fn load_preview_reports_recognized_unsupported_archive_format() {
     let error = load_preview(
         archive_path,
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -98,6 +104,7 @@ async fn load_preview_reads_directory_top_layer_only() {
     let preview_content = load_preview(
         temp_dir.path().to_path_buf(),
         FileKind::Directory,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -151,6 +158,7 @@ async fn load_preview_reads_gzip_tar_archive_tree() {
     let preview_content = load_preview(
         archive_path,
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -175,6 +183,7 @@ async fn load_preview_keeps_utf8_text_preview() {
     let preview_content = load_preview(
         text_path,
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -200,6 +209,7 @@ async fn load_preview_renders_markdown_text_preview() {
     let preview_content = load_preview(
         text_path,
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -226,6 +236,7 @@ async fn load_preview_chunks_plain_text_preview() {
     let preview_content = load_preview(
         text_path,
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_MAX_PREVIEW_FILE_BYTES,
     )
@@ -256,9 +267,15 @@ async fn load_preview_rejects_file_over_configured_limit() {
     let content = "a".repeat(1025);
     std::fs::write(&text_path, content).expect("write text file");
 
-    let error = load_preview(text_path, FileKind::File, ScanOptions::default(), 1024)
-        .await
-        .expect_err("file should be rejected");
+    let error = load_preview(
+        text_path,
+        FileKind::File,
+        &default_rules(),
+        ScanOptions::default(),
+        1024,
+    )
+    .await
+    .expect_err("file should be rejected");
 
     assert!(error.contains("File is too large to preview"));
 }
@@ -270,59 +287,121 @@ async fn load_preview_allows_any_size_when_limit_is_zero() {
     let content = "a".repeat(4096);
     std::fs::write(&text_path, content).expect("write text file");
 
-    let preview_content = load_preview(text_path, FileKind::File, ScanOptions::default(), 0)
-        .await
-        .expect("zero limit must not reject");
+    let preview_content = load_preview(
+        text_path,
+        FileKind::File,
+        &default_rules(),
+        ScanOptions::default(),
+        0,
+    )
+    .await
+    .expect("zero limit must not reject");
 
     assert!(matches!(preview_content, PreviewContent::Text { .. }));
 }
 
 #[test]
-fn preview_file_size_kind_matches_preview_dispatch() {
-    use crate::config::PreviewFileSizeKind;
+fn classify_preview_path_matches_preview_dispatch() {
+    let rules = default_rules();
 
     assert_eq!(
-        preview_file_size_kind(Path::new("report.pdf")),
-        PreviewFileSizeKind::Document
+        classify_preview_path(Path::new("report.pdf"), &rules),
+        Some(PreviewPathKind::Document)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("report.docx")),
-        PreviewFileSizeKind::Document
+        classify_preview_path(Path::new("report.docx"), &rules),
+        Some(PreviewPathKind::Document)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("bundle.zip")),
-        PreviewFileSizeKind::Archive
+        classify_preview_path(Path::new("bundle.zip"), &rules),
+        Some(PreviewPathKind::Archive)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("backup.db3")),
-        PreviewFileSizeKind::Sqlite
+        classify_preview_path(Path::new("bundle.tar.gz"), &rules),
+        Some(PreviewPathKind::Archive)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("clip.mp4")),
-        PreviewFileSizeKind::Video
+        classify_preview_path(Path::new("backup.db3"), &rules),
+        Some(PreviewPathKind::Sqlite)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("song.flac")),
-        PreviewFileSizeKind::Audio
+        classify_preview_path(Path::new("clip.mp4"), &rules),
+        Some(PreviewPathKind::Video)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("animation.gif")),
-        PreviewFileSizeKind::Image
+        classify_preview_path(Path::new("song.flac"), &rules),
+        Some(PreviewPathKind::Audio)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("photo.png")),
-        PreviewFileSizeKind::Image
+        classify_preview_path(Path::new("animation.gif"), &rules),
+        Some(PreviewPathKind::AnimatedImage)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("notes.txt")),
-        PreviewFileSizeKind::Text
+        classify_preview_path(Path::new("photo.png"), &rules),
+        Some(PreviewPathKind::Image)
     );
     assert_eq!(
-        preview_file_size_kind(Path::new("data.unknownext")),
-        PreviewFileSizeKind::Text
+        classify_preview_path(Path::new("notes.txt"), &rules),
+        Some(PreviewPathKind::Text)
+    );
+    // 不在任何类型列表里的后缀不可预览。
+    assert_eq!(
+        classify_preview_path(Path::new("data.unknownext"), &rules),
+        None
     );
 }
 
+#[test]
+fn classify_preview_path_follows_user_rules_replacing_builtins() {
+    use crate::config::PreviewExtensionRules;
+
+    // 替换式语义：从图片列表删掉 png 后，png 不再按图片预览。
+    let mut rules = default_rules();
+    rules.image.retain(|candidate| candidate != "png");
+    assert_eq!(classify_preview_path(Path::new("photo.png"), &rules), None);
+
+    // 自定义后缀加入视频列表后按视频预览。
+    let mut rules = default_rules();
+    rules.video.push("dat".to_owned());
+    assert_eq!(
+        classify_preview_path(Path::new("media.DAT"), &rules),
+        Some(PreviewPathKind::Video)
+    );
+
+    // 同一后缀命中多个列表时，dispatch 顺序决定类型（文档优先）。
+    let mut rules = PreviewExtensionRules::default_rules();
+    rules.document.push("dat".to_owned());
+    rules.text.push("dat".to_owned());
+    assert_eq!(
+        classify_preview_path(Path::new("a.dat"), &rules),
+        Some(PreviewPathKind::Document)
+    );
+
+    // 清空全部列表后没有文件可预览。
+    let empty = PreviewExtensionRules::default();
+    assert_eq!(classify_preview_path(Path::new("notes.txt"), &empty), None);
+}
+
+#[tokio::test]
+async fn load_preview_sniffs_custom_archive_extension_by_content() {
+    let temp_dir = tempdir().expect("temp dir");
+    let archive_path = temp_dir.path().join("sample.datpack");
+    write_test_archive(&archive_path, ArchiveFormat::Zip).await;
+
+    let mut rules = default_rules();
+    rules.archive.push("datpack".to_owned());
+    let preview_content = load_preview(
+        archive_path,
+        FileKind::File,
+        &rules,
+        ScanOptions::default(),
+        TEST_MAX_PREVIEW_FILE_BYTES,
+    )
+    .await
+    .expect("custom archive extension preview");
+
+    assert!(matches!(preview_content, PreviewContent::Archive { .. }));
+}
 #[tokio::test]
 async fn load_preview_truncates_long_markdown_on_utf8_boundary() {
     let temp_dir = tempdir().expect("temp dir");
@@ -333,6 +412,7 @@ async fn load_preview_truncates_long_markdown_on_utf8_boundary() {
     let preview_content = load_preview(
         text_path,
         FileKind::File,
+        &default_rules(),
         ScanOptions::default(),
         TEST_LARGE_MAX_PREVIEW_FILE_BYTES,
     )

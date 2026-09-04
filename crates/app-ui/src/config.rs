@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use desktop_linux::{DisplayRendererGpu, TerminalEmulator};
 use file_core::{FileOperationVerification, SortDirection, SortField};
@@ -53,6 +53,26 @@ pub(crate) const DEFAULT_PREVIEW_DOCUMENT_SIZE_BYTES: u64 = 100 * PREVIEW_FILE_S
 pub(crate) const MIN_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 0;
 pub(crate) const MAX_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 3;
 pub(crate) const DEFAULT_PREVIEW_DIRECTORY_EXPAND_LEVELS: u8 = 1;
+/// 空格预览各类型的默认后缀表，镜像各预览类型的内置判定；
+/// 后缀以小写、无前导点的规范形态存储。替换式语义：用户可增删，
+/// 删除即该后缀不再按此类型预览。
+pub(crate) const DEFAULT_PREVIEW_TEXT_EXTENSIONS: [&str; 22] = [
+    "txt", "md", "log", "conf", "ini", "yaml", "yml", "json", "xml", "toml", "sh", "py", "js",
+    "ts", "c", "cpp", "h", "rs", "java", "css", "html", "csv",
+];
+pub(crate) const DEFAULT_PREVIEW_IMAGE_EXTENSIONS: [&str; 11] = [
+    "avif", "bmp", "gif", "ico", "jpg", "jpeg", "png", "svg", "tif", "tiff", "webp",
+];
+pub(crate) const DEFAULT_PREVIEW_VIDEO_EXTENSIONS: [&str; 6] =
+    ["mp4", "m4v", "mkv", "mov", "webm", "avi"];
+pub(crate) const DEFAULT_PREVIEW_AUDIO_EXTENSIONS: [&str; 7] =
+    ["mp3", "wav", "flac", "ogg", "oga", "m4a", "aac"];
+pub(crate) const DEFAULT_PREVIEW_SQLITE_EXTENSIONS: [&str; 4] = ["db", "sqlite", "sqlite3", "db3"];
+pub(crate) const DEFAULT_PREVIEW_ARCHIVE_EXTENSIONS: [&str; 6] =
+    ["zip", "tar", "tar.gz", "tgz", "7z", "rar"];
+pub(crate) const DEFAULT_PREVIEW_DOCUMENT_EXTENSIONS: [&str; 10] = [
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+];
 pub(crate) const DEFAULT_SEARCH_MAX_EXTRACT_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_ICON_GRID_SIZE: u32 = 96;
 pub(crate) const MIN_ICON_GRID_SIZE: u32 = 64;
@@ -404,6 +424,107 @@ pub(crate) fn normalize_preview_directory_expand_levels(levels: u8) -> u8 {
     )
 }
 
+/// 把用户输入规范成可匹配的后缀：去首尾空白、去前导点、转小写。
+/// 含内部空白（如 "my ext"）永远无法命中真实文件名，直接拒绝。
+/// 复合后缀（如 tar.gz）保留内部点。
+pub(crate) fn normalize_preview_extension(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_start_matches('.');
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(trimmed.to_lowercase())
+}
+
+/// 空格预览的分类型后缀规则：每个类型的列表完全决定该类型识别哪些
+/// 后缀（替换式）。匹配按文件名 `ends_with` 进行，天然覆盖 tar.gz
+/// 这类复合后缀；大小写不敏感，与各渲染器行为保持一致。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PreviewExtensionRules {
+    pub(crate) text: Vec<String>,
+    pub(crate) image: Vec<String>,
+    pub(crate) video: Vec<String>,
+    pub(crate) audio: Vec<String>,
+    pub(crate) sqlite: Vec<String>,
+    pub(crate) archive: Vec<String>,
+    pub(crate) document: Vec<String>,
+}
+
+impl PreviewExtensionRules {
+    pub(crate) fn default_rules() -> Self {
+        Self {
+            text: default_extensions(&DEFAULT_PREVIEW_TEXT_EXTENSIONS),
+            image: default_extensions(&DEFAULT_PREVIEW_IMAGE_EXTENSIONS),
+            video: default_extensions(&DEFAULT_PREVIEW_VIDEO_EXTENSIONS),
+            audio: default_extensions(&DEFAULT_PREVIEW_AUDIO_EXTENSIONS),
+            sqlite: default_extensions(&DEFAULT_PREVIEW_SQLITE_EXTENSIONS),
+            archive: default_extensions(&DEFAULT_PREVIEW_ARCHIVE_EXTENSIONS),
+            document: default_extensions(&DEFAULT_PREVIEW_DOCUMENT_EXTENSIONS),
+        }
+    }
+
+    pub(crate) fn matches(&self, kind: PreviewFileSizeKind, path: &Path) -> bool {
+        extensions_match(self.list(kind), path)
+    }
+
+    pub(crate) fn list(&self, kind: PreviewFileSizeKind) -> &Vec<String> {
+        match kind {
+            PreviewFileSizeKind::Text => &self.text,
+            PreviewFileSizeKind::Image => &self.image,
+            PreviewFileSizeKind::Video => &self.video,
+            PreviewFileSizeKind::Audio => &self.audio,
+            PreviewFileSizeKind::Archive => &self.archive,
+            PreviewFileSizeKind::Document => &self.document,
+            PreviewFileSizeKind::Sqlite => &self.sqlite,
+        }
+    }
+
+    pub(crate) fn list_mut(&mut self, kind: PreviewFileSizeKind) -> &mut Vec<String> {
+        match kind {
+            PreviewFileSizeKind::Text => &mut self.text,
+            PreviewFileSizeKind::Image => &mut self.image,
+            PreviewFileSizeKind::Video => &mut self.video,
+            PreviewFileSizeKind::Audio => &mut self.audio,
+            PreviewFileSizeKind::Archive => &mut self.archive,
+            PreviewFileSizeKind::Document => &mut self.document,
+            PreviewFileSizeKind::Sqlite => &mut self.sqlite,
+        }
+    }
+
+    pub(crate) fn set_list(&mut self, kind: PreviewFileSizeKind, extensions: Vec<String>) {
+        *self.list_mut(kind) = extensions;
+    }
+
+    pub(crate) fn default_list(kind: PreviewFileSizeKind) -> Vec<String> {
+        let builtin: &[&str] = match kind {
+            PreviewFileSizeKind::Text => &DEFAULT_PREVIEW_TEXT_EXTENSIONS,
+            PreviewFileSizeKind::Image => &DEFAULT_PREVIEW_IMAGE_EXTENSIONS,
+            PreviewFileSizeKind::Video => &DEFAULT_PREVIEW_VIDEO_EXTENSIONS,
+            PreviewFileSizeKind::Audio => &DEFAULT_PREVIEW_AUDIO_EXTENSIONS,
+            PreviewFileSizeKind::Archive => &DEFAULT_PREVIEW_ARCHIVE_EXTENSIONS,
+            PreviewFileSizeKind::Document => &DEFAULT_PREVIEW_DOCUMENT_EXTENSIONS,
+            PreviewFileSizeKind::Sqlite => &DEFAULT_PREVIEW_SQLITE_EXTENSIONS,
+        };
+        default_extensions(builtin)
+    }
+}
+
+fn default_extensions(builtin: &[&str]) -> Vec<String> {
+    builtin
+        .iter()
+        .map(|extension| (*extension).to_owned())
+        .collect()
+}
+
+fn extensions_match(extensions: &[String], path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_lowercase();
+    extensions
+        .iter()
+        .any(|candidate| file_name.ends_with(&format!(".{candidate}")))
+}
+
 pub(crate) fn preview_size_limit_mib(bytes: u64) -> u64 {
     bytes.div_ceil(PREVIEW_FILE_SIZE_UNIT_BYTES)
 }
@@ -418,6 +539,7 @@ pub(crate) struct UserConfig {
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
     pub(crate) preview_size_limits: PreviewFileSizeLimits,
     pub(crate) preview_directory_expand_levels: u8,
+    pub(crate) preview_extension_rules: PreviewExtensionRules,
     pub(crate) show_hidden_files: bool,
     pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
@@ -472,6 +594,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         network_list_thumbnail_downloads_enabled: false,
         preview_size_limits: PreviewFileSizeLimits::with_default_limits(),
         preview_directory_expand_levels: DEFAULT_PREVIEW_DIRECTORY_EXPAND_LEVELS,
+        preview_extension_rules: PreviewExtensionRules::default_rules(),
         show_hidden_files: false,
         language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -509,6 +632,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         network_list_thumbnail_downloads_enabled: false,
         preview_size_limits: PreviewFileSizeLimits::with_default_limits(),
         preview_directory_expand_levels: DEFAULT_PREVIEW_DIRECTORY_EXPAND_LEVELS,
+        preview_extension_rules: PreviewExtensionRules::default_rules(),
         show_hidden_files: false,
         language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,

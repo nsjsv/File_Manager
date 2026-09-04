@@ -9,8 +9,8 @@ use crate::app::FileBrowser;
 use crate::commands::{prepare_document_command, render_document_page_command};
 use crate::document_preview::{
     DocumentPageRenderOutcome, DocumentPrepareOutcome, DocumentPrepareRequest,
-    DocumentPreviewFormat, DocumentPreviewMessage, DocumentPreviewRequestKey, DocumentViewportKey,
-    PagedDocumentPreview, PendingDocumentPreview,
+    DocumentPreviewMessage, DocumentPreviewRequestKey, DocumentViewportKey, PagedDocumentPreview,
+    PendingDocumentPreview,
 };
 use crate::model::{Message, PreviewContent, PreviewState, PreviewWindowProfile, ScrollbarRegion};
 
@@ -43,11 +43,7 @@ impl FileBrowser {
         }
     }
 
-    pub(in crate::app) fn start_document_preview(
-        &mut self,
-        path: PathBuf,
-        format: DocumentPreviewFormat,
-    ) -> Task<Message> {
+    pub(in crate::app) fn start_document_preview(&mut self, path: PathBuf) -> Task<Message> {
         let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
         self.clear_preview();
         self.document_preview_generation = self.document_preview_generation.wrapping_add(1);
@@ -67,7 +63,6 @@ impl FileBrowser {
             window_command,
             prepare_document_command(DocumentPrepareRequest {
                 key,
-                format,
                 max_file_bytes: self.user_config.preview_size_limits.document_bytes,
                 cancellation,
             }),

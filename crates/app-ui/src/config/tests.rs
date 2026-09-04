@@ -6,7 +6,9 @@ use desktop_linux::{
     NetworkProtocol, TerminalEmulator,
 };
 use file_core::{FileOperationVerification, SortDirection, SortField};
-use file_operation_store::{StoredNetworkConnection, StoredWindowControlPlacement, TaskQueueStore};
+use file_operation_store::{
+    StoredNetworkConnection, StoredUserPreferences, StoredWindowControlPlacement, TaskQueueStore,
+};
 
 use crate::model::{
     BrowserViewMode, ListColumnKind, ListDirectorySizeDisplayMode, WindowChromeLayout,
@@ -803,4 +805,97 @@ preview_directory_expand_levels = 3
     assert_eq!(parsed.preview_size_limits.video_bytes, 0);
     assert_eq!(parsed.preview_size_limits.image_bytes, 4 * 1024 * 1024);
     assert_eq!(parsed.preview_directory_expand_levels, 3);
+}
+
+#[test]
+fn normalizes_preview_extension_input() {
+    assert_eq!(
+        normalize_preview_extension(" .TXT ").as_deref(),
+        Some("txt")
+    );
+    assert_eq!(normalize_preview_extension("..md"), Some("md".to_owned()));
+    assert_eq!(
+        normalize_preview_extension("tar.gz"),
+        Some("tar.gz".to_owned())
+    );
+    assert_eq!(normalize_preview_extension("  "), None);
+    assert_eq!(normalize_preview_extension("."), None);
+    assert_eq!(normalize_preview_extension("my ext"), None);
+}
+
+#[test]
+fn extension_rules_match_case_insensitively_and_support_compound_suffixes() {
+    let rules = PreviewExtensionRules::default_rules();
+
+    assert!(rules.matches(PreviewFileSizeKind::Text, &PathBuf::from("notes.TXT")));
+    assert!(rules.matches(
+        PreviewFileSizeKind::Archive,
+        &PathBuf::from("bundle.tar.gz")
+    ));
+    assert!(rules.matches(PreviewFileSizeKind::Archive, &PathBuf::from("bundle.TGZ")));
+    assert!(rules.matches(PreviewFileSizeKind::Document, &PathBuf::from("report.PDF")));
+    assert!(!rules.matches(PreviewFileSizeKind::Text, &PathBuf::from("notes.bin")));
+    assert!(!rules.matches(PreviewFileSizeKind::Archive, &PathBuf::from("archive.gz")));
+}
+
+#[test]
+fn extension_rules_default_lists_mirror_builtin_types() {
+    let rules = PreviewExtensionRules::default_rules();
+    for (kind, expected) in [
+        (PreviewFileSizeKind::Text, "txt"),
+        (PreviewFileSizeKind::Image, "png"),
+        (PreviewFileSizeKind::Video, "mp4"),
+        (PreviewFileSizeKind::Audio, "mp3"),
+        (PreviewFileSizeKind::Sqlite, "sqlite"),
+        (PreviewFileSizeKind::Archive, "7z"),
+        (PreviewFileSizeKind::Document, "docx"),
+    ] {
+        assert!(
+            rules
+                .list(kind)
+                .iter()
+                .any(|candidate| candidate == expected),
+            "default {kind:?} list should contain {expected}"
+        );
+        assert_eq!(PreviewExtensionRules::default_list(kind), *rules.list(kind));
+    }
+}
+
+#[test]
+fn preview_extension_rules_roundtrip_through_stored_preferences() {
+    let default = default_user_config();
+    let mut config = default.clone();
+    config.preview_extension_rules.text = vec!["nfo".to_owned(), "cfg".to_owned()];
+    config.preview_extension_rules.image = Vec::new();
+
+    let stored = config.user_preferences().to_stored();
+    let restored = UserPreferences::from_stored(stored, &default);
+    assert_eq!(restored.preview_extension_rules.text, vec!["nfo", "cfg"]);
+    // 用户显式清空是合法选择，不能回退默认列表。
+    assert!(restored.preview_extension_rules.image.is_empty());
+    // 未触发的类型保持默认。
+    assert_eq!(
+        restored.preview_extension_rules.video,
+        default.preview_extension_rules.video
+    );
+
+    // 旧版本存储缺该字段时整体回退默认。
+    let stored = StoredUserPreferences::default();
+    let restored = UserPreferences::from_stored(stored, &default);
+    assert_eq!(
+        restored.preview_extension_rules,
+        default.preview_extension_rules
+    );
+
+    // 单类型缺失时该类型回退默认，其他类型保留用户值。
+    let mut stored = config.user_preferences().to_stored();
+    let mut rules = stored.preview_extension_rules.take().expect("stored rules");
+    rules.text = None;
+    stored.preview_extension_rules = Some(rules);
+    let restored = UserPreferences::from_stored(stored, &default);
+    assert_eq!(
+        restored.preview_extension_rules.text,
+        default.preview_extension_rules.text
+    );
+    assert!(restored.preview_extension_rules.image.is_empty());
 }

@@ -12,10 +12,10 @@ use self::process::{
     run_document_tool_command, DocumentToolCommand, DocumentToolError, DocumentToolOutput,
 };
 use crate::document_preview::{
-    parse_pdfinfo_pages, parse_pdfinfo_summary, DocumentPageRenderOutcome,
-    DocumentPageRenderRequest, DocumentPageRenderResult, DocumentPrepareOutcome,
-    DocumentPrepareRequest, DocumentPreviewFormat, DocumentPreviewMessage,
-    DocumentPreviewWorkspace, DocumentScaleAxis, PreparedDocumentPreview,
+    document_preview_format_for_path, parse_pdfinfo_pages, parse_pdfinfo_summary,
+    DocumentPageRenderOutcome, DocumentPageRenderRequest, DocumentPageRenderResult,
+    DocumentPrepareOutcome, DocumentPrepareRequest, DocumentPreviewFormat, DocumentPreviewMessage,
+    DocumentPreviewWorkspace, DocumentScaleAxis, OfficeDocumentFormat, PreparedDocumentPreview,
 };
 use crate::formatting::format_file_size;
 use crate::model::Message;
@@ -85,21 +85,47 @@ async fn prepare_document_with_programs(
     }
 }
 
+/// 在 prepare 异步体内解析文档格式：嗅探 %PDF 头识别 PDF（含自定义
+/// 后缀的改名 PDF）；嗅探不中或读不到时按扩展名兜底（内置行为不变），
+/// 自定义 Office 后缀交给 LibreOffice 内容自识别。格式是渲染器的
+/// 内部实现细节，不再随请求跨层传递。
+async fn detect_document_preview_format(request: &DocumentPrepareRequest) -> DocumentPreviewFormat {
+    use tokio::io::AsyncReadExt;
+
+    let fallback = || {
+        document_preview_format_for_path(&request.key.source_path)
+            .unwrap_or(DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx))
+    };
+    let is_pdf = async {
+        let mut file = tokio::fs::File::open(&request.key.source_path).await.ok()?;
+        let mut header = [0u8; 5];
+        let read = file.read(&mut header).await.ok()?;
+        Some(header[..read] == *b"%PDF-")
+    }
+    .await;
+    if is_pdf == Some(true) {
+        DocumentPreviewFormat::Pdf
+    } else {
+        fallback()
+    }
+}
+
 pub(super) async fn validate_document_source(
     request: &DocumentPrepareRequest,
+    format: DocumentPreviewFormat,
 ) -> Result<Option<std::fs::Metadata>, String> {
     let metadata = tokio::select! {
         _ = request.cancellation.cancelled() => return Ok(None),
         metadata = tokio::fs::metadata(&request.key.source_path) => metadata,
     }
-    .map_err(|error| match request.format {
+    .map_err(|error| match format {
         DocumentPreviewFormat::Pdf => format!("Could not inspect PDF: {error}"),
         DocumentPreviewFormat::Office(_) => {
             format!("Could not inspect Office document: {error}")
         }
     })?;
     if !metadata.is_file() {
-        return Err(match request.format {
+        return Err(match format {
             DocumentPreviewFormat::Pdf => "PDF preview source is not a regular file".to_owned(),
             DocumentPreviewFormat::Office(_) => {
                 "Office preview source is not a regular file".to_owned()
@@ -120,11 +146,12 @@ async fn prepare_document_inner(
     request: &DocumentPrepareRequest,
     programs: &DocumentPrograms,
 ) -> Result<Option<PreparedDocumentPreview>, String> {
-    if validate_document_source(request).await?.is_none() {
+    let format = detect_document_preview_format(request).await;
+    if validate_document_source(request, format).await?.is_none() {
         return Ok(None);
     }
 
-    let workspace = match request.format {
+    let workspace = match format {
         DocumentPreviewFormat::Pdf => {
             let pdf_path = request.key.source_path.clone();
             let workspace = tokio::select! {
@@ -139,7 +166,7 @@ async fn prepare_document_inner(
         }
         DocumentPreviewFormat::Office(_) => {
             let Some(workspace) =
-                prepare_office_document_workspace(request, &programs.office).await?
+                prepare_office_document_workspace(request, format, &programs.office).await?
             else {
                 return Ok(None);
             };

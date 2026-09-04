@@ -37,7 +37,7 @@ impl ScrollableOperation for RecordedScrollOffset {
 }
 
 fn prepare_current_document(browser: &mut FileBrowser, source: PathBuf, page_count: usize) {
-    drop(browser.start_document_preview(source.clone(), DocumentPreviewFormat::Pdf));
+    drop(browser.start_document_preview(source.clone()));
     let key = browser
         .pending_document_preview
         .as_ref()
@@ -58,7 +58,7 @@ async fn prepared_document_resets_stable_scrollable_before_page_commands() {
     let directory = tempdir().unwrap();
     let source = directory.path().join("reset.pdf");
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
-    drop(browser.start_document_preview(source.clone(), DocumentPreviewFormat::Pdf));
+    drop(browser.start_document_preview(source.clone()));
     let key = browser
         .pending_document_preview
         .as_ref()
@@ -183,10 +183,7 @@ fn office_document_dispatch_enters_the_typed_document_pipeline() {
 fn office_prepare_failure_stays_local_and_never_falls_back_to_text() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let source = PathBuf::from("/tmp/broken.docx");
-    drop(browser.start_document_preview(
-        source,
-        DocumentPreviewFormat::Office(crate::document_preview::OfficeDocumentFormat::Docx),
-    ));
+    drop(browser.start_document_preview(source));
     let key = browser
         .pending_document_preview
         .as_ref()
@@ -216,7 +213,7 @@ fn same_path_reopen_rejects_old_prepare_generation() {
     std::fs::write(&source, b"pdf").unwrap();
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
 
-    drop(browser.start_document_preview(source.clone(), DocumentPreviewFormat::Pdf));
+    drop(browser.start_document_preview(source.clone()));
     let first = browser
         .pending_document_preview
         .as_ref()
@@ -224,7 +221,7 @@ fn same_path_reopen_rejects_old_prepare_generation() {
         .key
         .clone();
     browser.clear_preview();
-    drop(browser.start_document_preview(source.clone(), DocumentPreviewFormat::Pdf));
+    drop(browser.start_document_preview(source.clone()));
     let second = browser
         .pending_document_preview
         .as_ref()
@@ -255,7 +252,7 @@ fn clear_preview_cancels_pending_and_ready_document_tokens() {
     let source = directory.path().join("cancel.pdf");
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
 
-    drop(browser.start_document_preview(source.clone(), DocumentPreviewFormat::Pdf));
+    drop(browser.start_document_preview(source.clone()));
     let pending_token = browser
         .pending_document_preview
         .as_ref()

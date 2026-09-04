@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use super::{
-    is_supported_sqlite_path, load_sqlite_preview_blocking, load_sqlite_table_data_blocking,
-    run_sqlite_sql_blocking, SQLITE_ROW_LIMIT,
+    load_sqlite_preview_blocking, load_sqlite_table_data_blocking, run_sqlite_sql_blocking,
+    SQLITE_ROW_LIMIT,
 };
 use crate::model::SqliteCellValue;
 use rusqlite::Connection;
@@ -17,18 +17,6 @@ fn create_sample_database(path: &Path) {
              CREATE TABLE \"weird\"\"name\" (id INTEGER);",
         )
         .unwrap();
-}
-
-#[test]
-fn recognizes_sqlite_extensions_case_insensitively() {
-    for extension in ["db", "sqlite", "sqlite3", "db3", "DB", "SQLite"] {
-        assert!(is_supported_sqlite_path(Path::new(&format!(
-            "/tmp/data.{extension}"
-        ))));
-    }
-    for candidate in ["/tmp/data.json", "/tmp/database", "/tmp/archive.sqlite-wal"] {
-        assert!(!is_supported_sqlite_path(Path::new(candidate)));
-    }
 }
 
 #[test]

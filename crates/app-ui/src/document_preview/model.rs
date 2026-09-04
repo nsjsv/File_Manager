@@ -9,7 +9,7 @@ use super::resources::{
     page_render_plan, render_width_bucket, select_render_set, ReadyDocumentPage,
     ReadyDocumentPageCache, RenderCandidate,
 };
-use super::{DocumentPreviewFormat, DocumentPreviewWorkspace};
+use super::DocumentPreviewWorkspace;
 
 pub(crate) const MAX_DOCUMENT_PAGES: usize = 10_000;
 const DOCUMENT_PAGE_SIDE_MARGIN: f32 = 12.0;
@@ -43,7 +43,6 @@ pub(crate) struct DocumentViewportKey {
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentPrepareRequest {
     pub(crate) key: DocumentPreviewRequestKey,
-    pub(crate) format: DocumentPreviewFormat,
     pub(crate) max_file_bytes: u64,
     pub(crate) cancellation: CancellationToken,
 }

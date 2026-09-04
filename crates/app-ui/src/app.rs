@@ -34,6 +34,7 @@ mod path_suggestions;
 mod paths;
 mod persistence_feedback;
 mod pointer_interactions;
+mod preview_settings;
 pub(crate) mod preview_state;
 mod preview_window_view;
 mod properties;
@@ -277,6 +278,8 @@ pub(crate) struct FileBrowser {
     user_config: config::UserConfig,
     pub(crate) preview_size_limit_mib_inputs: [String; 7],
     pub(crate) preview_size_limit_mib_errors: [Option<String>; 7],
+    pub(crate) preview_extension_inputs: [String; 7],
+    pub(crate) preview_extension_input_errors: [Option<String>; 7],
     pub(crate) preview_directory_expand_levels_input: String,
     pub(crate) preview_directory_expand_levels_error: Option<String>,
     pub(crate) startup_custom_directory_input: String,
@@ -419,9 +422,13 @@ impl FileBrowser {
     }
 
     pub(crate) fn preview_file_size_limit_for(&self, path: &Path) -> u64 {
-        self.user_config
-            .preview_size_limits
-            .limit(crate::preview::preview_file_size_kind(path))
+        // 调用点都位于预览门禁之后，分类必然成功；`None` 只可能来自
+        // 门禁外的元数据查询，按文本上限处理是安全的兜底。
+        let size_kind =
+            crate::preview::classify_preview_path(path, &self.user_config.preview_extension_rules)
+                .map(crate::preview::PreviewPathKind::file_size_kind)
+                .unwrap_or(crate::config::PreviewFileSizeKind::Text);
+        self.user_config.preview_size_limits.limit(size_kind)
     }
 
     pub(crate) fn preview_directory_expand_levels(&self) -> u8 {
@@ -640,6 +647,8 @@ impl FileBrowser {
                 &user_config.preview_size_limits,
             ),
             preview_size_limit_mib_errors: [const { None }; 7],
+            preview_extension_inputs: [const { String::new() }; 7],
+            preview_extension_input_errors: [const { None }; 7],
             preview_directory_expand_levels_input: user_config
                 .preview_directory_expand_levels
                 .to_string(),

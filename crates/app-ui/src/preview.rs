@@ -2,20 +2,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use file_core::{
-    archive_extraction_format_for_path, is_supported_audio_path, is_supported_video_path,
-    list_archive_members, scan_directory, ArchiveListingEntry, DirectoryEntry, FileKind,
-    ScanOptions,
+    list_archive_members_with_format, scan_directory, sniff_archive_extraction_format,
+    ArchiveListingEntry, DirectoryEntry, FileKind, ScanOptions,
 };
 
 use crate::animated_image_preview::is_animated_image_preview_path;
 use crate::audio_preview::inspect_audio_preview_metadata;
-use crate::config::PreviewFileSizeKind;
-use crate::document_preview::document_preview_format_for_path;
+use crate::config::{PreviewExtensionRules, PreviewFileSizeKind};
 use crate::formatting::format_file_size;
 use crate::model::{PreviewContent, PreviewTreeDirectoryChildren, PreviewTreeEntry};
-use crate::sqlite_preview::{is_supported_sqlite_path, load_sqlite_preview};
+use crate::sqlite_preview::load_sqlite_preview;
 use crate::text_preview_loading::load_initial_text_preview;
-use thumbnails::is_supported_thumbnail_path;
 
 pub(crate) const PREVIEW_ARCHIVE_ENTRY_LIMIT: usize = 500;
 
@@ -25,6 +22,7 @@ const SUPPORTED_ARCHIVE_FORMAT_MESSAGE: &str =
 pub(crate) async fn load_preview(
     path: PathBuf,
     kind: FileKind,
+    rules: &PreviewExtensionRules,
     options: ScanOptions,
     max_file_bytes: u64,
 ) -> Result<PreviewContent, String> {
@@ -32,17 +30,17 @@ pub(crate) async fn load_preview(
         FileKind::Directory => load_directory_preview(path, options).await,
         FileKind::File => {
             reject_file_over_preview_limit(&path, max_file_bytes).await?;
-            if archive_extraction_format_for_path(&path).is_some() {
+            if rules.matches(PreviewFileSizeKind::Archive, &path) {
                 load_archive_preview(path).await
             } else if is_recognized_unsupported_archive_path(&path) {
                 Err(format!(
                     "This archive format is not supported yet. {SUPPORTED_ARCHIVE_FORMAT_MESSAGE}"
                 ))
-            } else if is_supported_audio_path(&path) {
+            } else if rules.matches(PreviewFileSizeKind::Audio, &path) {
                 load_audio_preview(path).await
-            } else if is_supported_video_path(&path) {
+            } else if rules.matches(PreviewFileSizeKind::Video, &path) {
                 load_video_preview(path).await
-            } else if is_supported_sqlite_path(&path) {
+            } else if rules.matches(PreviewFileSizeKind::Sqlite, &path) {
                 load_sqlite_preview(path).await.map(PreviewContent::Sqlite)
             } else {
                 load_text_preview(path).await
@@ -69,26 +67,68 @@ async fn reject_file_over_preview_limit(path: &Path, max_file_bytes: u64) -> Res
     ))
 }
 
-/// 与预览打开的 dispatch 顺序保持一致：文件适用的大小上限
-/// 等于它实际打开时所属预览类型的上限。
-pub(crate) fn preview_file_size_kind(path: &Path) -> PreviewFileSizeKind {
-    if document_preview_format_for_path(path).is_some() {
-        PreviewFileSizeKind::Document
-    } else if archive_extraction_format_for_path(path).is_some() {
-        PreviewFileSizeKind::Archive
-    } else if is_supported_sqlite_path(path) {
-        PreviewFileSizeKind::Sqlite
-    } else if is_animated_image_preview_path(path) {
-        PreviewFileSizeKind::Image
-    } else if is_supported_thumbnail_path(path) && !is_supported_video_path(path) {
-        PreviewFileSizeKind::Image
-    } else if is_supported_video_path(path) {
-        PreviewFileSizeKind::Video
-    } else if is_supported_audio_path(path) {
-        PreviewFileSizeKind::Audio
-    } else {
-        PreviewFileSizeKind::Text
+/// 预览路径的单一事实源分类：分支顺序必须镜像
+/// `start_classified_preview` 的真实 dispatch；新增预览类型时
+/// 分类器与 dispatch 必须同步扩展，禁止在调用点各自内联判定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewPathKind {
+    Document,
+    Archive,
+    Sqlite,
+    AnimatedImage,
+    Image,
+    Video,
+    Audio,
+    Text,
+}
+
+impl PreviewPathKind {
+    pub(crate) fn file_size_kind(self) -> PreviewFileSizeKind {
+        match self {
+            PreviewPathKind::Document => PreviewFileSizeKind::Document,
+            PreviewPathKind::Archive => PreviewFileSizeKind::Archive,
+            PreviewPathKind::Sqlite => PreviewFileSizeKind::Sqlite,
+            PreviewPathKind::AnimatedImage | PreviewPathKind::Image => PreviewFileSizeKind::Image,
+            PreviewPathKind::Video => PreviewFileSizeKind::Video,
+            PreviewPathKind::Audio => PreviewFileSizeKind::Audio,
+            PreviewPathKind::Text => PreviewFileSizeKind::Text,
+        }
     }
+}
+
+/// 返回 `None` 表示文件不属于任何可预览类型。每个类型的后缀列表
+/// 完全决定该类型识别哪些后缀（替换式）；图片列表中的 gif 走动图渲染。
+pub(crate) fn classify_preview_path(
+    path: &Path,
+    rules: &PreviewExtensionRules,
+) -> Option<PreviewPathKind> {
+    use PreviewFileSizeKind as Kind;
+
+    if rules.matches(Kind::Document, path) {
+        return Some(PreviewPathKind::Document);
+    }
+    if rules.matches(Kind::Archive, path) {
+        return Some(PreviewPathKind::Archive);
+    }
+    if rules.matches(Kind::Sqlite, path) {
+        return Some(PreviewPathKind::Sqlite);
+    }
+    if rules.matches(Kind::Image, path) {
+        if is_animated_image_preview_path(path) {
+            return Some(PreviewPathKind::AnimatedImage);
+        }
+        return Some(PreviewPathKind::Image);
+    }
+    if rules.matches(Kind::Video, path) {
+        return Some(PreviewPathKind::Video);
+    }
+    if rules.matches(Kind::Audio, path) {
+        return Some(PreviewPathKind::Audio);
+    }
+    if rules.matches(Kind::Text, path) {
+        return Some(PreviewPathKind::Text);
+    }
+    None
 }
 
 async fn load_directory_preview(
@@ -116,7 +156,9 @@ pub(crate) async fn load_directory_preview_children(
 }
 
 async fn load_archive_preview(path: PathBuf) -> Result<PreviewContent, String> {
-    let members = list_archive_members(path)
+    // 自定义归档后缀无法从扩展名推断解压后端，按文件头嗅探决定。
+    let format = sniff_archive_extraction_format(&path).await;
+    let members = list_archive_members_with_format(path, format)
         .await
         .map_err(|error| error.to_string())?;
     let mut tree_builder = ArchiveTreeBuilder::new();

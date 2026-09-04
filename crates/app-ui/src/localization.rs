@@ -758,6 +758,17 @@ fn exact_translation(text: &str) -> Option<&'static str> {
             Some("启用后，远程位置中的图片和视频可能会使用更多流量。")
         }
         "Max Text Preview" => Some("最大文本预览"),
+        "Text Preview Extensions" => Some("文本预览后缀"),
+        "Image Preview Extensions" => Some("图片预览后缀"),
+        "Video Preview Extensions" => Some("视频预览后缀"),
+        "Audio Preview Extensions" => Some("音频预览后缀"),
+        "Archive Preview Extensions" => Some("压缩包预览后缀"),
+        "Document Preview Extensions" => Some("文档预览后缀"),
+        "SQLite Preview Extensions" => Some("SQLite 预览后缀"),
+        "Enter an extension like txt (a leading dot is optional)." => {
+            Some("请输入类似 txt 的后缀（前导点可省略）。")
+        }
+        "No preview available for this file type." => Some("无法预览此文件类型。"),
         "Max Image Preview" => Some("最大图片预览"),
         "Max Video Preview" => Some("最大视频预览"),
         "Max Audio Preview" => Some("最大音频预览"),

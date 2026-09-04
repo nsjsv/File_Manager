@@ -8,16 +8,6 @@ use crate::model::{
     SQLITE_ROW_LIMIT,
 };
 
-pub(crate) fn is_supported_sqlite_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            ["db", "sqlite", "sqlite3", "db3"]
-                .iter()
-                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-        })
-}
-
 pub(crate) async fn load_sqlite_preview(path: PathBuf) -> Result<SqliteDatabasePreview, String> {
     tokio::task::spawn_blocking(move || load_sqlite_preview_blocking(&path))
         .await

@@ -39,7 +39,6 @@ fn office_request(path: PathBuf, max_file_bytes: u64) -> DocumentPrepareRequest 
             source_path: path,
             document_generation: 41,
         },
-        format: DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         max_file_bytes,
         cancellation: CancellationToken::new(),
     }
@@ -100,6 +99,7 @@ async fn assert_follow_up_conversion_acquires_permit(directory: &Path, name: &st
         Duration::from_secs(120),
         convert_office_document_in_workspace(
             &request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &workspace,
             &fake_office_programs(),
             OfficeConversionLimits::default(),
@@ -120,6 +120,7 @@ async fn fake_conversion_uses_strict_arguments_isolated_environment_and_one_pdf(
 
     let output = convert_office_document_in_workspace(
         &request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         &workspace,
         &fake_office_programs(),
         OfficeConversionLimits::default(),
@@ -184,6 +185,7 @@ async fn missing_libreoffice_falls_back_only_to_soffice() {
 
     let output = convert_office_document_in_workspace(
         &request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         &workspace,
         &programs,
         OfficeConversionLimits::default(),
@@ -202,6 +204,7 @@ async fn missing_libreoffice_falls_back_only_to_soffice() {
     let missing_workspace = OfficeDocumentPreviewWorkspace::create().unwrap();
     let error = convert_office_document_in_workspace(
         &missing_request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         &missing_workspace,
         &missing_office_programs(directory.path()),
         OfficeConversionLimits::default(),
@@ -232,6 +235,7 @@ async fn conversion_rejects_invalid_or_oversized_output() {
         let workspace = OfficeDocumentPreviewWorkspace::create().unwrap();
         let error = convert_office_document_in_workspace(
             &request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &workspace,
             &fake_office_programs(),
             OfficeConversionLimits::default(),
@@ -255,9 +259,13 @@ async fn output_directory_replacement_cannot_escape_the_workspace() {
     .unwrap();
     let request = office_request(source, 4096);
 
-    let error = prepare_office_document_workspace(&request, &fake_office_programs())
-        .await
-        .expect_err("replaced output directory");
+    let error = prepare_office_document_workspace(
+        &request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
+        &fake_office_programs(),
+    )
+    .await
+    .expect_err("replaced output directory");
 
     assert!(error.contains("output directory identity changed"));
     let escaped_pdf = external.path().join("escaped.pdf");
@@ -278,6 +286,7 @@ async fn nonzero_libreoffice_does_not_fall_back_to_soffice() {
 
     let error = convert_office_document_in_workspace(
         &request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         &workspace,
         &programs,
         OfficeConversionLimits::default(),
@@ -302,6 +311,7 @@ async fn waiting_cancellation_and_post_wait_size_check_never_spawn_a_child() {
     let first = tokio::spawn(async move {
         convert_office_document_in_workspace(
             &holding_request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &holding_workspace,
             &programs,
             OfficeConversionLimits::default(),
@@ -319,6 +329,7 @@ async fn waiting_cancellation_and_post_wait_size_check_never_spawn_a_child() {
     let waiting = tokio::spawn(async move {
         convert_office_document_in_workspace(
             &cancelled_request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &cancelled_workspace,
             &programs,
             OfficeConversionLimits::default(),
@@ -342,6 +353,7 @@ async fn waiting_cancellation_and_post_wait_size_check_never_spawn_a_child() {
     let holder = tokio::spawn(async move {
         convert_office_document_in_workspace(
             &holding_request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &holding_workspace,
             &programs,
             OfficeConversionLimits::default(),
@@ -358,6 +370,7 @@ async fn waiting_cancellation_and_post_wait_size_check_never_spawn_a_child() {
     let growing = tokio::spawn(async move {
         convert_office_document_in_workspace(
             &growing_request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &growing_workspace,
             &programs,
             OfficeConversionLimits::default(),
@@ -382,6 +395,7 @@ async fn running_cancel_timeout_and_output_limit_reap_the_child() {
     let timeout_workspace = OfficeDocumentPreviewWorkspace::create().unwrap();
     let timeout_error = convert_office_document_in_workspace(
         &timeout_request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         &timeout_workspace,
         &fake_office_programs(),
         test_limits(Duration::from_millis(40)),
@@ -404,6 +418,7 @@ async fn running_cancel_timeout_and_output_limit_reap_the_child() {
     let running = tokio::spawn(async move {
         convert_office_document_in_workspace(
             &cancel_request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &cancel_workspace,
             &programs,
             OfficeConversionLimits::default(),
@@ -424,6 +439,7 @@ async fn running_cancel_timeout_and_output_limit_reap_the_child() {
     let output_workspace = OfficeDocumentPreviewWorkspace::create().unwrap();
     let error = convert_office_document_in_workspace(
         &output_request,
+        DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
         &output_workspace,
         &fake_office_programs(),
         OfficeConversionLimits {
@@ -450,6 +466,7 @@ async fn timeout_kills_descendants_that_hold_pipes_after_parent_exit() {
         let job = tokio::spawn(async move {
             convert_office_document_in_workspace(
                 &request,
+                DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
                 &workspace,
                 &programs,
                 test_limits(Duration::from_millis(80)),
@@ -487,6 +504,7 @@ async fn cancellation_kills_parent_and_descendant_pipe_holder() {
     let job = tokio::spawn(async move {
         convert_office_document_in_workspace(
             &request,
+            DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
             &workspace,
             &programs,
             OfficeConversionLimits::default(),
@@ -523,6 +541,7 @@ async fn office_conversions_share_one_global_permit() {
         jobs.push(tokio::spawn(async move {
             convert_office_document_in_workspace(
                 &request,
+                DocumentPreviewFormat::Office(OfficeDocumentFormat::Docx),
                 &workspace,
                 &programs,
                 OfficeConversionLimits::default(),
@@ -667,10 +686,8 @@ async fn real_office_samples_convert_and_render_the_first_page() {
         "office/preview.odp",
     ] {
         let source = fixture(name);
-        let format = document_preview_format_for_path(&source).expect("Office fixture format");
         let mut request = office_request(source.clone(), 4 * 1024 * 1024);
         let started_at = std::time::Instant::now();
-        request.format = format;
         let outcome = prepare_document_with_programs(request, DocumentPrograms::default()).await;
         let DocumentPrepareOutcome::Ready(prepared) = outcome else {
             panic!("could not prepare {}: {outcome:?}", source.display());

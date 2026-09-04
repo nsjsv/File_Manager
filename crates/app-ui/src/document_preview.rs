@@ -4,9 +4,9 @@ mod pdfinfo;
 mod resources;
 mod workspace;
 
-#[cfg(test)]
-pub(crate) use format::OfficeDocumentFormat;
-pub(crate) use format::{document_preview_format_for_path, DocumentPreviewFormat};
+pub(crate) use format::{
+    document_preview_format_for_path, DocumentPreviewFormat, OfficeDocumentFormat,
+};
 pub(crate) use model::{
     document_viewport_height, DocumentPageRenderOutcome, DocumentPageRenderRequest,
     DocumentPageRenderResult, DocumentPageView, DocumentPrepareOutcome, DocumentPrepareRequest,

@@ -30,6 +30,7 @@ use super::option_controls::{
     inactive_segmented_choice_row, segmented_choice_button_style, segmented_choice_row,
     SegmentedChoice,
 };
+use super::preview_settings::preview_extension_rows;
 use super::rendering_settings::rendering_gpu_preference_row;
 use super::search_settings::search_settings_detail;
 use super::settings_group::{
@@ -314,6 +315,7 @@ fn files_settings_detail(
                     ),
                 ],
             ),
+            settings_group("Preview", vec![preview_extension_rows(browser)]),
             settings_group(
                 "Verification",
                 vec![file_operation_verification_options(

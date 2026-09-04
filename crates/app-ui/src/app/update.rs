@@ -825,6 +825,18 @@ impl FileBrowser {
             Message::PreviewDirectoryExpandLevelsInputCommitted => {
                 self.commit_preview_directory_expand_levels_input()
             }
+            Message::PreviewExtensionInputChanged(kind_index, value) => {
+                self.update_preview_extension_input(kind_index, value)
+            }
+            Message::PreviewExtensionInputCommitted(kind_index) => {
+                self.add_preview_extension(kind_index)
+            }
+            Message::PreviewExtensionRemoved(kind_index, extension) => {
+                self.remove_preview_extension(kind_index, &extension)
+            }
+            Message::PreviewExtensionReset(kind_index) => {
+                self.reset_preview_extension_list(kind_index)
+            }
             Message::LanguageSettingSelected(language_setting) => {
                 self.select_language_setting(language_setting)
             }

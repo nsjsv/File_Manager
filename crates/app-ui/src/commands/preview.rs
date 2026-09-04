@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::animated_image_preview::load_animated_image_preview;
 use crate::audio_preview::{start_audio_preview, start_audio_preview_at};
+use crate::config::PreviewExtensionRules;
 use crate::model::{
     Message, RemotePreviewCacheFinished, RemotePreviewCacheMessage, RemotePreviewCacheProgress,
 };
@@ -25,12 +26,13 @@ const NETWORK_PREVIEW_PROGRESS_UI_INTERVAL: Duration = crate::ui_pacing::PROGRES
 pub(crate) fn preview_command(
     path: PathBuf,
     kind: FileKind,
+    rules: PreviewExtensionRules,
     options: ScanOptions,
     max_file_bytes: u64,
 ) -> Task<Message> {
     let preview_path = path.clone();
     Task::perform(
-        load_preview(path, kind, options, max_file_bytes),
+        async move { load_preview(path, kind, &rules, options, max_file_bytes).await },
         move |preview_outcome| Message::PreviewLoaded(preview_path.clone(), preview_outcome),
     )
 }

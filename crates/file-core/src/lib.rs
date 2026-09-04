@@ -23,7 +23,10 @@ pub use archive_extraction::{
     inspect_archive_extraction, is_supported_archive_path, ArchiveExtractionFormat,
     ArchiveExtractionProgress, ArchiveExtractionRequest,
 };
-pub use archive_listing::{list_archive_members, ArchiveListingEntry};
+pub use archive_listing::{
+    list_archive_members, list_archive_members_with_format, sniff_archive_extraction_format,
+    ArchiveListingEntry,
+};
 pub use directory_metadata::{
     resolve_directory_metadata, DirectoryFilesystemMetadata, DirectoryIdentityNames,
     DirectoryMetadataRequest, DirectoryMetadataRequirement, DirectoryMetadataResolution,

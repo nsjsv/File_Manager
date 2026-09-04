@@ -1,18 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use file_core::{
-    is_supported_archive_path, is_supported_audio_path, is_supported_video_path, FileKind,
-};
+use file_core::{is_supported_archive_path, FileKind};
 use iced::Task;
 
 use super::super::{FileBrowser, PendingKeyboardColumnFocus};
-use crate::animated_image_preview::is_animated_image_preview_path;
 use crate::commands::{
     animated_image_preview_command, image_preview_dimensions_command,
     load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
     start_audio_preview_command,
 };
-use crate::document_preview::document_preview_format_for_path;
 use crate::formatting::format_file_size;
 use crate::list_view::LIST_HEADER_HEIGHT;
 use crate::model::{
@@ -442,6 +438,17 @@ impl FileBrowser {
         let kind = self.entry_kind(&path).unwrap_or(FileKind::Other);
         self.preview_shown_path = Some(path.clone());
         if kind == FileKind::File {
+            // 门禁放在远程下载与大小检查之前：不可预览的远程文件不值得下载，
+            // 也不应误报“文件太大”。
+            if crate::preview::classify_preview_path(
+                &path,
+                &self.user_config.preview_extension_rules,
+            )
+            .is_none()
+            {
+                self.preview_window_pinned = pinned;
+                return close_window_command.chain(self.show_unpreviewable_file_preview());
+            }
             if let Some(command) = self.reject_oversized_file_preview(&path) {
                 return close_window_command.chain(command);
             }
@@ -455,6 +462,16 @@ impl FileBrowser {
         close_window_command.chain(self.open_preview_for_resolved_path(path, kind))
     }
 
+    /// QuickLook 式占位：不可预览类型弹预览窗口显示错误，与“文件太大”同一表现。
+    fn show_unpreviewable_file_preview(&mut self) -> Task<Message> {
+        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        self.clear_preview();
+        self.preview = Some(PreviewState::Error(
+            "No preview available for this file type.".to_owned(),
+        ));
+        window_command
+    }
+
     pub(in crate::app) fn open_preview_for_resolved_path(
         &mut self,
         path: PathBuf,
@@ -463,77 +480,118 @@ impl FileBrowser {
         // 新预览会话不复用上一个文件的缩放/平移；同会话内的
         // 缩略图→原图替换不经过这里，视口得以保留。
         self.preview_image_viewport = ImagePreviewViewport::default();
-        let document_format = (kind == FileKind::File)
-            .then(|| document_preview_format_for_path(&path))
-            .flatten();
-        if let Some(document_format) = document_format {
-            return self.start_document_preview(path, document_format);
+        if kind == FileKind::File {
+            // 预览会话的诞生边界：远程下载回流与本地入口共用这一道门，
+            // 文本兜底同样受白名单约束。
+            let classification = crate::preview::classify_preview_path(
+                &path,
+                &self.user_config.preview_extension_rules,
+            );
+            let Some(classification) = classification else {
+                return self.show_unpreviewable_file_preview();
+            };
+            return self.start_classified_preview(path, classification);
         }
 
-        let is_audio_preview = kind == FileKind::File && is_supported_audio_path(&path);
-        let is_video_preview = kind == FileKind::File && is_supported_video_path(&path);
-        let is_animated_image_preview =
-            kind == FileKind::File && is_animated_image_preview_path(&path);
-        let is_image_preview = kind == FileKind::File
-            && thumbnails::is_supported_thumbnail_path(&path)
-            && !is_video_preview
-            && !is_animated_image_preview;
-        if is_animated_image_preview {
-            self.preview = Some(PreviewState::Loading(path.clone()));
-            self.clear_global_error();
-            let max_file_bytes = self.preview_file_size_limit_for(&path);
-            let generation = self.next_animated_image_preview_generation();
-            return Task::batch([
-                animated_image_preview_command(path, generation, max_file_bytes),
-                self.request_browser_session_save(),
-            ]);
-        }
-        if is_image_preview {
-            self.preview = Some(PreviewState::Loading(path.clone()));
-            self.clear_global_error();
-            let generation = self.next_original_image_preview_generation();
-            return Task::batch([
-                image_preview_dimensions_command(path, generation),
-                self.request_browser_session_save(),
-            ]);
-        }
-        if is_video_preview {
-            self.preview = Some(PreviewState::Loading(path.clone()));
-            self.clear_global_error();
-            let max_file_bytes = self.preview_file_size_limit_for(&path);
-            return Task::batch([preview_command(
-                path,
-                kind,
-                self.options.clone(),
-                max_file_bytes,
-            )]);
-        }
-
-        let window_profile = if is_audio_preview {
-            PreviewWindowProfile::Audio
-        } else {
-            PreviewWindowProfile::Regular
-        };
-        let window_command = self.ensure_preview_window(window_profile);
+        // 目录与未识别类型不走文件分类：目录预览由 load_preview 展开，
+        // Symlink/Other 的错误仍由 load_preview 边界返回。
+        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
         self.clear_preview();
         self.preview = Some(PreviewState::Loading(path.clone()));
         self.clear_global_error();
-        if is_audio_preview {
-            self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
-            let max_file_bytes = self.preview_file_size_limit_for(&path);
-            return Task::batch([
-                window_command,
-                preview_command(path.clone(), kind, self.options.clone(), max_file_bytes),
-                start_audio_preview_command(path),
-                self.request_browser_session_save(),
-            ]);
-        }
         let max_file_bytes = self.preview_file_size_limit_for(&path);
         Task::batch([
             window_command,
-            preview_command(path, kind, self.options.clone(), max_file_bytes),
+            preview_command(
+                path,
+                kind,
+                self.user_config.preview_extension_rules.clone(),
+                self.options.clone(),
+                max_file_bytes,
+            ),
             self.request_browser_session_save(),
         ])
+    }
+
+    fn start_classified_preview(
+        &mut self,
+        path: PathBuf,
+        classification: crate::preview::PreviewPathKind,
+    ) -> Task<Message> {
+        match classification {
+            crate::preview::PreviewPathKind::Document => self.start_document_preview(path),
+            crate::preview::PreviewPathKind::AnimatedImage => {
+                self.preview = Some(PreviewState::Loading(path.clone()));
+                self.clear_global_error();
+                let max_file_bytes = self.preview_file_size_limit_for(&path);
+                let generation = self.next_animated_image_preview_generation();
+                Task::batch([
+                    animated_image_preview_command(path, generation, max_file_bytes),
+                    self.request_browser_session_save(),
+                ])
+            }
+            crate::preview::PreviewPathKind::Image => {
+                self.preview = Some(PreviewState::Loading(path.clone()));
+                self.clear_global_error();
+                let generation = self.next_original_image_preview_generation();
+                Task::batch([
+                    image_preview_dimensions_command(path, generation),
+                    self.request_browser_session_save(),
+                ])
+            }
+            crate::preview::PreviewPathKind::Video => {
+                self.preview = Some(PreviewState::Loading(path.clone()));
+                self.clear_global_error();
+                let max_file_bytes = self.preview_file_size_limit_for(&path);
+                preview_command(
+                    path,
+                    FileKind::File,
+                    self.user_config.preview_extension_rules.clone(),
+                    self.options.clone(),
+                    max_file_bytes,
+                )
+            }
+            crate::preview::PreviewPathKind::Audio => {
+                let window_command = self.ensure_preview_window(PreviewWindowProfile::Audio);
+                self.clear_preview();
+                self.preview = Some(PreviewState::Loading(path.clone()));
+                self.clear_global_error();
+                self.audio_preview = Some(AudioPreviewPlayback::loading(path.clone()));
+                let max_file_bytes = self.preview_file_size_limit_for(&path);
+                Task::batch([
+                    window_command,
+                    preview_command(
+                        path.clone(),
+                        FileKind::File,
+                        self.user_config.preview_extension_rules.clone(),
+                        self.options.clone(),
+                        max_file_bytes,
+                    ),
+                    start_audio_preview_command(path),
+                    self.request_browser_session_save(),
+                ])
+            }
+            crate::preview::PreviewPathKind::Archive
+            | crate::preview::PreviewPathKind::Sqlite
+            | crate::preview::PreviewPathKind::Text => {
+                let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+                self.clear_preview();
+                self.preview = Some(PreviewState::Loading(path.clone()));
+                self.clear_global_error();
+                let max_file_bytes = self.preview_file_size_limit_for(&path);
+                Task::batch([
+                    window_command,
+                    preview_command(
+                        path,
+                        FileKind::File,
+                        self.user_config.preview_extension_rules.clone(),
+                        self.options.clone(),
+                        max_file_bytes,
+                    ),
+                    self.request_browser_session_save(),
+                ])
+            }
+        }
     }
 
     fn reject_oversized_file_preview(&mut self, path: &Path) -> Option<Task<Message>> {

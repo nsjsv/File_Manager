@@ -10,7 +10,8 @@ use super::process::{
 };
 use super::validate_document_source;
 use crate::document_preview::{
-    DocumentPrepareRequest, DocumentPreviewWorkspace, OfficeDocumentPreviewWorkspace,
+    DocumentPrepareRequest, DocumentPreviewFormat, DocumentPreviewWorkspace,
+    OfficeDocumentPreviewWorkspace,
 };
 use crate::formatting::format_file_size;
 
@@ -56,6 +57,7 @@ impl Default for OfficeConversionLimits {
 
 pub(super) async fn prepare_office_document_workspace(
     request: &DocumentPrepareRequest,
+    format: DocumentPreviewFormat,
     programs: &OfficePrograms,
 ) -> Result<Option<DocumentPreviewWorkspace>, String> {
     let workspace = tokio::select! {
@@ -68,6 +70,7 @@ pub(super) async fn prepare_office_document_workspace(
     };
     let Some(pdf_path) = convert_office_document_in_workspace(
         request,
+        format,
         &workspace,
         programs,
         OfficeConversionLimits::default(),
@@ -85,6 +88,7 @@ pub(super) async fn prepare_office_document_workspace(
 
 async fn convert_office_document_in_workspace(
     request: &DocumentPrepareRequest,
+    format: DocumentPreviewFormat,
     workspace: &OfficeDocumentPreviewWorkspace,
     programs: &OfficePrograms,
     limits: OfficeConversionLimits,
@@ -93,7 +97,7 @@ async fn convert_office_document_in_workspace(
         return Ok(None);
     };
     // 等待全局转换许可期间源文件可能增长，因此必须在 spawn 前重新执行同一预算边界。
-    if validate_document_source(request).await?.is_none() {
+    if validate_document_source(request, format).await?.is_none() {
         return Ok(None);
     }
 

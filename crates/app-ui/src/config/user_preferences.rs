@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator};
 use file_core::FileOperationVerification;
 use file_operation_store::{
-    StoreResult, StoredListViewColumn, StoredNetworkConnection, StoredPath, StoredShortcutBinding,
-    StoredSidebarFavorite, StoredUserPreferences, StoredWindowControlPlacement, TaskQueueStore,
+    StoreResult, StoredListViewColumn, StoredNetworkConnection, StoredPath,
+    StoredPreviewExtensionRules, StoredShortcutBinding, StoredSidebarFavorite,
+    StoredUserPreferences, StoredWindowControlPlacement, TaskQueueStore,
 };
 
 use super::app_config::AppConfig;
@@ -17,8 +18,8 @@ use super::{
     list_directory_size_display_mode_from_config_value, normalize_preview_directory_expand_levels,
     normalize_sidebar_width, normalize_visible_column_count, sort_direction_config_value,
     sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
-    LaunchWindowPolicy, PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting,
-    UserConfig, ViewDensityLevel,
+    LaunchWindowPolicy, PreviewExtensionRules, PreviewFileSizeLimits, SidebarFavoriteConfig,
+    UiLanguageSetting, UserConfig, ViewDensityLevel,
 };
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
@@ -35,6 +36,7 @@ pub(crate) struct UserPreferences {
     pub(crate) network_list_thumbnail_downloads_enabled: bool,
     pub(crate) preview_size_limits: PreviewFileSizeLimits,
     pub(crate) preview_directory_expand_levels: u8,
+    pub(crate) preview_extension_rules: PreviewExtensionRules,
     pub(crate) show_hidden_files: bool,
     pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
@@ -82,6 +84,7 @@ impl UserPreferences {
                 .network_list_thumbnail_downloads_enabled,
             preview_size_limits: config.preview_size_limits,
             preview_directory_expand_levels: config.preview_directory_expand_levels,
+            preview_extension_rules: config.preview_extension_rules.clone(),
             show_hidden_files: config.show_hidden_files,
             language_setting: config.language_setting,
             sidebar_width: normalize_sidebar_width(config.sidebar_width),
@@ -115,6 +118,7 @@ impl UserPreferences {
             self.network_list_thumbnail_downloads_enabled;
         config.preview_size_limits = self.preview_size_limits;
         config.preview_directory_expand_levels = self.preview_directory_expand_levels;
+        config.preview_extension_rules = self.preview_extension_rules.clone();
         config.show_hidden_files = self.show_hidden_files;
         config.language_setting = self.language_setting;
         config.sidebar_width = self.sidebar_width;
@@ -154,6 +158,15 @@ impl UserPreferences {
         stored.preview_archive_size_bytes = Some(self.preview_size_limits.archive_bytes);
         stored.preview_document_size_bytes = Some(self.preview_size_limits.document_bytes);
         stored.preview_sqlite_size_bytes = Some(self.preview_size_limits.sqlite_bytes);
+        stored.preview_extension_rules = Some(StoredPreviewExtensionRules {
+            text: Some(self.preview_extension_rules.text.clone()),
+            image: Some(self.preview_extension_rules.image.clone()),
+            video: Some(self.preview_extension_rules.video.clone()),
+            audio: Some(self.preview_extension_rules.audio.clone()),
+            sqlite: Some(self.preview_extension_rules.sqlite.clone()),
+            archive: Some(self.preview_extension_rules.archive.clone()),
+            document: Some(self.preview_extension_rules.document.clone()),
+        });
         stored.preview_directory_expand_levels = Some(self.preview_directory_expand_levels);
         stored.show_hidden_files = self.show_hidden_files;
         stored.language_setting = self.language_setting.config_value().to_owned();
@@ -238,6 +251,12 @@ impl UserPreferences {
                 default_preferences.preview_directory_expand_levels,
                 normalize_preview_directory_expand_levels,
             ),
+            // 每类型独立回退：None 是旧版本数据或缺失类型；空列表是
+            // 用户显式清空，必须原样保留。
+            preview_extension_rules: preview_extension_rules_from_stored(
+                &stored,
+                &default_preferences,
+            ),
             show_hidden_files: stored.show_hidden_files,
             language_setting: UiLanguageSetting::from_config_value(&stored.language_setting)
                 .unwrap_or(default_preferences.language_setting),
@@ -280,6 +299,28 @@ impl UserPreferences {
             color_scheme,
             custom_color_scheme,
         }
+    }
+}
+
+fn preview_extension_rules_from_stored(
+    stored: &StoredUserPreferences,
+    default: &UserPreferences,
+) -> PreviewExtensionRules {
+    let fallback = &default.preview_extension_rules;
+    let Some(stored_rules) = &stored.preview_extension_rules else {
+        return fallback.clone();
+    };
+    let per_type = |stored: &Option<Vec<String>>, default_extensions: &Vec<String>| {
+        stored.clone().unwrap_or_else(|| default_extensions.clone())
+    };
+    PreviewExtensionRules {
+        text: per_type(&stored_rules.text, &fallback.text),
+        image: per_type(&stored_rules.image, &fallback.image),
+        video: per_type(&stored_rules.video, &fallback.video),
+        audio: per_type(&stored_rules.audio, &fallback.audio),
+        sqlite: per_type(&stored_rules.sqlite, &fallback.sqlite),
+        archive: per_type(&stored_rules.archive, &fallback.archive),
+        document: per_type(&stored_rules.document, &fallback.document),
     }
 }
 
