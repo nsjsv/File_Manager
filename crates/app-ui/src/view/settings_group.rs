@@ -7,6 +7,7 @@ use crate::model::Message;
 use crate::typography::readable_text;
 
 use super::option_controls::hover_background_color;
+use super::{themed_icon, IconSymbol, IconTone};
 use super::toggle_switch::switch_control;
 
 pub(super) const SETTINGS_GROUP_SPACING: f32 = 16.0;
@@ -101,6 +102,21 @@ pub(super) fn action_setting_row(
         .style(card_row_button_style())
 }
 
+/// 进入二级页面的导航行：左标题右箭头，整行可点。
+pub(super) fn navigation_setting_row(title: &'static str) -> Button<'static, Message> {
+    let content = row![
+        readable_text(title).size(12).width(Length::Fill),
+        themed_icon(IconSymbol::ChevronRight, IconTone::Normal, 13.0),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    button(content)
+        .padding(ROW_PADDING)
+        .width(Length::Fill)
+        .style(card_row_button_style())
+}
+
 pub(super) fn info_setting_row(content: Element<'_, Message>) -> Element<'_, Message> {
     container(content)
         .padding(ROW_PADDING)
@@ -168,7 +184,7 @@ fn separator_line_style(theme: &Theme) -> container::Style {
     }
 }
 
-fn card_row_button_style() -> fn(&Theme, button::Status) -> button::Style {
+pub(super) fn card_row_button_style() -> fn(&Theme, button::Status) -> button::Style {
     card_row_button_appearance
 }
 

@@ -50,6 +50,20 @@ impl FileBrowser {
         self.persist_user_preferences_command()
     }
 
+    /// 重置需要行内确认：先记录待确认的类型，确认后才真正恢复默认。
+    pub(super) fn request_preview_extension_reset(&mut self, kind_index: usize) -> Task<Message> {
+        self.preview_extension_reset_confirmation = Some(kind_index);
+        Task::none()
+    }
+
+    pub(super) fn confirm_preview_extension_reset(
+        &mut self,
+        kind_index: usize,
+    ) -> Task<Message> {
+        self.preview_extension_reset_confirmation = None;
+        self.reset_preview_extension_list(kind_index)
+    }
+
     pub(super) fn remove_preview_extension(
         &mut self,
         kind_index: usize,
@@ -124,6 +138,25 @@ mod tests {
     }
 
     #[test]
+    fn reset_restores_default_list_for_requested_type() {
+        let (mut browser, _) = FileBrowser::new(config::default_user_config());
+        let text_index = kind_index(config::PreviewFileSizeKind::Text);
+        let kind = config::PreviewFileSizeKind::Text;
+        browser
+            .user_config
+            .preview_extension_rules
+            .list_mut(kind)
+            .push("custom".to_owned());
+
+        let _ = browser.reset_preview_extension_list(text_index);
+
+        assert_eq!(
+            browser.user_config.preview_extension_rules.list(kind),
+            &config::PreviewExtensionRules::default_list(kind)
+        );
+    }
+
+    #[test]
     fn removing_extension_updates_requested_type_only() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let text_index = kind_index(config::PreviewFileSizeKind::Text);
@@ -146,19 +179,39 @@ mod tests {
     }
 
     #[test]
-    fn reset_restores_default_list_for_requested_type() {
+    fn reset_runs_only_after_second_press() {
         let (mut browser, _) = FileBrowser::new(config::default_user_config());
         let text_index = kind_index(config::PreviewFileSizeKind::Text);
+        let kind = config::PreviewFileSizeKind::Text;
+        browser
+            .user_config
+            .preview_extension_rules
+            .list_mut(kind)
+            .push("custom".to_owned());
 
-        let _ = browser.remove_preview_extension(text_index, "txt");
-        let _ = browser.reset_preview_extension_list(text_index);
+        let _ = browser.request_preview_extension_reset(text_index);
+        assert_eq!(browser.preview_extension_reset_confirmation, Some(text_index));
+        // 未确认前配置不变。
+        assert!(browser
+            .user_config
+            .preview_extension_rules
+            .list(kind)
+            .iter()
+            .any(|candidate| candidate == "custom"));
 
+        assert!(browser
+            .user_config
+            .preview_extension_rules
+            .list(kind)
+            .iter()
+            .any(|candidate| candidate == "custom"));
+
+        let _ = browser.request_preview_extension_reset(text_index);
+        let _ = browser.confirm_preview_extension_reset(text_index);
+        assert_eq!(browser.preview_extension_reset_confirmation, None);
         assert_eq!(
-            browser
-                .user_config
-                .preview_extension_rules
-                .list(config::PreviewFileSizeKind::Text),
-            &config::PreviewExtensionRules::default_list(config::PreviewFileSizeKind::Text)
+            browser.user_config.preview_extension_rules.list(kind),
+            &config::PreviewExtensionRules::default_list(kind)
         );
     }
 }

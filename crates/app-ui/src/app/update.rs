@@ -782,6 +782,8 @@ impl FileBrowser {
             Message::ObservedDirectoryChanged(path) => self.reload_observed_directory(path),
             Message::SettingsOpened => self.open_settings(),
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
+            Message::SettingsSubpageOpened(subpage) => self.select_settings_subpage(subpage),
+            Message::SettingsSubpageClosed => self.close_settings_subpage(),
             Message::WindowChromeLayoutSelected(layout) => self.select_window_chrome_layout(layout),
             Message::WindowControlVisibilityToggled(kind) => {
                 self.toggle_window_control_visibility(kind)
@@ -831,11 +833,23 @@ impl FileBrowser {
             Message::PreviewExtensionInputCommitted(kind_index) => {
                 self.add_preview_extension(kind_index)
             }
+            Message::PreviewExtensionExpandToggled(kind_index) => {
+                self.preview_extension_expanded[kind_index] =
+                    !self.preview_extension_expanded[kind_index];
+                // 确认区只存在于展开态，切换折叠状态时一并撤销。
+                if self.preview_extension_reset_confirmation == Some(kind_index) {
+                    self.preview_extension_reset_confirmation = None;
+                }
+                Task::none()
+            }
             Message::PreviewExtensionRemoved(kind_index, extension) => {
                 self.remove_preview_extension(kind_index, &extension)
             }
-            Message::PreviewExtensionReset(kind_index) => {
-                self.reset_preview_extension_list(kind_index)
+            Message::PreviewExtensionResetRequested(kind_index) => {
+                self.request_preview_extension_reset(kind_index)
+            }
+            Message::PreviewExtensionResetConfirmed(kind_index) => {
+                self.confirm_preview_extension_reset(kind_index)
             }
             Message::LanguageSettingSelected(language_setting) => {
                 self.select_language_setting(language_setting)

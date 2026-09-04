@@ -29,3 +29,9 @@ impl SettingsCategory {
         }
     }
 }
+
+/// 设置详情区的二级页面；一级仍是 SettingsCategory 分类页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsSubpage {
+    Preview,
+}

@@ -8,7 +8,7 @@ use crate::app::runtime::preview_window_initial_chrome_command;
 use crate::app::smooth_scroll::smooth_scroll_id;
 use crate::model::{
     Message, PreviewContent, PreviewSize, PreviewState, PreviewWindowProfile, ScrollbarRegion,
-    SettingsCategory, WINDOW_TOP_BAR_HEIGHT,
+    SettingsCategory, SettingsSubpage, WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::view::{address_input_id, rename_input_id};
 
@@ -373,14 +373,8 @@ impl FileBrowser {
             self.invalidate_startup_directory_validation();
         }
         self.selected_settings_category = category;
-        // 六个分类共用 ScrollbarRegion::Settings 的 scrollable 状态，切页必须归零，
-        // 否则上一页的滚动偏移、平滑滚动动画和 thumb 几何会泄漏到新页。
-        self.smooth_scroll.stop();
-        self.forget_scrollbar_viewport(&ScrollbarRegion::Settings);
-        let reset_scroll = iced::widget::operation::scroll_to(
-            smooth_scroll_id(&ScrollbarRegion::Settings),
-            scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
-        );
+        self.settings_subpage = None;
+        let reset_scroll = self.reset_settings_detail_scroll();
         let refresh = match category {
             SettingsCategory::Search => Task::batch([
                 self.refresh_search_service_status(),
@@ -393,6 +387,28 @@ impl FileBrowser {
             | SettingsCategory::Shortcuts => Task::none(),
         };
         Task::batch([reset_scroll, refresh])
+    }
+
+    pub(super) fn select_settings_subpage(&mut self, subpage: SettingsSubpage) -> Task<Message> {
+        self.settings_subpage = Some(subpage);
+        self.reset_settings_detail_scroll()
+    }
+
+    pub(super) fn close_settings_subpage(&mut self) -> Task<Message> {
+        self.settings_subpage = None;
+        self.reset_settings_detail_scroll()
+    }
+
+    /// 六个分类页与二级页面共用 ScrollbarRegion::Settings 的 scrollable 状态，
+    /// 任何切换都必须归零，否则上一页的滚动偏移、平滑滚动动画和 thumb 几何
+    /// 会泄漏到新页。
+    fn reset_settings_detail_scroll(&mut self) -> Task<Message> {
+        self.smooth_scroll.stop();
+        self.forget_scrollbar_viewport(&ScrollbarRegion::Settings);
+        iced::widget::operation::scroll_to(
+            smooth_scroll_id(&ScrollbarRegion::Settings),
+            scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+        )
     }
 
     pub(super) fn ensure_settings_window(&mut self) -> Task<Message> {
@@ -711,6 +727,9 @@ impl FileBrowser {
         if self.settings_window == Some(self.focused_window) {
             if self.search_service.cancel_force_restart_confirmation() {
                 return Task::none();
+            }
+            if self.settings_subpage.is_some() {
+                return self.close_settings_subpage();
             }
             return self.close_settings_window();
         }

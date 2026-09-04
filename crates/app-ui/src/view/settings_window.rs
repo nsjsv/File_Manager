@@ -14,8 +14,8 @@ use crate::icons::{rotated_chevron_right_view, IconSymbol};
 use crate::matugen_theme::{ColorSchemeFamily, ColorSchemePreset, ContrastWarnings, ThemeMode};
 use crate::model::{
     Message, ScrollbarRegion, ScrollbarViewport, ScrollbarVisibility, SettingsCategory,
-    WindowChromeLayout, WindowControlSide, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT,
-    WINDOW_TOP_BAR_HEIGHT,
+    SettingsSubpage, WindowChromeLayout, WindowControlSide, WindowFrameState,
+    WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::typography::{localized_text, readable_text};
 
@@ -25,12 +25,12 @@ use super::auxiliary_window_layout::{
     auxiliary_full_height_sidebar, auxiliary_sidebar_button,
 };
 use super::file_operation_verification_settings::file_operation_verification_options;
-use super::network_settings::{network_thumbnails_row, preview_size_limit_rows};
+use super::network_settings::network_thumbnails_row;
 use super::option_controls::{
     inactive_segmented_choice_row, segmented_choice_button_style, segmented_choice_row,
     SegmentedChoice,
 };
-use super::preview_settings::preview_extension_rows;
+use super::preview_settings::{preview_settings_entry_card, preview_settings_subpage_detail};
 use super::rendering_settings::rendering_gpu_preference_row;
 use super::search_settings::search_settings_detail;
 use super::settings_group::{
@@ -204,6 +204,11 @@ fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
         SettingsCategory::Appearance => {
             appearance_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
         }
+        SettingsCategory::Files
+            if browser.settings_subpage == Some(SettingsSubpage::Preview) =>
+        {
+            preview_settings_subpage_detail(browser, scrollbar_visibility, scrollbar_viewport)
+        }
         SettingsCategory::Files => {
             files_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
         }
@@ -315,20 +320,14 @@ fn files_settings_detail(
                     ),
                 ],
             ),
-            settings_group("Preview", vec![preview_extension_rows(browser)]),
+            preview_settings_entry_card(),
             settings_group(
                 "Verification",
                 vec![file_operation_verification_options(
                     browser.file_operation_verification(),
                 )],
             ),
-            settings_group(
-                "Network",
-                vec![
-                    network_thumbnails_row(browser),
-                    preview_size_limit_rows(browser),
-                ],
-            ),
+            settings_group("Network", vec![network_thumbnails_row(browser)]),
         ]
         .spacing(SETTINGS_GROUP_SPACING)
         .width(Length::Fill),

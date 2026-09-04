@@ -753,6 +753,9 @@ fn exact_translation(text: &str) -> Option<&'static str> {
         "Checking archive..." => Some("正在检查归档..."),
         "Thumbnails" => Some("缩略图"),
         "File preview" => Some("文件预览"),
+        "Preview settings" => Some("预览设置"),
+        "Collapse" => Some("收起"),
+        "Click Again to Reset" => Some("再次点击重置"),
         "Remote List Thumbnails" => Some("远程位置列表缩略图"),
         "When enabled, images and videos on remote locations may use more data." => {
             Some("启用后，远程位置中的图片和视频可能会使用更多流量。")

@@ -128,7 +128,7 @@ pub(crate) use preview::{
     VideoPreviewSeekCompletion, PREVIEW_WINDOW_INITIAL_CONTROLS_DURATION,
 };
 mod settings;
-pub(crate) use settings::SettingsCategory;
+pub(crate) use settings::{SettingsCategory, SettingsSubpage};
 mod window_controls;
 pub(crate) use window_controls::{
     WindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
@@ -626,6 +626,8 @@ pub(crate) enum Message {
     ObservedDirectoryChanged(PathBuf),
     SettingsOpened,
     SettingsCategorySelected(SettingsCategory),
+    SettingsSubpageOpened(SettingsSubpage),
+    SettingsSubpageClosed,
     ThemeModeSelected(ThemeMode),
     ColorSchemeFamilySelected(ColorSchemeFamily),
     ColorSchemePresetSelected(ColorSchemePreset),
@@ -656,8 +658,10 @@ pub(crate) enum Message {
     PreviewDirectoryExpandLevelsInputCommitted,
     PreviewExtensionInputChanged(usize, String),
     PreviewExtensionInputCommitted(usize),
+    PreviewExtensionExpandToggled(usize),
     PreviewExtensionRemoved(usize, String),
-    PreviewExtensionReset(usize),
+    PreviewExtensionResetRequested(usize),
+    PreviewExtensionResetConfirmed(usize),
     LanguageSettingSelected(UiLanguageSetting),
     StartupLocationPolicySelected(crate::config::StartupLocationPolicy),
     LaunchWindowPolicySelected(crate::config::LaunchWindowPolicy),

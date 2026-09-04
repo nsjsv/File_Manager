@@ -14,8 +14,8 @@ use crate::animated_image_preview::{
 use crate::config;
 use crate::model::{
     BrowserPaneId, BrowserPaneLayout, BrowserViewMode, LoadedOperationStore, Message,
-    PreviewContent, PreviewSize, PreviewState, PreviewWindowChromeState, SplitAxis,
-    WindowChromeLayout, WindowFrameState, WINDOW_TOP_BAR_HEIGHT,
+    PreviewContent, PreviewSize, PreviewState, PreviewWindowChromeState, SettingsCategory,
+    SettingsSubpage, SplitAxis, WindowChromeLayout, WindowFrameState, WINDOW_TOP_BAR_HEIGHT,
 };
 use crate::operation_history::FileOperationCompletion;
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
@@ -1337,4 +1337,37 @@ fn unpinned_preview_closes_when_preview_window_unfocuses() {
     drop(browser.update(Message::WindowUnfocused(browser.preview_window.unwrap())));
 
     assert!(browser.preview_window.is_none());
+}
+
+#[test]
+fn selecting_settings_category_clears_open_subpage() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    browser.selected_settings_category = SettingsCategory::Files;
+    drop(browser.select_settings_subpage(SettingsSubpage::Preview));
+    assert_eq!(browser.settings_subpage, Some(SettingsSubpage::Preview));
+
+    drop(browser.select_settings_category(SettingsCategory::Appearance));
+
+    assert_eq!(browser.settings_subpage, None);
+    assert_eq!(
+        browser.selected_settings_category,
+        SettingsCategory::Appearance
+    );
+}
+
+#[test]
+fn escape_returns_from_settings_subpage_before_closing_settings_window() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let settings_window = window::Id::unique();
+    browser.settings_window = Some(settings_window);
+    browser.focused_window = settings_window;
+    browser.selected_settings_category = SettingsCategory::Files;
+    drop(browser.select_settings_subpage(SettingsSubpage::Preview));
+
+    drop(browser.handle_focused_window_escape_pressed());
+    assert_eq!(browser.settings_subpage, None);
+    assert_eq!(browser.settings_window, Some(settings_window));
+
+    drop(browser.handle_focused_window_escape_pressed());
+    assert_eq!(browser.settings_window, None);
 }

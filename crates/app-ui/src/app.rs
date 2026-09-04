@@ -131,7 +131,8 @@ use crate::model::{
     FilePropertiesState, IconGridExpansionState, IconGridViewport, ImagePreviewViewport,
     ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowChromeState, PreviewWindowProfile, ScrollbarRegion,
-    SearchServiceState, SelectionMarquee, SettingsCategory, SidebarBookmarkDragState,
+    SearchServiceState, SelectionMarquee, SettingsCategory, SettingsSubpage,
+    SidebarBookmarkDragState,
     SidebarBookmarkDropSlot, SidebarLocation, StartupDirectoryValidationRequest, TabDragState,
     TextPreviewDocument, TransferConflictState, TrashRefreshState, VideoPreviewPlayback,
 };
@@ -280,6 +281,8 @@ pub(crate) struct FileBrowser {
     pub(crate) preview_size_limit_mib_errors: [Option<String>; 7],
     pub(crate) preview_extension_inputs: [String; 7],
     pub(crate) preview_extension_input_errors: [Option<String>; 7],
+    pub(crate) preview_extension_expanded: [bool; 7],
+    pub(crate) preview_extension_reset_confirmation: Option<usize>,
     pub(crate) preview_directory_expand_levels_input: String,
     pub(crate) preview_directory_expand_levels_error: Option<String>,
     pub(crate) startup_custom_directory_input: String,
@@ -298,6 +301,7 @@ pub(crate) struct FileBrowser {
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) selected_settings_category: SettingsCategory,
+    pub(crate) settings_subpage: Option<SettingsSubpage>,
     pub(crate) expanded_color_scheme_family: Option<crate::matugen_theme::ColorSchemeFamily>,
     pub(crate) custom_color_scheme_import_error: Option<String>,
     pub(crate) search_service: SearchServiceState,
@@ -649,6 +653,8 @@ impl FileBrowser {
             preview_size_limit_mib_errors: [const { None }; 7],
             preview_extension_inputs: [const { String::new() }; 7],
             preview_extension_input_errors: [const { None }; 7],
+            preview_extension_expanded: [false; 7],
+            preview_extension_reset_confirmation: None,
             preview_directory_expand_levels_input: user_config
                 .preview_directory_expand_levels
                 .to_string(),
@@ -671,6 +677,7 @@ impl FileBrowser {
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
             selected_settings_category: SettingsCategory::General,
+            settings_subpage: None,
             expanded_color_scheme_family: None,
             custom_color_scheme_import_error: None,
             search_service,
