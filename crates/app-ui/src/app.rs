@@ -7,6 +7,7 @@ mod batch_rename;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
+pub(crate) mod convert;
 mod desktop_activation;
 mod directory_expansion_loading;
 mod directory_metadata_demand;
@@ -91,6 +92,7 @@ use crate::app::application_shutdown::ApplicationShutdownPhase;
 use crate::app::archive_creation::ArchiveCreationState;
 use crate::app::archive_extraction::ArchiveExtractionState;
 use crate::app::column_resize::ColumnResizeDrag;
+use crate::app::convert::ConvertState;
 use crate::app::events::global_event_message;
 use crate::app::preview_state::PendingOriginalImagePreview;
 use crate::app::preview_state::SqlitePreviewState;
@@ -132,9 +134,9 @@ use crate::model::{
     ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowChromeState, PreviewWindowProfile, ScrollbarRegion,
     SearchServiceState, SelectionMarquee, SettingsCategory, SettingsSubpage,
-    SidebarBookmarkDragState,
-    SidebarBookmarkDropSlot, SidebarLocation, StartupDirectoryValidationRequest, TabDragState,
-    TextPreviewDocument, TransferConflictState, TrashRefreshState, VideoPreviewPlayback,
+    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
+    StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
+    TrashRefreshState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -236,6 +238,7 @@ pub(crate) struct FileBrowser {
     pub(crate) open_with: Option<OpenWithState>,
     pub(crate) file_drop_prompt: Option<FileDropPrompt>,
     pub(crate) archive_creation: Option<ArchiveCreationState>,
+    pub(crate) convert: Option<ConvertState>,
     pub(crate) archive_extraction: Option<ArchiveExtractionState>,
     pub(crate) batch_rename: Option<BatchRenameState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
@@ -602,6 +605,7 @@ impl FileBrowser {
             open_with: None,
             file_drop_prompt: None,
             archive_creation: None,
+            convert: None,
             archive_extraction: None,
             batch_rename: None,
             sidebar_locations: Vec::new(),

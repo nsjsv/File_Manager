@@ -37,6 +37,7 @@ use crate::operation_queue::{
 };
 
 use super::batch_rename_operation::run_queued_batch_rename;
+use super::convert_operation::run_queued_convert;
 
 const FILE_OPERATION_CHANNEL_SIZE: usize = 32;
 const BYTE_PROGRESS_UI_INTERVAL: Duration = crate::ui_pacing::PROGRESS_UI_INTERVAL;
@@ -243,6 +244,9 @@ async fn run_queued_file_operation(
         }
         QueuedFileOperation::ExtractArchive { request } => {
             run_queued_extract_archive(request, controls, task_id, output).await
+        }
+        QueuedFileOperation::Convert { requests } => {
+            run_queued_convert(requests, controls, task_id, output).await
         }
     };
 

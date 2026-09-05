@@ -83,6 +83,16 @@ pub(super) fn queued_operation_to_stored(operation: &QueuedFileOperation) -> Sto
             destination: StoredPath::from_path(&request.destination),
             password_required: request.password.is_some(),
         },
+        QueuedFileOperation::Convert { requests } => StoredOperation::Convert {
+            sources: requests
+                .iter()
+                .map(|request| StoredPath::from_path(&request.source))
+                .collect(),
+            output_extensions: requests
+                .iter()
+                .map(|request| request.target.extension().to_owned())
+                .collect(),
+        },
     }
 }
 

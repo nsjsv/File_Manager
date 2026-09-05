@@ -270,6 +270,13 @@ impl FileBrowser {
                     &request.destination,
                 );
             }
+            QueuedFileOperation::Convert { requests } => {
+                for request in requests {
+                    self.invalidate_list_directory_summary_subtree_and_ancestor_chain(
+                        &request.source,
+                    );
+                }
+            }
             QueuedFileOperation::DeleteTrashEntries { .. } | QueuedFileOperation::EmptyTrash => {}
         }
     }

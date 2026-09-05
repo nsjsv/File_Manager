@@ -6,6 +6,7 @@ use iced::{Alignment, Element, Length};
 use desktop_linux::FileClipboardOperation;
 
 use crate::app::archive_creation::ArchiveCreationMessage;
+use crate::app::convert::ConvertMessage;
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use crate::appearance::{
@@ -506,6 +507,11 @@ fn file_context_menu_panel(
                 IconSymbol::FileArchive,
                 "Create Archive...",
                 Message::ArchiveCreation(ArchiveCreationMessage::OpenSelected),
+            ))
+            .push(menu_item(
+                IconSymbol::FileImage,
+                "Convert Format...",
+                Message::Convert(ConvertMessage::OpenSelected),
             ))
             .push(menu_item(IconSymbol::Copy, "Paste", Message::PastePending))
             .push(menu_item(

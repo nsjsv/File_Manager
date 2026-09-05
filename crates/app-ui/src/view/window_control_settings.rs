@@ -41,7 +41,10 @@ pub(super) fn window_control_settings_row(browser: &FileBrowser) -> Element<'_, 
     }
     info_setting_row(
         content
-            .push(secondary_action_button("Restore defaults", Message::WindowControlsReset))
+            .push(secondary_action_button(
+                "Restore defaults",
+                Message::WindowControlsReset,
+            ))
             .into(),
     )
 }
@@ -150,10 +153,14 @@ fn reorder_arrow_button(
     symbol: IconSymbol,
 ) -> Element<'static, Message> {
     button(
-        container(themed_icon(symbol, IconTone::Normal, WINDOW_CONTROL_ARROW_ICON_SIZE))
-            .padding(1)
-            .center_x(Length::Shrink)
-            .center_y(Length::Shrink),
+        container(themed_icon(
+            symbol,
+            IconTone::Normal,
+            WINDOW_CONTROL_ARROW_ICON_SIZE,
+        ))
+        .padding(1)
+        .center_x(Length::Shrink)
+        .center_y(Length::Shrink),
     )
     // Both arrows must fit the 34px content box of a 46px row: with the
     // 1px button border the pair is 2 * (12 + 2 + 2) + 1 spacing = 33px,

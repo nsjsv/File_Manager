@@ -829,6 +829,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if self.convert.is_some() {
+            self.convert = None;
+            return Task::none();
+        }
+
         if self.archive_extraction.is_some() {
             self.archive_extraction = None;
             return Task::none();

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use crate::config::UiLanguage;
 
 mod batch_rename;
+mod convert;
 mod document_preview;
 mod file_operation_notifications;
 mod index_status;
@@ -66,6 +67,9 @@ pub(crate) fn translate<'a>(language: UiLanguage, text: &'a str) -> Cow<'a, str>
     }
 
     if let Some(translated) = batch_rename::translate(text) {
+        return Cow::Owned(translated);
+    }
+    if let Some(translated) = convert::translate(text) {
         return Cow::Owned(translated);
     }
     if let Some(translated) = search_workspace::translate(text) {

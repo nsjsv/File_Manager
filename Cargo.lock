@@ -1573,6 +1573,7 @@ dependencies = [
  "filetime",
  "flate2",
  "getrandom 0.4.2",
+ "image",
  "libc",
  "notify",
  "rustix 1.1.4",

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use file_core::{
     ArchiveCompressionLevel, ArchiveExtractionRequest, ArchiveFormat, ArchivePassword,
-    BatchRenameItem, FileOperationControls, FileOperationRunState, FileOperationVerification,
-    TransferConflictStrategy, TrashRestoreEntry,
+    BatchRenameItem, ConversionRequest, FileOperationControls, FileOperationRunState,
+    FileOperationVerification, TransferConflictStrategy, TrashRestoreEntry,
 };
 use file_operation_store::{
     RecoverableTaskRunnerLease, StoredInterruptedRecoverableTask, StoredOperation, StoredTask,
@@ -98,6 +98,9 @@ pub(crate) enum QueuedFileOperation {
     ExtractArchive {
         request: ArchiveExtractionRequest,
     },
+    Convert {
+        requests: Vec<ConversionRequest>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +136,7 @@ impl QueuedFileOperation {
             Self::Move { .. } => "Move",
             Self::CreateArchive { .. } => "Create Archive",
             Self::ExtractArchive { .. } => "Extract Archive",
+            Self::Convert { .. } => "Convert Format",
         }
     }
 
@@ -147,7 +151,7 @@ impl QueuedFileOperation {
     pub(crate) fn supports_pause(&self) -> bool {
         !matches!(
             self,
-            Self::CreateArchive { .. } | Self::ExtractArchive { .. }
+            Self::CreateArchive { .. } | Self::ExtractArchive { .. } | Self::Convert { .. }
         )
     }
 

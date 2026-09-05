@@ -7,8 +7,8 @@ use crate::model::Message;
 use crate::typography::readable_text;
 
 use super::option_controls::hover_background_color;
-use super::{themed_icon, IconSymbol, IconTone};
 use super::toggle_switch::switch_control;
+use super::{themed_icon, IconSymbol, IconTone};
 
 pub(super) const SETTINGS_GROUP_SPACING: f32 = 16.0;
 

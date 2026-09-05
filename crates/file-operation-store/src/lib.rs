@@ -317,6 +317,11 @@ pub enum StoredOperation {
         destination: StoredPath,
         password_required: bool,
     },
+    /// 格式转换任务;转换不可恢复,存储只保留历史展示所需的源与目标扩展名。
+    Convert {
+        sources: Vec<StoredPath>,
+        output_extensions: Vec<String>,
+    },
 }
 
 impl StoredOperation {
@@ -335,6 +340,7 @@ impl StoredOperation {
             Self::Move { .. } => "move",
             Self::CreateArchive { .. } => "create_archive",
             Self::ExtractArchive { .. } => "extract_archive",
+            Self::Convert { .. } => "convert",
         }
     }
 }

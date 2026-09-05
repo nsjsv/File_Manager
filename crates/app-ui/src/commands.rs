@@ -44,6 +44,7 @@ mod batch_rename_operation;
 mod bounded_child_output;
 mod browser_session;
 mod config_persistence;
+mod convert_operation;
 pub(crate) use config_persistence::{save_app_config_command, save_user_preferences_command};
 mod custom_color_scheme;
 pub(crate) use custom_color_scheme::custom_color_scheme_import_command;

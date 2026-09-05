@@ -566,6 +566,7 @@ impl FileBrowser {
             }
             Message::DismissFloating => self.dismiss_floating(),
             Message::ArchiveCreation(message) => self.handle_archive_creation_message(message),
+            Message::Convert(message) => self.handle_convert_message(message),
             Message::ArchiveExtraction(message) => self.handle_archive_extraction_message(message),
             Message::BatchRename(message) => self.handle_batch_rename_message(message),
             Message::FileContextMenuExpansionChanged(expansion) => {

@@ -56,10 +56,7 @@ impl FileBrowser {
         Task::none()
     }
 
-    pub(super) fn confirm_preview_extension_reset(
-        &mut self,
-        kind_index: usize,
-    ) -> Task<Message> {
+    pub(super) fn confirm_preview_extension_reset(&mut self, kind_index: usize) -> Task<Message> {
         self.preview_extension_reset_confirmation = None;
         self.reset_preview_extension_list(kind_index)
     }
@@ -190,7 +187,10 @@ mod tests {
             .push("custom".to_owned());
 
         let _ = browser.request_preview_extension_reset(text_index);
-        assert_eq!(browser.preview_extension_reset_confirmation, Some(text_index));
+        assert_eq!(
+            browser.preview_extension_reset_confirmation,
+            Some(text_index)
+        );
         // 未确认前配置不变。
         assert!(browser
             .user_config

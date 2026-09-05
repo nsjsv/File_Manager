@@ -454,6 +454,8 @@ pub enum FileError {
     Watch { path: PathBuf, message: String },
     #[error("could not create archive {path:?}: {message}")]
     Archive { path: PathBuf, message: String },
+    #[error("could not convert {path:?}: {message}")]
+    Convert { path: PathBuf, message: String },
     #[error("archive {path:?} requires a password")]
     ArchivePasswordRequired { path: PathBuf },
     #[error("archive {path:?} password is incorrect")]

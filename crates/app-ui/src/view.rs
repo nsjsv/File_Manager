@@ -4,6 +4,7 @@ mod archive_creation;
 mod archive_extraction;
 mod auxiliary_window_layout;
 mod batch_rename;
+mod convert;
 mod document_preview_panel;
 mod file_operation_verification_settings;
 mod floating_panels;
@@ -86,6 +87,7 @@ use address_bar::address_bar;
 use archive_creation::archive_creation_panel;
 use archive_extraction::archive_extraction_panel;
 use batch_rename::batch_rename_panel;
+use convert::convert_panel;
 use floating_panels::{
     context_menu_panel, destructive_action_confirmation_panel, error_notification_panel,
     file_drop_operation_panel, open_with_panel,
@@ -232,6 +234,12 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
         floating_input = BrowserFloatingInput::DismissibleBlocking;
         floating.push(FloatingContent {
             element: archive_creation_panel(archive_creation),
+            placement: FloatingPlacement::Center,
+        });
+    } else if let Some(convert) = &browser.convert {
+        floating_input = BrowserFloatingInput::DismissibleBlocking;
+        floating.push(FloatingContent {
+            element: convert_panel(convert),
             placement: FloatingPlacement::Center,
         });
     } else if let Some(context_menu) = &browser.context_menu {

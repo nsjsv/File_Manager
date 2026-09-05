@@ -244,7 +244,6 @@ fn muted_count_label(hidden_count: usize) -> Element<'static, Message> {
         .into()
 }
 
-
 fn chip_container_style(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(Color::TRANSPARENT)),
@@ -256,4 +255,3 @@ fn chip_container_style(theme: &Theme) -> container::Style {
         ..container::Style::default()
     }
 }
-

@@ -9,6 +9,7 @@ blake3.workspace = true
 getrandom = "0.4.2"
 filetime = "0.2.29"
 flate2 = "1.1.9"
+image.workspace = true
 libc = "0.2"
 notify.workspace = true
 serde = { version = "1", features = ["derive"] }

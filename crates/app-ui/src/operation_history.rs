@@ -67,6 +67,10 @@ pub(crate) enum FileOperationOutcome {
         transfers: Vec<CompletedTransfer>,
         history_eligibility: FileOperationHistoryEligibility,
     },
+    Convert {
+        /// 逐文件失败的「源名: 原因」清单;空表示全部成功。
+        failures: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +135,25 @@ impl FileOperationOutcome {
     pub(crate) fn completion_warning(&self) -> Option<String> {
         const MAX_TRACKING_WARNING_DETAILS: usize = 5;
 
+        if let Self::Convert { failures } = self {
+            if failures.is_empty() {
+                return None;
+            }
+            let mut details = failures
+                .iter()
+                .take(MAX_TRACKING_WARNING_DETAILS)
+                .cloned()
+                .collect::<Vec<_>>();
+            let remaining = failures.len().saturating_sub(MAX_TRACKING_WARNING_DETAILS);
+            if remaining > 0 {
+                details.push(format!("... (+{remaining})"));
+            }
+            return Some(format!(
+                "Some files could not be converted: {}",
+                details.join("; ")
+            ));
+        }
+
         let Self::Trash {
             tracking_warnings, ..
         } = self
@@ -177,7 +200,8 @@ impl FileOperationOutcome {
             | Self::CreateEmptyFile { .. }
             | Self::Trash { .. }
             | Self::Restore { .. }
-            | Self::Copy { .. } => Vec::new(),
+            | Self::Copy { .. }
+            | Self::Convert { .. } => Vec::new(),
         }
     }
 }
@@ -458,6 +482,8 @@ impl FileOperationHistoryItem {
     fn from_outcome(outcome: &FileOperationOutcome) -> Option<Self> {
         match outcome {
             FileOperationOutcome::NoHistory => None,
+            // 转换生成新文件,不可通过删除新文件安全撤销(可能有同名列/外部引用),不写历史。
+            FileOperationOutcome::Convert { .. } => None,
             FileOperationOutcome::Rename { from, to } => Some(Self::Rename {
                 from: from.clone(),
                 to: to.clone(),

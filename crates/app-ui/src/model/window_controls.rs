@@ -462,10 +462,7 @@ mod tests {
     fn move_up_swaps_with_previous_same_side_control() {
         let mut config = WindowControlsConfig::default();
 
-        assert!(config.move_within_side(
-            WindowControlKind::Close,
-            WindowControlMoveDirection::Up
-        ));
+        assert!(config.move_within_side(WindowControlKind::Close, WindowControlMoveDirection::Up));
 
         assert_eq!(
             kinds_on(&config, WindowControlSide::Right),
@@ -484,14 +481,12 @@ mod tests {
         // The side's first row has no up neighbour and the last row no down
         // neighbour: the arrows are not rendered, so the model must refuse
         // too, otherwise a hidden click path could still mutate state.
-        assert!(!config.move_within_side(
-            WindowControlKind::Minimize,
-            WindowControlMoveDirection::Up
-        ));
-        assert!(!config.move_within_side(
-            WindowControlKind::Close,
-            WindowControlMoveDirection::Down
-        ));
+        assert!(
+            !config.move_within_side(WindowControlKind::Minimize, WindowControlMoveDirection::Up)
+        );
+        assert!(
+            !config.move_within_side(WindowControlKind::Close, WindowControlMoveDirection::Down)
+        );
         assert_eq!(
             kinds_on(&config, WindowControlSide::Right),
             WindowControlKind::ALL
@@ -526,10 +521,9 @@ mod tests {
         // Ahead of Minimize the Vec holds only the foreign-side Close: the
         // nearest same-side scan must skip it and refuse, never swap across
         // sides.
-        assert!(!config.move_within_side(
-            WindowControlKind::Minimize,
-            WindowControlMoveDirection::Up
-        ));
+        assert!(
+            !config.move_within_side(WindowControlKind::Minimize, WindowControlMoveDirection::Up)
+        );
 
         assert!(config.move_within_side(
             WindowControlKind::Minimize,

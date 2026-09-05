@@ -57,7 +57,11 @@ impl FileBrowser {
     ) -> Task<Message> {
         // The model refuses boundary moves, and the view hides those arrows,
         // so a persisting click always follows a real reorder.
-        if self.user_config.window_controls.move_within_side(kind, direction) {
+        if self
+            .user_config
+            .window_controls
+            .move_within_side(kind, direction)
+        {
             self.persist_user_preferences_command()
         } else {
             Task::none()
@@ -153,20 +157,16 @@ mod tests {
 
         // First row of its side: the up arrow is not rendered, and the model
         // refusal must skip persistence too.
-        assert!(into_stream(
-            browser.move_window_control_within_side(
-                WindowControlKind::Minimize,
-                WindowControlMoveDirection::Up
-            )
-        )
+        assert!(into_stream(browser.move_window_control_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Up
+        ))
         .is_none());
 
-        assert!(into_stream(
-            browser.move_window_control_within_side(
-                WindowControlKind::Minimize,
-                WindowControlMoveDirection::Down
-            )
-        )
+        assert!(into_stream(browser.move_window_control_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Down
+        ))
         .is_some());
         drop(browser.accept_user_preferences_saved(Ok(())));
         assert_eq!(
@@ -180,20 +180,16 @@ mod tests {
 
         // Each further down move keeps persisting until the side tail, where
         // the model refuses again.
-        assert!(into_stream(
-            browser.move_window_control_within_side(
-                WindowControlKind::Minimize,
-                WindowControlMoveDirection::Down
-            )
-        )
+        assert!(into_stream(browser.move_window_control_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Down
+        ))
         .is_some());
         drop(browser.accept_user_preferences_saved(Ok(())));
-        assert!(into_stream(
-            browser.move_window_control_within_side(
-                WindowControlKind::Minimize,
-                WindowControlMoveDirection::Down
-            )
-        )
+        assert!(into_stream(browser.move_window_control_within_side(
+            WindowControlKind::Minimize,
+            WindowControlMoveDirection::Down
+        ))
         .is_none());
         assert_eq!(
             kinds_on(&browser, WindowControlSide::Right),

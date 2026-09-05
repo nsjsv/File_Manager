@@ -12,9 +12,16 @@ use crate::transfer_conflict::{
 use crate::FileError;
 
 mod batch_rename;
+mod convert;
 mod copy;
 mod copy_verification;
 mod recoverable_transfer;
+pub use convert::{
+    available_conversion_encoders, convert_file_with_controls, locate_media_tool, media_duration,
+    AudioChannelSpec, AudioTargetFormat, ConversionEncoderAvailability, ConversionQualityPreset,
+    ConversionRequest, ConversionTarget, ConvertedFile, ImageTargetFormat, QualitySpec, ResizeSpec,
+    VideoTargetFormat,
+};
 pub(crate) use recoverable_transfer::rename_noreplace;
 pub use recoverable_transfer::{
     is_direct_move_segment_candidate, persist_recoverable_source_manifest,

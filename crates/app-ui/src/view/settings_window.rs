@@ -204,9 +204,7 @@ fn settings_category_detail(browser: &FileBrowser) -> Element<'_, Message> {
         SettingsCategory::Appearance => {
             appearance_settings_detail(browser, scrollbar_visibility, scrollbar_viewport)
         }
-        SettingsCategory::Files
-            if browser.settings_subpage == Some(SettingsSubpage::Preview) =>
-        {
+        SettingsCategory::Files if browser.settings_subpage == Some(SettingsSubpage::Preview) => {
             preview_settings_subpage_detail(browser, scrollbar_visibility, scrollbar_viewport)
         }
         SettingsCategory::Files => {

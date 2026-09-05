@@ -57,6 +57,13 @@ impl QueuedFileOperation {
             Self::CreateArchive {
                 sources, target, ..
             } => path_lines_from_archive(sources, target),
+            Self::Convert { requests } => {
+                let sources = requests
+                    .iter()
+                    .map(|request| request.source.clone())
+                    .collect::<Vec<_>>();
+                path_lines_from_paths(&sources)
+            }
             Self::ExtractArchive { request } => {
                 path_lines_from_extracted_archive(&request.archive, &request.destination)
             }
