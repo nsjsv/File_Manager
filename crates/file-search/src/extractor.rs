@@ -14,6 +14,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{SearchError, SearchResult};
 
+mod zip_xml_text;
+
+use zip_xml_text::{extract_zipped_xml_text, zipped_xml_document_kind, ZippedXmlDocumentKind};
+
 const DEFAULT_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_MAX_ADDRESS_SPACE_BYTES: u64 = 44_000_000;
 const STDERR_CAPTURE_LIMIT_BYTES: u64 = 64 * 1024;
@@ -92,6 +96,8 @@ pub enum ExtractionStatus {
     ToolUnavailable { tool: String },
     ToolFailed { tool: String, message: String },
     TimedOut { tool: String },
+    /// 已没有生产路径；保留是为了让旧索引库里存量行 JSON 仍能反序列化，
+    /// 移除会让 daemon 打开旧库时把这些行的状态读成错误。
     ResourceBudgetExceeded { tool: String },
 }
 
@@ -137,14 +143,12 @@ pub enum ExtractionExecutionMode {
         command: CommandSpec,
         timeout: Duration,
     },
+    ZippedXmlTextInProcess {
+        document_kind: ZippedXmlDocumentKind,
+    },
     SkipNow {
         skip_reason: ExtractionStatus,
     },
-}
-
-enum DocumentExtraction {
-    Isolated(CommandSpec),
-    MetadataOnly { tool: &'static str },
 }
 
 pub fn plan_content_extraction(
@@ -178,24 +182,26 @@ pub fn plan_content_extraction(
         };
     }
 
-    let Some(document_extraction) = document_extraction(path) else {
-        return ExtractionPlan {
-            max_output_bytes: max_extract_bytes,
-            execution_mode: ExtractionExecutionMode::SkipNow {
-                skip_reason: ExtractionStatus::Unsupported,
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase());
+    let execution_mode = match extension.as_deref() {
+        Some("pdf") => ExtractionExecutionMode::IsolatedSubprocess {
+            command: CommandSpec {
+                program: "pdftotext".to_owned(),
+                args: vec!["{}".to_owned(), "-".to_owned()],
             },
-        };
-    };
-
-    let execution_mode = match document_extraction {
-        DocumentExtraction::Isolated(command) => ExtractionExecutionMode::IsolatedSubprocess {
-            command,
             timeout: DEFAULT_EXTRACTION_TIMEOUT,
         },
-        DocumentExtraction::MetadataOnly { tool } => ExtractionExecutionMode::SkipNow {
-            skip_reason: ExtractionStatus::ResourceBudgetExceeded {
-                tool: tool.to_owned(),
+        Some(extension) => match zipped_xml_document_kind(extension) {
+            Some(document_kind) => ExtractionExecutionMode::ZippedXmlTextInProcess { document_kind },
+            None => ExtractionExecutionMode::SkipNow {
+                skip_reason: ExtractionStatus::Unsupported,
             },
+        },
+        None => ExtractionExecutionMode::SkipNow {
+            skip_reason: ExtractionStatus::Unsupported,
         },
     };
     ExtractionPlan {
@@ -224,6 +230,15 @@ pub(crate) async fn execute_extraction_plan_cancelled(
     match &extraction_plan.execution_mode {
         ExtractionExecutionMode::PlainTextInProcess => {
             extract_plain_text(path, extraction_plan.max_output_bytes).await
+        }
+        ExtractionExecutionMode::ZippedXmlTextInProcess { document_kind } => {
+            // 与纯文本一致的进程内提取；输入文件已受 max_extract_bytes 上限保护，
+            // 输出受 BoundedText 预算保护，无需子进程隔离。
+            Ok(extract_zipped_xml_text(
+                path,
+                *document_kind,
+                extraction_plan.max_output_bytes,
+            )?)
         }
         ExtractionExecutionMode::IsolatedSubprocess { command, timeout } => {
             extract_with_system_command_cancelled(
@@ -694,18 +709,6 @@ fn classify_plain_text_read_error(
         Ok(ExtractionOutcome::skipped(ExtractionStatus::ReadFailed {
             message: source.to_string(),
         }))
-    }
-}
-
-fn document_extraction(path: &Path) -> Option<DocumentExtraction> {
-    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-    match extension.as_str() {
-        "pdf" => Some(DocumentExtraction::Isolated(CommandSpec {
-            program: "pdftotext".to_owned(),
-            args: vec!["{}".to_owned(), "-".to_owned()],
-        })),
-        "docx" | "odt" => Some(DocumentExtraction::MetadataOnly { tool: "pandoc" }),
-        _ => None,
     }
 }
 

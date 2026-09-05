@@ -97,6 +97,40 @@ impl SearchDatabase {
         if current < 10 {
             self.migrate_path_configuration()?;
         }
+        if current < 11 {
+            self.reset_skipped_office_content_stage()?;
+        }
+        Ok(())
+    }
+
+    /// docx/xlsx/pptx/odt 从“跳过”升级为可进程内提取后，这些格式存量的
+    /// skipped 内容阶段必须重置为 pending：签名比较只放行非 pending 行，
+    /// 不重置的话存量 Office 文件在文件变更前永远不会被重新提取。
+    fn reset_skipped_office_content_stage(&self) -> SearchResult<()> {
+        const OFFICE_MIME_TYPES: [&str; 4] = [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.oasis.opendocument.text",
+        ];
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
+            "UPDATE file_stage_state
+             SET content_stage_state = 'pending'
+             WHERE content_stage_state = 'skipped'
+               AND path IN (
+                   SELECT path FROM files
+                   WHERE mime_type IN (?1, ?2, ?3, ?4)
+               )",
+            rusqlite::params![
+                OFFICE_MIME_TYPES[0],
+                OFFICE_MIME_TYPES[1],
+                OFFICE_MIME_TYPES[2],
+                OFFICE_MIME_TYPES[3]
+            ],
+        )?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.commit()?;
         Ok(())
     }
 

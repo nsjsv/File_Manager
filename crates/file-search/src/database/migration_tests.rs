@@ -434,3 +434,91 @@ fn schema_nine_replace_failure_rolls_back_to_schema_eight() {
         "sentinel"
     );
 }
+
+#[test]
+fn schema_eleven_migration_resets_skipped_office_content_for_reextraction() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("search.sqlite");
+    let database = SearchDatabase::open(&database_path).unwrap();
+    let skipped_office_file = IndexedFile {
+        path: Path::new("/tmp/report.docx").to_path_buf(),
+        parent_path: Path::new("/tmp").to_path_buf(),
+        display_name: "report.docx".to_owned(),
+        kind: SearchFileKind::File,
+        size: 9,
+        modified_ms: None,
+        accessed_ms: None,
+        created_ms: None,
+        mime_type: Some(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_owned(),
+        ),
+        stage_state: IndexedEntryStageState {
+            metadata: EntryStageProgress::Complete,
+            content: EntryStageProgress::Skipped,
+        },
+        content: None,
+        extraction_status: ExtractionStatus::ResourceBudgetExceeded {
+            tool: "pandoc".to_owned(),
+        },
+        device: Some(1),
+        inode: Some(2),
+        mtime_ns: Some(3),
+        ctime_ns: Some(4),
+    };
+    let skipped_plain_text_file = IndexedFile {
+        path: Path::new("/tmp/legacy.txt").to_path_buf(),
+        parent_path: Path::new("/tmp").to_path_buf(),
+        display_name: "legacy.txt".to_owned(),
+        kind: SearchFileKind::File,
+        size: 4,
+        modified_ms: None,
+        accessed_ms: None,
+        created_ms: None,
+        mime_type: Some("text/plain".to_owned()),
+        stage_state: IndexedEntryStageState {
+            metadata: EntryStageProgress::Complete,
+            content: EntryStageProgress::Skipped,
+        },
+        content: None,
+        extraction_status: ExtractionStatus::NonUtf8,
+        device: Some(5),
+        inode: Some(6),
+        mtime_ns: Some(7),
+        ctime_ns: Some(8),
+    };
+    database.upsert_file(&skipped_office_file).unwrap();
+    database.upsert_file(&skipped_plain_text_file).unwrap();
+    database
+        .connection
+        .execute_batch("PRAGMA user_version = 10;")
+        .unwrap();
+    drop(database);
+
+    let database = SearchDatabase::open(&database_path).unwrap();
+
+    assert_eq!(
+        database
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        SCHEMA_VERSION
+    );
+    assert_eq!(
+        database
+            .entry_stage_state(Path::new("/tmp/report.docx"))
+            .unwrap()
+            .expect("migrated office row must stay present")
+            .content,
+        EntryStageProgress::Pending,
+        "office documents skipped by the old extractor must be re-extracted"
+    );
+    assert_eq!(
+        database
+            .entry_stage_state(Path::new("/tmp/legacy.txt"))
+            .unwrap()
+            .expect("control row must stay present")
+            .content,
+        EntryStageProgress::Skipped,
+        "non-office skip reasons must not be disturbed by the migration"
+    );
+}

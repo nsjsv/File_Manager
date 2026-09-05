@@ -1649,6 +1649,7 @@ dependencies = [
  "file-core",
  "libc",
  "notify",
+ "quick-xml",
  "regex",
  "rusqlite",
  "serde",
@@ -1660,6 +1661,7 @@ dependencies = [
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]

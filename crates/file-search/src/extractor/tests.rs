@@ -13,7 +13,8 @@ use super::{
     classify_plain_text_read_error, extract_content, extract_with_system_command,
     extract_with_system_command_cancelled, plan_content_extraction, CommandSpec,
     DurableContentStageState, ExtractionExecutionMode, ExtractionProcessLimits, ExtractionStatus,
-    DEFAULT_EXTRACTION_TIMEOUT, DEFAULT_MAX_ADDRESS_SPACE_BYTES, STDERR_CAPTURE_LIMIT_BYTES,
+    ZippedXmlDocumentKind, DEFAULT_EXTRACTION_TIMEOUT, DEFAULT_MAX_ADDRESS_SPACE_BYTES,
+    STDERR_CAPTURE_LIMIT_BYTES,
 };
 
 #[test]
@@ -52,32 +53,32 @@ fn plans_plain_text_and_pdf_backends_explicitly() {
 }
 
 #[test]
-fn pandoc_documents_are_metadata_only_when_the_tool_exceeds_the_service_budget() {
-    for document_path in ["/tmp/report.docx", "/tmp/report.odt"] {
+fn office_documents_are_extracted_in_process_by_format() {
+    let planned_kinds = [
+        ("/tmp/report.docx", ZippedXmlDocumentKind::WordDocument),
+        ("/tmp/workbook.xlsx", ZippedXmlDocumentKind::Spreadsheet),
+        ("/tmp/slides.pptx", ZippedXmlDocumentKind::Presentation),
+        ("/tmp/notes.odt", ZippedXmlDocumentKind::OpenDocumentText),
+        ("/tmp/UPPERCASE.XLSX", ZippedXmlDocumentKind::Spreadsheet),
+    ];
+    for (document_path, document_kind) in planned_kinds {
         let extraction_plan = plan_content_extraction(Path::new(document_path), 12, 1024, true);
         assert_eq!(
             extraction_plan.execution_mode,
-            ExtractionExecutionMode::SkipNow {
-                skip_reason: ExtractionStatus::ResourceBudgetExceeded {
-                    tool: "pandoc".to_owned(),
-                },
-            },
-            "{document_path} must retain metadata without starting pandoc"
+            ExtractionExecutionMode::ZippedXmlTextInProcess { document_kind },
+            "{document_path} must be extracted in process"
         );
     }
 }
 
 #[test]
-fn unsupported_office_formats_are_metadata_only() {
+fn unsupported_office_formats_stay_unsupported() {
     for file_name in [
         "legacy.doc",
         "legacy.xls",
-        "workbook.xlsx",
         "legacy.ppt",
-        "slides.pptx",
         "spreadsheet.ods",
         "presentation.odp",
-        "UPPERCASE.XLSX",
     ] {
         let extraction_plan = plan_content_extraction(Path::new(file_name), 12, 1024, true);
         assert_eq!(
@@ -85,7 +86,7 @@ fn unsupported_office_formats_are_metadata_only() {
             ExtractionExecutionMode::SkipNow {
                 skip_reason: ExtractionStatus::Unsupported,
             },
-            "{file_name} must not be routed to Pandoc"
+            "{file_name} must not be routed to a zipped-xml extractor"
         );
     }
 }
