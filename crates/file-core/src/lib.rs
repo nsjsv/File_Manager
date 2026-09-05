@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod archive_extraction;
 pub mod archive_listing;
+pub mod checksum;
 pub mod directory_metadata;
 pub mod entry;
 pub mod media;
@@ -26,6 +27,11 @@ pub use archive_extraction::{
 pub use archive_listing::{
     list_archive_members, list_archive_members_with_format, sniff_archive_extraction_format,
     ArchiveListingEntry,
+};
+pub use checksum::{
+    algorithms_matching_digest, compute_file_checksums, find_checksum_entry, is_plausible_digest,
+    parse_checksum_file, ChecksumAlgorithm, ChecksumFileContent, ChecksumFileEntry,
+    ChecksumProgress, FileChecksums, ALL_CHECKSUM_ALGORITHMS,
 };
 pub use directory_metadata::{
     resolve_directory_metadata, DirectoryFilesystemMetadata, DirectoryIdentityNames,

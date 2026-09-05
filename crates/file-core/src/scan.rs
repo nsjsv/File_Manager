@@ -456,6 +456,12 @@ pub enum FileError {
     Archive { path: PathBuf, message: String },
     #[error("could not convert {path:?}: {message}")]
     Convert { path: PathBuf, message: String },
+    #[error("could not read {path:?} for checksum computation: {source}")]
+    Checksum {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("archive {path:?} requires a password")]
     ArchivePasswordRequired { path: PathBuf },
     #[error("archive {path:?} password is incorrect")]

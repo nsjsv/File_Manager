@@ -130,6 +130,20 @@ pub async fn write_file_clipboard(
         .map_err(|source| FileClipboardError::Clipboard { source })
 }
 
+/// 把纯文本写入桌面剪贴板(校验值复制等文本场景;文件复制走 write_file_clipboard)。
+pub async fn write_desktop_clipboard_text(text: String) -> Result<(), FileClipboardError> {
+    let bytes = text.into_bytes();
+    tokio::task::spawn_blocking(move || {
+        ClipboardOptions::new().copy(
+            Source::Bytes(bytes.into()),
+            MimeType::Specific(PLAIN_TEXT_MIME.to_owned()),
+        )
+    })
+    .await
+    .map_err(|source| FileClipboardError::Worker { source })?
+    .map_err(|source| FileClipboardError::Clipboard { source })
+}
+
 fn file_clipboard_mime_sources(selection: &FileClipboardSelection) -> Vec<MimeSource> {
     // wl-clipboard-rs 会把第一个文本类源的 payload 自动补挂到其余 text MIME；
     // 明文路径源必须排第一，终端粘贴 text 目标才能拿到解码路径，

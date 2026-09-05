@@ -20,9 +20,10 @@ pub use display_renderer::{
 };
 pub use file_clipboard::{
     parse_file_uri_list, parse_gnome_copied_files, read_desktop_clipboard, read_file_clipboard,
-    serialize_file_uri_list, serialize_gnome_copied_files, write_file_clipboard, ClipboardImage,
-    DesktopClipboardContent, FileClipboardError, FileClipboardOperation, FileClipboardPayloadError,
-    FileClipboardSelection, GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
+    serialize_file_uri_list, serialize_gnome_copied_files, write_desktop_clipboard_text,
+    write_file_clipboard, ClipboardImage, DesktopClipboardContent, FileClipboardError,
+    FileClipboardOperation, FileClipboardPayloadError, FileClipboardSelection,
+    GNOME_COPIED_FILES_MIME, URI_LIST_MIME,
 };
 pub use file_manager_activation::{
     DesktopActivationEvent, DesktopActivationRuntime, DesktopLaunchWindowPolicy, DesktopStartupId,

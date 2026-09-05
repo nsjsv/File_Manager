@@ -4,6 +4,7 @@ pub(crate) mod archive_creation;
 pub(crate) mod archive_extraction;
 pub(crate) mod archive_password;
 mod batch_rename;
+pub(crate) mod checksum;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
@@ -91,6 +92,7 @@ use crate::animated_image_preview::animated_image_preview_subscription;
 use crate::app::application_shutdown::ApplicationShutdownPhase;
 use crate::app::archive_creation::ArchiveCreationState;
 use crate::app::archive_extraction::ArchiveExtractionState;
+use crate::app::checksum::ChecksumState;
 use crate::app::column_resize::ColumnResizeDrag;
 use crate::app::convert::ConvertState;
 use crate::app::events::global_event_message;
@@ -239,6 +241,7 @@ pub(crate) struct FileBrowser {
     pub(crate) file_drop_prompt: Option<FileDropPrompt>,
     pub(crate) archive_creation: Option<ArchiveCreationState>,
     pub(crate) convert: Option<ConvertState>,
+    pub(crate) checksum: Option<ChecksumState>,
     pub(crate) archive_extraction: Option<ArchiveExtractionState>,
     pub(crate) batch_rename: Option<BatchRenameState>,
     pub(crate) sidebar_locations: Vec<SidebarLocation>,
@@ -606,6 +609,7 @@ impl FileBrowser {
             file_drop_prompt: None,
             archive_creation: None,
             convert: None,
+            checksum: None,
             archive_extraction: None,
             batch_rename: None,
             sidebar_locations: Vec::new(),

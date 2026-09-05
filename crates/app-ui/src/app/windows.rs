@@ -834,6 +834,11 @@ impl FileBrowser {
             return Task::none();
         }
 
+        if let Some(checksum) = self.checksum.take() {
+            crate::app::checksum::cancel_running_checksum(&checksum);
+            return Task::none();
+        }
+
         if self.archive_extraction.is_some() {
             self.archive_extraction = None;
             return Task::none();

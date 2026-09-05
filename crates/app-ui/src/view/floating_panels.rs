@@ -6,6 +6,7 @@ use iced::{Alignment, Element, Length};
 use desktop_linux::FileClipboardOperation;
 
 use crate::app::archive_creation::ArchiveCreationMessage;
+use crate::app::checksum::ChecksumMessage;
 use crate::app::convert::ConvertMessage;
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
@@ -512,7 +513,15 @@ fn file_context_menu_panel(
                 IconSymbol::FileImage,
                 "Convert Format...",
                 Message::Convert(ConvertMessage::OpenSelected),
-            ))
+            ));
+        if !menu.target_is_directory {
+            menu_content = menu_content.push(menu_item(
+                IconSymbol::Hash,
+                "File Checksum...",
+                Message::Checksum(ChecksumMessage::OpenSelected),
+            ));
+        }
+        menu_content = menu_content
             .push(menu_item(IconSymbol::Copy, "Paste", Message::PastePending))
             .push(menu_item(
                 IconSymbol::Pencil,
@@ -572,10 +581,17 @@ fn new_entry_submenu_slot(menu: &FileContextMenuState) -> Element<'_, Message> {
 }
 
 fn new_entry_trigger_top(menu: &FileContextMenuState) -> f32 {
-    let rows_before_new_entry = match (menu.target.is_some(), menu.can_batch_rename) {
-        (true, true) => 8.0,
-        (true, false) => 7.0,
-        (false, _) => 1.0,
+    // 文件目标比目录目标多一行 "File Checksum..."。
+    let rows_before_new_entry = match (
+        menu.target.is_some(),
+        menu.target_is_directory,
+        menu.can_batch_rename,
+    ) {
+        (true, false, true) => 9.0,
+        (true, false, false) => 8.0,
+        (true, true, true) => 8.0,
+        (true, true, false) => 7.0,
+        (false, _, _) => 1.0,
     };
     CONTEXT_MENU_PADDING
         + rows_before_new_entry * (CONTEXT_MENU_ITEM_HEIGHT + CONTEXT_MENU_ITEM_SPACING)

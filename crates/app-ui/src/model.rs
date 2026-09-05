@@ -24,6 +24,7 @@ use iced::{event, mouse, window, Point, Theme};
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::archive_creation::ArchiveCreationMessage;
 use crate::app::archive_extraction::ArchiveExtractionMessage;
+use crate::app::checksum::ChecksumMessage;
 use crate::app::convert::ConvertMessage;
 use crate::audio_preview::AudioPreviewRuntime;
 use crate::config::{RenderingGpuPreference, UiLanguage, UiLanguageSetting, UserConfig};
@@ -492,6 +493,7 @@ pub(crate) enum Message {
     DismissFloating,
     ArchiveCreation(ArchiveCreationMessage),
     Convert(ConvertMessage),
+    Checksum(ChecksumMessage),
     ArchiveExtraction(ArchiveExtractionMessage),
     BatchRename(BatchRenameMessage),
     FileContextMenuExpansionChanged(FileContextMenuExpansion),

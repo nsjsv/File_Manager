@@ -11,8 +11,11 @@ filetime = "0.2.29"
 flate2 = "1.1.9"
 image.workspace = true
 libc = "0.2"
+md-5.workspace = true
 notify.workspace = true
 serde = { version = "1", features = ["derive"] }
+sha1.workspace = true
+sha2.workspace = true
 tar = "0.4.46"
 thiserror.workspace = true
 tokio.workspace = true
