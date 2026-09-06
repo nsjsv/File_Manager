@@ -163,16 +163,13 @@ impl TerminalSession {
             .map_err(|error| format!("克隆 PTY 读端失败: {error}"))
     }
 
-    /// 读端 EOF 后调用;尽力回收子进程。
-    pub(crate) fn mark_exited(&mut self) {
-        self.exited = true;
-        let _ = self.child.wait();
-    }
-
-    /// 彻底关闭:杀掉 shell;主从端随后释放,读端线程因 EOF 退出。
+    /// 彻底关闭:杀掉 shell(若还活着)并回收子进程避免留僵尸;
+    /// shell 已自行退出时 kill 失败由 wait 兜底回收。主从端随后释放,
+    /// 读端线程因 EOF 退出。
     pub(crate) fn terminate(&mut self) {
         self.exited = true;
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

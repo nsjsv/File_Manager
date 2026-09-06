@@ -143,6 +143,8 @@ impl FileBrowser {
             ShortcutAction::Escape => self.handle_focused_window_escape_pressed(),
             ShortcutAction::Preview => self.request_preview(),
             ShortcutAction::ToggleTerminal => self.toggle_terminal_via_shortcut(),
+            ShortcutAction::TerminalNewTab => self.add_terminal_tab(),
+            ShortcutAction::TerminalCloseTab => self.close_active_terminal_tab_via_shortcut(),
             ShortcutAction::SelectAll => self.select_all_in_file_selection_scope(),
             ShortcutAction::Copy => self.copy_selected(),
             ShortcutAction::Paste => self.paste_pending(),

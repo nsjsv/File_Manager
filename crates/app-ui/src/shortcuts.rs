@@ -22,6 +22,8 @@ pub(crate) enum ShortcutAction {
     Escape,
     Preview,
     ToggleTerminal,
+    TerminalNewTab,
+    TerminalCloseTab,
     SelectAll,
     Copy,
     Paste,
@@ -50,6 +52,8 @@ impl ShortcutAction {
             | Self::Escape
             | Self::FocusPathInput
             | Self::ToggleTerminal
+            | Self::TerminalNewTab
+            | Self::TerminalCloseTab
             | Self::NavigateBack
             | Self::NavigateForward
             | Self::NavigateUp => ShortcutRoutingContext::Application,
@@ -97,6 +101,8 @@ pub(crate) enum ShortcutBindingId {
     Escape,
     Preview,
     ToggleTerminal,
+    TerminalNewTab,
+    TerminalCloseTab,
     SelectAll,
     Copy,
     CopyNamed,
@@ -109,7 +115,7 @@ pub(crate) enum ShortcutBindingId {
     Redo,
 }
 
-const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 25] = [
+const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 27] = [
     ShortcutBindingId::OpenSelected,
     ShortcutBindingId::RenameSelected,
     ShortcutBindingId::FocusPathInput,
@@ -125,6 +131,8 @@ const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 25] = [
     ShortcutBindingId::Escape,
     ShortcutBindingId::Preview,
     ShortcutBindingId::ToggleTerminal,
+    ShortcutBindingId::TerminalNewTab,
+    ShortcutBindingId::TerminalCloseTab,
     ShortcutBindingId::SelectAll,
     ShortcutBindingId::Copy,
     ShortcutBindingId::CopyNamed,
@@ -161,6 +169,8 @@ impl ShortcutBindingId {
             Self::Escape => ShortcutAction::Escape,
             Self::Preview => ShortcutAction::Preview,
             Self::ToggleTerminal => ShortcutAction::ToggleTerminal,
+            Self::TerminalNewTab => ShortcutAction::TerminalNewTab,
+            Self::TerminalCloseTab => ShortcutAction::TerminalCloseTab,
             Self::SelectAll => ShortcutAction::SelectAll,
             Self::Copy | Self::CopyNamed => ShortcutAction::Copy,
             Self::Paste | Self::PasteNamed => ShortcutAction::Paste,
@@ -188,6 +198,8 @@ impl ShortcutBindingId {
             Self::Escape => "Dismiss",
             Self::Preview => "Preview",
             Self::ToggleTerminal => "Toggle Terminal",
+            Self::TerminalNewTab => "New Terminal Tab",
+            Self::TerminalCloseTab => "Close Terminal Tab",
             Self::SelectAll => "Select All",
             Self::Copy => "Copy",
             Self::CopyNamed => "Copy Named Key",
@@ -218,6 +230,8 @@ impl ShortcutBindingId {
             Self::Escape => "escape",
             Self::Preview => "preview",
             Self::ToggleTerminal => "toggle_terminal",
+            Self::TerminalNewTab => "terminal_new_tab",
+            Self::TerminalCloseTab => "terminal_close_tab",
             Self::SelectAll => "select_all",
             Self::Copy => "copy",
             Self::CopyNamed => "copy_named",
@@ -413,6 +427,8 @@ fn default_binding(id: ShortcutBindingId) -> KeyBinding {
         ShortcutBindingId::Escape => KeyBinding::named(ShortcutNamedKey::Escape),
         ShortcutBindingId::Preview => KeyBinding::named(ShortcutNamedKey::Space),
         ShortcutBindingId::ToggleTerminal => KeyBinding::control_character('`'),
+        ShortcutBindingId::TerminalNewTab => KeyBinding::control_shift_character('T'),
+        ShortcutBindingId::TerminalCloseTab => KeyBinding::control_shift_character('W'),
         ShortcutBindingId::SelectAll => KeyBinding::primary_character('A'),
         ShortcutBindingId::Copy => KeyBinding::primary_character('C'),
         ShortcutBindingId::CopyNamed => KeyBinding::named(ShortcutNamedKey::Copy),
@@ -448,6 +464,17 @@ impl KeyBinding {
         Self {
             modifiers: ShortcutModifiers {
                 control: true,
+                ..ShortcutModifiers::default()
+            },
+            key: ShortcutKey::Character(character),
+        }
+    }
+
+    fn control_shift_character(character: char) -> Self {
+        Self {
+            modifiers: ShortcutModifiers {
+                control: true,
+                shift: true,
                 ..ShortcutModifiers::default()
             },
             key: ShortcutKey::Character(character),
@@ -753,6 +780,28 @@ mod tests {
             keyboard::Modifiers::CTRL,
         );
         assert_eq!(action, Some(ShortcutAction::ToggleTerminal));
+    }
+
+    #[test]
+    fn ctrl_shift_t_w_are_default_terminal_tab_shortcuts() {
+        // 大小写两种字形都要命中:物理按键送来的字符跟随 shift 状态。
+        let config = ShortcutConfig::defaults();
+        for character in ["T", "t"] {
+            assert_eq!(
+                config.matching_action(
+                    &Key::Character(character.into()),
+                    keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT,
+                ),
+                Some(ShortcutAction::TerminalNewTab)
+            );
+        }
+        assert_eq!(
+            config.matching_action(
+                &Key::Character("W".into()),
+                keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT,
+            ),
+            Some(ShortcutAction::TerminalCloseTab)
+        );
     }
 
     #[test]

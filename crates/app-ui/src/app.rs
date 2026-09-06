@@ -407,6 +407,7 @@ impl FileBrowser {
         self.preview_window_chrome.advance();
         self.preview_window_bottom_controls.advance();
         self.advance_terminal_panel_height_animation();
+        self.advance_terminal_tab_shift_animations();
         Task::batch([
             self.advance_smooth_scroll_animation(),
             self.advance_scrollbar_animation(),

@@ -68,6 +68,8 @@ impl FileBrowser {
             | ShortcutAction::FileProperties
             | ShortcutAction::Preview
             | ShortcutAction::ToggleTerminal
+            | ShortcutAction::TerminalNewTab
+            | ShortcutAction::TerminalCloseTab
             | ShortcutAction::Paste => Task::none(),
         }
     }

@@ -25,7 +25,7 @@ mod shortcut_settings;
 mod sidebar_panel;
 mod sqlite_preview_panel;
 mod tab_bar;
-mod tab_motion;
+pub(crate) mod tab_motion;
 mod text_preview_panel;
 mod toggle_switch;
 mod toolbar_controls;
@@ -310,6 +310,17 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     if let Some(pane_preview) = pane_drag_preview_panel(browser) {
         floating.push(FloatingContent {
             element: pane_preview,
+            placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
+        });
+    }
+
+    if let Some(directory) = browser.terminal_tab_drag_preview() {
+        floating.push(FloatingContent {
+            element: container(tab_title_content(directory, false, IconTone::Selected))
+                .padding([7, 10])
+                .width(Length::Fixed(TAB_DRAG_PREVIEW_WIDTH))
+                .style(selected_tab_item_style)
+                .into(),
             placement: FloatingPlacement::Free(drag_preview_position(browser.cursor_position)),
         });
     }

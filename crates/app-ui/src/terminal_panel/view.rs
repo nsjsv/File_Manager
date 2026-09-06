@@ -1,12 +1,13 @@
 use iced::mouse::{self, Interaction, ScrollDelta};
 use iced::widget::canvas::{Frame, Geometry, Text as CanvasText};
-use iced::widget::{button, canvas, container, mouse_area, row, space};
+use iced::widget::{button, canvas, container, mouse_area, row, space, text};
 use iced::{Color, Element, Length, Point, Rectangle, Size, Theme};
 use iced::alignment::Vertical;
 
 use super::emulator::TerminalCell;
-use super::session::TerminalSession;
+use super::session::{SessionId, TerminalSession};
 use super::{FileBrowser, TerminalPanelMessage, PANEL_HORIZONTAL_PADDING};
+use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
 use crate::model::Message;
 use alacritty_terminal::term::cell::Flags;
@@ -27,25 +28,50 @@ const DRAG_HANDLE_HEIGHT: f32 = 6.0;
 const DIVIDER_LINE_HEIGHT: f32 = 1.0;
 /// 每格滚动的行数。
 const WHEEL_LINES_PER_NOTCH: i32 = 3;
+/// 终端标签条高度。
+const TAB_STRIP_HEIGHT: f32 = 26.0;
+/// 标签条上下留白。
+const TAB_STRIP_VERTICAL_PADDING: f32 = 3.0;
+/// 标签间距;位移动画距离也按它计算。
+pub(crate) const TAB_STRIP_SPACING: f32 = 6.0;
+/// 标签上关闭按钮的图标大小与槽宽。
+const TAB_CLOSE_ICON_SIZE: f32 = 11.0;
+const TAB_CLOSE_SLOT_WIDTH: f32 = 18.0;
+/// 未读输出小圆点直径。
+const TAB_UNREAD_DOT_SIZE: f32 = 5.0;
+/// 未读圆点占位宽(含间距);恒定占位保证标题不因圆点出现而横跳。
+const TAB_UNREAD_DOT_SLOT_WIDTH: f32 = TAB_UNREAD_DOT_SIZE + 3.0;
+/// 标签标题最大字符数。
+const TAB_LABEL_MAX_CHARS: usize = 20;
+/// 标签条「+」按钮的图标与按钮尺寸。
+const TAB_ADD_ICON_SIZE: f32 = 13.0;
+const TAB_ADD_BUTTON_SIZE: f32 = 20.0;
+
+/// 面板高度中终端网格可用的部分:去掉拖拽手柄与标签条。
+pub(crate) fn canvas_height_for_panel(height: f32) -> f32 {
+    (height - DRAG_HANDLE_HEIGHT - TAB_STRIP_HEIGHT).max(CELL_HEIGHT)
+}
 
 /// 主窗口最底部区域:访达式抽屉。收起时是与内容同背景的窄条(仅顶部分隔线 +
 /// 右下角图标);展开时终端取代窄条,图标消失,顶部分隔线即拖拽手柄。
 /// 抽屉横贯窗宽,左侧由上层侧边栏卡片遮住。
 pub(crate) fn terminal_panel_area(browser: &FileBrowser) -> Element<'_, Message> {
-    if let Some(session) = &browser.terminal_panel.session {
+    if let Some(active_tab) = browser.terminal_panel.active_tab() {
         if browser.terminal_panel.height() >= CELL_HEIGHT {
             let focused = browser.terminal_panel.is_focused();
+            let session = &active_tab.session;
             return iced::widget::column![
                 resize_handle(),
+                terminal_tab_strip(browser),
                 container(
                     canvas(TerminalGrid { session, focused })
                         .width(Length::Fill)
                         .height(Length::Fill),
                 )
                 .width(Length::Fill)
-                .height(Length::Fixed(
-                    (browser.terminal_panel.height() - DRAG_HANDLE_HEIGHT).max(CELL_HEIGHT),
-                ))
+                .height(Length::Fixed(canvas_height_for_panel(
+                    browser.terminal_panel.height(),
+                )))
                 // 左侧让位给上层侧边栏,文字从内容区起点开始。
                 .padding(iced::Padding {
                     left: browser.sidebar_width,
@@ -58,6 +84,146 @@ pub(crate) fn terminal_panel_area(browser: &FileBrowser) -> Element<'_, Message>
         }
     }
     collapsed_strip()
+}
+
+/// 终端标签条:标签(标题 + 未读圆点 + ×)+ 右端「+」新建按钮。
+fn terminal_tab_strip(browser: &FileBrowser) -> Element<'_, Message> {
+    let mut strip = row![].spacing(TAB_STRIP_SPACING);
+    for tab in &browser.terminal_panel.tabs {
+        let is_active = Some(tab.session.id) == browser.terminal_panel.active_session_id;
+        strip = strip.push(terminal_tab_button(
+            browser,
+            tab.session.id,
+            &tab.directory,
+            tab.has_unread_output,
+            is_active,
+        ));
+    }
+    strip = strip.push(add_tab_button());
+    strip = strip.push(space::Space::new().width(Length::Fill));
+    container(strip)
+        .width(Length::Fill)
+        .height(Length::Fixed(TAB_STRIP_HEIGHT))
+        .padding(iced::Padding {
+            left: browser.sidebar_width,
+            right: PANEL_HORIZONTAL_PADDING,
+            top: TAB_STRIP_VERTICAL_PADDING,
+            bottom: TAB_STRIP_VERTICAL_PADDING,
+        })
+        .style(content_background_style)
+        .into()
+}
+
+fn terminal_tab_button<'a>(
+    browser: &'a FileBrowser,
+    session_id: SessionId,
+    directory: &std::path::Path,
+    has_unread_output: bool,
+    is_active: bool,
+) -> Element<'a, Message> {
+    let title = directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| directory.to_string_lossy().into_owned());
+    let label = row![
+        space::Space::new().width(Length::Fixed(TAB_CLOSE_SLOT_WIDTH)),
+        container(text(format_middle_ellipsized_text(&title, TAB_LABEL_MAX_CHARS)).size(11))
+            .center_x(Length::Fill),
+        unread_dot_slot(has_unread_output),
+        button(
+            IconSymbol::Close
+                .view(TAB_CLOSE_ICON_SIZE)
+                .width(Length::Fixed(TAB_CLOSE_ICON_SIZE))
+                .height(Length::Fixed(TAB_CLOSE_ICON_SIZE))
+                .style(crate::appearance::icon_svg_style()),
+        )
+        .on_press(Message::TerminalPanel(
+            TerminalPanelMessage::TabCloseRequested(session_id),
+        ))
+        .padding(2.0)
+        .width(Length::Fixed(TAB_CLOSE_SLOT_WIDTH))
+        .style(crate::appearance::navigation_icon_button_style()),
+    ]
+    .spacing(4.0)
+    .align_y(Vertical::Center)
+    .width(Length::Fill);
+
+    let tab = container(label)
+        .padding([3, 6])
+        .width(Length::Fill)
+        .clip(true)
+        .style(if is_active {
+            crate::appearance::selected_tab_item_style
+        } else {
+            crate::appearance::tab_item_style
+        });
+    let shift_offset = browser
+        .terminal_panel
+        .tab_shift_animations
+        .get(&session_id)
+        .map(|animation| animation.shift_offset())
+        .unwrap_or(0.0);
+    let tab = super::super::view::tab_motion::translated(tab, shift_offset, 0.0);
+    mouse_area(tab)
+        .on_press(Message::TerminalPanel(
+            TerminalPanelMessage::TabPressed(session_id),
+        ))
+        .on_middle_press(Message::TerminalPanel(
+            TerminalPanelMessage::TabCloseRequested(session_id),
+        ))
+        .on_enter(Message::TerminalPanel(
+            TerminalPanelMessage::TabDragEntered(session_id),
+        ))
+        .on_release(Message::TerminalPanel(TerminalPanelMessage::TabDragFinished))
+        .interaction(Interaction::Pointer)
+        .into()
+}
+
+/// 未读输出圆点槽:无未读时是等宽占位,避免标题横跳。
+fn unread_dot_slot(has_unread_output: bool) -> Element<'static, Message> {
+    if has_unread_output {
+        container(space::Space::new())
+            .width(Length::Fixed(TAB_UNREAD_DOT_SIZE))
+            .height(Length::Fixed(TAB_UNREAD_DOT_SIZE))
+            .style(unread_dot_style)
+            .into()
+    } else {
+        space::Space::new()
+            .width(Length::Fixed(TAB_UNREAD_DOT_SLOT_WIDTH))
+            .into()
+    }
+}
+
+fn unread_dot_style(theme: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(iced::Background::Color(
+            theme.extended_palette().primary.base.color,
+        )),
+        border: iced::Border {
+            radius: (TAB_UNREAD_DOT_SIZE / 2.0).into(),
+            ..iced::Border::default()
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
+fn add_tab_button() -> Element<'static, Message> {
+    button(
+        IconSymbol::Plus
+            .view(TAB_ADD_ICON_SIZE)
+            .width(Length::Fixed(TAB_ADD_ICON_SIZE))
+            .height(Length::Fixed(TAB_ADD_ICON_SIZE))
+            .style(crate::appearance::icon_svg_style()),
+    )
+    .on_press(Message::TerminalPanel(
+        TerminalPanelMessage::TabAddRequested,
+    ))
+    .padding(3.0)
+    .width(Length::Fixed(TAB_ADD_BUTTON_SIZE))
+    .height(Length::Fixed(TAB_ADD_BUTTON_SIZE))
+    .style(crate::appearance::transparent_button_style())
+    .into()
 }
 
 /// 分隔线 + 拖拽热区:1px 可见横线,整个 6px 区域可按住拖动调高。

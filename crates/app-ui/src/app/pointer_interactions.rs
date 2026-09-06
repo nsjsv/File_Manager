@@ -87,6 +87,7 @@ impl FileBrowser {
         self.update_split_resize(position);
         self.update_list_column_reorder_drag(position);
         self.update_terminal_panel_resize_drag(position);
+        self.update_terminal_tab_drag(position);
         let selection_command = if self.update_selection_marquee(position) {
             crate::column_entry_bounds::column_entry_bounds_command()
         } else {

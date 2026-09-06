@@ -1,12 +1,15 @@
 //! 主窗口底部内嵌终端面板:底部窄条 + 可展开的真终端(PTY + 终端模拟)。
 //!
 //! 会话生命周期与面板可见性解耦:收起不杀 shell,`exit` 后自动收起。
+//! 面板内是多个终端标签,同一时刻只渲染激活标签的网格。
 
 pub(crate) mod emulator;
 pub(crate) mod input;
 pub(crate) mod session;
+pub(crate) mod tabs;
 pub(crate) mod view;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use iced::advanced::subscription::{self, EventStream, Hasher, Recipe};
@@ -15,8 +18,10 @@ use iced::{Point, Task};
 
 use crate::app::FileBrowser;
 use crate::model::Message;
+use crate::shortcuts::ShortcutAction;
 
-use session::{SessionId, TerminalSession};
+use session::SessionId;
+use tabs::TerminalTab;
 
 /// 展开时的默认面板高度(px)。
 pub(crate) const DEFAULT_PANEL_HEIGHT: f32 = 320.0;
@@ -29,12 +34,19 @@ pub(crate) const PANEL_HORIZONTAL_PADDING: f32 = 12.0;
 /// 面板高度动画的 tick 步数(60Hz 下约 8 帧)。
 const HEIGHT_ANIMATION_STEPS: f32 = 8.0;
 /// 面板未展开时高度。
-const COLLAPSED_HEIGHT: f32 = 0.0;
+pub(crate) const COLLAPSED_HEIGHT: f32 = 0.0;
+/// 终端标签拖拽的移动激活距离(与主区标签一致)。
+pub(crate) const TERMINAL_TAB_DRAG_ACTIVATION_DISTANCE: f32 = 3.0;
 
 #[derive(Debug, Clone)]
 pub(crate) enum TerminalPanelMessage {
     ToggleRequested,
     PanelResizeDragStarted,
+    TabAddRequested,
+    TabPressed(SessionId),
+    TabCloseRequested(SessionId),
+    TabDragEntered(SessionId),
+    TabDragFinished,
     OutputReceived {
         session: SessionId,
         bytes: Vec<u8>,
@@ -78,14 +90,17 @@ pub(crate) struct TerminalPanelState {
     expanded_height: f32,
     height_animation: Option<HeightAnimation>,
     resize_drag: Option<PanelResizeDrag>,
-    pub(crate) session: Option<TerminalSession>,
+    pub(crate) tabs: Vec<TerminalTab>,
+    pub(crate) active_session_id: Option<SessionId>,
     next_session_id: SessionId,
     /// 终端网格持有键盘焦点(点击面板获得;点击地址栏等输入会话自动让路)。
     pub(crate) focused: bool,
     /// 鼠标左键拖动选区进行中。
     selection_drag_active: bool,
-    /// 已同步给 shell 的目录;None 表示待同步(新会话或刚展开)。
-    followed_directory: Option<PathBuf>,
+    /// 文件区跟随目标的上次快照;None 表示下次检查必须重新同步(刚展开/收起过)。
+    follow_target_snapshot: Option<PathBuf>,
+    pub(crate) tab_drag: Option<tabs::TerminalTabDrag>,
+    pub(crate) tab_shift_animations: HashMap<SessionId, tabs::TabShiftAnimation>,
 }
 
 impl TerminalPanelState {
@@ -96,11 +111,14 @@ impl TerminalPanelState {
             expanded_height: DEFAULT_PANEL_HEIGHT,
             height_animation: None,
             resize_drag: None,
-            session: None,
+            tabs: Vec::new(),
+            active_session_id: None,
             next_session_id: 1,
             focused: false,
             selection_drag_active: false,
-            followed_directory: None,
+            follow_target_snapshot: None,
+            tab_drag: None,
+            tab_shift_animations: HashMap::new(),
         }
     }
 
@@ -109,11 +127,24 @@ impl TerminalPanelState {
     }
 
     pub(crate) fn is_animating(&self) -> bool {
-        self.height_animation.is_some() || self.resize_drag.is_some()
+        self.height_animation.is_some() || self.resize_drag.is_some() || !self.tab_shift_animations.is_empty()
     }
 
     pub(crate) fn is_focused(&self) -> bool {
-        self.expanded && self.focused && self.session.is_some()
+        self.expanded && self.focused && self.active_session_id.is_some()
+    }
+
+    pub(crate) fn active_tab(&self) -> Option<&TerminalTab> {
+        self.tabs
+            .iter()
+            .find(|tab| Some(tab.session.id) == self.active_session_id)
+    }
+
+    pub(crate) fn active_tab_mut(&mut self) -> Option<&mut TerminalTab> {
+        let active_session_id = self.active_session_id;
+        self.tabs
+            .iter_mut()
+            .find(|tab| Some(tab.session.id) == active_session_id)
     }
 
     fn start_height_animation(&mut self, target: f32) {
@@ -132,7 +163,7 @@ impl TerminalPanelState {
 }
 
 impl FileBrowser {
-    /// 快捷键语义:开着就彻底关闭(杀 shell),关着就新开。
+    /// 快捷键语义:开着就彻底关闭(杀掉全部标签的 shell),关着就新开。
     pub(crate) fn toggle_terminal_via_shortcut(&mut self) -> Task<Message> {
         if self.terminal_panel.expanded {
             self.close_terminal_panel()
@@ -141,14 +172,17 @@ impl FileBrowser {
         }
     }
 
-    /// 彻底关闭终端:终止 shell 会话并收起面板。
+    /// 彻底关闭终端:终止所有标签的 shell 并收起面板。
     pub(crate) fn close_terminal_panel(&mut self) -> Task<Message> {
         self.terminal_panel.expanded = false;
         self.terminal_panel.focused = false;
-        self.terminal_panel.followed_directory = None;
-        if let Some(mut session) = self.terminal_panel.session.take() {
-            session.terminate();
+        self.terminal_panel.follow_target_snapshot = None;
+        self.terminal_panel.tab_drag = None;
+        self.terminal_panel.tab_shift_animations.clear();
+        for mut tab in self.terminal_panel.tabs.drain(..) {
+            tab.session.terminate();
         }
+        self.terminal_panel.active_session_id = None;
         self.terminal_panel.start_height_animation(COLLAPSED_HEIGHT);
         Task::none()
     }
@@ -160,46 +194,23 @@ impl FileBrowser {
             self.terminal_panel
                 .start_height_animation(COLLAPSED_HEIGHT);
         } else {
-            self.terminal_panel.expanded = true;
-            self.terminal_panel.focused = true;
             let target = self.terminal_panel.clamp_height_for_window(
                 self.terminal_panel.expanded_height,
                 self.main_window_height,
             );
             self.terminal_panel.expanded_height = target;
-            if self.terminal_panel.session.is_none() {
-                self.spawn_terminal_session_for_active_directory(target);
+            self.terminal_panel.focused = true;
+            if self.terminal_panel.tabs.is_empty() {
+                let directory = self.terminal_panel_spawn_directory();
+                if !self.spawn_terminal_tab_in_directory(directory, target) {
+                    self.terminal_panel.expanded = false;
+                    return Task::none();
+                }
             }
+            self.terminal_panel.expanded = true;
             self.terminal_panel.start_height_animation(target);
         }
         Task::none()
-    }
-
-    /// 在活动窗格的目录里拉起新 shell。失败时面板保持收起。
-    fn spawn_terminal_session_for_active_directory(&mut self, height: f32) {
-        let cwd = self.terminal_panel_spawn_directory();
-        let columns = self.terminal_panel_grid_columns();
-        let rows = terminal_panel_grid_rows(height);
-        let shell = self.terminal_panel_shell();
-        let session_id = self.terminal_panel.next_session_id;
-        self.terminal_panel.next_session_id += 1;
-
-        match session::spawn_terminal_session(
-            session_id,
-            &shell,
-            &cwd,
-            emulator_dimensions(columns, rows),
-        ) {
-            Ok(spawned) => {
-                // 新 shell 已在目标目录,避免紧接着再注入一次 cd。
-                self.terminal_panel.followed_directory = Some(cwd);
-                self.terminal_panel.session = Some(spawned);
-            }
-            Err(error) => {
-                self.terminal_panel.expanded = false;
-                tracing::error!("内嵌终端启动失败: {error}");
-            }
-        }
     }
 
     /// 终端跟随的目标目录:多栏视图取鼠标悬停的栏,其余视图取活动窗格目录。
@@ -216,26 +227,27 @@ impl FileBrowser {
         self.pointer_hovered_column_directory()
     }
 
-    /// 活动窗格目录变化时向 shell 注入 cd;前进/后退/侧边栏跳转统一跟随。
-    /// 仅在面板展开时注入,避免惊动收起状态下后台会话里的前台程序。
+    /// 活动窗格目录变化时向**激活标签**的 shell 注入 cd;前进/后退/侧边栏跳转统一跟随。
+    /// 切换标签不注入:各标签保住自己的目录,否则每个标签都会被拉回文件区目录。
+    /// 快照在面板收起时清空,让下次展开立即同步一次。
     pub(crate) fn follow_terminal_panel_directory(&mut self) {
         let Some(directory) = self.terminal_panel_follow_target() else {
             return;
         };
-        if self.terminal_panel.followed_directory.as_ref() == Some(&directory) {
-            return;
-        }
         if !self.terminal_panel.expanded {
-            // 展开前不注入,但清掉旧记录,让下次展开时立即跟随。
-            self.terminal_panel.followed_directory = None;
+            self.terminal_panel.follow_target_snapshot = None;
             return;
         }
-        let Some(session) = self.terminal_panel.session.as_mut() else {
+        if self.terminal_panel.follow_target_snapshot.as_ref() == Some(&directory) {
+            return;
+        }
+        self.terminal_panel.follow_target_snapshot = Some(directory.clone());
+        let Some(active_tab) = self.terminal_panel.active_tab_mut() else {
             return;
         };
-        self.terminal_panel.followed_directory = Some(directory.clone());
+        active_tab.directory = directory.clone();
         let quoted = directory.to_string_lossy().replace('\'', "'\\''");
-        session.write_input(format!("cd -- '{quoted}'\r").as_bytes());
+        active_tab.session.write_input(format!("cd -- '{quoted}'\r").as_bytes());
     }
 
     /// 点击终端抽屉以外的区域时把键盘焦点还给文件区;
@@ -251,8 +263,8 @@ impl FileBrowser {
         };
         if self.cursor_position.y < drawer_top {
             self.terminal_panel.focused = false;
-            if let Some(session) = self.terminal_panel.session.as_mut() {
-                session.emulator.clear_selection();
+            if let Some(active_tab) = self.terminal_panel.active_tab_mut() {
+                active_tab.session.emulator.clear_selection();
             }
         }
     }
@@ -282,17 +294,17 @@ impl FileBrowser {
         ((width / view::CELL_WIDTH).floor() as usize).max(2)
     }
 
-    /// 面板高度稳定后把新尺寸同步给 PTY;动画期间跳过,结束时再收敛。
+    /// 面板高度稳定后把新尺寸同步给所有 PTY;动画期间跳过,结束时再收敛。
+    /// 后台标签保持同尺寸,避免切回时内容按旧宽度折行。
     pub(crate) fn sync_terminal_panel_size(&mut self) {
         if !self.terminal_panel.expanded {
             return;
         }
-        let rows = terminal_panel_grid_rows(self.terminal_panel.height.max(MIN_PANEL_HEIGHT));
+        let rows = terminal_panel_canvas_rows(self.terminal_panel.height.max(MIN_PANEL_HEIGHT));
         let columns = self.terminal_panel_grid_columns();
-        let Some(session) = self.terminal_panel.session.as_mut() else {
-            return;
-        };
-        session.resize(emulator_dimensions(columns, rows));
+        for tab in &mut self.terminal_panel.tabs {
+            tab.session.resize(emulator_dimensions(columns, rows));
+        }
     }
 
     /// 高度动画推进;由 [`FileBrowser::advance_window_animation_frame`] 驱动。
@@ -343,10 +355,11 @@ impl FileBrowser {
         });
     }
 
-    /// 全局左键释放:结束拖拽调高与选区拖动。
+    /// 全局左键释放:结束拖拽调高、选区拖动与标签拖拽。
     pub(crate) fn finish_terminal_panel_pointer_interaction(&mut self) {
         self.terminal_panel.resize_drag = None;
         self.terminal_panel.selection_drag_active = false;
+        self.finish_terminal_tab_drag();
     }
 
     pub(crate) fn handle_terminal_panel_message(
@@ -358,62 +371,73 @@ impl FileBrowser {
             TerminalPanelMessage::PanelResizeDragStarted => {
                 self.start_terminal_panel_resize_drag();
             }
+            TerminalPanelMessage::TabAddRequested => return self.add_terminal_tab(),
+            TerminalPanelMessage::TabPressed(session_id) => {
+                self.start_terminal_tab_drag(session_id);
+            }
+            TerminalPanelMessage::TabCloseRequested(session_id) => {
+                return self.close_terminal_tab(session_id);
+            }
+            TerminalPanelMessage::TabDragEntered(session_id) => {
+                self.reorder_terminal_tab_dragged(session_id);
+            }
+            TerminalPanelMessage::TabDragFinished => {
+                self.finish_terminal_tab_drag();
+            }
             TerminalPanelMessage::OutputReceived { session, bytes } => {
-                if let Some(active) = &mut self.terminal_panel.session {
-                    if active.id == session {
-                        active.emulator.feed(&bytes);
+                let active_session_id = self.terminal_panel.active_session_id;
+                if let Some(tab) = self
+                    .terminal_panel
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.session.id == session)
+                {
+                    tab.session.emulator.feed(&bytes);
+                    if active_session_id != Some(session) {
+                        tab.has_unread_output = true;
                     }
                 }
             }
             TerminalPanelMessage::ProcessExited { session } => {
-                if let Some(active) = &mut self.terminal_panel.session {
-                    if active.id == session {
-                        active.mark_exited();
-                        self.terminal_panel.session = None;
-                        self.terminal_panel.focused = false;
-                        if self.terminal_panel.expanded {
-                            self.terminal_panel.expanded = false;
-                            self.terminal_panel
-                                .start_height_animation(COLLAPSED_HEIGHT);
-                        }
-                    }
-                }
+                return self.close_terminal_tab(session);
             }
             TerminalPanelMessage::GridPressed { position } => {
                 self.terminal_panel.focused = true;
                 self.terminal_panel.selection_drag_active = true;
-                if let Some(session) = &mut self.terminal_panel.session {
+                if let Some(active_tab) = self.terminal_panel.active_tab_mut() {
                     let (row, column) =
                         view::grid_cell_for_position(position);
-                    session.emulator.clear_selection();
-                    session.emulator.begin_selection(row, column);
+                    active_tab.session.emulator.clear_selection();
+                    active_tab.session.emulator.begin_selection(row, column);
                 }
             }
             TerminalPanelMessage::GridDragged { position } => {
                 if self.terminal_panel.selection_drag_active {
-                    if let Some(session) = &mut self.terminal_panel.session {
+                    if let Some(active_tab) = self.terminal_panel.active_tab_mut() {
                         let (row, column) =
                             view::grid_cell_for_position(position);
-                        session.emulator.extend_selection(row, column);
+                        active_tab.session.emulator.extend_selection(row, column);
                     }
                 }
             }
             TerminalPanelMessage::GridWheelScrolled { lines } => {
-                if let Some(session) = &mut self.terminal_panel.session {
-                    session.emulator.scroll_display(lines);
+                if let Some(active_tab) = self.terminal_panel.active_tab_mut() {
+                    active_tab.session.emulator.scroll_display(lines);
                 }
             }
             TerminalPanelMessage::CopySelectionRequested => {
-                if let Some(session) = &self.terminal_panel.session {
-                    if let Some(text) = session.emulator.selection_string() {
+                if let Some(active_tab) = self.terminal_panel.active_tab() {
+                    if let Some(text) = active_tab.session.emulator.selection_string() {
                         return iced::clipboard::write::<Message>(text);
                     }
                 }
             }
             TerminalPanelMessage::PasteReceived(text) => {
                 if let Some(text) = text {
-                    if let Some(session) = &self.terminal_panel.session {
-                        session.write_input(text.replace("\r\n", "\r").as_bytes());
+                    if let Some(active_tab) = self.terminal_panel.active_tab() {
+                        active_tab
+                            .session
+                            .write_input(text.replace("\r\n", "\r").as_bytes());
                     }
                 }
             }
@@ -434,9 +458,16 @@ impl FileBrowser {
             return None;
         }
 
-        // 宿主保留键:开关面板、复制、粘贴。
-        if self.shortcut_config().matching_action(key, modifiers) == Some(crate::shortcuts::ShortcutAction::ToggleTerminal) {
-            return Some(self.toggle_terminal_via_shortcut());
+        // 宿主保留键:开关面板、新建/关闭标签、复制、粘贴。
+        match self.shortcut_config().matching_action(key, modifiers) {
+            Some(ShortcutAction::ToggleTerminal) => {
+                return Some(self.toggle_terminal_via_shortcut());
+            }
+            Some(ShortcutAction::TerminalNewTab) => return Some(self.add_terminal_tab()),
+            Some(ShortcutAction::TerminalCloseTab) => {
+                return Some(self.close_active_terminal_tab_via_shortcut());
+            }
+            _ => {}
         }
         if modifiers.control() && modifiers.shift() {
             match key.as_ref() {
@@ -454,20 +485,20 @@ impl FileBrowser {
             }
         }
 
-        let Some(session) = self.terminal_panel.session.as_mut() else {
+        let Some(active_tab) = self.terminal_panel.active_tab_mut() else {
             return None;
         };
         let input = input::input_for_key(key, modifiers);
         match input {
             input::TerminalInput::None => {
                 // 无修饰翻页键属于本地回看。
-                let rows = session.emulator.dimensions().screen_lines as i32;
+                let rows = active_tab.session.emulator.dimensions().screen_lines as i32;
                 match key.as_ref() {
                     iced::keyboard::Key::Named(iced::keyboard::key::Named::PageUp) => {
-                        session.emulator.scroll_display(rows / 2);
+                        active_tab.session.emulator.scroll_display(rows / 2);
                     }
                     iced::keyboard::Key::Named(iced::keyboard::key::Named::PageDown) => {
-                        session.emulator.scroll_display(-(rows / 2));
+                        active_tab.session.emulator.scroll_display(-(rows / 2));
                     }
                     _ => {}
                 }
@@ -475,25 +506,32 @@ impl FileBrowser {
             other => {
                 let bytes = other.into_bytes();
                 if !bytes.is_empty() {
-                    session.write_input(&bytes);
+                    active_tab.session.write_input(&bytes);
                 }
             }
         }
         Some(Task::none())
     }
 
-    /// 终端面板的输出订阅;无会话时为空。同一会话重订阅时克隆读端继续读;
-    /// 运行时按 session_id 去重,重复构造的 recipe(连同其读端)会被丢弃。
+    /// 终端面板的输出订阅;每个标签一份,后台标签持续积累输出。
+    /// 同一会话重订阅时克隆读端继续读;运行时按 session_id 去重,
+    /// 重复构造的 recipe(连同其读端)会被丢弃。
     pub(crate) fn terminal_output_subscription(&self) -> iced::Subscription<Message> {
-        let Some(active) = &self.terminal_panel.session else {
+        if self.terminal_panel.tabs.is_empty() {
             return iced::Subscription::none();
-        };
-        let session_id = active.id;
-        let Ok(reader) = active.clone_reader() else {
-            tracing::error!("内嵌终端输出订阅失败: 读端不可用");
-            return iced::Subscription::none();
-        };
-        subscription::from_recipe(TerminalOutputRecipe { session_id, reader })
+        }
+        let mut recipes = Vec::with_capacity(self.terminal_panel.tabs.len());
+        for tab in &self.terminal_panel.tabs {
+            let Ok(reader) = tab.session.clone_reader() else {
+                tracing::error!("内嵌终端输出订阅失败: 读端不可用");
+                continue;
+            };
+            recipes.push(subscription::from_recipe(TerminalOutputRecipe {
+                session_id: tab.session.id,
+                reader,
+            }));
+        }
+        iced::Subscription::batch(recipes)
     }
 }
 
@@ -520,11 +558,16 @@ impl Recipe for TerminalOutputRecipe {
     }
 }
 
-fn terminal_panel_grid_rows(height: f32) -> usize {
+pub(crate) fn terminal_panel_grid_rows(height: f32) -> usize {
     ((height / view::CELL_HEIGHT).floor() as usize).max(2)
 }
 
-fn emulator_dimensions(columns: usize, rows: usize) -> emulator::TerminalDimensions {
+/// 面板高度 → PTY 行数:按去掉手柄与标签条后的画布高度换算。
+pub(crate) fn terminal_panel_canvas_rows(height: f32) -> usize {
+    terminal_panel_grid_rows(view::canvas_height_for_panel(height))
+}
+
+pub(crate) fn emulator_dimensions(columns: usize, rows: usize) -> emulator::TerminalDimensions {
     emulator::TerminalDimensions {
         columns,
         screen_lines: rows,
@@ -549,6 +592,8 @@ mod tests {
         let panel = state();
         assert_eq!(panel.height(), 0.0);
         assert!(!panel.is_focused());
+        assert!(panel.tabs.is_empty());
+        assert!(panel.active_tab().is_none());
     }
 
     #[test]
