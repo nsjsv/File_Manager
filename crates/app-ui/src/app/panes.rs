@@ -122,14 +122,20 @@ impl FileBrowser {
         self.pane_layout.active()
     }
 
+    /// 窗格区的窗口 y 起点:全窗工具栏顶栏横贯后,窗格从它下方开始。
+    fn main_panes_area_top(&self) -> f32 {
+        crate::model::MAIN_TOOLBAR_ROW_HEIGHT
+    }
+
     pub(super) fn pane_id_at_position(&self, position: Point) -> Option<BrowserPaneId> {
         let sidebar_width = self.sidebar_width;
         let content_width = self.split_content_width();
-        let content_height = self.main_window_height.max(1.0);
+        let panes_top = self.main_panes_area_top();
+        let content_height = (self.main_window_height - panes_top).max(1.0);
         if position.x < sidebar_width
             || position.x > sidebar_width + content_width
-            || position.y < 0.0
-            || position.y > content_height
+            || position.y < panes_top
+            || position.y > panes_top + content_height
         {
             return None;
         }
@@ -156,7 +162,7 @@ impl FileBrowser {
                 second,
                 ..
             } => {
-                let boundary = self.pane_layout.split_divider_center(content_height);
+                let boundary = panes_top + self.pane_layout.split_divider_center(content_height);
                 if position.y < boundary {
                     Some(first)
                 } else {
@@ -361,29 +367,30 @@ impl FileBrowser {
         }
         let target = drag.split_target?;
         let content_width = self.split_content_width();
-        let content_height = self.main_window_height.max(1.0);
+        let panes_top = self.main_panes_area_top();
+        let content_height = (self.main_window_height - panes_top).max(1.0);
         let sidebar_width = self.sidebar_width;
         let half_width = content_width / 2.0;
         let half_height = content_height / 2.0;
 
         let bounds = match target.region {
             SplitRegion::Left => SplitOverlayBounds {
-                top_left: Point::new(sidebar_width, 0.0),
+                top_left: Point::new(sidebar_width, panes_top),
                 width: half_width,
                 height: content_height,
             },
             SplitRegion::Right => SplitOverlayBounds {
-                top_left: Point::new(sidebar_width + half_width, 0.0),
+                top_left: Point::new(sidebar_width + half_width, panes_top),
                 width: half_width,
                 height: content_height,
             },
             SplitRegion::Top => SplitOverlayBounds {
-                top_left: Point::new(sidebar_width, 0.0),
+                top_left: Point::new(sidebar_width, panes_top),
                 width: content_width,
                 height: half_height,
             },
             SplitRegion::Bottom => SplitOverlayBounds {
-                top_left: Point::new(sidebar_width, half_height),
+                top_left: Point::new(sidebar_width, panes_top + half_height),
                 width: content_width,
                 height: half_height,
             },

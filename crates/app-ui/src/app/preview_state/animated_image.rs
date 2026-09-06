@@ -5,6 +5,7 @@ use iced::Task;
 
 use crate::animated_image_preview::{AnimatedImageFrame, AnimatedImagePreview};
 use crate::app::FileBrowser;
+use crate::app::right_preview_panel::PreviewLoadSurface;
 use crate::model::{Message, PreviewContent, PreviewState};
 
 impl FileBrowser {
@@ -52,14 +53,23 @@ impl FileBrowser {
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Ready(PreviewContent::AnimatedImage(preview)));
                 self.clear_global_error();
-                self.open_animated_image_preview_window_for_dimensions(width, height)
+                // 窗口尺寸跟随内容只归独立窗口会话;面板按面板视口适配。
+                if self.preview_load_surface == PreviewLoadSurface::StandaloneWindow {
+                    self.open_animated_image_preview_window_for_dimensions(width, height)
+                } else {
+                    Task::none()
+                }
             }
             Err(error) => {
                 self.text_preview_document = None;
                 self.clear_audio_preview();
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Error(error));
-                self.open_image_preview_error_window()
+                if self.preview_load_surface == PreviewLoadSurface::StandaloneWindow {
+                    self.open_image_preview_error_window()
+                } else {
+                    Task::none()
+                }
             }
         }
     }
@@ -132,7 +142,10 @@ impl FileBrowser {
         }
 
         self.preview = Some(PreviewState::Error(error));
-        self.open_image_preview_error_window()
+        if self.preview_load_surface == PreviewLoadSurface::StandaloneWindow {
+            return self.open_image_preview_error_window();
+        }
+        Task::none()
     }
 
     pub(in crate::app) fn seek_animated_image_preview(

@@ -10,9 +10,8 @@ use crate::appearance::{
 use crate::icons::IconSymbol;
 use crate::matugen_theme::ui_colors;
 use crate::model::{
-    BrowserPaneId, BrowserPaneLayout, Message, PreviewWindowChromeState, SplitAxis,
-    WindowChromeLayout, WindowControlKind, WindowControlSide, WindowControlsConfig,
-    WindowFrameState, WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT,
+    Message, PreviewWindowChromeState, WindowChromeLayout, WindowControlKind, WindowControlSide,
+    WindowControlsConfig, WindowFrameState, WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT,
 };
 
 use super::{themed_icon, window_drag_region::window_drag_region, IconTone};
@@ -37,46 +36,31 @@ pub(crate) enum PaneNavigationLayout {
     StackedRows,
 }
 
-pub(crate) fn pane_navigation_layout(
-    main_window_width: f32,
-    sidebar_width: f32,
-    pane_layout: BrowserPaneLayout,
-    pane_id: BrowserPaneId,
-) -> PaneNavigationLayout {
-    let browser_width = (main_window_width - sidebar_width).max(1.0);
-    let pane_width = match pane_layout {
-        BrowserPaneLayout::Split {
-            axis: SplitAxis::Horizontal,
-            ..
-        } => pane_layout.pane_extent(pane_id, browser_width),
-        BrowserPaneLayout::Single { .. }
-        | BrowserPaneLayout::Split {
-            axis: SplitAxis::Vertical,
-            ..
-        } => browser_width,
-    };
-    if pane_width < STACKED_PANE_NAVIGATION_MAX_WIDTH {
+pub(crate) fn pane_navigation_layout(main_window_width: f32) -> PaneNavigationLayout {
+    // 工具栏横贯整个窗口宽度,侧栏与预览面板都在它下方,不再参与
+    // 宽度预算;只有窗口本身过窄时才折行。
+    if main_window_width < STACKED_PANE_NAVIGATION_MAX_WIDTH {
         PaneNavigationLayout::StackedRows
     } else {
         PaneNavigationLayout::SingleRow
     }
 }
 
+/// 全窗顶栏的 chrome 形态:集成导航时顶栏两端承载窗口控制并作为
+/// 拖拽区;独立标题栏布局下控制归标题栏,顶栏只承载工具栏本体。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MainPaneWindowChromeRole {
     Complete,
-    LeftControls,
-    RightControls,
     NoChrome,
 }
 
 impl MainPaneWindowChromeRole {
     pub(crate) fn shows_left_controls(self) -> bool {
-        matches!(self, Self::Complete | Self::LeftControls)
+        matches!(self, Self::Complete)
     }
 
     pub(crate) fn shows_right_controls(self) -> bool {
-        matches!(self, Self::Complete | Self::RightControls)
+        matches!(self, Self::Complete)
     }
 
     pub(crate) fn owns_window_drag_region(self) -> bool {
@@ -84,34 +68,6 @@ impl MainPaneWindowChromeRole {
     }
 }
 
-pub(crate) fn main_pane_window_chrome_role(
-    layout: BrowserPaneLayout,
-    pane_id: BrowserPaneId,
-) -> MainPaneWindowChromeRole {
-    match layout {
-        BrowserPaneLayout::Single { active } if pane_id == active => {
-            MainPaneWindowChromeRole::Complete
-        }
-        BrowserPaneLayout::Split {
-            axis: SplitAxis::Horizontal,
-            first,
-            ..
-        } if pane_id == first => MainPaneWindowChromeRole::LeftControls,
-        BrowserPaneLayout::Split {
-            axis: SplitAxis::Horizontal,
-            second,
-            ..
-        } if pane_id == second => MainPaneWindowChromeRole::RightControls,
-        BrowserPaneLayout::Split {
-            axis: SplitAxis::Vertical,
-            first,
-            ..
-        } if pane_id == first => MainPaneWindowChromeRole::Complete,
-        BrowserPaneLayout::Single { .. } | BrowserPaneLayout::Split { .. } => {
-            MainPaneWindowChromeRole::NoChrome
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 enum WindowControlPresentation {
@@ -659,56 +615,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_navigation_stacks_only_when_each_pane_is_narrow() {
-        let first = BrowserPaneId(1);
-        let second = BrowserPaneId(2);
+    fn pane_navigation_stacks_only_when_window_is_narrow() {
+        // 顶栏横贯全窗后,折行只取决于窗口自身宽度;侧栏/面板在顶栏
+        // 下方,不再参与宽度预算。
         assert_eq!(
-            pane_navigation_layout(
-                633.0,
-                170.0,
-                BrowserPaneLayout::Single { active: first },
-                first,
-            ),
+            pane_navigation_layout(499.0),
             PaneNavigationLayout::StackedRows
         );
         assert_eq!(
-            pane_navigation_layout(
-                700.0,
-                170.0,
-                BrowserPaneLayout::Single { active: first },
-                first,
-            ),
+            pane_navigation_layout(500.0),
             PaneNavigationLayout::SingleRow
-        );
-        assert_eq!(
-            pane_navigation_layout(
-                1_180.0,
-                170.0,
-                BrowserPaneLayout::Split {
-                    axis: SplitAxis::Horizontal,
-                    first,
-                    second,
-                    active: first,
-                    first_portion: 500,
-                },
-                first,
-            ),
-            PaneNavigationLayout::SingleRow
-        );
-        assert_eq!(
-            pane_navigation_layout(
-                900.0,
-                170.0,
-                BrowserPaneLayout::Split {
-                    axis: SplitAxis::Horizontal,
-                    first,
-                    second,
-                    active: first,
-                    first_portion: 500,
-                },
-                first,
-            ),
-            PaneNavigationLayout::StackedRows
         );
     }
 }

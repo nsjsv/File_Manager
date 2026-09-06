@@ -17,6 +17,7 @@ mod preview_panel;
 mod preview_settings;
 mod properties_window;
 mod rendering_settings;
+mod right_preview_panel;
 mod search_panel;
 mod search_settings;
 mod settings_group;
@@ -36,8 +37,8 @@ mod window_control_settings;
 mod window_drag_region;
 
 pub(crate) use window_chrome::{
-    auxiliary_window_content, floating_preview_window_content, main_pane_window_chrome_role,
-    separate_window_content, window_resize_frame, MainPaneWindowChromeRole,
+    auxiliary_window_content, floating_preview_window_content, separate_window_content,
+    window_resize_frame, MainPaneWindowChromeRole,
 };
 
 pub(crate) use address_bar::address_input_id;
@@ -95,10 +96,13 @@ use floating_panels::{
     file_drop_operation_panel, open_with_panel,
 };
 use rendering_settings::renderer_restart_notice_panel;
+use right_preview_panel::right_preview_panel;
 use search_panel::{search_input_panel, search_results_view};
 use sidebar_panel::sidebar_view;
 use tab_bar::tab_bar;
-use toolbar_controls::{navigation_button_group, view_mode_button_group};
+use toolbar_controls::{
+    navigation_button_group, right_preview_panel_toggle_button, view_mode_button_group,
+};
 use transfer_conflict::transfer_conflict_panel;
 use window_chrome::{pane_navigation_layout, window_control_group, PaneNavigationLayout};
 use window_drag_region::window_drag_region;
@@ -168,16 +172,25 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     // 终端抽屉横贯窗宽、位于层叠底部,侧边栏卡片盖在其上(始终最上层);
     // 抽屉左侧被卡片遮住,可见部分自然从边栏延伸到窗口右缘。
+    // 右侧预览面板按需挂在窗格 row 尾部,panes_view 以 Fill 收窄让位。
+    let mut pane_row = Row::new()
+        .push(Space::new().width(Length::Fixed(browser.sidebar_width)))
+        .push(
+            container(panes_view(browser))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        );
+    // 面板开启才挂进 row;关闭时只有侧栏占位与窗格两项,布局与现状一致。
+    if browser.right_preview_panel_open {
+        pane_row = pane_row.push(right_preview_panel(browser));
+    }
+    let pane_row = pane_row.width(Length::Fill).height(Length::Fill);
+    // 工具栏横贯整个窗口宽度,侧栏/窗格/预览面板都从它下方开始;
+    // 窗口控制在顶栏两端,任何区域都不再把三大键挤离窗口右上角。
     let pane_layer: Element<'_, Message> = container(
         iced::widget::column![
-            row![
-                Space::new().width(Length::Fixed(browser.sidebar_width)),
-                container(panes_view(browser))
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill),
+            main_window_top_bar(browser),
+            pane_row,
             crate::terminal_panel::view::terminal_panel_area(browser),
         ]
         .width(Length::Fill)
@@ -187,7 +200,16 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     .height(Length::Fill)
     .style(app_content_style)
     .into();
-    let content: Element<'_, Message> = stack([pane_layer, opaque(sidebar_view(browser))])
+    // 侧栏浮层从顶栏下方开始,不再遮挡工具栏。包裹容器必须保持内容
+    // 尺寸(定宽侧栏条):opaque 层在其整个 bounds 内捕获鼠标按下,
+    // 一旦撑满全窗,侧栏以外的整个界面都会点击失效。
+    let sidebar_overlay: Element<'_, Message> = container(sidebar_view(browser)).padding(
+        iced::Padding {
+            top: crate::model::MAIN_TOOLBAR_ROW_HEIGHT,
+            ..iced::Padding::ZERO
+        },
+    ).into();
+    let content: Element<'_, Message> = stack([pane_layer, opaque(sidebar_overlay)])
         .width(Length::Fill)
         .height(Length::Fill)
         .into();
@@ -490,28 +512,41 @@ fn split_resize_divider(axis: SplitAxis) -> Element<'static, Message> {
         .into()
 }
 
+/// 全窗工具栏顶栏:窗口控制居两端,导航/地址栏/搜索/视图切换/预览
+/// 开关取自活动窗格。集成导航布局时整条是窗口拖拽区;独立标题栏
+/// 布局时控制归标题栏,顶栏只承载工具栏本体。
+fn main_window_top_bar<'a>(browser: &'a FileBrowser) -> Element<'a, Message> {
+    let chrome_role = match browser.user_config().window_controls.layout() {
+        WindowChromeLayout::IntegratedNavigation => MainPaneWindowChromeRole::Complete,
+        WindowChromeLayout::SeparateTitleBar => MainPaneWindowChromeRole::NoChrome,
+    };
+    let Some(pane) = browser.pane_view(browser.active_pane_id()) else {
+        return Space::new()
+            .width(Length::Fill)
+            .height(Length::Fixed(crate::model::MAIN_TOOLBAR_ROW_HEIGHT))
+            .into();
+    };
+    let main_window = browser.main_window_id();
+    let navigation_content = pane_navigation_content(browser, pane, chrome_role);
+    // 高度钉死为共享常量:侧栏/窗格几何的偏移量取同一值,保证不漂移。
+    let bar_content: Element<'_, Message> = container(navigation_content)
+        .padding(18)
+        .width(Length::Fill)
+        .height(Length::Fixed(crate::model::MAIN_TOOLBAR_ROW_HEIGHT))
+        .into();
+    if chrome_role.owns_window_drag_region() {
+        window_drag_region(bar_content, main_window)
+    } else {
+        bar_content
+    }
+}
+
 fn pane_view(browser: &FileBrowser, pane_id: BrowserPaneId) -> Element<'_, Message> {
     let Some(pane) = browser.pane_view(pane_id) else {
         return Space::new().width(Length::Fill).height(Length::Fill).into();
     };
-    let chrome_role = match browser.user_config().window_controls.layout() {
-        WindowChromeLayout::IntegratedNavigation => {
-            main_pane_window_chrome_role(browser.pane_layout, pane_id)
-        }
-        WindowChromeLayout::SeparateTitleBar => MainPaneWindowChromeRole::NoChrome,
-    };
-    let main_window = browser.main_window_id();
-    let navigation_content = pane_navigation_content(browser, pane, chrome_role);
-    let header_content: Element<'_, Message> = container(navigation_content)
-        .padding(18)
-        .width(Length::Fill)
-        .into();
-    let header_content = if chrome_role.owns_window_drag_region() {
-        window_drag_region(header_content, main_window)
-    } else {
-        header_content
-    };
-    let mut main_content = Column::new().spacing(0).push(header_content);
+    // 工具栏已上移为全窗顶栏,窗格本体从 tab 条/内容开始。
+    let mut main_content = Column::new().spacing(0);
     if pane.tab_bar_should_occupy_layout() {
         main_content = main_content.push(tab_bar(browser, pane));
     }
@@ -542,12 +577,7 @@ fn pane_navigation_content<'a>(
     pane: BrowserPaneView<'a>,
     chrome_role: MainPaneWindowChromeRole,
 ) -> Element<'a, Message> {
-    match pane_navigation_layout(
-        browser.main_window_width,
-        browser.sidebar_width,
-        browser.pane_layout,
-        pane.id,
-    ) {
+    match pane_navigation_layout(browser.main_window_width) {
         PaneNavigationLayout::SingleRow => {
             let navigation = Row::new()
                 .spacing(8)
@@ -562,9 +592,10 @@ fn pane_navigation_content<'a>(
             .push(navigation_button_group(pane.id))
             .push(address_bar(browser, pane))
             .push(search_input_panel(browser))
-            .push(view_mode_button_group(pane));
-            push_pane_window_controls(navigation, browser, chrome_role, WindowControlSide::Right)
-                .into()
+            .push(view_mode_button_group(pane))
+            .push(right_preview_panel_toggle_button(browser.right_preview_panel_open));
+        push_pane_window_controls(navigation, browser, chrome_role, WindowControlSide::Right)
+            .into()
         }
         PaneNavigationLayout::StackedRows => {
             let control_row = Row::new()
@@ -591,6 +622,7 @@ fn pane_navigation_content<'a>(
                 .push(address_bar(browser, pane))
                 .push(search_input_panel(browser))
                 .push(view_mode_button_group(pane))
+                .push(right_preview_panel_toggle_button(browser.right_preview_panel_open))
                 .width(Length::Fill);
             Column::new()
                 .spacing(8)

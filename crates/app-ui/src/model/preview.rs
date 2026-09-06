@@ -329,6 +329,21 @@ pub(crate) struct PreviewSize {
     pub(crate) height: f32,
 }
 
+/// 右侧面板信息区的单条目元数据快照:按目标路径异步读自文件系统,
+/// 与目录列表快照解耦(列视图深层选中、搜索结果同样有完整元数据)。
+#[derive(Debug, Clone)]
+pub(crate) struct RightPreviewPanelInfoSnapshot {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) kind: file_core::FileKind,
+    pub(crate) type_label: String,
+    pub(crate) name: std::ffi::OsString,
+    pub(crate) location: std::path::PathBuf,
+    pub(crate) size_bytes: u64,
+    pub(crate) created: Option<std::time::SystemTime>,
+    pub(crate) modified: Option<std::time::SystemTime>,
+    pub(crate) accessed: Option<std::time::SystemTime>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreviewWindowProfile {
     Regular,

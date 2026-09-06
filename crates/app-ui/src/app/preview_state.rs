@@ -5,6 +5,7 @@ use iced::widget::image;
 use iced::Task;
 
 use super::FileBrowser;
+use super::right_preview_panel::PreviewLoadSurface;
 use crate::commands::{
     start_audio_preview_command, start_video_preview_audio_command, video_preview_frame_command,
     video_preview_metadata_command,
@@ -110,11 +111,8 @@ impl FileBrowser {
                 self.clear_audio_preview();
                 self.clear_video_preview();
                 self.preview = Some(PreviewState::Error(error));
-                if self.preview_window.is_none() {
-                    self.ensure_preview_window(PreviewWindowProfile::Video)
-                } else {
-                    Task::none()
-                }
+                // 面板会话不弹独立窗口;错误态直接呈现在面板里。
+                self.ensure_preview_window_for_standalone_load(PreviewWindowProfile::Video)
             }
         }
     }
@@ -140,7 +138,11 @@ impl FileBrowser {
         *current_frame = Some(video_frame.handle);
         *width = video_frame.width;
         *height = video_frame.height;
-        let resize_command = if should_resize_window {
+        // 视频帧到达时的窗口适配只归独立窗口会话;面板会话按面板视口适配,
+        // 不得弹出/缩放 Space 窗口。
+        let resize_command = if should_resize_window
+            && self.preview_load_surface == PreviewLoadSurface::StandaloneWindow
+        {
             self.fit_preview_window_to_video_frame(video_frame.width, video_frame.height)
         } else {
             Task::none()
@@ -189,8 +191,9 @@ impl FileBrowser {
 
         if self.active_video_preview_path_matches(&path) {
             self.preview = Some(PreviewState::Error(error));
-            if self.preview_window.is_none() {
-                return self.ensure_preview_window(PreviewWindowProfile::Video);
+            // 面板会话不弹独立窗口;错误态直接呈现在面板里。
+            if self.preview_load_surface == PreviewLoadSurface::StandaloneWindow {
+                return self.ensure_preview_window_for_standalone_load(PreviewWindowProfile::Video);
             }
         }
         Task::none()

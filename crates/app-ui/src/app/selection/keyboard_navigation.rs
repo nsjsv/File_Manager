@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use file_core::{is_supported_archive_path, FileKind};
 use iced::Task;
 
-use super::super::{FileBrowser, PendingKeyboardColumnFocus};
+use super::super::{
+    FileBrowser, PendingKeyboardColumnFocus, right_preview_panel::PreviewLoadSurface,
+};
 use crate::commands::{
     animated_image_preview_command, image_preview_dimensions_command,
     load_expanded_directory_command, open_file_command, open_terminal_command, preview_command,
@@ -328,19 +330,28 @@ impl FileBrowser {
         // 鼠标未悬停在文件条目上（空白处、预览窗口聚焦时）：预览开着就关闭，没开则不误开。
         if self.hovered_entry.is_none() {
             self.context_menu = None;
-            return if self.preview.is_some() {
+            return if self.standalone_preview_session_active() {
                 self.close_preview_window()
             } else {
                 Task::none()
             };
         }
-        if self.preview.is_some() && self.preview_shown_path.as_deref() == self.selected.as_deref()
+        if self.standalone_preview_session_active()
+            && self.preview_shown_path.as_deref() == self.selected.as_deref()
         {
             self.context_menu = None;
             return self.close_preview_window();
         }
 
         self.open_preview()
+    }
+
+    /// Space toggle 的不变量：独立预览窗口会话正在活跃显示。preview 会话
+    /// 状态与右侧停靠面板共享（面板会话同样置 preview 非空），单看
+    /// preview.is_some() 会把面板加载误判成“独立窗口已显示”，导致面板
+    /// 开着时按 Space 打不开独立窗口；补上窗口存在性即回到原语义。
+    fn standalone_preview_session_active(&self) -> bool {
+        self.preview_window.is_some() && self.preview.is_some()
     }
 
     pub(crate) fn open_path(&mut self, path: PathBuf) -> Task<Message> {
@@ -431,6 +442,9 @@ impl FileBrowser {
 
     fn open_preview(&mut self) -> Task<Message> {
         self.context_menu = None;
+        // 空格驱动的加载会话面向独立窗口:异步回流时窗口尺寸/聚焦动作
+        // 全部照旧;面板发起的会话经 sync_right_preview_panel 另行标注。
+        self.preview_load_surface = PreviewLoadSurface::StandaloneWindow;
         // 内部“先关后开”会复位固定状态；切换预览内容时必须保留用户设定的固定。
         let pinned = self.preview_window_pinned;
         let close_window_command = self.close_preview_window();
@@ -469,7 +483,8 @@ impl FileBrowser {
 
     /// QuickLook 式占位：不可预览类型弹预览窗口显示错误，与“文件太大”同一表现。
     fn show_unpreviewable_file_preview(&mut self) -> Task<Message> {
-        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        let window_command =
+            self.preview_window_presentation_command(PreviewWindowProfile::Regular);
         self.clear_preview();
         self.preview = Some(PreviewState::Error(
             "No preview available for this file type.".to_owned(),
@@ -500,7 +515,8 @@ impl FileBrowser {
 
         // 目录与未识别类型不走文件分类：目录预览由 load_preview 展开，
         // Symlink/Other 的错误仍由 load_preview 边界返回。
-        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        let window_command =
+            self.preview_window_presentation_command(PreviewWindowProfile::Regular);
         self.clear_preview();
         self.preview = Some(PreviewState::Loading(path.clone()));
         self.clear_global_error();
@@ -557,7 +573,8 @@ impl FileBrowser {
                 )
             }
             crate::preview::PreviewPathKind::Audio => {
-                let window_command = self.ensure_preview_window(PreviewWindowProfile::Audio);
+                let window_command =
+                    self.preview_window_presentation_command(PreviewWindowProfile::Audio);
                 self.clear_preview();
                 self.preview = Some(PreviewState::Loading(path.clone()));
                 self.clear_global_error();
@@ -579,7 +596,8 @@ impl FileBrowser {
             crate::preview::PreviewPathKind::Archive
             | crate::preview::PreviewPathKind::Sqlite
             | crate::preview::PreviewPathKind::Text => {
-                let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+                let window_command =
+                    self.preview_window_presentation_command(PreviewWindowProfile::Regular);
                 self.clear_preview();
                 self.preview = Some(PreviewState::Loading(path.clone()));
                 self.clear_global_error();
@@ -607,7 +625,8 @@ impl FileBrowser {
             return None;
         }
 
-        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        let window_command =
+            self.preview_window_presentation_command(PreviewWindowProfile::Regular);
         self.clear_preview();
         self.preview = Some(PreviewState::Error(format!(
             "File is too large to preview ({}). Maximum preview size is {}.",

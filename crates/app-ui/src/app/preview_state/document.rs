@@ -44,7 +44,8 @@ impl FileBrowser {
     }
 
     pub(in crate::app) fn start_document_preview(&mut self, path: PathBuf) -> Task<Message> {
-        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        let window_command =
+            self.preview_window_presentation_command(PreviewWindowProfile::Regular);
         self.clear_preview();
         self.document_preview_generation = self.document_preview_generation.wrapping_add(1);
         let key = DocumentPreviewRequestKey {
@@ -92,11 +93,13 @@ impl FileBrowser {
 
         match outcome {
             DocumentPrepareOutcome::Ready(prepared) => {
+                // 页面按呈现面视口排版:独立窗口用窗口尺寸,面板用面板宽度。
+                let layout_size = self.preview_document_layout_size();
                 let document = match PagedDocumentPreview::new(
                     prepared,
                     pending.cancellation,
-                    self.preview_size.width,
-                    self.preview_size.height,
+                    layout_size.width,
+                    layout_size.height,
                 ) {
                     Ok(document) => document,
                     Err(error) => {

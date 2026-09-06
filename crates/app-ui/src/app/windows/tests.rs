@@ -19,7 +19,6 @@ use crate::model::{
 };
 use crate::operation_history::FileOperationCompletion;
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
-use crate::view::{main_pane_window_chrome_role, MainPaneWindowChromeRole};
 
 const FLOAT_TOLERANCE: f32 = 0.01;
 
@@ -677,49 +676,6 @@ async fn maximized_window_does_not_start_edge_resize() {
     .await;
 
     assert!(actions.is_empty());
-}
-
-#[test]
-fn pane_layout_assigns_one_outer_window_chrome_set() {
-    let first = BrowserPaneId(1);
-    let second = BrowserPaneId(2);
-
-    assert_eq!(
-        main_pane_window_chrome_role(BrowserPaneLayout::Single { active: first }, first),
-        MainPaneWindowChromeRole::Complete
-    );
-
-    let horizontal = BrowserPaneLayout::Split {
-        axis: SplitAxis::Horizontal,
-        first,
-        second,
-        active: first,
-        first_portion: 500,
-    };
-    assert_eq!(
-        main_pane_window_chrome_role(horizontal, first),
-        MainPaneWindowChromeRole::LeftControls
-    );
-    assert_eq!(
-        main_pane_window_chrome_role(horizontal, second),
-        MainPaneWindowChromeRole::RightControls
-    );
-
-    let vertical = BrowserPaneLayout::Split {
-        axis: SplitAxis::Vertical,
-        first,
-        second,
-        active: second,
-        first_portion: 500,
-    };
-    assert_eq!(
-        main_pane_window_chrome_role(vertical, first),
-        MainPaneWindowChromeRole::Complete
-    );
-    assert_eq!(
-        main_pane_window_chrome_role(vertical, second),
-        MainPaneWindowChromeRole::NoChrome
-    );
 }
 
 #[tokio::test]

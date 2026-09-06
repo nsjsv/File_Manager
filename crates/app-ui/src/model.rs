@@ -120,6 +120,7 @@ pub(crate) use sqlite_preview::{
     SqlitePreviewTab, SqliteTableData, SqliteTableSummary, SQLITE_ROW_LIMIT,
 };
 mod preview;
+pub(crate) use preview::RightPreviewPanelInfoSnapshot;
 pub(crate) use preview::{
     image_preview_zoom_multiplier, AudioPreviewPlayback, AudioPreviewPlaybackStatus,
     ImagePreviewContent, ImagePreviewViewport, PreviewContent, PreviewImageViewportMessage,
@@ -135,7 +136,7 @@ mod window_controls;
 pub(crate) use window_controls::{
     WindowChromeLayout, WindowControlKind, WindowControlMoveDirection, WindowControlPlacement,
     WindowControlSide, WindowControlVisibility, WindowControlsConfig, WindowFrameState,
-    WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT,
+    WINDOW_TITLE_BAR_HEIGHT, WINDOW_TOP_BAR_HEIGHT, MAIN_TOOLBAR_ROW_HEIGHT,
 };
 mod application_logs;
 pub(crate) use application_logs::{
@@ -459,8 +460,15 @@ pub(crate) enum Message {
     SidebarBookmarkReleased,
     SidebarBookmarkDeleteRequested(PathBuf),
     SidebarResizeStarted,
+    RightPreviewPanelResizeStarted,
+    RightPreviewPanelRatioResizeStarted,
+    RightPreviewPanelInfoLoaded {
+        path: PathBuf,
+        snapshot: Result<Box<crate::model::preview::RightPreviewPanelInfoSnapshot>, String>,
+    },
     SqliteTablesResizeStarted,
     SplitResizeStarted,
+    ToggleRightPreviewPanel,
     CursorMoved {
         window: window::Id,
         position: Point,

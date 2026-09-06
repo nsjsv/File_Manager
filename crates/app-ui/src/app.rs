@@ -41,6 +41,7 @@ pub(crate) mod preview_state;
 mod preview_window_view;
 mod properties;
 mod remote_mounts;
+pub(crate) mod right_preview_panel;
 mod rendering_settings;
 mod runtime;
 pub(crate) mod scrollbar;
@@ -253,6 +254,13 @@ pub(crate) struct FileBrowser {
     pub(crate) sidebar_bookmark_motion: HashMap<PathBuf, SidebarBookmarkMotionState>,
     pub(crate) sidebar_width: f32,
     sidebar_resize_drag: Option<SidebarResizeDrag>,
+    pub(crate) right_preview_panel_open: bool,
+    pub(crate) right_preview_panel_width: f32,
+    right_preview_panel_resize_drag: Option<right_preview_panel::RightPreviewPanelResizeDrag>,
+    pub(crate) right_preview_preview_ratio: f32,
+    pub(crate) right_preview_panel_info: Option<crate::model::RightPreviewPanelInfoSnapshot>,
+    right_preview_ratio_resize_drag: Option<right_preview_panel::RightPreviewPanelRatioDrag>,
+    preview_load_surface: right_preview_panel::PreviewLoadSurface,
     pub(crate) renaming: Option<PathBuf>,
     pending_created_entry_rename: Option<PathBuf>,
     pub(crate) pending_operation: Option<PendingOperation>,
@@ -624,6 +632,17 @@ impl FileBrowser {
             sidebar_bookmark_motion: HashMap::new(),
             sidebar_width: user_config.sidebar_width,
             sidebar_resize_drag: None,
+            right_preview_panel_open: user_config.right_preview_panel_open,
+            right_preview_panel_width: config::normalize_right_preview_panel_width(
+                user_config.right_preview_panel_width,
+            ),
+            right_preview_panel_resize_drag: None,
+            right_preview_preview_ratio: config::normalize_right_preview_preview_ratio(
+                user_config.right_preview_preview_ratio,
+            ),
+            right_preview_panel_info: None,
+            right_preview_ratio_resize_drag: None,
+            preview_load_surface: right_preview_panel::PreviewLoadSurface::StandaloneWindow,
             renaming: None,
             pending_created_entry_rename: None,
             pending_operation: None,

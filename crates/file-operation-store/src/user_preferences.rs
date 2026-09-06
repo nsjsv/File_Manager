@@ -40,6 +40,15 @@ pub struct StoredUserPreferences {
     #[serde(default = "default_language_setting")]
     pub language_setting: String,
     pub sidebar_width: f64,
+    /// 右侧停靠预览面板开关;缺省 = 关(旧数据无此字段)。
+    #[serde(default)]
+    pub right_preview_panel_open: bool,
+    /// 右侧停靠预览面板宽度;None = 旧数据,由 app 层回退默认宽度。
+    #[serde(default)]
+    pub right_preview_panel_width: Option<f64>,
+    /// 面板内预览区高度占比;None = 旧数据,由 app 层回退默认比例。
+    #[serde(default)]
+    pub right_preview_preview_ratio: Option<f64>,
     pub sidebar_favorites: Option<Vec<StoredSidebarFavorite>>,
     pub network_connections: Vec<StoredNetworkConnection>,
     pub terminal_emulator: String,
@@ -103,6 +112,9 @@ impl Default for StoredUserPreferences {
             show_hidden_files: false,
             language_setting: default_language_setting(),
             sidebar_width: 180.0,
+            right_preview_panel_open: false,
+            right_preview_panel_width: None,
+            right_preview_preview_ratio: None,
             sidebar_favorites: None,
             network_connections: Vec::new(),
             terminal_emulator: "automatic".to_owned(),
@@ -388,5 +400,45 @@ mod launch_window_policy_tests {
             StoredUserPreferences::default().launch_window_policy,
             LAUNCH_WINDOW_POLICY_OPEN_NEW_WINDOW
         );
+    }
+
+    #[test]
+    fn missing_right_preview_panel_fields_default_to_closed_and_unsized() {
+        // 回归:旧偏好数据没有面板字段,serde 缺省回退必须同时覆盖开关与宽度。
+        let stored = StoredUserPreferences::default();
+        let mut json = serde_json::to_value(&stored).expect("serialize preferences");
+        json.as_object_mut()
+            .expect("preferences serialize to an object")
+            .remove("right_preview_panel_open");
+        json.as_object_mut()
+            .expect("preferences serialize to an object")
+            .remove("right_preview_panel_width");
+        json.as_object_mut()
+            .expect("preferences serialize to an object")
+            .remove("right_preview_preview_ratio");
+
+        let parsed: StoredUserPreferences =
+            serde_json::from_value(json).expect("deserialize preferences");
+
+        assert!(!parsed.right_preview_panel_open);
+        assert_eq!(parsed.right_preview_panel_width, None);
+        assert_eq!(parsed.right_preview_preview_ratio, None);
+    }
+
+    #[test]
+    fn right_preview_panel_fields_roundtrip() {
+        let stored = StoredUserPreferences {
+            right_preview_panel_open: true,
+            right_preview_panel_width: Some(480.0),
+            right_preview_preview_ratio: Some(0.8),
+            ..StoredUserPreferences::default()
+        };
+        let json = serde_json::to_value(&stored).expect("serialize preferences");
+        let parsed: StoredUserPreferences =
+            serde_json::from_value(json).expect("deserialize preferences");
+
+        assert!(parsed.right_preview_panel_open);
+        assert_eq!(parsed.right_preview_panel_width, Some(480.0));
+        assert_eq!(parsed.right_preview_preview_ratio, Some(0.8));
     }
 }

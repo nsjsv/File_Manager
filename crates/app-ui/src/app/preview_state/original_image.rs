@@ -5,7 +5,8 @@ use iced::Task;
 use thumbnails::{ThumbnailKey, ThumbnailRequest};
 use tokio_util::sync::CancellationToken;
 
-use super::super::{windows::image_preview_size_from_dimensions, FileBrowser};
+use super::super::right_preview_panel::PreviewLoadSurface;
+use super::super::{FileBrowser, windows::image_preview_size_from_dimensions};
 use crate::commands::original_image_preview_command;
 use crate::model::{ImagePreviewContent, Message, PreviewContent, PreviewSize, PreviewState};
 use crate::thumbnail_cache::{
@@ -81,6 +82,9 @@ impl FileBrowser {
         if generation != self.original_image_preview_generation || !active_preview {
             return Task::none();
         }
+        // 独立窗口会话在内容就绪后按内容尺寸补开/适配窗口;
+        // 面板会话始终不动窗口,内容按面板视口渲染。
+        let presents_in_window = self.preview_load_surface == PreviewLoadSurface::StandaloneWindow;
         let window_is_missing = self.preview_window.is_none();
 
         match outcome {
@@ -104,7 +108,7 @@ impl FileBrowser {
                         height,
                     },
                 )));
-                if window_is_missing {
+                if presents_in_window && window_is_missing {
                     self.open_image_preview_window_for_dimensions(width, height)
                 } else {
                     Task::none()
@@ -116,10 +120,14 @@ impl FileBrowser {
                 height,
                 has_intrinsic_size,
             }) => {
-                let window_command = if has_intrinsic_size {
-                    self.open_image_preview_window_for_dimensions(width, height)
+                let window_command = if presents_in_window {
+                    if has_intrinsic_size {
+                        self.open_image_preview_window_for_dimensions(width, height)
+                    } else {
+                        self.open_image_preview_window_with_default_size()
+                    }
                 } else {
-                    self.open_image_preview_window_with_default_size()
+                    Task::none()
                 };
                 self.preview = Some(PreviewState::Ready(PreviewContent::Image(
                     ImagePreviewContent::OriginalSvg {
@@ -132,7 +140,7 @@ impl FileBrowser {
             }
             Err(error) => {
                 self.preview = Some(PreviewState::ImageError { path, error });
-                if window_is_missing {
+                if presents_in_window && window_is_missing {
                     self.open_image_preview_error_window()
                 } else {
                     Task::none()
@@ -257,7 +265,9 @@ impl FileBrowser {
             }))) => Some(handle.clone()),
             _ => None,
         };
-        let window_command = if self.preview_window.is_none() {
+        let window_command = if self.preview_load_surface == PreviewLoadSurface::StandaloneWindow
+            && self.preview_window.is_none()
+        {
             self.open_image_preview_window_for_dimensions(
                 pending.original.width,
                 pending.original.height,
@@ -377,8 +387,7 @@ impl FileBrowser {
                     error = %error,
                     "image preview dimensions failed"
                 );
-                self.show_global_error(error);
-                return self.close_preview_window();
+                return self.fail_image_preview_dimensions(path, error);
             }
             Err(error) => {
                 tracing::warn!(
@@ -387,8 +396,7 @@ impl FileBrowser {
                     error = %error,
                     "image preview dimensions failed"
                 );
-                self.show_global_error(error);
-                return self.close_preview_window();
+                return self.fail_image_preview_dimensions(path, error);
             }
         };
 
@@ -412,7 +420,11 @@ impl FileBrowser {
                 .clone()
                 .expect("image preview generation must own cancellation"),
         };
-        let window_command = self.open_image_preview_window_for_dimensions(width, height);
+        let window_command = if self.preview_load_surface == PreviewLoadSurface::StandaloneWindow {
+            self.open_image_preview_window_for_dimensions(width, height)
+        } else {
+            Task::none()
+        };
         let Some(entry) = self.entry_for_path(&path).cloned() else {
             return Task::batch([window_command, original.load_command()]);
         };
@@ -422,6 +434,19 @@ impl FileBrowser {
             preview_thumbnail_edge_for_size(image_preview_size_from_dimensions(width, height)),
         );
         Task::batch([window_command, thumbnail_command])
+    }
+
+    /// 图片尺寸无效/读取失败的统一出口:独立窗口会话维持原语义
+    /// (全局错误提示 + 关闭预览窗口);面板会话改以可重试的错误态呈现。
+    fn fail_image_preview_dimensions(&mut self, path: PathBuf, error: String) -> Task<Message> {
+        self.show_global_error(error.clone());
+        match self.preview_load_surface {
+            PreviewLoadSurface::StandaloneWindow => self.close_preview_window(),
+            PreviewLoadSurface::RightDockedPanel => {
+                self.preview = Some(PreviewState::ImageError { path, error });
+                Task::none()
+            }
+        }
     }
 
     fn preview_thumbnail_edge(&self) -> u32 {

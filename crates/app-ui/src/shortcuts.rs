@@ -21,6 +21,7 @@ pub(crate) enum ShortcutAction {
     Refresh,
     Escape,
     Preview,
+    ToggleRightPreviewPanel,
     ToggleTerminal,
     TerminalNewTab,
     TerminalCloseTab,
@@ -51,6 +52,7 @@ impl ShortcutAction {
             Self::Refresh
             | Self::Escape
             | Self::FocusPathInput
+            | Self::ToggleRightPreviewPanel
             | Self::ToggleTerminal
             | Self::TerminalNewTab
             | Self::TerminalCloseTab
@@ -100,6 +102,7 @@ pub(crate) enum ShortcutBindingId {
     Refresh,
     Escape,
     Preview,
+    ToggleRightPreviewPanel,
     ToggleTerminal,
     TerminalNewTab,
     TerminalCloseTab,
@@ -115,7 +118,7 @@ pub(crate) enum ShortcutBindingId {
     Redo,
 }
 
-const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 27] = [
+const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 28] = [
     ShortcutBindingId::OpenSelected,
     ShortcutBindingId::RenameSelected,
     ShortcutBindingId::FocusPathInput,
@@ -130,6 +133,7 @@ const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 27] = [
     ShortcutBindingId::Refresh,
     ShortcutBindingId::Escape,
     ShortcutBindingId::Preview,
+    ShortcutBindingId::ToggleRightPreviewPanel,
     ShortcutBindingId::ToggleTerminal,
     ShortcutBindingId::TerminalNewTab,
     ShortcutBindingId::TerminalCloseTab,
@@ -168,6 +172,7 @@ impl ShortcutBindingId {
             Self::Refresh => ShortcutAction::Refresh,
             Self::Escape => ShortcutAction::Escape,
             Self::Preview => ShortcutAction::Preview,
+            Self::ToggleRightPreviewPanel => ShortcutAction::ToggleRightPreviewPanel,
             Self::ToggleTerminal => ShortcutAction::ToggleTerminal,
             Self::TerminalNewTab => ShortcutAction::TerminalNewTab,
             Self::TerminalCloseTab => ShortcutAction::TerminalCloseTab,
@@ -197,6 +202,7 @@ impl ShortcutBindingId {
             Self::Refresh => "Refresh",
             Self::Escape => "Dismiss",
             Self::Preview => "Preview",
+            Self::ToggleRightPreviewPanel => "Toggle Preview Panel",
             Self::ToggleTerminal => "Toggle Terminal",
             Self::TerminalNewTab => "New Terminal Tab",
             Self::TerminalCloseTab => "Close Terminal Tab",
@@ -229,6 +235,7 @@ impl ShortcutBindingId {
             Self::Refresh => "refresh",
             Self::Escape => "escape",
             Self::Preview => "preview",
+            Self::ToggleRightPreviewPanel => "toggle_right_preview_panel",
             Self::ToggleTerminal => "toggle_terminal",
             Self::TerminalNewTab => "terminal_new_tab",
             Self::TerminalCloseTab => "terminal_close_tab",
@@ -426,6 +433,7 @@ fn default_binding(id: ShortcutBindingId) -> KeyBinding {
         ShortcutBindingId::Refresh => KeyBinding::named(ShortcutNamedKey::Function(5)),
         ShortcutBindingId::Escape => KeyBinding::named(ShortcutNamedKey::Escape),
         ShortcutBindingId::Preview => KeyBinding::named(ShortcutNamedKey::Space),
+        ShortcutBindingId::ToggleRightPreviewPanel => KeyBinding::alt_character('P'),
         ShortcutBindingId::ToggleTerminal => KeyBinding::control_character('`'),
         ShortcutBindingId::TerminalNewTab => KeyBinding::control_shift_character('T'),
         ShortcutBindingId::TerminalCloseTab => KeyBinding::control_shift_character('W'),
@@ -457,6 +465,16 @@ impl KeyBinding {
                 ..ShortcutModifiers::default()
             },
             key: ShortcutKey::Named(key),
+        }
+    }
+
+    fn alt_character(character: char) -> Self {
+        Self {
+            modifiers: ShortcutModifiers {
+                alt: true,
+                ..ShortcutModifiers::default()
+            },
+            key: ShortcutKey::Character(character),
         }
     }
 
@@ -865,6 +883,24 @@ mod tests {
         assert_eq!(
             shortcuts.matching_action(&key, keyboard::Modifiers::ALT),
             Some(ShortcutAction::FileProperties)
+        );
+    }
+
+    #[test]
+    fn alt_p_is_default_toggle_right_preview_panel() {
+        // 大小写两种字形都要命中:物理按键送来的字符跟随 shift 状态。
+        let shortcuts = ShortcutConfig::defaults();
+        for character in ["P", "p"] {
+            assert_eq!(
+                shortcuts
+                    .matching_action(&Key::Character(character.into()), keyboard::Modifiers::ALT),
+                Some(ShortcutAction::ToggleRightPreviewPanel)
+            );
+        }
+        // 无 Alt 修饰的 P 不得误触面板开关。
+        assert_eq!(
+            shortcuts.matching_action(&Key::Character("P".into()), keyboard::Modifiers::default()),
+            None
         );
     }
 }

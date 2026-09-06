@@ -142,6 +142,7 @@ impl FileBrowser {
             }
             ShortcutAction::Escape => self.handle_focused_window_escape_pressed(),
             ShortcutAction::Preview => self.request_preview(),
+            ShortcutAction::ToggleRightPreviewPanel => self.toggle_right_preview_panel(),
             ShortcutAction::ToggleTerminal => self.toggle_terminal_via_shortcut(),
             ShortcutAction::TerminalNewTab => self.add_terminal_tab(),
             ShortcutAction::TerminalCloseTab => self.close_active_terminal_tab_via_shortcut(),

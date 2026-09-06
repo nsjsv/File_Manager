@@ -113,6 +113,9 @@ pub(crate) enum WindowFrameState {
 
 pub(crate) const WINDOW_TITLE_BAR_HEIGHT: f32 = 40.0;
 pub(crate) const WINDOW_TOP_BAR_HEIGHT: f32 = 48.0;
+/// 全窗工具栏顶栏高度(上下 padding 18 + 控制行)。顶栏自身用此值
+/// 定高,侧栏/窗格/面板的 y 向几何偏移才能与渲染严格一致。
+pub(crate) const MAIN_TOOLBAR_ROW_HEIGHT: f32 = 72.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowChromeLayout {

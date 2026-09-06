@@ -37,6 +37,12 @@ pub(crate) const DEFAULT_FILE_OPERATION_VERIFICATION: FileOperationVerification 
 pub(crate) const DEFAULT_SIDEBAR_WIDTH: f32 = 180.0;
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 140.0;
 pub(crate) const MAX_SIDEBAR_WIDTH: f32 = 360.0;
+pub(crate) const DEFAULT_RIGHT_PREVIEW_PANEL_WIDTH: f32 = 320.0;
+pub(crate) const MIN_RIGHT_PREVIEW_PANEL_WIDTH: f32 = 200.0;
+pub(crate) const MAX_RIGHT_PREVIEW_PANEL_WIDTH: f32 = 640.0;
+pub(crate) const DEFAULT_RIGHT_PREVIEW_PREVIEW_RATIO: f32 = 0.7;
+pub(crate) const MIN_RIGHT_PREVIEW_PREVIEW_RATIO: f32 = 0.25;
+pub(crate) const MAX_RIGHT_PREVIEW_PREVIEW_RATIO: f32 = 1.0;
 pub(crate) const MIN_COLUMN_WIDTH: f32 = 96.0;
 pub(crate) const MAX_COLUMN_WIDTH: f32 = 960.0;
 pub(crate) const MIN_VISIBLE_COLUMN_COUNT: usize = 3;
@@ -543,6 +549,9 @@ pub(crate) struct UserConfig {
     pub(crate) show_hidden_files: bool,
     pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
+    pub(crate) right_preview_panel_open: bool,
+    pub(crate) right_preview_panel_width: f32,
+    pub(crate) right_preview_preview_ratio: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) network_connections: Vec<SavedNetworkConnection>,
     pub(crate) terminal_emulator: TerminalEmulator,
@@ -600,6 +609,9 @@ pub(crate) fn default_user_config() -> UserConfig {
         show_hidden_files: false,
         language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+        right_preview_panel_open: false,
+        right_preview_panel_width: DEFAULT_RIGHT_PREVIEW_PANEL_WIDTH,
+        right_preview_preview_ratio: DEFAULT_RIGHT_PREVIEW_PREVIEW_RATIO,
         sidebar_favorites: None,
         network_connections: Vec::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
@@ -639,6 +651,9 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         show_hidden_files: false,
         language_setting: UiLanguageSetting::System,
         sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+        right_preview_panel_open: false,
+        right_preview_panel_width: DEFAULT_RIGHT_PREVIEW_PANEL_WIDTH,
+        right_preview_preview_ratio: DEFAULT_RIGHT_PREVIEW_PREVIEW_RATIO,
         sidebar_favorites: None,
         network_connections: Vec::new(),
         terminal_emulator: DEFAULT_TERMINAL_EMULATOR,
@@ -681,6 +696,27 @@ pub(crate) fn normalize_sidebar_width(width: f32) -> f32 {
         width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
     } else {
         DEFAULT_SIDEBAR_WIDTH
+    }
+}
+
+pub(crate) fn normalize_right_preview_panel_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(MIN_RIGHT_PREVIEW_PANEL_WIDTH, MAX_RIGHT_PREVIEW_PANEL_WIDTH)
+    } else {
+        DEFAULT_RIGHT_PREVIEW_PANEL_WIDTH
+    }
+}
+
+/// 存储边的比例合法性归一;信息区 120px 保底依赖运行期窗高,由
+/// app 层读取侧按当前窗高再夹取,这里只挡非法值(非有限/越界)。
+pub(crate) fn normalize_right_preview_preview_ratio(ratio: f32) -> f32 {
+    if ratio.is_finite() {
+        ratio.clamp(
+            MIN_RIGHT_PREVIEW_PREVIEW_RATIO,
+            MAX_RIGHT_PREVIEW_PREVIEW_RATIO,
+        )
+    } else {
+        DEFAULT_RIGHT_PREVIEW_PREVIEW_RATIO
     }
 }
 

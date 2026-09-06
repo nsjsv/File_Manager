@@ -14,6 +14,8 @@ impl FileBrowser {
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.sidebar_resize_drag = None;
+        self.right_preview_panel_resize_drag = None;
+        self.right_preview_ratio_resize_drag = None;
         self.column_resize_drag = None;
         self.list_column_resize_drag = None;
         self.list_column_reorder_drag = None;
@@ -42,6 +44,7 @@ impl FileBrowser {
         Task::batch([
             self.finish_sidebar_bookmark_drag(),
             self.finish_sidebar_resize_drag_command(),
+            self.finish_right_preview_panel_drag_commands(),
             self.finish_column_resize_drag_command(),
             self.finish_sqlite_tables_resize_drag(),
             self.finish_list_column_resize_drag_command(),
@@ -82,6 +85,8 @@ impl FileBrowser {
         let file_drag_command = self.update_file_drag(position);
         self.update_sidebar_bookmark_drag(position);
         self.update_sidebar_resize_drag(position);
+        self.update_right_preview_panel_resize_drag(position);
+        self.update_right_preview_panel_ratio_resize_drag(position);
         self.update_column_resize_drag(position);
         self.update_list_column_resize_drag(position);
         self.update_split_resize(position);

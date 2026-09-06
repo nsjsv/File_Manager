@@ -17,7 +17,8 @@ impl FileBrowser {
         &mut self,
         source_path: PathBuf,
     ) -> Task<Message> {
-        let window_command = self.ensure_preview_window(PreviewWindowProfile::Regular);
+        let window_command =
+            self.preview_window_presentation_command(PreviewWindowProfile::Regular);
         self.clear_preview();
 
         self.remote_preview_download_generation =
@@ -93,11 +94,8 @@ impl FileBrowser {
                 self.preview = Some(PreviewState::Error(format!(
                     "Could not download remote preview: {error}"
                 )));
-                if self.preview_window.is_none() {
-                    self.ensure_preview_window(PreviewWindowProfile::Regular)
-                } else {
-                    Task::none()
-                }
+                // 面板会话不弹独立窗口;错误态直接呈现在面板里。
+                self.ensure_preview_window_for_standalone_load(PreviewWindowProfile::Regular)
             }
         }
     }

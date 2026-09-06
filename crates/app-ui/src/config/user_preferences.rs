@@ -16,10 +16,11 @@ use super::{
     default_state_database_path, default_user_config, file_operation_verification_config_value,
     file_operation_verification_from_config_value, list_directory_size_display_mode_config_value,
     list_directory_size_display_mode_from_config_value, normalize_preview_directory_expand_levels,
-    normalize_sidebar_width, normalize_visible_column_count, sort_direction_config_value,
-    sort_direction_from_config_value, sort_field_config_value, sort_field_from_config_value,
-    LaunchWindowPolicy, PreviewExtensionRules, PreviewFileSizeLimits, SidebarFavoriteConfig,
-    UiLanguageSetting, UserConfig, ViewDensityLevel,
+    normalize_right_preview_panel_width, normalize_right_preview_preview_ratio,
+    normalize_sidebar_width, normalize_visible_column_count,
+    sort_direction_config_value, sort_direction_from_config_value, sort_field_config_value,
+    sort_field_from_config_value, LaunchWindowPolicy, PreviewExtensionRules,
+    PreviewFileSizeLimits, SidebarFavoriteConfig, UiLanguageSetting, UserConfig, ViewDensityLevel,
 };
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
@@ -40,6 +41,9 @@ pub(crate) struct UserPreferences {
     pub(crate) show_hidden_files: bool,
     pub(crate) language_setting: UiLanguageSetting,
     pub(crate) sidebar_width: f32,
+    pub(crate) right_preview_panel_open: bool,
+    pub(crate) right_preview_panel_width: f32,
+    pub(crate) right_preview_preview_ratio: f32,
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) network_connections: Vec<SavedNetworkConnection>,
     pub(crate) terminal_emulator: TerminalEmulator,
@@ -89,6 +93,13 @@ impl UserPreferences {
             show_hidden_files: config.show_hidden_files,
             language_setting: config.language_setting,
             sidebar_width: normalize_sidebar_width(config.sidebar_width),
+            right_preview_panel_open: config.right_preview_panel_open,
+            right_preview_panel_width: normalize_right_preview_panel_width(
+                config.right_preview_panel_width,
+            ),
+            right_preview_preview_ratio: normalize_right_preview_preview_ratio(
+                config.right_preview_preview_ratio,
+            ),
             sidebar_favorites: config.sidebar_favorites.clone(),
             network_connections: config.network_connections.clone(),
             terminal_emulator: config.terminal_emulator,
@@ -124,6 +135,9 @@ impl UserPreferences {
         config.show_hidden_files = self.show_hidden_files;
         config.language_setting = self.language_setting;
         config.sidebar_width = self.sidebar_width;
+        config.right_preview_panel_open = self.right_preview_panel_open;
+        config.right_preview_panel_width = self.right_preview_panel_width;
+        config.right_preview_preview_ratio = self.right_preview_preview_ratio;
         config.sidebar_favorites = self.sidebar_favorites.clone();
         config.network_connections = self.network_connections.clone();
         config.terminal_emulator = self.terminal_emulator;
@@ -174,6 +188,13 @@ impl UserPreferences {
         stored.show_hidden_files = self.show_hidden_files;
         stored.language_setting = self.language_setting.config_value().to_owned();
         stored.sidebar_width = f64::from(normalize_sidebar_width(self.sidebar_width));
+        stored.right_preview_panel_open = self.right_preview_panel_open;
+        stored.right_preview_panel_width = Some(f64::from(normalize_right_preview_panel_width(
+            self.right_preview_panel_width,
+        )));
+        stored.right_preview_preview_ratio = Some(f64::from(
+            normalize_right_preview_preview_ratio(self.right_preview_preview_ratio),
+        ));
         stored.sidebar_favorites = self
             .sidebar_favorites
             .as_ref()
@@ -265,6 +286,16 @@ impl UserPreferences {
             language_setting: UiLanguageSetting::from_config_value(&stored.language_setting)
                 .unwrap_or(default_preferences.language_setting),
             sidebar_width: normalize_sidebar_width(stored.sidebar_width as f32),
+            right_preview_panel_open: stored.right_preview_panel_open,
+            // 宽度缺省/非法值都回退默认;非法存储值按“从未设置过”处理。
+            right_preview_panel_width: stored
+                .right_preview_panel_width
+                .map(|width| normalize_right_preview_panel_width(width as f32))
+                .unwrap_or(default_preferences.right_preview_panel_width),
+            right_preview_preview_ratio: stored
+                .right_preview_preview_ratio
+                .map(|ratio| normalize_right_preview_preview_ratio(ratio as f32))
+                .unwrap_or(default_preferences.right_preview_preview_ratio),
             sidebar_favorites: stored
                 .sidebar_favorites
                 .map(|favorites| sidebar_favorites_from_stored(&favorites)),
@@ -677,6 +708,40 @@ mod tests {
             assert_eq!(restored.theme_mode, ThemeMode::Dark);
             assert_eq!(restored.color_scheme, color_scheme);
         }
+    }
+
+    #[test]
+    fn right_preview_panel_roundtrips_and_missing_width_falls_back() {
+        let default = default_user_config();
+        let mut config = default.clone();
+        config.right_preview_panel_open = true;
+        config.right_preview_panel_width = 480.0;
+        config.right_preview_preview_ratio = 0.8;
+
+        let stored = config.user_preferences().to_stored();
+        assert_eq!(stored.right_preview_panel_open, true);
+        assert_eq!(stored.right_preview_panel_width, Some(480.0));
+        // f32 比例升 f64 存储,只保留精度容差内相等。
+        assert!((stored.right_preview_preview_ratio.unwrap() - 0.8).abs() < 1e-6);
+        let restored = UserPreferences::from_stored(stored, &default);
+        assert!(restored.right_preview_panel_open);
+        assert_eq!(restored.right_preview_panel_width, 480.0);
+        assert_eq!(restored.right_preview_preview_ratio, 0.8);
+
+        // 旧版本数据缺宽度字段:回退默认宽度,开关回退关闭。
+        let mut legacy = StoredUserPreferences::default();
+        legacy.right_preview_panel_width = None;
+        legacy.right_preview_preview_ratio = None;
+        let restored = UserPreferences::from_stored(legacy, &default);
+        assert!(!restored.right_preview_panel_open);
+        assert_eq!(
+            restored.right_preview_panel_width,
+            default.right_preview_panel_width
+        );
+        assert_eq!(
+            restored.right_preview_preview_ratio,
+            default.right_preview_preview_ratio
+        );
     }
 
     #[test]

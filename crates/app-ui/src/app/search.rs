@@ -67,6 +67,7 @@ impl FileBrowser {
             | ShortcutAction::NavigateUp
             | ShortcutAction::FileProperties
             | ShortcutAction::Preview
+            | ShortcutAction::ToggleRightPreviewPanel
             | ShortcutAction::ToggleTerminal
             | ShortcutAction::TerminalNewTab
             | ShortcutAction::TerminalCloseTab

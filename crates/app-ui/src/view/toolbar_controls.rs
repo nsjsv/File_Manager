@@ -1,4 +1,4 @@
-use iced::widget::{button, container, row, Button, Row};
+use iced::widget::{Button, Row, button, container, row};
 use iced::{Alignment, Background, Border, Color, Element, Theme};
 
 use crate::app::panes::BrowserPaneView;
@@ -9,7 +9,7 @@ use crate::appearance::{
 use crate::icons::IconSymbol;
 use crate::model::{BrowserPaneId, BrowserViewMode, Message};
 
-use super::{themed_icon, IconTone, TOOLBAR_ICON_SIZE, VIEW_MODE_ICON_SIZE};
+use super::{IconTone, TOOLBAR_ICON_SIZE, VIEW_MODE_ICON_SIZE, themed_icon};
 
 pub(super) fn navigation_button_group(pane_id: BrowserPaneId) -> Element<'static, Message> {
     toolbar_button_group(row![
@@ -55,6 +55,21 @@ pub(super) fn view_mode_button_group(pane: BrowserPaneView<'_>) -> Element<'stat
             IconSymbol::Grid,
         ),
     ])
+}
+
+/// 右侧预览面板开关:状态全局唯一,分栏时两个窗格的按钮自然同步亮灭。
+pub(super) fn right_preview_panel_toggle_button(is_open: bool) -> Element<'static, Message> {
+    let tone = if is_open {
+        IconTone::Selected
+    } else {
+        IconTone::Normal
+    };
+    toolbar_button_group(row![toolbar_segment_button(
+        IconSymbol::PanelRight,
+        tone,
+        Message::ToggleRightPreviewPanel,
+        VIEW_MODE_ICON_SIZE,
+    )])
 }
 
 fn toolbar_button_group(content: Row<'static, Message>) -> Element<'static, Message> {

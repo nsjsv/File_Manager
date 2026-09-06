@@ -356,6 +356,7 @@ impl FileBrowser {
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
+                    self.finish_right_preview_panel_drag_commands(),
                     self.finish_column_resize_drag_command(),
                     self.finish_list_column_resize_drag_command(),
                     self.finish_list_column_reorder_drag_command(),
@@ -415,6 +416,7 @@ impl FileBrowser {
                 Task::batch([
                     self.finish_sidebar_bookmark_drag(),
                     self.finish_sidebar_resize_drag_command(),
+                    self.finish_right_preview_panel_drag_commands(),
                     self.finish_column_resize_drag_command(),
                     self.finish_list_column_resize_drag_command(),
                     self.finish_list_column_reorder_drag_command(),
@@ -452,6 +454,15 @@ impl FileBrowser {
             Message::SidebarBookmarkReleased => self.finish_sidebar_bookmark_drag(),
             Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
             Message::SidebarResizeStarted => self.start_sidebar_resize_drag(),
+            Message::RightPreviewPanelResizeStarted => self.start_right_preview_panel_resize_drag(),
+            Message::RightPreviewPanelRatioResizeStarted => {
+                self.start_right_preview_panel_ratio_resize_drag()
+            }
+            Message::RightPreviewPanelInfoLoaded { path, snapshot } => {
+                self.accept_right_preview_panel_info(&path, snapshot);
+                Task::none()
+            }
+            Message::ToggleRightPreviewPanel => self.toggle_right_preview_panel(),
             Message::SplitResizeStarted => self.start_split_resize(self.cursor_position),
             Message::TerminalPanel(message) => self.handle_terminal_panel_message(message),
             Message::CursorMoved { window, position } => {
@@ -1092,7 +1103,11 @@ impl FileBrowser {
         // 任何消息处理后都检查活动窗格目录是否变化,让内嵌终端即时跟随
         // (前进/后退/侧边栏跳转等入口太多,统一在出口收敛)。
         self.follow_terminal_panel_directory();
-        command
+        // D1 单点收敛:面板开启时让预览状态跟上活动窗格选中项。
+        // 覆盖点击/键盘/删除/改名/tab 切换/窗格切换/目录导航/启动偏好加载
+        // 的全部路径;面板关闭时是空操作。
+        let right_preview_panel_command = self.sync_right_preview_panel();
+        Task::batch([command, right_preview_panel_command])
     }
 }
 

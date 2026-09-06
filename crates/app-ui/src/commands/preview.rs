@@ -37,6 +37,62 @@ pub(crate) fn preview_command(
     )
 }
 
+/// 右侧面板信息区元数据:符号链接本身不展开(与属性窗口一致),
+/// 读失败(已删除/无权限)以 Err 回传,信息区降级为占位。
+pub(crate) fn right_preview_panel_info_command(path: PathBuf) -> Task<Message> {
+    let message_path = path.clone();
+    Task::perform(
+        async move {
+            let snapshot = tokio::task::spawn_blocking(move || {
+                read_right_preview_panel_info(path)
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|inner| inner.map(Box::new));
+            snapshot
+        },
+        move |snapshot| {
+            Message::RightPreviewPanelInfoLoaded {
+                path: message_path.clone(),
+                snapshot,
+            }
+        },
+    )
+}
+
+fn read_right_preview_panel_info(
+    path: std::path::PathBuf,
+) -> Result<crate::model::RightPreviewPanelInfoSnapshot, String> {
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    let file_type = metadata.file_type();
+    let (kind, type_label) = if file_type.is_symlink() {
+        (file_core::FileKind::Symlink, "Symbolic Link".to_owned())
+    } else if file_type.is_dir() {
+        (file_core::FileKind::Directory, "Folder".to_owned())
+    } else if file_type.is_file() {
+        (file_core::FileKind::File, "File".to_owned())
+    } else {
+        (file_core::FileKind::Other, "Other".to_owned())
+    };
+    Ok(crate::model::RightPreviewPanelInfoSnapshot {
+        name: path
+            .file_name()
+            .map(|name| name.to_os_string())
+            .unwrap_or_else(|| path.as_os_str().to_os_string()),
+        location: path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("/")),
+        size_bytes: metadata.len(),
+        created: metadata.created().ok(),
+        modified: metadata.modified().ok(),
+        accessed: metadata.accessed().ok(),
+        path,
+        kind,
+        type_label,
+    })
+}
+
 pub(crate) fn remote_preview_cache_command(
     source_path: PathBuf,
     generation: u64,
