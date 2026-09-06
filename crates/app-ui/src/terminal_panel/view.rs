@@ -54,7 +54,8 @@ pub(crate) fn canvas_height_for_panel(height: f32) -> f32 {
 
 /// 主窗口最底部区域:访达式抽屉。收起时是与内容同背景的窄条(仅顶部分隔线 +
 /// 右下角图标);展开时终端取代窄条,图标消失,顶部分隔线即拖拽手柄。
-/// 抽屉横贯窗宽,左侧由上层侧边栏卡片遮住。
+/// 抽屉横贯窗宽,左段由上层贴满侧边的边栏卡片盖住;标签条与终端文字
+/// 自行让出边栏宽度,从卡片右缘开始,不依赖遮挡。
 pub(crate) fn terminal_panel_area(browser: &FileBrowser) -> Element<'_, Message> {
     if let Some(active_tab) = browser.terminal_panel.active_tab() {
         if browser.terminal_panel.height() >= CELL_HEIGHT {
@@ -62,7 +63,13 @@ pub(crate) fn terminal_panel_area(browser: &FileBrowser) -> Element<'_, Message>
             let session = &active_tab.session;
             return iced::widget::column![
                 resize_handle(),
-                terminal_tab_strip(browser),
+                // 标签条与下方终端文字对齐,同样让出边栏宽度。
+                container(terminal_tab_strip(browser))
+                    .width(Length::Fill)
+                    .padding(iced::Padding {
+                        left: browser.sidebar_width,
+                        ..iced::Padding::default()
+                    }),
                 container(
                     canvas(TerminalGrid { session, focused })
                         .width(Length::Fill)
@@ -72,7 +79,7 @@ pub(crate) fn terminal_panel_area(browser: &FileBrowser) -> Element<'_, Message>
                 .height(Length::Fixed(canvas_height_for_panel(
                     browser.terminal_panel.height(),
                 )))
-                // 左侧让位给上层侧边栏,文字从内容区起点开始。
+                // 左侧让位给边栏列,文字从内容区起点开始。
                 .padding(iced::Padding {
                     left: browser.sidebar_width,
                     right: PANEL_HORIZONTAL_PADDING,

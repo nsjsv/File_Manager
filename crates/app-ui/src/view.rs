@@ -171,9 +171,9 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 }
 
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
-    // 终端抽屉横贯窗宽、位于层叠底部,侧边栏卡片盖在其上(始终最上层);
-    // 抽屉左侧被卡片遮住,可见部分自然从边栏延伸到窗口右缘。
-    // 右侧预览面板按需挂在窗格 row 尾部,panes_view 以 Fill 收窄让位。
+    // 边栏卡片是贴满整个侧边的浮层:从窗口顶沿到窗底,盖在终端抽屉
+    // 左段之上(抽屉分隔线从卡片后方横贯窗宽)。工具栏与窗格用定宽
+    // 占位让出卡片;预览面板按需挂在 row 尾部,panes_view 以 Fill 收窄。
     let mut pane_row = Row::new()
         .push(Space::new().width(Length::Fixed(browser.sidebar_width)))
         .push(
@@ -181,16 +181,21 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .height(Length::Fill),
         );
-    // 面板开启才挂进 row;关闭时只有侧栏占位与窗格两项,布局与现状一致。
+    // 面板开启才挂进 row;关闭时只有侧栏占位与窗格两项。
     if browser.right_preview_panel_open {
         pane_row = pane_row.push(right_preview_panel(browser));
     }
     let pane_row = pane_row.width(Length::Fill).height(Length::Fill);
-    // 工具栏横贯整个窗口宽度,侧栏/窗格/预览面板都从它下方开始;
-    // 窗口控制在顶栏两端,任何区域都不再把三大键挤离窗口右上角。
-    let pane_layer: Element<'_, Message> = container(
+    // 工具栏只占边栏右侧:卡片顶到窗口上沿,顶栏左端随之让位;
+    // 窗口控制仍在顶栏右端,窗格与终端抽屉不受影响。
+    let base_layer: Element<'_, Message> = container(
         iced::widget::column![
-            main_window_top_bar(browser),
+            row![
+                Space::new().width(Length::Fixed(browser.sidebar_width)),
+                main_window_top_bar(browser),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fixed(crate::model::MAIN_TOOLBAR_ROW_HEIGHT)),
             pane_row,
             crate::terminal_panel::view::terminal_panel_area(browser),
         ]
@@ -201,16 +206,11 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
     .height(Length::Fill)
     .style(app_content_style)
     .into();
-    // 侧栏浮层从顶栏下方开始,不再遮挡工具栏。包裹容器必须保持内容
-    // 尺寸(定宽侧栏条):opaque 层在其整个 bounds 内捕获鼠标按下,
-    // 一旦撑满全窗,侧栏以外的整个界面都会点击失效。
-    let sidebar_overlay: Element<'_, Message> = container(sidebar_view(browser)).padding(
-        iced::Padding {
-            top: crate::model::MAIN_TOOLBAR_ROW_HEIGHT,
-            ..iced::Padding::ZERO
-        },
-    ).into();
-    let content: Element<'_, Message> = stack([pane_layer, opaque(sidebar_overlay)])
+    // 包裹容器必须保持内容尺寸(定宽侧栏条):opaque 层在其整个
+    // bounds 内捕获鼠标按下,一旦撑满全窗,侧栏以外的整个界面都会
+    // 点击失效。
+    let sidebar_overlay: Element<'_, Message> = container(sidebar_view(browser)).into();
+    let content: Element<'_, Message> = stack([base_layer, opaque(sidebar_overlay)])
         .width(Length::Fill)
         .height(Length::Fill)
         .into();
