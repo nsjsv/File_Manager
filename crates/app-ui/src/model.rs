@@ -305,6 +305,7 @@ pub(crate) fn display_entries_in_discovery_order(
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     StartupEnvironmentLoaded(Box<StartupEnvironment>),
+    TerminalPanel(crate::terminal_panel::TerminalPanelMessage),
     SidebarLocationsLoaded(Vec<SidebarLocation>),
     SidebarDevicesLoaded(StorageDeviceSnapshot),
     SidebarDevicesRefreshRequested,
@@ -680,6 +681,7 @@ pub(crate) enum Message {
     ApplicationShutdownPersisted(Result<(), String>),
     FileOperationVerificationSelected(FileOperationVerification),
     TerminalEmulatorSelected(TerminalEmulator),
+    TerminalShellSelected(String),
     RenderingGpuPreferenceSelected(RenderingGpuPreference),
     RendererRestartRequested,
     RendererRestartNoticeDismissed,

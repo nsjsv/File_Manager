@@ -21,6 +21,7 @@ pub(crate) enum ShortcutAction {
     Refresh,
     Escape,
     Preview,
+    ToggleTerminal,
     SelectAll,
     Copy,
     Paste,
@@ -48,6 +49,7 @@ impl ShortcutAction {
             Self::Refresh
             | Self::Escape
             | Self::FocusPathInput
+            | Self::ToggleTerminal
             | Self::NavigateBack
             | Self::NavigateForward
             | Self::NavigateUp => ShortcutRoutingContext::Application,
@@ -94,6 +96,7 @@ pub(crate) enum ShortcutBindingId {
     Refresh,
     Escape,
     Preview,
+    ToggleTerminal,
     SelectAll,
     Copy,
     CopyNamed,
@@ -106,7 +109,7 @@ pub(crate) enum ShortcutBindingId {
     Redo,
 }
 
-const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 24] = [
+const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 25] = [
     ShortcutBindingId::OpenSelected,
     ShortcutBindingId::RenameSelected,
     ShortcutBindingId::FocusPathInput,
@@ -121,6 +124,7 @@ const ALL_SHORTCUT_BINDING_IDS: [ShortcutBindingId; 24] = [
     ShortcutBindingId::Refresh,
     ShortcutBindingId::Escape,
     ShortcutBindingId::Preview,
+    ShortcutBindingId::ToggleTerminal,
     ShortcutBindingId::SelectAll,
     ShortcutBindingId::Copy,
     ShortcutBindingId::CopyNamed,
@@ -156,6 +160,7 @@ impl ShortcutBindingId {
             Self::Refresh => ShortcutAction::Refresh,
             Self::Escape => ShortcutAction::Escape,
             Self::Preview => ShortcutAction::Preview,
+            Self::ToggleTerminal => ShortcutAction::ToggleTerminal,
             Self::SelectAll => ShortcutAction::SelectAll,
             Self::Copy | Self::CopyNamed => ShortcutAction::Copy,
             Self::Paste | Self::PasteNamed => ShortcutAction::Paste,
@@ -182,6 +187,7 @@ impl ShortcutBindingId {
             Self::Refresh => "Refresh",
             Self::Escape => "Dismiss",
             Self::Preview => "Preview",
+            Self::ToggleTerminal => "Toggle Terminal",
             Self::SelectAll => "Select All",
             Self::Copy => "Copy",
             Self::CopyNamed => "Copy Named Key",
@@ -211,6 +217,7 @@ impl ShortcutBindingId {
             Self::Refresh => "refresh",
             Self::Escape => "escape",
             Self::Preview => "preview",
+            Self::ToggleTerminal => "toggle_terminal",
             Self::SelectAll => "select_all",
             Self::Copy => "copy",
             Self::CopyNamed => "copy_named",
@@ -405,6 +412,7 @@ fn default_binding(id: ShortcutBindingId) -> KeyBinding {
         ShortcutBindingId::Refresh => KeyBinding::named(ShortcutNamedKey::Function(5)),
         ShortcutBindingId::Escape => KeyBinding::named(ShortcutNamedKey::Escape),
         ShortcutBindingId::Preview => KeyBinding::named(ShortcutNamedKey::Space),
+        ShortcutBindingId::ToggleTerminal => KeyBinding::control_character('`'),
         ShortcutBindingId::SelectAll => KeyBinding::primary_character('A'),
         ShortcutBindingId::Copy => KeyBinding::primary_character('C'),
         ShortcutBindingId::CopyNamed => KeyBinding::named(ShortcutNamedKey::Copy),
@@ -506,10 +514,13 @@ impl ShortcutModifiers {
     }
 
     fn matches_iced(&self, modifiers: keyboard::Modifiers) -> bool {
+        // iced 在非 macOS 上 command() == control(),非 primary 分支若用
+        // command() 排除平台主键,会把字面 Ctrl 绑定(如 Ctrl+L、Ctrl+`)
+        // 一并排除导致永远失配;这里必须用 logo() 只排除真正的平台主键。
         let primary_matches = if self.primary {
             modifiers.control() || modifiers.command()
         } else {
-            modifiers.control() == self.control && !modifiers.command()
+            modifiers.control() == self.control && !modifiers.logo()
         };
         primary_matches && modifiers.alt() == self.alt && modifiers.shift() == self.shift
     }
@@ -568,7 +579,14 @@ impl ShortcutKey {
 fn normalized_character(value: &str) -> Option<char> {
     let mut characters = value.chars();
     let character = characters.next()?;
-    if characters.next().is_some() || !character.is_ascii_alphanumeric() {
+    if characters.next().is_some() {
+        return None;
+    }
+    // '+' 是配置里的修饰键分隔符,不能当按键;其余 ASCII 标点允许,
+    // 否则 Ctrl+` 这类绑定在注册和匹配两端都会被拒。
+    let is_bindable = character.is_ascii_alphanumeric()
+        || (character.is_ascii_punctuation() && character != '+');
+    if !is_bindable {
         return None;
     }
     Some(character.to_ascii_uppercase())
@@ -725,6 +743,17 @@ mod routing_context_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[test]
+    fn ctrl_backtick_matches_default_toggle_terminal() {
+        // 回归:字符归一化曾拒绝标点,导致 Ctrl+` 注册后永远匹配不上。
+        let action = ShortcutConfig::defaults().matching_action(
+            &Key::Character("`".into()),
+            keyboard::Modifiers::CTRL,
+        );
+        assert_eq!(action, Some(ShortcutAction::ToggleTerminal));
+    }
 
     #[test]
     fn parses_and_formats_shortcut_binding() {

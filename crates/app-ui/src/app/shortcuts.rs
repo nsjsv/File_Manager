@@ -27,6 +27,11 @@ impl FileBrowser {
             };
         }
 
+        // 终端面板聚焦时键盘归 PTY;除宿主保留键外不进入文件管理器快捷键路由。
+        if let Some(task) = self.terminal_panel_keyboard_input(&key, modifiers) {
+            return task;
+        }
+
         if let Some(command) = self.handle_path_suggestion_keyboard_key(&key, modifiers) {
             return command;
         }
@@ -105,6 +110,14 @@ impl FileBrowser {
             && !self.operation_queue.is_panel_open()
     }
 
+    /// 键盘正被某个输入会话占用(地址栏编辑、快捷键捕获、各类模态面板);
+    /// 终端面板据此让出键盘。
+    pub(crate) fn keyboard_input_session_is_active(&self) -> bool {
+        self.address_editing.is_some()
+            || self.shortcut_capture.is_some()
+            || !self.file_browser_content_shortcuts_enabled()
+    }
+
     pub(super) fn invoke_shortcut(&mut self, action: ShortcutAction) -> Task<Message> {
         if self.search_workspace.is_some() {
             return self.invoke_search_workspace_shortcut(action);
@@ -129,6 +142,7 @@ impl FileBrowser {
             }
             ShortcutAction::Escape => self.handle_focused_window_escape_pressed(),
             ShortcutAction::Preview => self.request_preview(),
+            ShortcutAction::ToggleTerminal => self.toggle_terminal_via_shortcut(),
             ShortcutAction::SelectAll => self.select_all_in_file_selection_scope(),
             ShortcutAction::Copy => self.copy_selected(),
             ShortcutAction::Paste => self.paste_pending(),

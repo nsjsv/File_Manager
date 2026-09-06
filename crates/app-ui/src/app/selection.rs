@@ -497,6 +497,11 @@ impl FileBrowser {
         self.last_pointer_clicked_column_directory = Some(directory);
     }
 
+    /// 多栏视图下鼠标悬停的栏目录;终端目录跟随等跨模块场景使用。
+    pub(crate) fn pointer_hovered_column_directory(&self) -> Option<PathBuf> {
+        self.hovered_column_directory()
+    }
+
     fn hovered_column_directory(&self) -> Option<PathBuf> {
         let directory = self.cursor_paste_directory.as_ref()?;
         crate::three_column_view::column_directories(self)

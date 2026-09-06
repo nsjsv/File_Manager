@@ -166,12 +166,19 @@ pub(super) fn auxiliary_window_message(message: &'static str) -> Element<'static
 }
 
 pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
+    // 终端抽屉横贯窗宽、位于层叠底部,侧边栏卡片盖在其上(始终最上层);
+    // 抽屉左侧被卡片遮住,可见部分自然从边栏延伸到窗口右缘。
     let pane_layer: Element<'_, Message> = container(
-        row![
-            Space::new().width(Length::Fixed(browser.sidebar_width)),
-            container(panes_view(browser))
-                .width(Length::Fill)
-                .height(Length::Fill),
+        iced::widget::column![
+            row![
+                Space::new().width(Length::Fixed(browser.sidebar_width)),
+                container(panes_view(browser))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill),
+            crate::terminal_panel::view::terminal_panel_area(browser),
         ]
         .width(Length::Fill)
         .height(Length::Fill),

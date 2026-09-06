@@ -767,6 +767,9 @@ impl FileBrowser {
             return Task::none();
         }
 
+        // 点击终端抽屉以外区域时释放其键盘焦点,文件区快捷键随之恢复。
+        self.release_terminal_panel_focus_if_outside();
+
         let pointer_command = match (button, status) {
             (
                 mouse::Button::Left | mouse::Button::Right | mouse::Button::Middle,

@@ -25,6 +25,7 @@ impl FileBrowser {
         self.finish_tab_drag();
         self.finish_pane_drag();
         self.finish_batch_rename_preview_drag();
+        self.finish_terminal_panel_pointer_interaction();
         // 任何窗口里的左键释放都结束图片平移；面板内释放由
         // mouse_area 的 PanEnded 先行处理，这里只是兜底。
         self.preview_image_viewport.panning = false;
@@ -85,6 +86,7 @@ impl FileBrowser {
         self.update_list_column_resize_drag(position);
         self.update_split_resize(position);
         self.update_list_column_reorder_drag(position);
+        self.update_terminal_panel_resize_drag(position);
         let selection_command = if self.update_selection_marquee(position) {
             crate::column_entry_bounds::column_entry_bounds_command()
         } else {

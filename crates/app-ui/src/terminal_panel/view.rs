@@ -1,0 +1,447 @@
+use iced::mouse::{self, Interaction, ScrollDelta};
+use iced::widget::canvas::{Frame, Geometry, Text as CanvasText};
+use iced::widget::{button, canvas, container, mouse_area, row, space};
+use iced::{Color, Element, Length, Point, Rectangle, Size, Theme};
+use iced::alignment::Vertical;
+
+use super::emulator::TerminalCell;
+use super::session::TerminalSession;
+use super::{FileBrowser, TerminalPanelMessage, PANEL_HORIZONTAL_PADDING};
+use crate::icons::IconSymbol;
+use crate::model::Message;
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::vte::ansi::{Color as TermColor, CursorShape, NamedColor};
+
+/// 终端字号;等宽字体在 cosmic-text 下的 advance 约 0.6em。
+pub(crate) const FONT_SIZE: f32 = 14.0;
+/// 单元格宽度(像素):按等宽字体 advance 近似,run 内累计误差在 2px 内。
+pub(crate) const CELL_WIDTH: f32 = FONT_SIZE * 0.602;
+/// 单元格高度(像素)。
+pub(crate) const CELL_HEIGHT: f32 = FONT_SIZE * 1.4;
+/// 底部窄条高度(收起时)。
+pub(crate) const BOTTOM_BAR_HEIGHT: f32 = 28.0;
+const BOTTOM_BAR_ICON_SIZE: f32 = 15.0;
+/// 展开面板顶部的分隔线 + 拖拽热区总高度。
+const DRAG_HANDLE_HEIGHT: f32 = 6.0;
+/// 分隔线可见宽度。
+const DIVIDER_LINE_HEIGHT: f32 = 1.0;
+/// 每格滚动的行数。
+const WHEEL_LINES_PER_NOTCH: i32 = 3;
+
+/// 主窗口最底部区域:访达式抽屉。收起时是与内容同背景的窄条(仅顶部分隔线 +
+/// 右下角图标);展开时终端取代窄条,图标消失,顶部分隔线即拖拽手柄。
+/// 抽屉横贯窗宽,左侧由上层侧边栏卡片遮住。
+pub(crate) fn terminal_panel_area(browser: &FileBrowser) -> Element<'_, Message> {
+    if let Some(session) = &browser.terminal_panel.session {
+        if browser.terminal_panel.height() >= CELL_HEIGHT {
+            let focused = browser.terminal_panel.is_focused();
+            return iced::widget::column![
+                resize_handle(),
+                container(
+                    canvas(TerminalGrid { session, focused })
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                )
+                .width(Length::Fill)
+                .height(Length::Fixed(
+                    (browser.terminal_panel.height() - DRAG_HANDLE_HEIGHT).max(CELL_HEIGHT),
+                ))
+                // 左侧让位给上层侧边栏,文字从内容区起点开始。
+                .padding(iced::Padding {
+                    left: browser.sidebar_width,
+                    right: PANEL_HORIZONTAL_PADDING,
+                    ..iced::Padding::default()
+                })
+                .style(content_background_style),
+            ]
+            .into();
+        }
+    }
+    collapsed_strip()
+}
+
+/// 分隔线 + 拖拽热区:1px 可见横线,整个 6px 区域可按住拖动调高。
+fn resize_handle() -> Element<'static, Message> {
+    mouse_area(
+        iced::widget::column![
+            container(space::Space::new())
+                .width(Length::Fill)
+                .height(Length::Fixed(DIVIDER_LINE_HEIGHT))
+                .style(divider_line_style),
+            container(space::Space::new()).width(Length::Fill).height(
+                Length::Fixed(DRAG_HANDLE_HEIGHT - DIVIDER_LINE_HEIGHT),
+            ),
+        ]
+        .width(Length::Fill),
+    )
+    .on_press(Message::TerminalPanel(
+        TerminalPanelMessage::PanelResizeDragStarted,
+    ))
+    .interaction(Interaction::ResizingVertically)
+    .into()
+}
+
+/// 收起态窄条:顶部分隔线 + 右下角终端图标,背景与内容区一致。
+fn collapsed_strip() -> Element<'static, Message> {
+    let icon = button(
+        IconSymbol::Terminal
+            .view(BOTTOM_BAR_ICON_SIZE)
+            .width(Length::Fixed(BOTTOM_BAR_ICON_SIZE))
+            .height(Length::Fixed(BOTTOM_BAR_ICON_SIZE))
+            .style(crate::appearance::icon_svg_style()),
+    )
+    .on_press(Message::TerminalPanel(TerminalPanelMessage::ToggleRequested))
+    .padding(4.0)
+    .style(crate::appearance::transparent_button_style());
+    iced::widget::column![
+        container(space::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fixed(DIVIDER_LINE_HEIGHT))
+            .style(divider_line_style),
+        container(
+            row![
+                space::Space::new().width(Length::Fill),
+                icon.width(Length::Fixed(BOTTOM_BAR_HEIGHT - DIVIDER_LINE_HEIGHT))
+                    .height(Length::Fixed(BOTTOM_BAR_HEIGHT - DIVIDER_LINE_HEIGHT)),
+            ]
+            .align_y(Vertical::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(BOTTOM_BAR_HEIGHT - DIVIDER_LINE_HEIGHT))
+        .padding(iced::Padding {
+            right: 6.0,
+            ..iced::Padding::default()
+        })
+        .align_y(Vertical::Center)
+        .style(content_background_style),
+    ]
+    .into()
+}
+
+fn divider_line_style(theme: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(iced::Background::Color(
+            crate::appearance::subtle_border_color(theme),
+        )),
+        ..iced::widget::container::Style::default()
+    }
+}
+
+/// 与内容区(app_content_style)完全一致的背景。
+fn content_background_style(theme: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(iced::Background::Color(theme.palette().background)),
+        ..iced::widget::container::Style::default()
+    }
+}
+
+/// 把面板内坐标换算成 (row, column) 网格单元;选区消息使用。
+pub(crate) fn grid_cell_for_position(position: Point) -> (usize, usize) {
+    let column = (position.x / CELL_WIDTH).floor().max(0.0) as usize;
+    let row = (position.y / CELL_HEIGHT).floor().max(0.0) as usize;
+    (row, column)
+}
+
+/// 终端网格画布:渲染 + 鼠标选区/滚动。
+struct TerminalGrid<'a> {
+    session: &'a TerminalSession,
+    focused: bool,
+}
+
+impl canvas::Program<Message> for TerminalGrid<'_> {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let iced::Event::Mouse(mouse_event) = event else {
+            return None;
+        };
+        let message = match mouse_event {
+            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                TerminalPanelMessage::GridPressed {
+                    position: cursor.position_over(bounds)?,
+                }
+            }
+            mouse::Event::CursorMoved { position } => TerminalPanelMessage::GridDragged {
+                position: Point::new(position.x - bounds.x, position.y - bounds.y),
+            },
+            mouse::Event::WheelScrolled { delta } => {
+                cursor.position_over(bounds)?;
+                TerminalPanelMessage::GridWheelScrolled {
+                    lines: scroll_lines(delta),
+                }
+            }
+            _ => return None,
+        };
+        Some(canvas::Action::publish(Message::TerminalPanel(message)).and_capture())
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let palette = theme.palette();
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), palette.background);
+
+        let grid = self.session.emulator.renderable_frame();
+        let highlight = selection_highlight_color(theme);
+
+        for (row, line) in grid.lines.iter().enumerate() {
+            let y = row as f32 * CELL_HEIGHT;
+            let mut run = String::new();
+            let mut run_start = 0usize;
+            let mut run_style: Option<(Color, iced::Font)> = None;
+            for (column, cell) in line.iter().enumerate() {
+                let style = cell_text_style(cell, theme, highlight);
+                match run_style {
+                    Some(current) if current != style => {
+                        flush_text_run(&mut frame, &mut run, run_start, y, Some(current));
+                        run_start = column;
+                        run_style = Some(style);
+                    }
+                    None => {
+                        run_start = column;
+                        run_style = Some(style);
+                    }
+                    _ => {}
+                }
+                run.push(cell.character);
+            }
+            flush_text_run(&mut frame, &mut run, run_start, y, run_style);
+        }
+
+        if self.focused {
+            if let Some((row, column)) = grid.cursor {
+                if grid.cursor_shape != CursorShape::Hidden {
+                    draw_cursor(&mut frame, row, column, grid.cursor_shape, palette.text);
+                }
+            }
+        }
+
+        vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Interaction {
+        // canvas 的 interaction 全局生效,必须按悬停位置门控,
+        // 否则整个应用的光标都会变成输入条。
+        if cursor.is_over(bounds) {
+            Interaction::Text
+        } else {
+            Interaction::default()
+        }
+    }
+}
+
+fn selection_highlight_color(theme: &Theme) -> Color {
+    let mut color = theme.extended_palette().primary.base.color;
+    color.a = 0.35;
+    color
+}
+
+fn cell_text_style(
+    cell: &TerminalCell,
+    theme: &Theme,
+    highlight: Color,
+) -> (Color, iced::Font) {
+    let palette = theme.palette();
+    let mut fg = terminal_color(cell.fg, palette);
+    if cell.flags.contains(Flags::INVERSE) {
+        fg = terminal_color(cell.bg, palette);
+    }
+    if cell.flags.contains(Flags::DIM) {
+        fg.a *= 0.55;
+    }
+    if cell.selected {
+        fg = highlight;
+    }
+    let weight = if cell.flags.contains(Flags::BOLD) {
+        iced::font::Weight::Bold
+    } else {
+        iced::font::Weight::Normal
+    };
+    let style = if cell.flags.contains(Flags::ITALIC) {
+        iced::font::Style::Italic
+    } else {
+        iced::font::Style::Normal
+    };
+    (
+        fg,
+        iced::Font {
+            weight,
+            style,
+            ..iced::Font::MONOSPACE
+        },
+    )
+}
+
+fn draw_cursor(
+    frame: &mut Frame,
+    row: usize,
+    column: usize,
+    shape: CursorShape,
+    color: Color,
+) {
+    let x = column as f32 * CELL_WIDTH;
+    let y = row as f32 * CELL_HEIGHT;
+    match shape {
+        CursorShape::Block => frame.fill_rectangle(Point::new(x, y), Size::new(CELL_WIDTH, CELL_HEIGHT), {
+            let mut background = color;
+            background.a = 0.35;
+            background
+        }),
+        CursorShape::Underline => frame.fill_rectangle(
+            Point::new(x, y + CELL_HEIGHT - 2.0),
+            Size::new(CELL_WIDTH, 2.0),
+            color,
+        ),
+        _ => frame.fill_rectangle(Point::new(x, y), Size::new(2.0, CELL_HEIGHT), color),
+    }
+}
+
+fn flush_text_run(
+    frame: &mut Frame,
+    run: &mut String,
+    run_start: usize,
+    y: f32,
+    style: Option<(Color, iced::Font)>,
+) {
+    let Some((color, font)) = style else {
+        return;
+    };
+    if run.is_empty() {
+        return;
+    }
+    let content = std::mem::take(run);
+    frame.fill_text(CanvasText {
+        content,
+        position: Point::new(run_start as f32 * CELL_WIDTH, y),
+        max_width: f32::INFINITY,
+        color,
+        size: iced::Pixels(FONT_SIZE),
+        line_height: iced::advanced::text::LineHeight::Absolute(iced::Pixels(CELL_HEIGHT)),
+        font,
+        align_x: iced::advanced::text::Alignment::Left,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: iced::advanced::text::Shaping::Advanced,
+    });
+}
+
+/// ANSI 16 色(xterm 经典),其余索引色按 256 色公式;默认前景/背景取主题。
+fn terminal_color(color: TermColor, palette: iced::theme::Palette) -> Color {
+    match color {
+        TermColor::Named(name) => named_color(name, palette),
+        TermColor::Indexed(index) if index < 16 => ansi_16(index as usize),
+        TermColor::Indexed(index) if index < 232 => cube_color(index),
+        TermColor::Indexed(index) => grayscale_color(index),
+        TermColor::Spec(rgb) => Color::from_rgb8(rgb.r, rgb.g, rgb.b),
+    }
+}
+
+fn named_color(name: NamedColor, palette: iced::theme::Palette) -> Color {
+    match name {
+        NamedColor::Background => palette.background,
+        NamedColor::Black
+        | NamedColor::Red
+        | NamedColor::Green
+        | NamedColor::Yellow
+        | NamedColor::Blue
+        | NamedColor::Magenta
+        | NamedColor::Cyan
+        | NamedColor::White
+        | NamedColor::BrightBlack
+        | NamedColor::BrightRed
+        | NamedColor::BrightGreen
+        | NamedColor::BrightYellow
+        | NamedColor::BrightBlue
+        | NamedColor::BrightMagenta
+        | NamedColor::BrightCyan
+        | NamedColor::BrightWhite => ansi_16(plain_index(name)),
+        _ => palette.text,
+    }
+}
+
+fn plain_index(name: NamedColor) -> usize {
+    match name {
+        NamedColor::Black => 0,
+        NamedColor::Red => 1,
+        NamedColor::Green => 2,
+        NamedColor::Yellow => 3,
+        NamedColor::Blue => 4,
+        NamedColor::Magenta => 5,
+        NamedColor::Cyan => 6,
+        NamedColor::White => 7,
+        NamedColor::BrightBlack => 8,
+        NamedColor::BrightRed => 9,
+        NamedColor::BrightGreen => 10,
+        NamedColor::BrightYellow => 11,
+        NamedColor::BrightBlue => 12,
+        NamedColor::BrightMagenta => 13,
+        NamedColor::BrightCyan => 14,
+        _ => 15,
+    }
+}
+
+fn ansi_16(index: usize) -> Color {
+    // VS Code 风格 16 色:在深浅两种背景下都有足够对比度;
+    // 经典 xterm 色的暗红/暗蓝在深色背景上几乎不可见。
+    const ANSI: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00),
+        (0xcd, 0x31, 0x31),
+        (0x0d, 0xbc, 0x79),
+        (0xe5, 0xe5, 0x10),
+        (0x24, 0x72, 0xc8),
+        (0xbc, 0x3f, 0xbc),
+        (0x11, 0xa8, 0xcd),
+        (0xe5, 0xe5, 0xe5),
+        (0x66, 0x66, 0x66),
+        (0xf1, 0x4c, 0x4c),
+        (0x23, 0xd1, 0x8b),
+        (0xf5, 0xf5, 0x43),
+        (0x3b, 0x8e, 0xea),
+        (0xd6, 0x70, 0xd6),
+        (0x29, 0xb8, 0xdb),
+        (0xff, 0xff, 0xff),
+    ];
+    let (r, g, b) = ANSI[index.min(15)];
+    Color::from_rgb8(r, g, b)
+}
+
+fn cube_color(index: u8) -> Color {
+    let levels = [0u8, 95, 135, 175, 215, 255];
+    let value = index - 16;
+    Color::from_rgb8(
+        levels[(value / 36) as usize],
+        levels[((value % 36) / 6) as usize],
+        levels[(value % 6) as usize],
+    )
+}
+
+fn grayscale_color(index: u8) -> Color {
+    let value = 8 + (index - 232) * 10;
+    Color::from_rgb8(value, value, value)
+}
+
+fn scroll_lines(delta: &ScrollDelta) -> i32 {
+    match delta {
+        ScrollDelta::Lines { y, .. } => {
+            let magnitude = (y.abs().ceil() as i32).clamp(1, 10);
+            y.signum() as i32 * WHEEL_LINES_PER_NOTCH * magnitude
+        }
+        ScrollDelta::Pixels { y, .. } => (y / CELL_HEIGHT).round() as i32,
+    }
+}

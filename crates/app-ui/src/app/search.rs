@@ -67,6 +67,7 @@ impl FileBrowser {
             | ShortcutAction::NavigateUp
             | ShortcutAction::FileProperties
             | ShortcutAction::Preview
+            | ShortcutAction::ToggleTerminal
             | ShortcutAction::Paste => Task::none(),
         }
     }

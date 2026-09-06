@@ -29,7 +29,7 @@ impl FileBrowser {
                 _ => Task::none(),
             };
         }
-        match message {
+        let command = match message {
             Message::StartupEnvironmentLoaded(startup_environment) => {
                 self.accept_startup_environment(*startup_environment)
             }
@@ -453,6 +453,7 @@ impl FileBrowser {
             Message::SidebarBookmarkDeleteRequested(path) => self.delete_sidebar_bookmark(path),
             Message::SidebarResizeStarted => self.start_sidebar_resize_drag(),
             Message::SplitResizeStarted => self.start_split_resize(self.cursor_position),
+            Message::TerminalPanel(message) => self.handle_terminal_panel_message(message),
             Message::CursorMoved { window, position } => {
                 self.update_pointer_motion(window, position)
             }
@@ -875,6 +876,10 @@ impl FileBrowser {
                 self.user_config.terminal_emulator = terminal_emulator;
                 self.persist_user_preferences_command()
             }
+            Message::TerminalShellSelected(shell) => {
+                self.user_config.terminal_shell = shell;
+                self.persist_user_preferences_command()
+            }
             Message::RenderingGpuPreferenceSelected(preference) => {
                 self.select_rendering_gpu_preference(preference)
             }
@@ -1083,7 +1088,11 @@ impl FileBrowser {
             | Message::TransferConflictCancelRequested => {
                 self.apply_transfer_conflict_message(message)
             }
-        }
+        };
+        // 任何消息处理后都检查活动窗格目录是否变化,让内嵌终端即时跟随
+        // (前进/后退/侧边栏跳转等入口太多,统一在出口收敛)。
+        self.follow_terminal_panel_directory();
+        command
     }
 }
 

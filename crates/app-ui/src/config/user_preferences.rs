@@ -43,6 +43,7 @@ pub(crate) struct UserPreferences {
     pub(crate) sidebar_favorites: Option<Vec<SidebarFavoriteConfig>>,
     pub(crate) network_connections: Vec<SavedNetworkConnection>,
     pub(crate) terminal_emulator: TerminalEmulator,
+    pub(crate) terminal_shell: String,
     pub(crate) file_operation_verification: FileOperationVerification,
     pub(crate) browser_view_mode: BrowserViewMode,
     pub(crate) visible_column_count: usize,
@@ -91,6 +92,7 @@ impl UserPreferences {
             sidebar_favorites: config.sidebar_favorites.clone(),
             network_connections: config.network_connections.clone(),
             terminal_emulator: config.terminal_emulator,
+            terminal_shell: config.terminal_shell.clone(),
             file_operation_verification: config.file_operation_verification,
             browser_view_mode: config.browser_view_mode,
             visible_column_count: normalize_visible_column_count(config.visible_column_count),
@@ -125,6 +127,7 @@ impl UserPreferences {
         config.sidebar_favorites = self.sidebar_favorites.clone();
         config.network_connections = self.network_connections.clone();
         config.terminal_emulator = self.terminal_emulator;
+        config.terminal_shell = self.terminal_shell.clone();
         config.file_operation_verification = self.file_operation_verification;
         config.browser_view_mode = self.browser_view_mode;
         config.visible_column_count = normalize_visible_column_count(self.visible_column_count);
@@ -177,6 +180,7 @@ impl UserPreferences {
             .map(|favorites| stored_sidebar_favorites(favorites));
         stored.network_connections = stored_network_connections(&self.network_connections);
         stored.terminal_emulator = self.terminal_emulator.config_value().to_owned();
+        stored.terminal_shell = Some(self.terminal_shell.clone());
         stored.file_operation_verification =
             file_operation_verification_config_value(self.file_operation_verification).to_owned();
         stored.browser_view_mode =
@@ -267,6 +271,10 @@ impl UserPreferences {
             network_connections: network_connections_from_stored(&stored.network_connections),
             terminal_emulator: TerminalEmulator::from_config_value(&stored.terminal_emulator)
                 .unwrap_or(default_preferences.terminal_emulator),
+            terminal_shell: stored
+                .terminal_shell
+                .clone()
+                .unwrap_or(default_preferences.terminal_shell.clone()),
             file_operation_verification: file_operation_verification_from_config_value(
                 &stored.file_operation_verification,
             )

@@ -70,6 +70,7 @@ mod sidebar_devices;
 mod sqlite_preview;
 mod startup_rendering;
 mod startup_trace;
+mod terminal_panel;
 mod text_preview;
 mod text_preview_loading;
 mod text_preview_viewer;

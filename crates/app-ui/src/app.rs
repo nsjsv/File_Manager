@@ -306,6 +306,7 @@ pub(crate) struct FileBrowser {
     pub(crate) column_width_overrides: HashMap<usize, f32>,
     column_width_reference_content_widths: HashMap<usize, f32>,
     pub(crate) terminal_emulator: TerminalEmulator,
+    pub(crate) terminal_panel: crate::terminal_panel::TerminalPanelState,
     pub(crate) selected_settings_category: SettingsCategory,
     pub(crate) settings_subpage: Option<SettingsSubpage>,
     pub(crate) expanded_color_scheme_family: Option<crate::matugen_theme::ColorSchemeFamily>,
@@ -405,6 +406,7 @@ impl FileBrowser {
     pub(crate) fn advance_window_animation_frame(&mut self) -> Task<Message> {
         self.preview_window_chrome.advance();
         self.preview_window_bottom_controls.advance();
+        self.advance_terminal_panel_height_animation();
         Task::batch([
             self.advance_smooth_scroll_animation(),
             self.advance_scrollbar_animation(),
@@ -682,6 +684,7 @@ impl FileBrowser {
             column_width_overrides: HashMap::new(),
             column_width_reference_content_widths: HashMap::new(),
             terminal_emulator: user_config.terminal_emulator,
+            terminal_panel: crate::terminal_panel::TerminalPanelState::new(),
             selected_settings_category: SettingsCategory::General,
             settings_subpage: None,
             expanded_color_scheme_family: None,
@@ -860,6 +863,8 @@ impl FileBrowser {
             subscriptions.push(file_operation_subscription(operation));
         }
 
+        subscriptions.push(self.terminal_output_subscription());
+
         let remote_preview_progress_is_indeterminate = matches!(
             self.preview.as_ref(),
             Some(PreviewState::DownloadingRemoteFile(download)) if download.fraction().is_none()
@@ -890,6 +895,7 @@ impl FileBrowser {
             || self.list_directory_animation_is_active()
             || self.icon_grid_expansion_animation_is_active()
             || self.sidebar_bookmark_motion_is_active()
+            || self.terminal_panel.is_animating()
         {
             subscriptions.push(
                 time::every(SCROLLBAR_ANIMATION_INTERVAL)

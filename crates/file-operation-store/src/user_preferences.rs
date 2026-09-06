@@ -43,6 +43,9 @@ pub struct StoredUserPreferences {
     pub sidebar_favorites: Option<Vec<StoredSidebarFavorite>>,
     pub network_connections: Vec<StoredNetworkConnection>,
     pub terminal_emulator: String,
+    /// 内嵌终端使用的 shell;None 为旧版本数据,读取端回退系统登录 shell。
+    #[serde(default)]
+    pub terminal_shell: Option<String>,
     pub file_operation_verification: String,
     pub browser_view_mode: String,
     #[serde(default = "default_icon_grid_size")]
@@ -103,6 +106,7 @@ impl Default for StoredUserPreferences {
             sidebar_favorites: None,
             network_connections: Vec::new(),
             terminal_emulator: "automatic".to_owned(),
+            terminal_shell: None,
             file_operation_verification: "basic_metadata".to_owned(),
             browser_view_mode: "columns".to_owned(),
             icon_grid_size: default_icon_grid_size(),

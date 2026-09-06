@@ -69,6 +69,26 @@ impl fmt::Display for TerminalEmulatorPickOption {
     }
 }
 
+const SYSTEM_DEFAULT_SHELL_LABEL: &str = "System default";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalShellPickOption(String);
+
+impl fmt::Display for TerminalShellPickOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            return formatter.write_str(&crate::localization::translate_current(SYSTEM_DEFAULT_SHELL_LABEL));
+        }
+        formatter.write_str(
+            std::path::Path::new(&self.0)
+                .file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_else(|| self.0.as_str().into())
+                .as_ref(),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LanguageSettingPickOption(UiLanguageSetting);
 
@@ -238,6 +258,10 @@ fn general_settings_detail(
     rows.push(labeled_setting_row(
         "Terminal",
         terminal_emulator_dropdown(browser.terminal_emulator),
+    ));
+    rows.push(labeled_setting_row(
+        "Shell",
+        terminal_shell_dropdown(browser.user_config().terminal_shell.clone()),
     ));
 
     settings_detail_scroller(
@@ -735,6 +759,31 @@ fn terminal_emulator_dropdown(selected: TerminalEmulator) -> Element<'static, Me
         options,
         Some(TerminalEmulatorPickOption(selected)),
         |selected| Message::TerminalEmulatorSelected(selected.0),
+    )
+    .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
+    .text_size(12)
+    .padding([5, 8])
+    .into()
+}
+
+fn terminal_shell_dropdown(selected: String) -> Element<'static, Message> {
+    let mut shells = vec![String::new()];
+    shells.extend(
+        crate::terminal_panel::session::available_shells()
+            .iter()
+            .cloned(),
+    );
+    // 手写进配置文件的路径不在 /etc/shells 里也要能显示选中态。
+    if !selected.is_empty() && !shells.contains(&selected) {
+        shells.push(selected.clone());
+    }
+    let options: Vec<TerminalShellPickOption> =
+        shells.into_iter().map(TerminalShellPickOption).collect();
+
+    pick_list(
+        options,
+        Some(TerminalShellPickOption(selected)),
+        |selected| Message::TerminalShellSelected(selected.0),
     )
     .width(Length::Fixed(SETTINGS_DROPDOWN_WIDTH))
     .text_size(12)
