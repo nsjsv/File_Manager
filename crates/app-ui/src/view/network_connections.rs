@@ -6,7 +6,7 @@ use crate::appearance::{
 };
 use crate::formatting::format_middle_ellipsized_text;
 use crate::icons::IconSymbol;
-use crate::model::Message;
+use crate::model::{ContextMenuPreferences, Message};
 use crate::network_connections::{
     NetworkConnectionEditorMode, NetworkConnectionEditorState, NetworkConnectionMessage,
     SidebarNetworkConnectionAction, SidebarNetworkConnectionContextMenuState,
@@ -195,13 +195,14 @@ fn protocol_selector(selected: desktop_linux::NetworkProtocol) -> Element<'stati
     ])
 }
 
-pub(super) fn network_connection_context_menu_panel(
-    menu: &SidebarNetworkConnectionContextMenuState,
-) -> Element<'_, Message> {
+pub(super) fn network_connection_context_menu_panel<'a>(
+    menu: &'a SidebarNetworkConnectionContextMenuState,
+    context_menus: &'a ContextMenuPreferences,
+) -> Element<'a, Message> {
     let mut menu_content = iced::widget::Column::new()
         .spacing(NETWORK_CONTEXT_MENU_ITEM_SPACING)
         .padding(NETWORK_CONTEXT_MENU_PADDING);
-    for action in menu.connection.available_actions() {
+    for action in context_menus.network_connection_items(menu.connection.available_actions()) {
         menu_content = menu_content.push(network_connection_menu_button(
             action,
             Message::NetworkConnection(NetworkConnectionMessage::ActionSelected(

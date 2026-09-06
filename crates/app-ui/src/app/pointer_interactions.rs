@@ -42,6 +42,7 @@ impl FileBrowser {
             }
         }
         Task::batch([
+            self.finish_context_menu_settings_drag(),
             self.finish_sidebar_bookmark_drag(),
             self.finish_sidebar_resize_drag_command(),
             self.finish_right_preview_panel_drag_commands(),
@@ -74,6 +75,9 @@ impl FileBrowser {
                 self.preview_window_chrome.update_for_cursor_y(position.y);
             }
             return Task::none();
+        }
+        if self.settings_window == Some(window) {
+            return self.update_context_menu_settings_drag(position);
         }
         if window != self.main_window {
             return Task::none();

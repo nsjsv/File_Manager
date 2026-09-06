@@ -132,6 +132,18 @@ pub(crate) use preview::{
 };
 mod settings;
 pub(crate) use settings::{SettingsCategory, SettingsSubpage};
+mod context_menu_items;
+mod context_menu_layout;
+#[cfg(test)]
+mod context_menu_layout_tests;
+pub(crate) use context_menu_items::{
+    FileAreaMenuItem, SearchResultMenuItem, TrashMenuItem,
+};
+pub(crate) use context_menu_layout::{
+    ContextMenuLayoutConfigValues, ContextMenuPreferences, ContextMenuSettingsDragState,
+    ContextMenuSettingsPage, ContextMenuSettingsPageStep, ContextMenuSettingsRow,
+    CONTEXT_MENU_SETTINGS_PAGES, CONTEXT_MENU_SETTINGS_ROW_PITCH,
+};
 mod window_controls;
 pub(crate) use window_controls::{
     WindowChromeLayout, WindowControlKind, WindowControlMoveDirection, WindowControlPlacement,
@@ -641,6 +653,14 @@ pub(crate) enum Message {
     SettingsCategorySelected(SettingsCategory),
     SettingsSubpageOpened(SettingsSubpage),
     SettingsSubpageClosed,
+    ContextMenuSettingsPageShifted(ContextMenuSettingsPageStep),
+    ContextMenuSettingsItemToggled {
+        page: ContextMenuSettingsPage,
+        index: usize,
+    },
+    ContextMenuSettingsDragStarted { page: ContextMenuSettingsPage, index: usize },
+    ContextMenuSettingsResetRequested(ContextMenuSettingsPage),
+    ContextMenuSettingsResetConfirmed(ContextMenuSettingsPage),
     ThemeModeSelected(ThemeMode),
     ColorSchemeFamilySelected(ColorSchemeFamily),
     ColorSchemePresetSelected(ColorSchemePreset),

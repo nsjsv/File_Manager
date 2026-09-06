@@ -197,6 +197,14 @@ impl FileBrowser {
         let Some(connection) = self.network_connections.entry(&id).cloned() else {
             return rename_command;
         };
+        if self
+            .user_config
+            .context_menus
+            .network_connection_items(connection.available_actions())
+            .is_empty()
+        {
+            return rename_command;
+        }
 
         self.clear_preview();
         self.operation_queue.close_panel();

@@ -5,6 +5,7 @@ mod archive_extraction;
 mod auxiliary_window_layout;
 mod batch_rename;
 mod checksum;
+mod context_menu_settings;
 mod convert;
 mod document_preview_panel;
 mod file_operation_verification_settings;
@@ -291,6 +292,7 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
                 context_menu,
                 browser.is_trash_view,
                 browser.active_pane_id(),
+                &browser.user_config().context_menus,
                 &browser.user_config().list_view_preferences,
                 selected_search_entry_types,
             ),

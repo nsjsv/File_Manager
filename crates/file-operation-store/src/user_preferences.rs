@@ -93,6 +93,35 @@ pub struct StoredUserPreferences {
     pub custom_color_scheme: Option<StoredCustomColorScheme>,
     #[serde(default = "default_launch_window_policy")]
     pub launch_window_policy: String,
+    /// 各右键菜单的项顺序与可见性;None = 旧版本数据,读取端回退内置默认。
+    #[serde(default)]
+    pub context_menu_layouts: Option<StoredContextMenuLayouts>,
+}
+
+/// 一份右键菜单的有序项列表;id 为 app 层定义的稳定字符串。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredContextMenuLayout {
+    pub items: Vec<StoredContextMenuItemEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredContextMenuItemEntry {
+    pub id: String,
+    pub visible: bool,
+}
+
+/// 9 份可配置右键菜单的存储形态,字段与 app 层菜单页一一对应。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredContextMenuLayouts {
+    pub file_entry: StoredContextMenuLayout,
+    pub file_blank: StoredContextMenuLayout,
+    pub trash: StoredContextMenuLayout,
+    pub search: StoredContextMenuLayout,
+    pub search_entry_types: StoredContextMenuLayout,
+    pub list_columns: StoredContextMenuLayout,
+    pub sidebar_bookmark: StoredContextMenuLayout,
+    pub sidebar_device: StoredContextMenuLayout,
+    pub network_connection: StoredContextMenuLayout,
 }
 
 impl Default for StoredUserPreferences {
@@ -141,6 +170,7 @@ impl Default for StoredUserPreferences {
             color_scheme: default_color_scheme(),
             custom_color_scheme: None,
             launch_window_policy: default_launch_window_policy(),
+            context_menu_layouts: None,
         }
     }
 }

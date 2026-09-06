@@ -309,15 +309,19 @@ impl FileBrowser {
         self.clear_preview();
         self.drag_selection_anchor = None;
         self.cancel_file_drag_interaction();
-        self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
-            target: Some(path.clone()),
-            target_is_directory: self.entry_kind(&path) == Some(FileKind::Directory),
-            paste_directory: self.entry_parent_directory(&path),
-            can_batch_rename: self.batch_rename_available_for_selection(),
-            delete_action,
-            position: self.cursor_position,
-            expansion: FileContextMenuExpansion::None,
-        }));
+        let target_is_directory = self.entry_kind(&path) == Some(FileKind::Directory);
+        let can_batch_rename = self.batch_rename_available_for_selection();
+        if self.file_area_menu_is_visible(true, target_is_directory, can_batch_rename) {
+            self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
+                target: Some(path.clone()),
+                target_is_directory,
+                paste_directory: self.entry_parent_directory(&path),
+                can_batch_rename,
+                delete_action,
+                position: self.cursor_position,
+                expansion: FileContextMenuExpansion::None,
+            }));
+        }
         Task::batch([expansion_command, rename_command])
     }
 
@@ -343,16 +347,37 @@ impl FileBrowser {
         self.clear_preview();
         self.drag_selection_anchor = None;
         self.selection_marquee = None;
-        self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
-            target: None,
-            target_is_directory: false,
-            paste_directory: directory,
-            can_batch_rename: false,
-            delete_action: FileDeleteAction::MoveToTrash,
-            position: self.cursor_position,
-            expansion: FileContextMenuExpansion::None,
-        }));
+        if self.file_area_menu_is_visible(false, false, false) {
+            self.context_menu = Some(ContextMenuState::FileArea(FileContextMenuState {
+                target: None,
+                target_is_directory: false,
+                paste_directory: directory,
+                can_batch_rename: false,
+                delete_action: FileDeleteAction::MoveToTrash,
+                position: self.cursor_position,
+                expansion: FileContextMenuExpansion::None,
+            }));
+        }
         Task::batch([expansion_command, rename_command])
+    }
+
+    /// 与 view 层 trash/entry/blank 面板选择同一谓词,配置后无可见面板时菜单不进入状态。
+    pub(super) fn file_area_menu_is_visible(
+        &self,
+        has_target: bool,
+        target_is_directory: bool,
+        can_batch_rename: bool,
+    ) -> bool {
+        let menus = &self.user_config.context_menus;
+        if self.is_trash_view {
+            !menus.trash_items(has_target).is_empty()
+        } else if has_target {
+            !menus
+                .file_entry_items(target_is_directory, can_batch_rename)
+                .is_empty()
+        } else {
+            !menus.file_blank_items().is_empty()
+        }
     }
 
     pub(super) fn update_file_context_menu_expansion(

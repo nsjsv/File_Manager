@@ -205,7 +205,13 @@ impl FileBrowser {
     }
 
     pub(super) fn open_search_entry_types_menu(&mut self) -> Task<Message> {
-        if self.search_workspace.is_none() {
+        if self.search_workspace.is_none()
+            || self
+                .user_config
+                .context_menus
+                .search_entry_type_items()
+                .is_empty()
+        {
             return Task::none();
         }
         self.context_menu = Some(ContextMenuState::SearchEntryTypes(
@@ -574,10 +580,12 @@ impl FileBrowser {
                 SearchSelectionGesture::Plain,
             );
         }
-        self.context_menu = Some(ContextMenuState::Search(SearchContextMenuState {
-            target: path,
-            position: self.cursor_position,
-        }));
+        if !self.user_config.context_menus.search_items().is_empty() {
+            self.context_menu = Some(ContextMenuState::Search(SearchContextMenuState {
+                target: path,
+                position: self.cursor_position,
+            }));
+        }
         Task::none()
     }
 

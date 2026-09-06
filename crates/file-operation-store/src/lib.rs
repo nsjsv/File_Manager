@@ -31,6 +31,7 @@ pub use recoverable_transfer::{
 };
 mod user_preferences;
 pub use user_preferences::{
+    StoredContextMenuItemEntry, StoredContextMenuLayout, StoredContextMenuLayouts,
     StoredCustomColorScheme, StoredCustomColorSet, StoredListViewColumn, StoredNetworkConnection,
     StoredPreviewExtensionRules, StoredShortcutBinding, StoredSidebarFavorite,
     StoredUserPreferences, StoredWindowControlPlacement, LAUNCH_WINDOW_POLICY_MERGE_INTO_EXISTING,

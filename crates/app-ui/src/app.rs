@@ -8,6 +8,7 @@ pub(crate) mod checksum;
 mod column_resize;
 mod column_scroll;
 mod config_persistence;
+mod context_menu_settings;
 pub(crate) mod convert;
 mod desktop_activation;
 mod directory_expansion_loading;
@@ -136,7 +137,7 @@ use crate::model::{
     FilePropertiesState, IconGridExpansionState, IconGridViewport, ImagePreviewViewport,
     ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
     PreviewState, PreviewWindowChromeState, PreviewWindowProfile, ScrollbarRegion,
-    SearchServiceState, SelectionMarquee, SettingsCategory, SettingsSubpage,
+    SearchServiceState, SelectionMarquee, ContextMenuSettingsDragState, ContextMenuSettingsPage, SettingsCategory, SettingsSubpage,
     SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
     StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
     TrashRefreshState, VideoPreviewPlayback,
@@ -316,6 +317,9 @@ pub(crate) struct FileBrowser {
     pub(crate) terminal_emulator: TerminalEmulator,
     pub(crate) terminal_panel: crate::terminal_panel::TerminalPanelState,
     pub(crate) selected_settings_category: SettingsCategory,
+    pub(crate) context_menu_settings_page: ContextMenuSettingsPage,
+    pub(crate) context_menu_reset_confirmation: Option<ContextMenuSettingsPage>,
+    pub(crate) context_menu_settings_drag: Option<ContextMenuSettingsDragState>,
     pub(crate) settings_subpage: Option<SettingsSubpage>,
     pub(crate) expanded_color_scheme_family: Option<crate::matugen_theme::ColorSchemeFamily>,
     pub(crate) custom_color_scheme_import_error: Option<String>,
@@ -706,6 +710,9 @@ impl FileBrowser {
             terminal_emulator: user_config.terminal_emulator,
             terminal_panel: crate::terminal_panel::TerminalPanelState::new(),
             selected_settings_category: SettingsCategory::General,
+            context_menu_settings_page: ContextMenuSettingsPage::FileEntry,
+            context_menu_reset_confirmation: None,
+            context_menu_settings_drag: None,
             settings_subpage: None,
             expanded_color_scheme_family: None,
             custom_color_scheme_import_error: None,

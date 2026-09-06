@@ -37,6 +37,7 @@ use super::settings_group::{
     info_setting_row, labeled_setting_row, settings_card, settings_group, toggle_setting_row,
     SETTINGS_GROUP_SPACING,
 };
+use super::context_menu_settings::context_menu_settings_section;
 use super::shortcut_settings::shortcut_settings_section;
 use super::window_chrome::{floating_window_control_group, separate_window_content};
 use super::window_control_settings::window_control_settings_row;
@@ -341,6 +342,10 @@ fn files_settings_detail(
                         Message::ListDirectorySizeDisplayModeToggled,
                     ),
                 ],
+            ),
+            settings_group(
+                "Context menus",
+                vec![context_menu_settings_section(browser)],
             ),
             preview_settings_entry_card(),
             settings_group(

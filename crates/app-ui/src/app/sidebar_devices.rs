@@ -108,12 +108,21 @@ impl FileBrowser {
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         let _ = self.cancel_address_editing();
-        self.context_menu = Some(ContextMenuState::SidebarDevice(
-            SidebarDeviceContextMenuState {
-                device,
-                position: self.cursor_position,
-            },
-        ));
+        // 无可用动作的设备保留占位文案;有动作但全部被配置隐藏时不弹菜单。
+        let device_has_actions = device.available_actions().is_empty();
+        let actions_visible = !self
+            .user_config
+            .context_menus
+            .sidebar_device_items(device.available_actions())
+            .is_empty();
+        if device_has_actions || actions_visible {
+            self.context_menu = Some(ContextMenuState::SidebarDevice(
+                SidebarDeviceContextMenuState {
+                    device,
+                    position: self.cursor_position,
+                },
+            ));
+        }
         rename_command
     }
 

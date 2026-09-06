@@ -798,6 +798,21 @@ impl FileBrowser {
             Message::SettingsCategorySelected(category) => self.select_settings_category(category),
             Message::SettingsSubpageOpened(subpage) => self.select_settings_subpage(subpage),
             Message::SettingsSubpageClosed => self.close_settings_subpage(),
+            Message::ContextMenuSettingsPageShifted(step) => {
+                self.shift_context_menu_settings_page(step)
+            }
+            Message::ContextMenuSettingsItemToggled { page, index } => {
+                self.toggle_context_menu_settings_item(page, index)
+            }
+            Message::ContextMenuSettingsDragStarted { page, index } => {
+                self.start_context_menu_settings_drag(page, index)
+            }
+            Message::ContextMenuSettingsResetRequested(page) => {
+                self.request_context_menu_settings_reset(page)
+            }
+            Message::ContextMenuSettingsResetConfirmed(page) => {
+                self.confirm_context_menu_settings_reset(page)
+            }
             Message::WindowChromeLayoutSelected(layout) => self.select_window_chrome_layout(layout),
             Message::WindowControlVisibilityToggled(kind) => {
                 self.toggle_window_control_visibility(kind)

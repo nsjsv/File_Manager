@@ -6,7 +6,9 @@ use file_core::{FileOperationVerification, SortDirection, SortField};
 use crate::matugen_theme::{
     default_custom_color_scheme, ColorSchemePreset, CustomColorScheme, ThemeMode,
 };
-use crate::model::{BrowserViewMode, ListDirectorySizeDisplayMode, SearchHistory};
+use crate::model::{
+    BrowserViewMode, ContextMenuPreferences, ListDirectorySizeDisplayMode, SearchHistory,
+};
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
 
@@ -579,6 +581,7 @@ pub(crate) struct UserConfig {
     pub(crate) save_view_state: bool,
     pub(crate) shortcuts: ShortcutConfig,
     pub(crate) launch_window_policy: LaunchWindowPolicy,
+    pub(crate) context_menus: ContextMenuPreferences,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -638,6 +641,7 @@ pub(crate) fn default_user_config() -> UserConfig {
         save_view_state: false,
         launch_window_policy: DEFAULT_LAUNCH_WINDOW_POLICY,
         shortcuts: ShortcutConfig::defaults(),
+        context_menus: crate::model::ContextMenuPreferences::defaults(),
     }
 }
 
@@ -679,6 +683,7 @@ pub(crate) fn ui_thread_startup_config() -> UserConfig {
         startup_custom_directory: PathBuf::new(),
         save_view_state: false,
         shortcuts: ShortcutConfig::defaults(),
+        context_menus: ContextMenuPreferences::defaults(),
         launch_window_policy: DEFAULT_LAUNCH_WINDOW_POLICY,
     }
 }

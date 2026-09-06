@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use desktop_linux::{NetworkConnection, NetworkConnectionId, NetworkProtocol, TerminalEmulator};
 use file_core::FileOperationVerification;
 use file_operation_store::{
-    StoreResult, StoredListViewColumn, StoredNetworkConnection, StoredPath,
-    StoredPreviewExtensionRules, StoredShortcutBinding, StoredSidebarFavorite,
-    StoredUserPreferences, StoredWindowControlPlacement, TaskQueueStore,
+    StoreResult, StoredContextMenuItemEntry, StoredContextMenuLayout, StoredContextMenuLayouts,
+    StoredListViewColumn, StoredNetworkConnection, StoredPath, StoredPreviewExtensionRules,
+    StoredShortcutBinding, StoredSidebarFavorite, StoredUserPreferences,
+    StoredWindowControlPlacement, TaskQueueStore,
 };
 
 use super::app_config::AppConfig;
@@ -25,9 +26,10 @@ use super::{
 use crate::matugen_theme::{ColorSchemePreset, CustomColorScheme, ThemeMode};
 use crate::model::{
     list_column_kind_config_value, list_column_kind_from_config_value, BrowserViewMode,
-    ListColumnConfig, ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences,
-    WindowChromeLayout, WindowControlKind, WindowControlPlacement, WindowControlSide,
-    WindowControlVisibility, WindowControlsConfig,
+    ContextMenuLayoutConfigValues, ContextMenuPreferences, ListColumnConfig,
+    ListDirectorySizeDisplayMode, ListSortPreference, ListViewPreferences, WindowChromeLayout,
+    WindowControlKind, WindowControlPlacement, WindowControlSide, WindowControlVisibility,
+    WindowControlsConfig,
 };
 use crate::network_connections::SavedNetworkConnection;
 use crate::shortcuts::ShortcutConfig;
@@ -67,6 +69,7 @@ pub(crate) struct UserPreferences {
     pub(crate) theme_mode: ThemeMode,
     pub(crate) color_scheme: ColorSchemePreset,
     pub(crate) custom_color_scheme: CustomColorScheme,
+    pub(crate) context_menus: ContextMenuPreferences,
 }
 
 impl UserPreferences {
@@ -123,6 +126,7 @@ impl UserPreferences {
             theme_mode: config.theme_mode,
             color_scheme: config.color_scheme,
             custom_color_scheme: config.custom_color_scheme.clone(),
+            context_menus: config.context_menus.clone(),
         }
     }
 
@@ -161,6 +165,7 @@ impl UserPreferences {
         config.theme_mode = self.theme_mode;
         config.color_scheme = self.color_scheme;
         config.custom_color_scheme = self.custom_color_scheme.clone();
+        config.context_menus = self.context_menus.clone();
     }
 
     pub(crate) fn to_stored(&self) -> StoredUserPreferences {
@@ -231,6 +236,7 @@ impl UserPreferences {
         stored.theme_mode = self.theme_mode.config_value().to_owned();
         stored.color_scheme = self.color_scheme.config_value().to_owned();
         stored.custom_color_scheme = Some(self.custom_color_scheme.to_stored());
+        stored.context_menu_layouts = Some(stored_context_menu_layouts(&self.context_menus));
         stored
     }
 
@@ -256,6 +262,7 @@ impl UserPreferences {
             &default_preferences.custom_color_scheme,
         );
         let window_controls = window_controls_from_stored(&stored, &default_preferences);
+        let context_menus = context_menu_preferences_from_stored(&stored, &default_preferences);
         let columns_view_density = stored
             .columns_view_density
             .map(ViewDensityLevel::from_index)
@@ -333,10 +340,13 @@ impl UserPreferences {
             startup_custom_directory: stored.startup_custom_directory.to_path_buf(),
             save_view_state: startup_location_policy.saves_view_state(),
             shortcuts: shortcut_config_from_stored(&stored.shortcuts),
-            search_history: crate::model::SearchHistory::from_persisted(stored.search_history),
+            search_history: crate::model::SearchHistory::from_persisted(
+                stored.search_history.clone(),
+            ),
             theme_mode,
             color_scheme,
             custom_color_scheme,
+            context_menus,
         }
     }
 }
@@ -523,6 +533,59 @@ fn network_connections_from_stored(
         }
     }
     restored
+}
+
+fn stored_context_menu_layouts(
+    preferences: &ContextMenuPreferences,
+) -> StoredContextMenuLayouts {
+    let values = preferences.to_config_values();
+    let layout = |items: &Vec<(String, bool)>| StoredContextMenuLayout {
+        items: items
+            .iter()
+            .map(|(id, visible)| StoredContextMenuItemEntry {
+                id: id.clone(),
+                visible: *visible,
+            })
+            .collect(),
+    };
+    StoredContextMenuLayouts {
+        file_entry: layout(&values.file_entry),
+        file_blank: layout(&values.file_blank),
+        trash: layout(&values.trash),
+        search: layout(&values.search),
+        search_entry_types: layout(&values.search_entry_types),
+        list_columns: layout(&values.list_columns),
+        sidebar_bookmark: layout(&values.sidebar_bookmark),
+        sidebar_device: layout(&values.sidebar_device),
+        network_connection: layout(&values.network_connection),
+    }
+}
+
+fn context_menu_preferences_from_stored(
+    stored: &StoredUserPreferences,
+    default: &UserPreferences,
+) -> ContextMenuPreferences {
+    let Some(layouts) = &stored.context_menu_layouts else {
+        return default.context_menus.clone();
+    };
+    let config_values = |layout: &StoredContextMenuLayout| {
+        layout
+            .items
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.visible))
+            .collect::<Vec<(String, bool)>>()
+    };
+    ContextMenuPreferences::from_config_values(&ContextMenuLayoutConfigValues {
+        file_entry: config_values(&layouts.file_entry),
+        file_blank: config_values(&layouts.file_blank),
+        trash: config_values(&layouts.trash),
+        search: config_values(&layouts.search),
+        search_entry_types: config_values(&layouts.search_entry_types),
+        list_columns: config_values(&layouts.list_columns),
+        sidebar_bookmark: config_values(&layouts.sidebar_bookmark),
+        sidebar_device: config_values(&layouts.sidebar_device),
+        network_connection: config_values(&layouts.network_connection),
+    })
 }
 
 fn stored_list_view_columns(preferences: &ListViewPreferences) -> Vec<StoredListViewColumn> {
