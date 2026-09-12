@@ -9,8 +9,9 @@ use crate::model::{BrowserPaneLayout, BrowserViewMode, Message, ScrollbarRegion}
 const EDGE_SCROLL_ZONE: f32 = 44.0;
 const EDGE_SCROLL_MAX_STEP: f32 = 24.0;
 
-/// 窗口内应用内拖拽期间,光标压近浏览区边缘时每帧推进的滚动计划。
-/// 原生 dnd 交接后由合成器接管输入,该计划必须不存在。
+/// 内部文件拖拽期间(应用内拖拽或原生拖放皆可),光标压近浏览区边缘
+/// 时每帧推进的滚动计划。应用内拖拽由指针移动重算,原生拖放由目标
+/// Moved 事件重算;任何拖拽终态都必须清掉计划,防止无事件后残留滚动。
 #[derive(Debug, Clone)]
 pub(crate) struct FileDragEdgeScroll {
     region: ScrollbarRegion,
@@ -26,8 +27,8 @@ impl FileBrowser {
         self.file_drag_edge_scroll = None;
     }
 
-    /// 每次指针移动重算;拖拽未激活、已交接原生 dnd 或光标不在边缘带内
-    /// 时清除计划,任何拖拽结束路径之后都不会残留滚动。
+    /// 每次指针移动(应用内拖拽)或原生 Moved 事件重算;拖拽未激活或
+    /// 光标不在边缘带内时清除计划,任何拖拽结束路径之后都不会残留滚动。
     pub(crate) fn update_file_drag_edge_scroll(&mut self, position: Point) {
         self.file_drag_edge_scroll = self.file_drag_edge_scroll_at(position);
     }
@@ -43,8 +44,10 @@ impl FileBrowser {
     }
 
     fn file_drag_edge_scroll_at(&self, position: Point) -> Option<FileDragEdgeScroll> {
+        // 外部拖入(悬停本窗口)没有 file_drag 状态,自然不参与;
+        // 内部拖拽无论走应用内通道还是原生通道都规划。
         let file_drag = self.file_drag.as_ref()?;
-        if !file_drag.is_dragging() || file_drag.native_dnd.session_id().is_some() {
+        if !file_drag.is_dragging() {
             return None;
         }
         let pane_id = self.pane_id_at_position(position)?;
@@ -208,5 +211,41 @@ mod tests {
         // 拖拽结束后不允许残留滚动计划。
         browser.stop_file_drag_edge_scroll();
         assert!(browser.file_drag_edge_scroll.is_none());
+    }
+
+    #[test]
+    fn edge_plan_survives_native_drag_session() {
+        // 原生拖放的 Moved 事件负责重算计划,原生会话本身不再阻断规划;
+        // 应用内拖拽与原生拖放共用同一套边缘自动滚。
+        let (mut browser, _) = FileBrowser::new(crate::config::default_user_config());
+        browser.view_mode = BrowserViewMode::List;
+        let session_id = desktop_linux::WaylandDndController::new()
+            .start_file_drag(
+                vec![std::path::PathBuf::from("/tmp/a.txt")],
+                desktop_linux::WaylandFileDragIcon::new(1, 1, vec![0, 0, 0, 255])
+                    .expect("test icon"),
+            )
+            .expect("source session");
+        browser.file_drag = Some(FileDragState {
+            gesture_id: crate::model::FileDragGestureId(1),
+            source_pane_id: browser.active_pane_id(),
+            source_tab_id: browser.active_tab_id,
+            sources: vec![std::path::PathBuf::from("/tmp/a.txt")],
+            pressed_path: std::path::PathBuf::from("/tmp/a.txt"),
+            bookmark_source: None,
+            stationary_action: FileDragStationaryAction::SelectionOnly,
+            phase: FileDragPhase::Dragging,
+            native_dnd: crate::model::FileDragNativeDndState::Started(session_id),
+            column_directories_snapshot: Vec::new(),
+            press_origin: iced::Point::ORIGIN,
+            preview_entries: Vec::new(),
+        });
+
+        browser.update_file_drag_edge_scroll(Point::new(
+            browser.sidebar_width + 20.0,
+            browser.main_panes_area_top() + 5.0,
+        ));
+
+        assert!(browser.file_drag_edge_scroll.is_some());
     }
 }

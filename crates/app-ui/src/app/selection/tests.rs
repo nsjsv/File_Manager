@@ -760,11 +760,11 @@ fn iced_file_drag_keeps_sidebar_trash_non_drop_target() {
     browser.entries = vec![test_entry(source.clone(), FileKind::File)].into();
     browser.selected_paths.insert(source.clone());
     browser.cursor_position = Point::new(0.0, 0.0);
-    browser.start_file_drag(
+    drop(browser.start_file_drag(
         source,
         crate::model::FileDragStationaryAction::SelectionOnly,
         Vec::new(),
-    );
+    ));
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
 
     drop(browser.handle_sidebar_hovered(destination.clone()));

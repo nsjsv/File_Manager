@@ -36,12 +36,11 @@ impl FileBrowser {
         }
 
         if activated {
-            // 快速甩动可能一步越出窗口:应用内设施照常启动,同时立即交接。
-            return if self.cursor_strictly_outside_main_window(position) {
-                Task::batch([
-                    self.begin_iced_file_drag_after_activation(),
-                    self.start_native_file_drag_for_cursor_left(),
-                ])
+            // 激活即交接原生拖放:Wayland 上位图是全程唯一预览,窗口内
+            // 落点由原生目标事件驱动;请求失败回退应用内拖拽,拖拽不凭空
+            // 消失。X11 没有原生拖出通道,保持应用内拖拽。
+            return if self.wayland_dnd.is_some() {
+                self.start_native_file_drag()
             } else {
                 self.begin_iced_file_drag_after_activation()
             };
@@ -53,9 +52,10 @@ impl FileBrowser {
     }
 
     /// 拖动中(左键隐式 grab)Wayland/X11 不发 CursorLeft——指针事件
-    /// 持续发给本窗口,光标越界也一样——所以交接时机只能按坐标判定。
-    /// 光标贴近边缘(缓冲带)就交接:越过边缘后合成器会结束隐式
-    /// grab,按压记录随之失效,越界后才请求的拖放注定被拒。
+    /// 持续发给本窗口,光标越界也一样。激活即已交接原生拖放,此路径
+    /// 只服务恢复:激活时的原生请求失败(回退应用内拖拽)后,光标贴近
+    /// 边缘时重试交接——越过边缘后合成器会结束隐式 grab,按压记录随之
+    /// 失效,越界后才请求的拖放注定被拒。
     fn cursor_in_window_handoff_band(&self, position: iced::Point) -> bool {
         const EDGE_HANDOFF_BAND: f32 = 16.0;
         self.cursor_strictly_outside_main_window(position)
@@ -72,10 +72,39 @@ impl FileBrowser {
             || position.y > self.main_window_height
     }
 
-    /// 光标离开主窗口才把拖放交给 Wayland 原生会话(跨窗口拖放):窗口内
-    /// 保持应用内拖拽,滚轮/shift 滚轮/边缘自动滚全程可用。请求失败时保持
-    /// 应用内拖拽——回到窗口即恢复移动事件,重进后松手仍正常收尾,只有
-    /// 窗口外落放会丢失;此处不能像激活失败那样整段取消,用户可能只是
+    /// 激活即把拖放交给 Wayland 原生会话:窗口内外从此只有合成器位图
+    /// 一种预览。请求失败时复位原生状态并回退应用内拖拽——拖拽不能
+    /// 凭空消失;后续由缓冲带重试(start_native_file_drag_for_cursor_left)
+    /// 负责恢复交接。
+    pub(crate) fn start_native_file_drag(&mut self) -> Task<Message> {
+        let drag_sources = self
+            .file_drag
+            .as_ref()
+            .expect("native drag start requires an active file drag")
+            .sources
+            .clone();
+        match self.request_wayland_file_drag(drag_sources) {
+            WaylandFileDragRequest::Requested(session_id) => {
+                if let Some(file_drag) = &mut self.file_drag {
+                    file_drag.native_dnd = FileDragNativeDndState::Requested(session_id);
+                }
+                Task::none()
+            }
+            WaylandFileDragRequest::Rejected(error) => {
+                if let Some(file_drag) = &mut self.file_drag {
+                    file_drag.native_dnd = FileDragNativeDndState::NotRequested;
+                }
+                self.show_global_error(error);
+                self.begin_iced_file_drag_after_activation()
+            }
+            WaylandFileDragRequest::Unavailable => self.begin_iced_file_drag_after_activation(),
+        }
+    }
+
+    /// 缓冲带恢复交接:光标离开主窗口前把拖放交给 Wayland 原生会话。
+    /// 只在激活交接失败后(native_dnd 复位 NotRequested)才有实际效果。
+    /// 请求失败时保持应用内拖拽——回到窗口即恢复移动事件,重进后松手
+    /// 仍正常收尾,只有窗口外落放会丢失;此处不能整段取消,用户可能只是
     /// 晃过窗口边缘。
     pub(crate) fn start_native_file_drag_for_cursor_left(&mut self) -> Task<Message> {
         // 光标不在窗口内就没有后续 motion 来重算边缘滚计划,先无条件
@@ -124,10 +153,8 @@ impl FileBrowser {
     }
 
     fn begin_iced_file_drag_after_activation(&mut self) -> Task<Message> {
-        Task::batch([
-            crate::column_entry_bounds::column_entry_bounds_command(),
-            self.begin_iced_file_drop_session(),
-        ])
+        // 条目偏移快照已改为按下时测量,这里只需启动应用内落点会话。
+        self.begin_iced_file_drop_session()
     }
 
     pub(crate) fn finish_drag_selection(
@@ -176,12 +203,12 @@ impl FileBrowser {
         pressed_path: PathBuf,
         stationary_action: FileDragStationaryAction,
         column_directories_snapshot: Vec<PathBuf>,
-    ) {
+    ) -> Task<Message> {
         self.sidebar_bookmark_drop_slot = None;
         self.file_drop_session = None;
         if self.is_trash_view {
             self.file_drag = None;
-            return;
+            return Task::none();
         }
 
         let source_pane_id = self.active_pane_id();
@@ -207,6 +234,13 @@ impl FileBrowser {
             press_origin: self.cursor_position,
             preview_entries: Vec::new(),
         });
+        // 按下即测量条目偏移:激活瞬间要交接原生拖放并一次性生成位图,
+        // 快照必须在此之前就绪(极速甩动来不及则退单胶囊兜底)。
+        if self.file_drag.is_some() {
+            crate::column_entry_bounds::column_entry_bounds_command()
+        } else {
+            Task::none()
+        }
     }
 
     /// 记录拖拽源条目所在的列表滚动视口:聚合判断的"屏幕显示范围"
@@ -230,6 +264,8 @@ impl FileBrowser {
 
     /// 用最近的条目 bounds 测量填充拖拽预览偏移快照。只填充一次:
     /// 拖动中源视图滚动重排会改变条目原点,重算会让已提起的预览组跳位。
+    /// WaitingForMovement 期间也填充:按下时发起的测量在激活交接原生
+    /// 拖放之前到达,位图偏移依赖这份快照。
     pub(crate) fn refresh_file_drag_preview_layout(
         &mut self,
         bounds: &[crate::model::ColumnEntryBounds],
@@ -237,7 +273,7 @@ impl FileBrowser {
         let Some(file_drag) = &mut self.file_drag else {
             return;
         };
-        if !file_drag.is_dragging() || !file_drag.preview_entries.is_empty() {
+        if !file_drag.preview_entries.is_empty() {
             return;
         }
         let source_pane_id = file_drag.source_pane_id;
@@ -443,13 +479,14 @@ impl FileBrowser {
         self.enqueue_file_operation(QueuedFileOperation::CreateSymbolicLinks { links })
     }
 
-    /// 拖拽动作胶囊文案:悬停落点+修饰键意图实时合成。无拖拽、出窗交接
-    /// 原生拖放、无落点、书签槽(非传输语义)时返回 None 不渲染。目录名
-    /// 动态拼接,这里按当前语言产出成品——readable_text 对 String 不做
-    /// 翻译,渲染层不会兜底。
+    /// 拖拽动作胶囊文案:悬停落点+修饰键意图实时合成。应用内拖拽由
+    /// iced 悬停驱动,原生拖放由原生目标事件驱动(file_drop_session 同源
+    /// 更新),两种形态共用此判定。无拖拽、无落点、书签槽(非传输语义)
+    /// 时返回 None 不渲染。目录名动态拼接,这里按当前语言产出成品——
+    /// readable_text 对 String 不做翻译,渲染层不会兜底。
     pub(crate) fn file_drag_action_capsule_label(&self) -> Option<String> {
         let drag = self.file_drag.as_ref()?;
-        if !drag.displays_iced_drag_preview() {
+        if !drag.is_dragging() {
             return None;
         }
         // 光标正压在被拖的源条目上:提起的内容还悬在自己身上,落点是
@@ -709,11 +746,11 @@ mod tests {
         // entries 为空时 sources 回退到 self.selected。
         browser.selected = Some(source.clone());
         browser.cursor_position = iced::Point::new(0.0, 0.0);
-        browser.start_file_drag(
+        drop(browser.start_file_drag(
             source.clone(),
             FileDragStationaryAction::SelectionOnly,
             Vec::new(),
-        );
+        ));
         drop(browser.update_file_drag(iced::Point::new(10.0, 0.0)));
 
         // 拖拽中但无悬停落点:不渲染。
@@ -847,6 +884,89 @@ mod tests {
                 Some(FileDropTarget::Directory(root.clone())),
             ),
             Some(FileDropTarget::Directory(root))
+        );
+    }
+
+    #[test]
+    fn activation_hands_file_drag_to_native_wayland_session() {
+        let (mut browser, _) = crate::app::FileBrowser::new(crate::config::default_user_config());
+        browser.wayland_dnd = Some(crate::app::wayland_dnd::WaylandDndRuntime {
+            window_handle: desktop_linux::WaylandDndWindowHandle::new(0x1, 0x2),
+            controller: desktop_linux::WaylandDndController::new(),
+        });
+        let source = PathBuf::from("/workspace/report.txt");
+        browser.selected = Some(source.clone());
+        browser.cursor_position = iced::Point::new(0.0, 0.0);
+        drop(browser.start_file_drag(
+            source,
+            FileDragStationaryAction::SelectionOnly,
+            Vec::new(),
+        ));
+
+        drop(browser.update_file_drag(iced::Point::new(10.0, 0.0)));
+
+        let file_drag = browser.file_drag.as_ref().expect("drag survives activation");
+        assert!(matches!(
+            file_drag.native_dnd,
+            FileDragNativeDndState::Requested(_)
+        ));
+        // 原生会话接管:自绘预览退场,应用内落点会话不创建。
+        assert!(!file_drag.displays_iced_drag_preview());
+        assert!(browser.file_drop_session.is_none());
+    }
+
+    #[test]
+    fn activation_without_wayland_runtime_falls_back_to_iced_drag() {
+        let (mut browser, _) = crate::app::FileBrowser::new(crate::config::default_user_config());
+        let source = PathBuf::from("/workspace/report.txt");
+        browser.selected = Some(source.clone());
+        browser.cursor_position = iced::Point::new(0.0, 0.0);
+        drop(browser.start_file_drag(
+            source,
+            FileDragStationaryAction::SelectionOnly,
+            Vec::new(),
+        ));
+
+        drop(browser.update_file_drag(iced::Point::new(10.0, 0.0)));
+
+        let file_drag = browser.file_drag.as_ref().expect("drag survives activation");
+        assert_eq!(file_drag.native_dnd, FileDragNativeDndState::NotRequested);
+        assert!(matches!(
+            browser.file_drop_session.as_ref().map(|session| session.identity),
+            Some(crate::model::FileDropSessionIdentity::Iced(_))
+        ));
+    }
+
+    #[test]
+    fn preview_offsets_fill_while_waiting_for_movement() {
+        let (mut browser, _) = crate::app::FileBrowser::new(crate::config::default_user_config());
+        let source = PathBuf::from("/workspace/report.txt");
+        browser.selected = Some(source.clone());
+        browser.cursor_position = iced::Point::new(20.0, 30.0);
+        drop(browser.start_file_drag(
+            source.clone(),
+            FileDragStationaryAction::SelectionOnly,
+            Vec::new(),
+        ));
+        // 按下时发起的测量在激活前到达:此刻仍是 WaitingForMovement。
+        let press_origin = browser.file_drag.as_ref().unwrap().press_origin;
+        let bounds = vec![crate::model::ColumnEntryBounds {
+            pane_id: browser.active_pane_id(),
+            path: source,
+            bounds: iced::Rectangle::new(
+                iced::Point::new(15.0, 22.0),
+                iced::Size::new(100.0, 20.0),
+            ),
+        }];
+
+        browser.refresh_file_drag_preview_layout(&bounds);
+
+        let file_drag = browser.file_drag.as_ref().unwrap();
+        assert!(!file_drag.is_dragging());
+        assert_eq!(file_drag.preview_entries.len(), 1);
+        assert_eq!(
+            file_drag.preview_entries[0].offset,
+            iced::Vector::new(15.0 - press_origin.x, 22.0 - press_origin.y)
         );
     }
 }

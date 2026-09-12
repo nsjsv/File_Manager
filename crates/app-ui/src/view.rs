@@ -867,8 +867,8 @@ fn drag_preview_panel(
     ))
 }
 
-/// 拖拽动作胶囊:与提起条目预览同门控(出窗交接原生拖放后一并消失),
-/// 文案由 file_drag_action_capsule_label 实时合成,底板与聚合行同款。
+/// 拖拽动作胶囊:整个拖拽期(应用内或原生拖放)跟随落点显示,文案由
+/// file_drag_action_capsule_label 实时合成,底板与聚合行同款。
 fn file_drag_action_capsule_panel(browser: &FileBrowser) -> Option<Element<'static, Message>> {
     let label = browser.file_drag_action_capsule_label()?;
     Some(drag_preview_summary_row(&label))

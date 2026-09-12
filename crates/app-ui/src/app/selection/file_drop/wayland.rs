@@ -92,6 +92,8 @@ impl FileBrowser {
                             if id == session_id
                     ) {
                         file_drag.native_dnd = FileDragNativeDndState::Dropped(session_id);
+                        // 落地后不再有 Moved 事件,边缘滚计划必须清掉。
+                        self.stop_file_drag_edge_scroll();
                     }
                 }
             }
@@ -198,6 +200,8 @@ impl FileBrowser {
         if source_matches {
             self.file_drag = None;
             self.drag_selection_anchor = None;
+            // 拖拽终态后不再有 Moved 事件,边缘滚计划不能残留。
+            self.stop_file_drag_edge_scroll();
         }
         let clear_target = self.file_drop_session.as_ref().is_some_and(|session| {
             session.phase == FileDropSessionPhase::Hovering

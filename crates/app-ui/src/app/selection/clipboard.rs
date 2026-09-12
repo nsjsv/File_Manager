@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(browser.paste_target_directory(), current_dir);
 
         browser.cursor_position = iced::Point::new(0.0, 0.0);
-        browser.start_file_drag(source, FileDragStationaryAction::SelectionOnly, Vec::new());
+        drop(browser.start_file_drag(source, FileDragStationaryAction::SelectionOnly, Vec::new()));
         drop(browser.update_file_drag(iced::Point::new(10.0, 0.0)));
         drop(browser.handle_entry_hovered(directory.clone()));
 

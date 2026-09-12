@@ -63,6 +63,11 @@ impl FileBrowser {
         }
         session.position = Some(position);
         self.cursor_position = position;
+        // 内部原生拖放没有指针移动事件,边缘自动滚改由 Moved 事件重算;
+        // 外部拖入悬停不自动滚(与现状一致)。
+        if matches!(session.origin, FileDropOrigin::Internal(_)) {
+            self.update_file_drag_edge_scroll(position);
+        }
         self.refresh_hovered_target_from_ready_layout()
     }
 
@@ -73,6 +78,8 @@ impl FileBrowser {
         if hovering {
             self.file_drop_session = None;
             self.clear_file_drop_visuals();
+            // 光标离窗后不再有 Moved 事件,残留计划会在窗口外继续滚动。
+            self.stop_file_drag_edge_scroll();
         }
     }
 
@@ -97,6 +104,8 @@ impl FileBrowser {
             session.position = None;
             session.frozen_drop_target = Some(FrozenFileDropTarget::Rejected);
         }
+        // 终态后不再有 Moved 事件,边缘滚计划必须清掉。
+        self.stop_file_drag_edge_scroll();
         self.freeze_file_drop_target_from_ready_layout();
         self.clear_file_drop_visuals();
         self.consume_ready_file_drop()

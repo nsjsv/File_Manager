@@ -112,6 +112,7 @@ impl FileBrowser {
                     last_activation_click.path == path
                         && now.duration_since(last_activation_click.at) <= DOUBLE_CLICK_THRESHOLD
                 });
+        let mut drag_start_command = Task::none();
 
         if self.keyboard_modifiers.shift() {
             let anchor = self
@@ -139,7 +140,8 @@ impl FileBrowser {
             }
             self.drag_selection_anchor = None;
             self.selection_marquee = None;
-            self.start_file_drag(path.clone(), stationary_action, column_directories_snapshot);
+            drag_start_command =
+                self.start_file_drag(path.clone(), stationary_action, column_directories_snapshot);
         }
 
         self.last_activation_click = if has_selection_modifier {
@@ -161,6 +163,7 @@ impl FileBrowser {
         Task::batch([
             rename_command,
             action_command,
+            drag_start_command,
             self.schedule_thumbnail_refresh(),
             self.request_browser_session_save(),
         ])

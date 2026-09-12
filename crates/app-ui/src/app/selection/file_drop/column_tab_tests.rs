@@ -35,11 +35,11 @@ fn column_tab_hover_renders_target_columns_without_losing_source_snapshot() {
     browser.deepest_open_column_directory = Some(source_directory.clone());
     browser.entries = vec![file_entry(source_path.clone())].into();
     browser.selected_paths.insert(source_path.clone());
-    browser.start_file_drag(
+    drop(browser.start_file_drag(
         source_path,
         FileDragStationaryAction::ActivateColumnEntry,
         vec![root.clone(), source_directory.clone()],
-    );
+    ));
 
     let target_tab_id = source_tab_id + 1;
     let mut target_tab = BrowserTab::directory(target_tab_id, root.clone());

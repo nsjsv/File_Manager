@@ -722,11 +722,11 @@ async fn iced_fallback_tab_release_uses_same_internal_dispatch() {
     browser.entries = vec![test_entry(&source)].into();
     browser.selected_paths.insert(source.clone());
     browser.cursor_position = Point::new(0.0, 0.0);
-    browser.start_file_drag(
+    drop(browser.start_file_drag(
         source.clone(),
         crate::model::FileDragStationaryAction::SelectionOnly,
         Vec::new(),
-    );
+    ));
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
 
     let gesture_id = browser
@@ -755,6 +755,60 @@ async fn iced_fallback_tab_release_uses_same_internal_dispatch() {
 }
 
 #[test]
+fn internal_native_drag_moves_drive_edge_scroll_plan() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let source = PathBuf::from("/tmp/edge-scroll.txt");
+    let source_session_id = source_session_id(vec![source.clone()]);
+    let target_session_id = WaylandFileDropTargetSessionId::unique();
+    let position = Point::new(50.0, 20.0);
+    install_internal_source(&mut browser, source_session_id, vec![source]);
+    drop(begin_internal_session(
+        &mut browser,
+        target_session_id,
+        source_session_id,
+        position,
+    ));
+    assert!(browser.file_drag_edge_scroll.is_none());
+
+    // 内部原生拖放没有指针移动事件,边缘自动滚由 Moved 事件重算。
+    let edge_position = Point::new(
+        browser.sidebar_width + 20.0,
+        browser.main_panes_area_top() + 5.0,
+    );
+    drop(browser.accept_wayland_target_event(WaylandFileDropTargetEvent::Moved {
+        target_session_id,
+        position: WaylandDndDropPosition {
+            x: edge_position.x as f64,
+            y: edge_position.y as f64,
+        },
+    }));
+
+    assert!(browser.file_drag_edge_scroll.is_some());
+}
+
+#[test]
+fn external_native_drag_hover_does_not_plan_edge_scroll() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let target_session_id = WaylandFileDropTargetSessionId::unique();
+    let position = Point::new(50.0, 20.0);
+    drop(begin_external_session(&mut browser, target_session_id, position));
+
+    let edge_position = Point::new(
+        browser.sidebar_width + 20.0,
+        browser.main_panes_area_top() + 5.0,
+    );
+    drop(browser.accept_wayland_target_event(WaylandFileDropTargetEvent::Moved {
+        target_session_id,
+        position: WaylandDndDropPosition {
+            x: edge_position.x as f64,
+            y: edge_position.y as f64,
+        },
+    }));
+
+    assert!(browser.file_drag_edge_scroll.is_none());
+}
+
+#[test]
 fn iced_fallback_trash_tab_uses_drag_snapshot_paths() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());
     let target = add_inactive_trash_tab(&mut browser);
@@ -762,11 +816,11 @@ fn iced_fallback_trash_tab_uses_drag_snapshot_paths() {
     browser.entries = vec![test_entry(&source)].into();
     browser.selected_paths.insert(source.clone());
     browser.cursor_position = Point::new(0.0, 0.0);
-    browser.start_file_drag(
+    drop(browser.start_file_drag(
         source.clone(),
         crate::model::FileDragStationaryAction::SelectionOnly,
         Vec::new(),
-    );
+    ));
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
     let gesture_id = browser
         .file_drag

@@ -133,7 +133,7 @@ fn shift_range_click_does_not_seed_activation_double_click() {
 }
 
 #[test]
-fn file_drag_stays_in_app_until_cursor_leaves() {
+fn activation_hands_drag_to_native_wayland_session_immediately() {
     let source = PathBuf::from("/workspace/report.txt");
     let mut browser = browser_with_entries(std::slice::from_ref(&source));
     drop(browser.accept_wayland_dnd_handle(Ok(Some(WaylandDndWindowHandle::new(1, 2)))));
@@ -145,18 +145,9 @@ fn file_drag_stays_in_app_until_cursor_leaves() {
         Some(FileDragNativeDndState::NotRequested)
     );
 
-    // 激活不再立即请求原生拖放:窗口内保持应用内拖拽,滚轮/shift 滚轮/
-    // 边缘自动滚才有输入可用。
+    // 激活即交接原生拖放:窗口内外只有合成器位图一种预览,不再等
+    // 光标离开窗口。
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
-    assert_eq!(
-        browser.file_drag.as_ref().map(|drag| drag.native_dnd),
-        Some(FileDragNativeDndState::NotRequested)
-    );
-
-    // 离开主窗口才把拖放交给合成器(跨窗口拖放)。
-    drop(browser.update(Message::CursorLeft {
-        window: browser.main_window,
-    }));
     assert!(matches!(
         browser.file_drag.as_ref().map(|drag| drag.native_dnd),
         Some(FileDragNativeDndState::Requested(_))

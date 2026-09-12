@@ -42,11 +42,11 @@ fn start_directory_file_drag(browser: &mut FileBrowser, path: &Path) {
     browser.selected_paths.clear();
     browser.selected_paths.insert(path.to_path_buf());
     browser.cursor_position = Point::new(0.0, 0.0);
-    browser.start_file_drag(
+    drop(browser.start_file_drag(
         path.to_path_buf(),
         crate::model::FileDragStationaryAction::SelectionOnly,
         Vec::new(),
-    );
+    ));
     drop(browser.update_file_drag(Point::new(10.0, 0.0)));
 }
 

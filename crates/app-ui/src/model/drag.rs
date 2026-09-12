@@ -128,12 +128,11 @@ impl FileDragState {
         self.native_dnd == FileDragNativeDndState::NotRequested && self.is_dragging()
     }
 
+    /// iced 自绘预览只在"尚未请求原生拖放"时显示:原生会话一经请求,
+    /// 合成器位图就是全程唯一预览,自绘层退场以免与位图短暂叠影。
+    /// 原生请求失败的回退路径会复位 NotRequested,自绘预览随之恢复。
     pub(crate) fn displays_iced_drag_preview(&self) -> bool {
-        self.is_dragging()
-            && matches!(
-                self.native_dnd,
-                FileDragNativeDndState::NotRequested | FileDragNativeDndState::Requested(_)
-            )
+        self.is_dragging() && self.native_dnd == FileDragNativeDndState::NotRequested
     }
 }
 
