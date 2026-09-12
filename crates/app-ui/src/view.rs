@@ -264,19 +264,29 @@ pub(crate) fn view_browser(browser: &FileBrowser) -> Element<'_, Message> {
             placement: FloatingPlacement::Center,
             captures_pointer: true,
         });
-    } else if let Some((drag_preview, drag_preview_placement)) = drag_preview_panel(browser) {
-        floating.push(FloatingContent {
-            element: drag_preview,
-            placement: drag_preview_placement,
-            captures_pointer: false,
-        });
+    } else if browser
+        .file_drag
+        .as_ref()
+        .is_some_and(|drag| drag.is_dragging())
+    {
+        // 动作胶囊不能嵌在自绘预览分支里:原生拖放交接后 iced 预览退场,
+        // 预览返回 None 会把"移动/复制/连接"提示一起短路掉。
+        if let Some((drag_preview, drag_preview_placement)) = drag_preview_panel(browser) {
+            floating.push(FloatingContent {
+                element: drag_preview,
+                placement: drag_preview_placement,
+                captures_pointer: false,
+            });
+        }
         if let Some(action_capsule) = file_drag_action_capsule_panel(browser) {
             floating.push(FloatingContent {
                 element: action_capsule,
-                placement: FloatingPlacement::Free(Point::new(
-                    browser.cursor_position.x + DRAG_ACTION_CAPSULE_OFFSET_X,
-                    browser.cursor_position.y + DRAG_ACTION_CAPSULE_OFFSET_Y,
-                )),
+                // 合成器拖拽位图从光标向右下铺开,且作为独立 surface 永远
+                // 盖在窗口之上,窗口内元素盖不过它;胶囊钉在光标左上(位图
+                // 从不占据的象限)才真正可见。与聚合行同一锚定约定。
+                placement: FloatingPlacement::AnchorBottomRight {
+                    anchor: browser.cursor_position,
+                },
                 captures_pointer: false,
             });
         }
@@ -753,10 +763,6 @@ const DRAG_PREVIEW_LABEL_MAX_CHARS: usize = 20;
 const DRAG_PREVIEW_PILL_WIDTH: f32 = 162.0;
 const DRAG_PREVIEW_PILL_HEIGHT: f32 = 24.0;
 const DRAG_PREVIEW_SUMMARY_TEXT_SIZE: f32 = 12.0;
-// 动作胶囊相对光标的摆放偏移:z 序在预览之上(后 push),
-// 覆盖在提起的缩略图上。
-const DRAG_ACTION_CAPSULE_OFFSET_X: f32 = 25.0;
-const DRAG_ACTION_CAPSULE_OFFSET_Y: f32 = 25.0;
 
 /// 返回预览浮层与其定位:提起条目组左上角对准最早出现的条目,使负
 /// 偏移(按住条目右下时)也能完整显示;聚合行右下角钉在指针尖上,

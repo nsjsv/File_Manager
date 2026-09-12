@@ -13,6 +13,17 @@ use crate::model::{
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
+/// 移动空操作判定:源等于落点、落入自身子树、或已在落点目录内,
+/// 移动落地不会产生任何变化。动作胶囊的显示条件与落地过滤共用此
+/// 不变量——部分源为空操作时其余条目仍可移动。
+fn is_no_op_move(source: &Path, target: &Path, target_directory: &Path) -> bool {
+    source == target
+        || target.starts_with(source)
+        || source
+            .parent()
+            .is_some_and(|parent| parent == target_directory)
+}
+
 impl FileBrowser {
     pub(crate) fn update_file_drag(&mut self, position: iced::Point) -> Task<Message> {
         let mut activated = false;
@@ -402,18 +413,17 @@ impl FileBrowser {
         if mode == TransferConflictMode::Copy {
             return self.copy_dragged_files(transfer_targets, target_directory);
         }
-        if transfer_targets.is_empty()
-            || transfer_targets.iter().any(|(source, target)| {
-                source == target
-                    || target.starts_with(source)
-                    || source
-                        .parent()
-                        .is_some_and(|parent| parent == target_directory)
-            })
-        {
+        // 空操作源(落点目录自身/自身子树/已在落点目录)逐个跳过而非整
+        // 批拒绝:多选里混着落点目录自身时其余条目照常移动,全部空操作
+        // 才无事发生。与 file_drag_directory_capsule 的显示条件同判定。
+        let movable = transfer_targets
+            .into_iter()
+            .filter(|(source, target)| !is_no_op_move(source, target, &target_directory))
+            .collect::<Vec<_>>();
+        if movable.is_empty() {
             return Task::none();
         }
-        let transfers = transfer_targets
+        let transfers = movable
             .into_iter()
             .map(|(source, target)| QueuedTransfer::new(source, target))
             .collect::<Vec<_>>();
@@ -518,10 +528,10 @@ impl FileBrowser {
         }
     }
 
-    /// 目录落点的胶囊文案。移动意图下落点是源自身、自身子树或源父
-    /// 目录(拖起后悬在自己目录的条目或空白上)时,落地均为空操作,
-    /// 返回 None 不显示误导性动作;复制/链接在同落点有原位副本/链接
-    /// 行为,照常显示。判定条件与 move_dragged_files 的空操作分支一致。
+    /// 目录落点的胶囊文案。移动意图下整批源都是空操作(源自身、自身
+    /// 子树、已在落点目录)才隐藏——多选里混着落点目录自身时其余条目
+    /// 仍可移动,照常显示;落地按同一判定跳过空操作源。复制/链接在同
+    /// 落点有原位副本/链接行为,照常显示。
     fn file_drag_directory_capsule(
         &self,
         sources: &[PathBuf],
@@ -529,11 +539,9 @@ impl FileBrowser {
     ) -> Option<String> {
         let intent = self.file_drag_drop_intent(sources, directory);
         if intent == FileDragDropIntent::Move
-            && sources.iter().any(|source| {
-                source == directory
-                    || directory.starts_with(source)
-                    || source.parent().is_some_and(|parent| parent == directory)
-            })
+            && sources
+                .iter()
+                .all(|source| is_no_op_move(source, directory, directory))
         {
             return None;
         }
@@ -814,6 +822,86 @@ mod tests {
         session.hovered_target = Some(FileDropTarget::SidebarBookmarkSlot(
             SidebarBookmarkDropSlot::Insert { index: 0 },
         ));
+        assert!(browser.file_drag_action_capsule_label().is_none());
+    }
+
+    #[test]
+    fn no_op_move_predicate_matches_directory_relationships() {
+        let target_directory = Path::new("/data/project");
+        let dragged_folder = Path::new("/data/project");
+        let dragged_child = Path::new("/data/project/inner.txt");
+        let outsider = Path::new("/data/other.txt");
+
+        // 目录移入自身、源已在落点目录内、源等于落点:空操作。
+        assert!(is_no_op_move(
+            dragged_folder,
+            &target_directory.join("project"),
+            target_directory
+        ));
+        assert!(is_no_op_move(
+            dragged_child,
+            &target_directory.join("inner.txt"),
+            target_directory
+        ));
+        assert!(is_no_op_move(dragged_folder, target_directory, target_directory));
+        // 落点目录外的条目:可移动。
+        assert!(!is_no_op_move(
+            outsider,
+            &target_directory.join("other.txt"),
+            target_directory
+        ));
+    }
+
+    #[test]
+    fn move_drag_with_fully_no_op_batch_does_nothing() {
+        let (mut browser, _) = crate::app::FileBrowser::new(crate::config::default_user_config());
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("project");
+        std::fs::create_dir(&folder).unwrap();
+
+        // 全部都是空操作(目录移入自身):不入队任何传输。
+        drop(browser.move_dragged_files(vec![folder.clone()], folder.clone()));
+        assert!(browser.operation_queue.tasks().is_empty());
+    }
+
+    #[test]
+    fn drag_action_capsule_shows_when_batch_partially_no_op() {
+        let (mut browser, _) = crate::app::FileBrowser::new(crate::config::default_user_config());
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("project");
+        std::fs::create_dir(&folder).unwrap();
+        let sibling = directory.path().join("report.pdf");
+        std::fs::write(&sibling, b"data").unwrap();
+
+        // 多选批 = 落点目录自身 + 可移动条目:其余条目仍可移动,胶囊
+        // 照常显示;整批都是空操作才隐藏。
+        browser.file_drag = Some(crate::model::FileDragState {
+            gesture_id: crate::model::FileDragGestureId(1),
+            source_pane_id: browser.active_pane_id(),
+            source_tab_id: browser.active_tab_id,
+            sources: vec![folder.clone(), sibling.clone()],
+            pressed_path: sibling.clone(),
+            bookmark_source: None,
+            stationary_action: FileDragStationaryAction::SelectionOnly,
+            phase: crate::model::FileDragPhase::WaitingForMovement {
+                origin: iced::Point::new(0.0, 0.0),
+            },
+            native_dnd: crate::model::FileDragNativeDndState::NotRequested,
+            column_directories_snapshot: Vec::new(),
+            press_origin: iced::Point::new(0.0, 0.0),
+            preview_entries: Vec::new(),
+        });
+        // 激活拖拽会话(测试环境无 wayland 句柄,走应用内拖拽回退),
+        // 落点悬停会话由此建立。
+        drop(browser.update_file_drag(iced::Point::new(10.0, 0.0)));
+        drop(browser.handle_drop_target_hovered(folder.clone()));
+        assert_eq!(
+            browser.file_drag_action_capsule_label().as_deref(),
+            Some("Move to project")
+        );
+
+        // 整批都是空操作(悬停回源父目录空白):隐藏。
+        drop(browser.handle_drop_target_hovered(directory.path().to_path_buf()));
         assert!(browser.file_drag_action_capsule_label().is_none());
     }
 

@@ -55,27 +55,34 @@ pub(crate) struct FileDragPillPalette {
 
 
 /// 系统级拖拽图像必须一次性生成位图:按提起瞬间的相对位置摆开各
-/// 选中条目的"图标 + 文件名"行,离光标越远越淡,与窗口内预览
-/// 保持同一几何与观感。选中组大到画布(256)装不下时整组收拢为
-/// `summary` 一行总数文字。
+/// 选中条目的"图标 + 文件名"行,离光标越远越淡,画布装不下时收拢为
+/// `summary` 一行总数文字。Wayland 把位图左上角钉在光标上,按下点
+/// 上/左方的条目画不出来,因此整体平移以"按住的条目贴住光标"为锚,
+/// 而不是把整组挪到光标右下——那会让按住的条目跑离指针数行。
 pub(crate) fn render_wayland_file_drag_icon(
     entries: &[FileDragIconEntry],
     summary: Option<&str>,
     palette: FileDragPillPalette,
 ) -> Result<WaylandFileDragIcon, String> {
     let entries = &entries[..entries.len().min(DRAG_ICON_MAX_PILLS)];
-    // 组里条目相对光标可能在左上(负偏移):整体平移让最靠左上的
-    // 图块贴住画布原点;全正时不需要平移。
-    let min_x = entries
+    // 平移锚点:优先"按住的条目贴住光标"——按下点落在其行内,偏移
+    // 非正且最靠近原点;组内在按住条目之上/左的条目落到画布原点
+    // 左/上方,由位图边界裁掉。偏移全为正(回退单胶囊的缝隙位)时
+    // 没有非正锚点,退回最靠左上贴原点。
+    let leftmost_x = entries
         .iter()
         .map(|entry| entry.offset.x)
         .fold(0.0_f32, f32::min);
-    let min_y = entries
+    let topmost_y = entries
         .iter()
         .map(|entry| entry.offset.y)
         .fold(0.0_f32, f32::min);
-    let shift_x = (0.0 - min_x).max(0.0);
-    let shift_y = (0.0 - min_y).max(0.0);
+    let (shift_x, shift_y) = entries
+        .iter()
+        .filter(|entry| entry.offset.x <= 0.0 && entry.offset.y <= 0.0)
+        .max_by(|a, b| (a.offset.x + a.offset.y).total_cmp(&(b.offset.x + b.offset.y)))
+        .map(|entry| (-entry.offset.x, -entry.offset.y))
+        .unwrap_or((-leftmost_x, -topmost_y));
 
     let mut tiles = Vec::with_capacity(entries.len());
     let mut canvas_width = 1.0_f32;
@@ -92,7 +99,7 @@ pub(crate) fn render_wayland_file_drag_icon(
         canvas_height = canvas_height.max(position.y + TILE_SIZE);
         tiles.push((position, row_width, label_width, fade, entry));
     }
-    // 画布装不下整组就整体收拢为总数行,而不是裁掉超出部分。
+    // 画布装不下整组就收拢为总数行,而不是裁掉超出部分。
     if (canvas_width > DRAG_ICON_CANVAS_MAX_EDGE as f32
         || canvas_height > DRAG_ICON_CANVAS_MAX_EDGE as f32)
         && summary.is_some()
@@ -450,7 +457,7 @@ mod tests {
                 entry(IconSymbol::FolderSolid, "a.txt", 6.0, 6.0),
                 entry(IconSymbol::FileSolid, "a.txt", 400.0, 400.0),
             ],
-            Some("3 folders, 1 file"),
+            None,
             palette(),
         )
         .unwrap();
@@ -506,5 +513,29 @@ mod tests {
         // 有 summary 时画布收拢为一行且不超协议上限;无 summary 才按
         // 上限裁剪(保持旧行为兜底)。
         assert_eq!(collapsed.height(), SUMMARY_TEXT_HEIGHT as u32);
+    }
+
+    #[test]
+    fn group_shift_pins_pressed_pill_to_cursor() {
+        // 按住的条目(偏移非正且最靠原点)平移后贴住画布原点;组内
+        // 它上方的组员落到原点上方,被位图边界裁掉,画布只覆盖按下
+        // 点及其以下的部分——整组平移到右下会把按住条目推离光标。
+        let group = render_wayland_file_drag_icon(
+            &[
+                entry(IconSymbol::FolderSolid, "a.txt", -6.0, -30.0),
+                entry(IconSymbol::FileSolid, "a.txt", -6.0, -6.0),
+                entry(IconSymbol::FolderSolid, "a.txt", -6.0, 18.0),
+            ],
+            Some("3 files"),
+            palette(),
+        )
+        .unwrap();
+        // 画布只覆盖按住条目与其下方条目:两行 24px 图块。
+        assert_eq!(group.height(), (TILE_SIZE * 2.0) as u32);
+        // 按住条目贴住原点:画布第一行(图块+文件名)有可见像素。
+        let pressed_row_bytes = TILE_SIZE as usize * group.width() as usize * 4;
+        assert!(group.premultiplied_rgba()[..pressed_row_bytes]
+            .chunks_exact(4)
+            .any(|pixel| pixel[3] != 0));
     }
 }
