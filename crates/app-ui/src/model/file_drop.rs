@@ -109,4 +109,7 @@ pub(crate) struct FileDropSessionState {
     pub(crate) hover_generation: u64,
     pub(crate) pending_payload: Option<FileClipboardSelection>,
     pub(crate) frozen_drop_target: Option<FrozenFileDropTarget>,
+    /// 滚动驱动的在途布局刷新:快照换代期间旧 Ready 快照仍然可用,
+    /// 这里只登记最新在途代,accept 时按代校验并清除。
+    pub(crate) scroll_refresh_in_flight: Option<FileDropLayoutRequest>,
 }

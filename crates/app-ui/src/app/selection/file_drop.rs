@@ -46,6 +46,7 @@ impl FileBrowser {
             hover_generation: 0,
             pending_payload: None,
             frozen_drop_target: None,
+            scroll_refresh_in_flight: None,
         });
         file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::FileDropLayout(request))
     }
@@ -161,6 +162,7 @@ impl FileBrowser {
             hover_generation: 0,
             pending_payload: None,
             frozen_drop_target: None,
+            scroll_refresh_in_flight: None,
         });
         file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::FileDropLayout(request))
     }
@@ -201,14 +203,31 @@ impl FileBrowser {
         request: FileDropLayoutRequest,
         measured: FileDragHitTestBounds,
     ) -> Task<Message> {
-        let request_matches = self.file_drop_session.as_ref().is_some_and(|session| {
-            matches!(session.layout, FileDropLayoutState::Pending(pending) if pending == request)
-        });
-        if !request_matches {
+        let Some(session) = self.file_drop_session.as_ref() else {
+            return Task::none();
+        };
+        // 硬失效测量(tab 切换/目录重载)按 Pending 精确匹配;滚动刷新
+        // 按"同会话同 pane/tab 且代更新于当前 Ready"单调替换,过期代丢弃。
+        let pending_matches =
+            matches!(session.layout, FileDropLayoutState::Pending(pending) if pending == request);
+        let refresh_in_flight = session.scroll_refresh_in_flight.as_ref() == Some(&request);
+        let scroll_refresh_matches = matches!(
+            session.layout,
+            FileDropLayoutState::Ready { request: ready, .. }
+            if ready.identity == request.identity
+                && ready.pane_id == request.pane_id
+                && ready.tab_id == request.tab_id
+                && ready.generation < request.generation
+        ) && refresh_in_flight;
+        if !pending_matches && !scroll_refresh_matches {
             return Task::none();
         }
         if self.active_pane_id() != request.pane_id || self.active_tab_id != request.tab_id {
-            self.cancel_file_drop_session(request.identity);
+            // 硬失效期间 pane/tab 已切换说明会话上下文作废,整段取消;
+            // 滚动刷新是拖拽中的后台换代,上下文不变,不一致只说明过期。
+            if pending_matches {
+                self.cancel_file_drop_session(request.identity);
+            }
             return Task::none();
         }
 
@@ -218,6 +237,7 @@ impl FileBrowser {
                 request,
                 hit_test_bounds,
             };
+            session.scroll_refresh_in_flight = None;
         }
 
         match self.file_drop_session.as_ref().map(|session| session.phase) {
@@ -353,6 +373,41 @@ impl FileBrowser {
 
     pub(in crate::app) fn remeasure_active_file_drop_layout(&mut self) -> Task<Message> {
         self.request_file_drop_layout_measurement(self.active_pane_id(), self.active_tab_id)
+    }
+
+    /// 滚动偏移变化是软失效:条目映射不变,只有屏幕坐标过期。保持
+    /// Ready 快照供高亮与松手 freeze 继续使用,后台按新代测量,由
+    /// `accept_drop_layout` 单调替换。仅限内部原生拖放——原生 dnd 期间
+    /// iced 收不到指针移动,落点完全依赖快照;外部拖入不自动滚,iced
+    /// fallback 的 position 不随指针更新(refresh 会用过期位置),均不参与。
+    pub(in crate::app) fn remeasure_file_drop_layout_after_scroll(&mut self) -> Task<Message> {
+        let Some(session) = self.file_drop_session.as_ref() else {
+            return Task::none();
+        };
+        let native_internal = matches!(
+            session.origin,
+            FileDropOrigin::Internal(InternalFileDragSnapshot {
+                source_session_id: Some(_),
+                ..
+            })
+        );
+        if !native_internal
+            || session.phase != FileDropSessionPhase::Hovering
+            || session.frozen_drop_target.is_some()
+            || !matches!(session.layout, FileDropLayoutState::Ready { .. })
+        {
+            return Task::none();
+        }
+        let identity = session.identity.clone();
+        let request = self.next_file_drop_layout_request(
+            identity,
+            self.active_pane_id(),
+            self.active_tab_id,
+        );
+        if let Some(session) = &mut self.file_drop_session {
+            session.scroll_refresh_in_flight = Some(request.clone());
+        }
+        file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::FileDropLayout(request))
     }
 
     fn request_file_drop_layout_measurement(

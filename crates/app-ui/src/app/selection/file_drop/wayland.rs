@@ -155,6 +155,7 @@ impl FileBrowser {
             hover_generation: 0,
             pending_payload: None,
             frozen_drop_target: None,
+            scroll_refresh_in_flight: None,
         });
 
         file_drag_hit_test_bounds_command(FileDragHitTestBoundsRequest::FileDropLayout(request))

@@ -808,6 +808,237 @@ fn external_native_drag_hover_does_not_plan_edge_scroll() {
     assert!(browser.file_drag_edge_scroll.is_none());
 }
 
+fn internal_session_with_ready_layout(
+    browser: &mut FileBrowser,
+) -> crate::model::FileDropSessionIdentity {
+    let source = PathBuf::from("/tmp/scroll-refresh.txt");
+    let source_session_id = source_session_id(vec![source.clone()]);
+    let target_session_id = WaylandFileDropTargetSessionId::unique();
+    let position = Point::new(50.0, 20.0);
+    install_internal_source(browser, source_session_id, vec![source]);
+    let request = begin_internal_session(
+        browser,
+        target_session_id,
+        source_session_id,
+        position,
+    );
+    let pane_id = browser.active_pane_id();
+    drop(browser.accept_drop_layout(
+        request,
+        directory_bounds(pane_id, "/pane/before", rectangle(0.0, 0.0, 100.0, 100.0)),
+    ));
+    crate::model::FileDropSessionIdentity::Wayland(target_session_id)
+}
+
+fn hovered_target(browser: &FileBrowser) -> Option<crate::model::FileDropTarget> {
+    browser
+        .file_drop_session
+        .as_ref()
+        .and_then(|session| session.hovered_target.clone())
+}
+
+#[test]
+fn scroll_refresh_swaps_ready_bounds_and_moves_hover() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    internal_session_with_ready_layout(&mut browser);
+    assert_eq!(
+        hovered_target(&browser),
+        Some(crate::model::FileDropTarget::Directory(PathBuf::from(
+            "/pane/before"
+        )))
+    );
+
+    // 滚动软失效:发起后台刷新时旧快照保持 Ready,高亮不清空。
+    drop(browser.remeasure_file_drop_layout_after_scroll());
+    let session = browser.file_drop_session.as_ref().expect("drop session");
+    assert!(matches!(session.layout, FileDropLayoutState::Ready { .. }));
+    let refresh_request = session
+        .scroll_refresh_in_flight
+        .clone()
+        .expect("scroll refresh in flight");
+    assert_eq!(
+        session.hovered_target.clone(),
+        Some(crate::model::FileDropTarget::Directory(PathBuf::from(
+            "/pane/before"
+        )))
+    );
+
+    // 画面滚动后同一屏幕位置命中的条目已换成 /pane/after:刷新快照
+    // 到达即换代 Ready,并按当前指针位置重算落点。
+    let pane_id = browser.active_pane_id();
+    drop(browser.accept_drop_layout(
+        refresh_request,
+        directory_bounds(pane_id, "/pane/after", rectangle(0.0, 0.0, 100.0, 100.0)),
+    ));
+    let session = browser.file_drop_session.as_ref().expect("drop session");
+    assert!(session.scroll_refresh_in_flight.is_none());
+    assert_eq!(
+        hovered_target(&browser),
+        Some(crate::model::FileDropTarget::Directory(PathBuf::from(
+            "/pane/after"
+        )))
+    );
+}
+
+#[test]
+fn drop_during_scroll_refresh_settles_on_refreshed_snapshot() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let identity = internal_session_with_ready_layout(&mut browser);
+    let position = Point::new(50.0, 20.0);
+    drop(browser.remeasure_file_drop_layout_after_scroll());
+
+    // 贴边滚动中松手:冻结按仍可用的 Ready 快照解析,不出现拒绝。
+    drop(browser.drop_native_file_drop_session(identity, Some(position)));
+    let session = browser.file_drop_session.as_ref().expect("drop session");
+    assert_eq!(
+        session.frozen_drop_target.clone(),
+        Some(crate::model::FrozenFileDropTarget::Target(
+            crate::model::FileDropTarget::Directory(PathBuf::from("/pane/before"))
+        ))
+    );
+
+    // 在途刷新结果在松手后到达:按松手坐标对新快照重新冻结,落盘
+    // 目标与松手前高亮同源。
+    let pane_id = browser.active_pane_id();
+    let refresh_request = session
+        .scroll_refresh_in_flight
+        .clone()
+        .expect("scroll refresh in flight");
+    drop(browser.accept_drop_layout(
+        refresh_request,
+        directory_bounds(pane_id, "/pane/after", rectangle(0.0, 0.0, 100.0, 100.0)),
+    ));
+    let session = browser.file_drop_session.as_ref().expect("drop session");
+    assert_eq!(
+        session.frozen_drop_target.clone(),
+        Some(crate::model::FrozenFileDropTarget::Target(
+            crate::model::FileDropTarget::Directory(PathBuf::from("/pane/after"))
+        ))
+    );
+}
+
+#[test]
+fn edge_scroll_advance_plans_scroll_refresh() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let identity = internal_session_with_ready_layout(&mut browser);
+    let target_session_id = match identity {
+        crate::model::FileDropSessionIdentity::Wayland(id) => id,
+        other => panic!("unexpected identity {other:?}"),
+    };
+
+    // Moved 事件压在浏览区边缘生成滚动计划,帧循环推进时同帧发起
+    // 布局刷新。
+    let edge_position = Point::new(
+        browser.sidebar_width + 20.0,
+        browser.main_panes_area_top() + 5.0,
+    );
+    drop(browser.accept_wayland_target_event(WaylandFileDropTargetEvent::Moved {
+        target_session_id,
+        position: WaylandDndDropPosition {
+            x: edge_position.x as f64,
+            y: edge_position.y as f64,
+        },
+    }));
+    assert!(browser.file_drag_edge_scroll.is_some());
+
+    drop(browser.advance_file_drag_edge_scroll());
+    assert!(
+        browser
+            .file_drop_session
+            .as_ref()
+            .expect("drop session")
+            .scroll_refresh_in_flight
+            .is_some()
+    );
+}
+
+#[test]
+fn external_and_iced_fallback_sessions_do_not_plan_scroll_refresh() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    let target_session_id = WaylandFileDropTargetSessionId::unique();
+    let request = begin_external_session(&mut browser, target_session_id, Point::new(50.0, 20.0));
+    drop(browser.accept_drop_layout(
+        request,
+        directory_bounds(
+            browser.active_pane_id(),
+            "/external",
+            rectangle(0.0, 0.0, 100.0, 100.0),
+        ),
+    ));
+    drop(browser.remeasure_file_drop_layout_after_scroll());
+    assert!(
+        browser
+            .file_drop_session
+            .as_ref()
+            .expect("drop session")
+            .scroll_refresh_in_flight
+            .is_none()
+    );
+
+    // iced fallback(原生 dnd 不可用)的 position 不随指针更新,
+    // 滚动刷新会按过期位置重算,不参与。
+    let source = PathBuf::from("/tmp/fallback.txt");
+    browser.entries = vec![test_entry(&source)].into();
+    browser.selected_paths.insert(source.clone());
+    browser.cursor_position = Point::new(50.0, 20.0);
+    drop(browser.start_file_drag(
+        source.clone(),
+        crate::model::FileDragStationaryAction::SelectionOnly,
+        Vec::new(),
+    ));
+    drop(browser.update_file_drag(Point::new(10.0, 0.0)));
+    drop(browser.begin_iced_file_drop_session());
+    let request = match browser.file_drop_session.as_ref().expect("drop session").layout {
+        FileDropLayoutState::Pending(request) => request,
+        FileDropLayoutState::Ready { .. } => panic!("iced session must measure layout"),
+    };
+    drop(browser.accept_drop_layout(
+        request,
+        directory_bounds(
+            browser.active_pane_id(),
+            "/fallback",
+            rectangle(0.0, 0.0, 100.0, 100.0),
+        ),
+    ));
+    drop(browser.remeasure_file_drop_layout_after_scroll());
+    assert!(
+        browser
+            .file_drop_session
+            .as_ref()
+            .expect("drop session")
+            .scroll_refresh_in_flight
+            .is_none()
+    );
+}
+
+#[test]
+fn hard_remeasure_pending_discards_arriving_scroll_refresh() {
+    let (mut browser, _) = FileBrowser::new(config::default_user_config());
+    internal_session_with_ready_layout(&mut browser);
+    drop(browser.remeasure_file_drop_layout_after_scroll());
+    let stale_refresh = browser
+        .file_drop_session
+        .as_ref()
+        .expect("drop session")
+        .scroll_refresh_in_flight
+        .clone()
+        .expect("scroll refresh in flight");
+
+    // 硬失效(内容变化)抢先重测成 Pending 后,过期的滚动刷新结果
+    // 必须被丢弃,不得覆盖待到的硬测量。
+    drop(browser.remeasure_active_file_drop_layout());
+    let pane_id = browser.active_pane_id();
+    drop(browser.accept_drop_layout(
+        stale_refresh,
+        directory_bounds(pane_id, "/pane/stale", rectangle(0.0, 0.0, 100.0, 100.0)),
+    ));
+    assert!(matches!(
+        browser.file_drop_session.as_ref().expect("drop session").layout,
+        FileDropLayoutState::Pending(_)
+    ));
+}
+
+
 #[test]
 fn iced_fallback_trash_tab_uses_drag_snapshot_paths() {
     let (mut browser, _) = FileBrowser::new(config::default_user_config());

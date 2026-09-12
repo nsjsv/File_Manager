@@ -37,10 +37,15 @@ impl FileBrowser {
         let Some(edge_scroll) = self.file_drag_edge_scroll.clone() else {
             return Task::none();
         };
-        iced::widget::operation::scroll_by(
-            smooth_scroll_id(&edge_scroll.region),
-            edge_scroll.offset,
-        )
+        // 滚动平移内容即落点快照软失效:滚动与后台重测同帧批量下发,
+        // 新快照到达后高亮按当前指针位置重算,松手 freeze 始终有快照可用。
+        Task::batch([
+            iced::widget::operation::scroll_by(
+                smooth_scroll_id(&edge_scroll.region),
+                edge_scroll.offset,
+            ),
+            self.remeasure_file_drop_layout_after_scroll(),
+        ])
     }
 
     fn file_drag_edge_scroll_at(&self, position: Point) -> Option<FileDragEdgeScroll> {
