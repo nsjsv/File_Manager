@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use file_core::numbered_duplicate_name;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PasteTargetMode {
     Copy,
@@ -72,10 +74,8 @@ pub(super) fn unique_alternate_path(
         .map(OsString::from)
         .unwrap_or_else(|| OsString::from("item"));
 
-    for index in 1..1000 {
-        let mut next = name.clone();
-        next.push(format!(".copy{index}"));
-        let candidate = parent.join(next);
+    for index in 2..1001 {
+        let candidate = parent.join(numbered_duplicate_name(&name, index));
         if !reserved_targets.contains(&candidate) {
             reserved_targets.insert(candidate.clone());
             return candidate;

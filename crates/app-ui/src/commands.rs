@@ -11,8 +11,8 @@ use desktop_linux::{
 };
 use file_core::{
     available_transfer_target_path, check_transfer_conflicts as check_core_transfer_conflicts,
-    create_file_with_contents, scan_trash_with_cancellation, ScanOptions, TransferConflictCheck,
-    TransferConflictItem, TrashScan,
+    create_file_with_contents, numbered_duplicate_name, scan_trash_with_cancellation, ScanOptions,
+    TransferConflictCheck, TransferConflictItem, TrashScan,
 };
 use file_operation_store::{StoreError, TaskQueueStore};
 use iced::Task;
@@ -389,10 +389,8 @@ fn unique_reserved_target(target: &Path, reserved: &std::collections::HashSet<Pa
         .file_name()
         .map(std::ffi::OsStr::to_os_string)
         .unwrap_or_else(|| std::ffi::OsString::from("item"));
-    for index in 1..1000u32 {
-        let mut next = name.clone();
-        next.push(format!(".copy{index}"));
-        let candidate = parent.join(next);
+    for index in 2..1001 {
+        let candidate = parent.join(numbered_duplicate_name(&name, index));
         if !reserved.contains(&candidate) {
             return candidate;
         }

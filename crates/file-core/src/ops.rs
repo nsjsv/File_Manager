@@ -619,12 +619,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let source = directory.path().join("source.txt");
         let target = directory.path().join("target.txt");
-        let target_copy1 = directory.path().join("target.txt.copy1");
-        let target_copy2 = directory.path().join("target.txt.copy2");
+        let target_numbered_2 = directory.path().join("target 2.txt");
+        let target_numbered_3 = directory.path().join("target 3.txt");
 
         fs::write(&source, b"new").await.unwrap();
         fs::write(&target, b"old").await.unwrap();
-        fs::write(&target_copy1, b"old copy").await.unwrap();
+        fs::write(&target_numbered_2, b"old copy").await.unwrap();
 
         copy_path_with_options(
             &source,
@@ -636,8 +636,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(fs::read(&target).await.unwrap(), b"old");
-        assert_eq!(fs::read(&target_copy1).await.unwrap(), b"old copy");
-        assert_eq!(fs::read(&target_copy2).await.unwrap(), b"new");
+        assert_eq!(fs::read(&target_numbered_2).await.unwrap(), b"old copy");
+        assert_eq!(fs::read(&target_numbered_3).await.unwrap(), b"new");
     }
 
     #[tokio::test]
@@ -645,12 +645,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let source = directory.path().join("source.txt");
         let target = directory.path().join("target.txt");
-        let target_copy1 = directory.path().join("target.txt.copy1");
-        let target_copy2 = directory.path().join("target.txt.copy2");
+        let target_numbered_2 = directory.path().join("target 2.txt");
+        let target_numbered_3 = directory.path().join("target 3.txt");
 
         fs::write(&source, b"new").await.unwrap();
         fs::write(&target, b"old").await.unwrap();
-        fs::write(&target_copy1, b"old copy").await.unwrap();
+        fs::write(&target_numbered_2, b"old copy").await.unwrap();
 
         move_path_with_options(
             &source,
@@ -663,8 +663,8 @@ mod tests {
 
         assert!(fs::metadata(&source).await.is_err());
         assert_eq!(fs::read(&target).await.unwrap(), b"old");
-        assert_eq!(fs::read(&target_copy1).await.unwrap(), b"old copy");
-        assert_eq!(fs::read(&target_copy2).await.unwrap(), b"new");
+        assert_eq!(fs::read(&target_numbered_2).await.unwrap(), b"old copy");
+        assert_eq!(fs::read(&target_numbered_3).await.unwrap(), b"new");
     }
 
     #[cfg(unix)]

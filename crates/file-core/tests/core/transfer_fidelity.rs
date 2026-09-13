@@ -465,7 +465,7 @@ mod unix {
         let directory = tempdir().unwrap();
         let source = directory.path().join("source.txt");
         let target = directory.path().join("target-link");
-        let alternate = directory.path().join("target-link.copy1");
+        let alternate = directory.path().join("target-link 2");
         fs::write(&source, b"payload").unwrap();
         symlink("missing", &target).unwrap();
 

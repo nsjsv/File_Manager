@@ -92,7 +92,7 @@ pub async fn available_transfer_target_path(path: impl AsRef<Path>) -> Result<Pa
     }
 
     let (parent, name) = transfer_target_parent_and_name(&path);
-    for index in 1..1000 {
+    for index in 2..1001 {
         let candidate = transfer_target_copy_candidate(&parent, &name, index);
         if is_transfer_target_available(&candidate).await? {
             return Ok(candidate);
@@ -118,7 +118,7 @@ pub(crate) async fn available_transfer_target_path_candidate(path: &Path) -> io:
     }
 
     let (parent, name) = transfer_target_parent_and_name(path);
-    for index in 1..1000 {
+    for index in 2..1001 {
         let candidate = transfer_target_copy_candidate(&parent, &name, index);
         if transfer_target_metadata_if_exists(&candidate)
             .await?
@@ -166,8 +166,64 @@ fn transfer_target_parent_and_name(path: &Path) -> (PathBuf, OsString) {
     (parent, name)
 }
 
+/// 重名自动改名的候选名:序号插在扩展名之前,保住扩展名,
+/// 文件格式识别才不受影响(`Screenshot.png` 被占用 → `Screenshot 2.png`)。
+/// 无扩展名与 `.bashrc` 这类隐藏文件整体视作主名,序号直接尾追,
+/// 扩展名拆分语义与 app-ui `entry_naming` 的 `split_name` 一致。
+pub fn numbered_duplicate_name(name: &std::ffi::OsStr, number: usize) -> OsString {
+    let path = Path::new(name);
+    match (path.file_stem(), path.extension()) {
+        (Some(stem), Some(extension)) => {
+            let mut candidate = stem.to_os_string();
+            candidate.push(format!(" {number}."));
+            candidate.push(extension);
+            candidate
+        }
+        _ => {
+            let mut candidate = name.to_os_string();
+            candidate.push(format!(" {number}"));
+            candidate
+        }
+    }
+}
+
 fn transfer_target_copy_candidate(parent: &Path, name: &std::ffi::OsStr, index: usize) -> PathBuf {
-    let mut next = OsString::from(name);
-    next.push(format!(".copy{index}"));
-    parent.join(next)
+    parent.join(numbered_duplicate_name(name, index))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_number_goes_between_name_and_extension() {
+        assert_eq!(
+            numbered_duplicate_name(std::ffi::OsStr::new("Screenshot.png"), 2),
+            OsString::from("Screenshot 2.png")
+        );
+    }
+
+    #[test]
+    fn duplicate_number_increments_for_each_taken_candidate() {
+        assert_eq!(
+            numbered_duplicate_name(std::ffi::OsStr::new("report.pdf"), 3),
+            OsString::from("report 3.pdf")
+        );
+    }
+
+    #[test]
+    fn extensionless_names_take_the_number_directly() {
+        assert_eq!(
+            numbered_duplicate_name(std::ffi::OsStr::new("notes"), 2),
+            OsString::from("notes 2")
+        );
+    }
+
+    #[test]
+    fn hidden_extensionless_files_use_whole_name_as_stem() {
+        assert_eq!(
+            numbered_duplicate_name(std::ffi::OsStr::new(".bashrc"), 2),
+            OsString::from(".bashrc 2")
+        );
+    }
 }
