@@ -1,6 +1,4 @@
-use iced::widget::{
-    button, column, container, progress_bar, row, scrollable, text_input, Column, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, text_input, Column, Space};
 use iced::{Alignment, Element, Length};
 
 use file_core::{ChecksumAlgorithm, ALL_CHECKSUM_ALGORITHMS};
@@ -110,74 +108,76 @@ fn file_chip_list(state: &ChecksumState) -> Element<'static, Message> {
         .into()
 }
 
+/// 计算区:四行校验卡常驻渲染,取消/失败提示行挂其下。
+/// 卡片布局不随状态增删元素,否则切换文件时面板高度反复跳动。
 fn computation_section(state: &ChecksumState) -> Element<'static, Message> {
-    let body: Element<'static, Message> = match state.computation() {
-        ChecksumComputation::Computing {
-            bytes_done,
-            total_bytes,
-        } => {
-            let fraction = if *total_bytes > 0 {
-                *bytes_done as f32 / *total_bytes as f32
-            } else {
-                0.0
-            };
-            let percent = (fraction * 100.0).round() as u32;
-            row![
-                container(progress_bar(0.0..=1.0, fraction)).width(Length::Fill),
-                readable_text("Computing...").size(12),
-                readable_text(format!("{percent}%")).size(12),
-                secondary_action_button(
-                    "Cancel",
-                    Message::Checksum(ChecksumMessage::CancelPressed)
-                ),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .width(Length::Fill)
-            .into()
-        }
-        ChecksumComputation::Canceled => retry_notice(crate::localization::translate_current(
-            "Checksum computation canceled",
-        ))
-        .into(),
-        ChecksumComputation::Failed(error) => retry_notice(error.clone()).into(),
-        ChecksumComputation::Completed(digests) => {
-            let rows = ALL_CHECKSUM_ALGORITHMS
-                .into_iter()
-                .map(|algorithm| digest_row(state, digests.digest(algorithm), algorithm))
-                .collect();
-            settings_card(rows)
-        }
-    };
+    let mut body = column![digest_card(state)]
+        .spacing(6)
+        .width(Length::Fill);
 
-    section(body)
+    // 计算中不渲染任何进度/取消行:该行的显隐引起面板高度抖动,值位 "—" 已表达
+    // 未就绪;要中止直接关面板,dismiss_floating 会取消仍在跑的计算。
+    let status_line: Option<Element<'static, Message>> = match state.computation() {
+        ChecksumComputation::Computing { .. } | ChecksumComputation::Completed(_) => None,
+        ChecksumComputation::Canceled => Some(
+            retry_notice(crate::localization::translate_current(
+                "Checksum computation canceled",
+            ))
+            .into(),
+        ),
+        ChecksumComputation::Failed(error) => Some(retry_notice(error.clone()).into()),
+    };
+    if let Some(line) = status_line {
+        body = body.push(line);
+    }
+
+    section(body.into())
+}
+
+fn digest_card(state: &ChecksumState) -> Element<'static, Message> {
+    let digests = match state.computation() {
+        ChecksumComputation::Completed(digests) => Some(digests),
+        _ => None,
+    };
+    let rows = ALL_CHECKSUM_ALGORITHMS
+        .into_iter()
+        .map(|algorithm| digest_row(state, digests.map(|d| d.digest(algorithm)), algorithm))
+        .collect();
+    settings_card(rows)
 }
 
 fn digest_row(
     state: &ChecksumState,
-    digest: &str,
+    digest: Option<&str>,
     algorithm: ChecksumAlgorithm,
 ) -> Element<'static, Message> {
-    let copy_icon = if state.last_copied() == Some(algorithm) {
+    let value_text = match digest {
+        Some(digest) => format_middle_ellipsized_text(digest, DIGEST_MAX_CHARS),
+        None => String::from("—"),
+    };
+    // 对勾只在"该算法当前确实显示着已复制的值"时出现,否则取消/重算后旧对勾会挂在空值行上。
+    let copy_icon = if digest.is_some() && state.last_copied() == Some(algorithm) {
         IconSymbol::Check
     } else {
         IconSymbol::Copy
     };
+    // 无值(未算完/取消/失败)时不挂 on_press,复制只在真值可复制时可用。
+    let mut copy_button = button(themed_icon(copy_icon, IconTone::Normal, 13.0))
+        .padding(4)
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0))
+        .style(crate::appearance::navigation_icon_button_style());
+    if digest.is_some() {
+        copy_button = copy_button.on_press(Message::Checksum(
+            ChecksumMessage::HashCopyRequested(algorithm),
+        ));
+    }
     row![
         readable_text(algorithm.label())
             .size(12)
             .width(Length::Fixed(64.0)),
-        readable_text(format_middle_ellipsized_text(digest, DIGEST_MAX_CHARS))
-            .size(12)
-            .width(Length::Fill),
-        button(themed_icon(copy_icon, IconTone::Normal, 13.0))
-            .on_press(Message::Checksum(ChecksumMessage::HashCopyRequested(
-                algorithm
-            )))
-            .padding(4)
-            .width(Length::Fixed(28.0))
-            .height(Length::Fixed(28.0))
-            .style(crate::appearance::navigation_icon_button_style()),
+        readable_text(value_text).size(12).width(Length::Fill),
+        copy_button,
     ]
     .spacing(8)
     .align_y(Alignment::Center)

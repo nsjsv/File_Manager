@@ -209,7 +209,6 @@ pub(crate) enum ChecksumMessage {
         generation: u64,
         result: Result<FileChecksums, ChecksumFailure>,
     },
-    CancelPressed,
     /// 取消或失败后重新计算当前文件。
     RetryPressed,
     ExpectedValueChanged(String),
@@ -244,10 +243,6 @@ impl FileBrowser {
             }
             ChecksumMessage::Completed { generation, result } => {
                 self.finish_checksum_computation(generation, result)
-            }
-            ChecksumMessage::CancelPressed => {
-                self.cancel_active_checksum();
-                Task::none()
             }
             ChecksumMessage::RetryPressed => {
                 if let Some(state) = &mut self.checksum {
@@ -357,16 +352,6 @@ impl FileBrowser {
             Err(ChecksumFailure::Message(message)) => ChecksumComputation::Failed(message),
         };
         Task::none()
-    }
-
-    fn cancel_active_checksum(&mut self) {
-        let Some(state) = &mut self.checksum else {
-            return;
-        };
-        if matches!(state.computation, ChecksumComputation::Computing { .. }) {
-            state.cancel_token.cancel();
-            state.computation = ChecksumComputation::Canceled;
-        }
     }
 
     fn copy_checksum_digest(&mut self, algorithm: ChecksumAlgorithm) -> Task<Message> {
