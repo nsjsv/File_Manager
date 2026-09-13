@@ -1,8 +1,8 @@
 use crate::app::scrollbar::{enhanced_scrollbar, scrollbar_on_scroll, ScrollbarAxis};
 use crate::app::smooth_scroll::{smooth_scroll_content, smooth_scroll_id};
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, row, scrollable, text_input,
-    Column, Row, Space,
+    button, checkbox, column, container, mouse_area, pick_list, row, scrollable, text,
+    text_input, Column, Row, Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
@@ -29,6 +29,9 @@ use super::option_controls::{
 };
 
 const BATCH_RENAME_PANEL_WIDTH: f32 = 720.0;
+// 面板自然高度上限(规则区+预览区满配)。浮层把窗口高-2×边距作为 max 传入,
+// 面板 Fill 高度在该上限与窗口之间取小者,保证小窗口收缩、大窗口外观不变。
+const BATCH_RENAME_PANEL_MAX_HEIGHT: f32 = 700.0;
 const BATCH_RENAME_PREVIEW_HEIGHT: f32 = 240.0;
 const BATCH_RENAME_PATH_MAX_CHARS: usize = 38;
 const BATCH_RENAME_RULES_AREA_HEIGHT: f32 = 170.0;
@@ -66,20 +69,39 @@ pub(super) fn batch_rename_panel(
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let content = column![
+    // 按钮钉底:表单区(标题/排序/规则/编辑器/预览)整体滚动,取消/应用留在
+    // 滚动区外。窗口矮时滚动区收缩,按钮行永远贴底可见;大窗口下受
+    // BATCH_RENAME_PANEL_MAX_HEIGHT 兜底,外观与固定高度时代一致。
+    let form = column![
         header,
         sort_row,
         rules_section(state),
         selected_rule_editor(state),
         preview_rows(state, scrollbar_visibility, scrollbar_viewport),
-        action_row(state),
     ]
     .spacing(12)
     .width(Length::Fill);
 
+    let form_scroller = scrollable(form)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .direction(enhanced_vertical_scrollbar_direction(
+            scrollbar_visibility_stub(),
+            6.0,
+        ))
+        .style(enhanced_scrollbar_style(scrollbar_visibility_stub()));
+
+    let content = column![form_scroller, action_row(state)]
+        .spacing(12)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
     container(content)
         .padding(14)
-        .width(Length::Fixed(BATCH_RENAME_PANEL_WIDTH))
+        .width(Length::Fill)
+        .max_width(BATCH_RENAME_PANEL_WIDTH)
+        .height(Length::Fill)
+        .max_height(BATCH_RENAME_PANEL_MAX_HEIGHT)
         .style(context_menu_style)
         .into()
 }
@@ -736,17 +758,20 @@ fn preview_rows(
         6.0,
     );
 
+    // 表头/行单元文本一律单行测量(Wrapping::None)+ cell clip 水平裁剪:
+    // iced 默认 Word 换行,窄面板压窄列时会把行高撑到两倍以上(无头布局
+    // 探针实测 400px 窗口约 43px vs 单行 28px),clip 只裁绘制不救换行。
     let header = row![
         readable_text("#").size(11).width(Length::Fixed(24.0)),
-        localized_text("Original name")
-            .size(11)
-            .width(Length::FillPortion(3)),
-        localized_text("New name")
-            .size(11)
-            .width(Length::FillPortion(3)),
-        localized_text("Status")
-            .size(11)
-            .width(Length::FillPortion(1)),
+        container(localized_text("Original name").size(11).wrapping(text::Wrapping::None))
+            .width(Length::FillPortion(3))
+            .clip(true),
+        container(localized_text("New name").size(11).wrapping(text::Wrapping::None))
+            .width(Length::FillPortion(3))
+            .clip(true),
+        container(localized_text("Status").size(11).wrapping(text::Wrapping::None))
+            .width(Length::FillPortion(1))
+            .clip(true),
     ]
     .spacing(8);
 
@@ -771,9 +796,10 @@ fn preview_row<'a>(
         .width(Length::Fixed(24.0))
         .into();
     let source_cell: Element<'a, Message> = mouse_area(
-        container(readable_text(source).size(12))
+        container(readable_text(source).size(12).wrapping(text::Wrapping::None))
             .width(Length::FillPortion(3))
-            .padding([1, 0]),
+            .padding([1, 0])
+            .clip(true),
     )
     .on_press(Message::BatchRename(
         BatchRenameMessage::PreviewDragStarted(row_state.source.clone()),
@@ -811,12 +837,19 @@ fn preview_row<'a>(
             index_cell,
             source_cell,
             target_cell,
-            readable_text(status)
-                .size(11)
-                .width(Length::FillPortion(1))
-                .style(move |theme: &Theme| iced::widget::text::Style {
-                    color: Some(status_color(theme, row_state.status)),
-                }),
+            // 状态列与新名列一致:单行测量 + clip 裁剪,窄列不撑高行。
+            container(
+                readable_text(status)
+                    .size(11)
+                    .wrapping(text::Wrapping::None)
+                    .style(move |theme: &Theme| {
+                        iced::widget::text::Style {
+                            color: Some(status_color(theme, row_state.status)),
+                        }
+                    })
+            )
+            .width(Length::FillPortion(1))
+            .clip(true),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -854,16 +887,20 @@ fn diff_highlighted_target(row_state: &BatchRenamePreviewRow) -> Element<'_, Mes
         BATCH_RENAME_PATH_MAX_CHARS,
     );
     let mut cells = Row::new().spacing(0);
-    for (text, changed) in segments {
-        cells = cells.push(readable_text(text).size(12).style(move |theme: &Theme| {
-            iced::widget::text::Style {
-                color: Some(if changed {
-                    changed_segment_color(theme)
-                } else {
-                    base_text_color(theme)
-                }),
-            }
-        }));
+    for (segment, changed) in segments {
+        // 变更段同样单行测量,窄面板下交给外层 container.clip 裁剪。
+        cells =
+            cells.push(readable_text(segment).size(12).wrapping(text::Wrapping::None).style(
+                move |theme: &Theme| {
+                    iced::widget::text::Style {
+                        color: Some(if changed {
+                            changed_segment_color(theme)
+                        } else {
+                            base_text_color(theme)
+                        }),
+                    }
+                },
+            ));
     }
 
     container(cells).clip(true).width(Length::Fill).into()
