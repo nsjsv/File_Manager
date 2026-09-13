@@ -135,14 +135,14 @@ use crate::model::{
     BrowserPane, BrowserPaneId, BrowserPaneLayout, BrowserTab, BrowserViewMode,
     ColumnBrowserViewport, ColumnEntryBounds, ContextMenuState, DestructiveActionConfirmation,
     DirectoryCollectionPhase, DirectoryEntrySnapshot, DirectoryLoadingPlaceholder,
-    DirectoryOrderPhase, ExpandedDirectory, FileDragState, FileDropPrompt, FileDropSessionState,
-    FilePropertiesState, IconGridExpansionState, IconGridViewport, ImagePreviewViewport,
-    ListColumnKind, Message, PaneDragPointerPress, PaneDragState, PendingOperation, PreviewSize,
-    PreviewState, PreviewWindowChromeState, PreviewWindowProfile, ScrollbarRegion,
-    SearchServiceState, SelectionMarquee, ContextMenuSettingsDragState, ContextMenuSettingsPage, SettingsCategory, SettingsSubpage,
-    SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarLocation,
-    StartupDirectoryValidationRequest, TabDragState, TextPreviewDocument, TransferConflictState,
-    TrashRefreshState, VideoPreviewPlayback,
+    DirectoryOrderPhase, ExpandedDirectory, FileDragSpringHover, FileDragState, FileDropPrompt,
+    FileDropSessionState, FilePropertiesState, IconGridExpansionState, IconGridViewport,
+    ImagePreviewViewport, ListColumnKind, Message, PaneDragPointerPress, PaneDragState,
+    PendingOperation, PreviewSize, PreviewState, PreviewWindowChromeState, PreviewWindowProfile,
+    ScrollbarRegion, SearchServiceState, SelectionMarquee, ContextMenuSettingsDragState,
+    ContextMenuSettingsPage, SettingsCategory, SettingsSubpage, SidebarBookmarkDragState,
+    SidebarBookmarkDropSlot, SidebarLocation, StartupDirectoryValidationRequest, TabDragState,
+    TextPreviewDocument, TransferConflictState, TrashRefreshState, VideoPreviewPlayback,
 };
 use crate::network_connections::{NetworkConnectionEditorState, NetworkConnectionState};
 use crate::open_with::OpenWithState;
@@ -292,6 +292,11 @@ pub(crate) struct FileBrowser {
     /// 拖拽源所在的列表滚动可视区,最近一次测量快照。
     pub(crate) file_drag_viewport: Option<iced::Rectangle>,
     pub(crate) file_drop_session: Option<FileDropSessionState>,
+    /// 拖拽悬停目录自动打开(spring)候选:spring_open 模块收敛。
+    pub(crate) file_drag_spring_hover: Option<FileDragSpringHover>,
+    /// 拖拽会话存续期间条目内容变化(spring 导航加载完成/watcher 增量/
+    /// 元数据落地)后落点布局过期;由 spring tick 消化重测。
+    file_drop_layout_stale: bool,
     next_file_drag_gesture_id: u64,
     file_drop_layout_generation: u64,
     file_entry_bounds: Vec<ColumnEntryBounds>,
@@ -686,6 +691,8 @@ impl FileBrowser {
             file_drag: None,
             file_drag_viewport: None,
             file_drop_session: None,
+            file_drag_spring_hover: None,
+            file_drop_layout_stale: false,
             next_file_drag_gesture_id: 0,
             file_drop_layout_generation: 0,
             file_entry_bounds: Vec::new(),
@@ -918,6 +925,14 @@ impl FileBrowser {
             subscriptions.push(
                 time::every(OPERATION_PROGRESS_ANIMATION_INTERVAL)
                     .map(|_| Message::OperationProgressAnimationTick),
+            );
+        }
+
+        // spring 候选存在期间:tick 驱动进度环重绘,到点触发自动打开。
+        if self.file_drag_spring_hover.is_some() {
+            subscriptions.push(
+                time::every(crate::app::selection::spring_open::FILE_DRAG_SPRING_OPEN_TICK_INTERVAL)
+                    .map(|_| Message::FileDragSpringOpenTick),
             );
         }
 

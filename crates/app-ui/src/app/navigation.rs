@@ -282,6 +282,11 @@ impl FileBrowser {
         self.clear_icon_grid_expansion();
         self.current_dir = path.clone();
         self.is_trash_view = false;
+        // 拖拽栏链快照绑定换目录前的多栏链;拖拽中导航(spring 面包屑
+        // 返回 / Alt+←)换目录后快照失效,清空让多栏渲染回到活链。
+        if let Some(drag) = &mut self.file_drag {
+            drag.column_directories_snapshot.clear();
+        }
         self.set_entries(empty_directory_entry_snapshot());
         self.directory_loading_placeholder = loading_placeholder;
         self.trash_entries.clear();
@@ -629,6 +634,9 @@ impl FileBrowser {
     pub(super) fn set_entries(&mut self, entries: DirectoryEntrySnapshot) {
         self.entries = entries;
         self.entry_index = None;
+        // 拖拽会话存续时条目集变化意味着落点布局快照内容级过期(不同于
+        // 滚动的坐标级软失效);由 spring tick 消化重测。
+        self.file_drop_layout_stale |= self.file_drop_session.is_some();
     }
 
     // hover 热路径的 O(1) 查找前提：按需惰性重建索引（导航级一次 O(n)）。
@@ -753,7 +761,9 @@ impl FileBrowser {
         self.selection_anchor = None;
         self.drag_selection_anchor = None;
         self.column_resize_drag = None;
-        self.cancel_file_drag_interaction();
+        // 不取消进行中的拖拽:spring 悬停导航是拖拽中导航的唯一来源,
+        // 拖拽生命周期归拖拽协议(松手/Escape/离窗)管理;导航只负责
+        // 清选择上下文,落点布局过期由 stale 标记驱动重测。
         self.sidebar_bookmark_drag = None;
         self.sidebar_bookmark_drop_slot = None;
         self.hovered_entry = None;

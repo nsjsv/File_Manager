@@ -169,9 +169,30 @@ pub(crate) struct SidebarFileDragTargetBounds {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileDropEntryTargetBounds {
+    pub(crate) pane_id: super::BrowserPaneId,
     pub(crate) directory: PathBuf,
     pub(crate) path: PathBuf,
     pub(crate) bounds: Rectangle,
+}
+
+/// spring 候选来源:文件区目录条目(列表/大图/多栏)或面包屑段落
+/// (仅列表/大图;多栏祖先栏本就可见,面包屑导航会重置栏链,不触发)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileDragSpringSource {
+    Entry,
+    Breadcrumb,
+}
+
+/// 拖拽悬停目录自动打开(spring-loaded)的当前候选。同一次悬停只触发
+/// 一次:fired 后悬停未离开前不重复计时;目录或 pane 变化才重置,
+/// 由 spring_open 模块收敛。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileDragSpringHover {
+    pub(crate) directory: PathBuf,
+    pub(crate) pane_id: super::BrowserPaneId,
+    pub(crate) source: FileDragSpringSource,
+    pub(crate) since: Instant,
+    pub(crate) fired: bool,
 }
 
 #[derive(Debug, Clone, Default)]

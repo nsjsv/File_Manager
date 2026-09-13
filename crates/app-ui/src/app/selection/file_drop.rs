@@ -18,6 +18,7 @@ use crate::file_drag_hit_test_bounds::{
     file_drag_hit_test_bounds_command, FileDragHitTestBoundsRequest,
 };
 use crate::model::{
+    FileDragSpringSource,
     BreadcrumbDropTargetBounds, FileDragHitTestBounds, FileDragState, FileDropLayoutRequest,
     FileDropLayoutState, FileDropOrigin, FileDropSessionIdentity, FileDropSessionPhase,
     FileDropSessionState, FileDropTarget, FrozenFileDropTarget, InternalFileDragSnapshot, Message,
@@ -495,7 +496,7 @@ impl FileBrowser {
     }
 
     fn refresh_hovered_target_from_ready_layout(&mut self) -> Task<Message> {
-        let (target, hovered_entry, hovered_sidebar) = self
+        let (target, hovered_entry, hovered_sidebar, spring_hover) = self
             .file_drop_session
             .as_ref()
             .and_then(|session| {
@@ -522,6 +523,36 @@ impl FileBrowser {
                         .map(|entry| entry.path.clone()),
                     _ => None,
                 };
+                // spring 候选:面包屑段落优先(地址栏区域与条目区不重叠),
+                // 其次是悬停条目本身就是目录落点(目录条目)。
+                let hovered_breadcrumb = match &target {
+                    Some(FileDropTarget::Directory(_)) => hit_test_bounds
+                        .breadcrumbs
+                        .iter()
+                        .filter(|target| {
+                            target.viewport_bounds.contains(position)
+                                && target.item_bounds.contains(position)
+                        })
+                        .max_by_key(|target| target.directory.components().count())
+                        .map(|target| (target.pane_id, target.directory.clone())),
+                    _ => None,
+                };
+                let spring_directory_entry = match &target {
+                    Some(FileDropTarget::Directory(directory)) => hit_test_bounds
+                        .entries
+                        .iter()
+                        .rev()
+                        .find(|entry| entry.path == *directory && entry.bounds.contains(position))
+                        .map(|entry| {
+                            (entry.pane_id, entry.path.clone(), FileDragSpringSource::Entry)
+                        }),
+                    _ => None,
+                };
+                let spring_hover = hovered_breadcrumb
+                    .map(|(pane_id, directory)| {
+                        (pane_id, directory, FileDragSpringSource::Breadcrumb)
+                    })
+                    .or(spring_directory_entry);
                 let hovered_sidebar = match &target {
                     Some(FileDropTarget::Directory(directory)) => hit_test_bounds
                         .sidebar_directories
@@ -534,11 +565,12 @@ impl FileBrowser {
                     Some(FileDropTarget::Trash) => Some(crate::model::trash_location_path()),
                     _ => None,
                 };
-                Some((target, hovered_entry, hovered_sidebar))
+                Some((target, hovered_entry, hovered_sidebar, spring_hover))
             })
             .unwrap_or_default();
         self.hovered_entry = hovered_entry;
         self.hovered_sidebar = hovered_sidebar;
+        self.note_file_drag_spring_hover(spring_hover);
         let target_changed = self.set_file_drop_target(target.clone());
         self.update_file_drop_visuals(target.as_ref());
         match target {
@@ -552,6 +584,7 @@ impl FileBrowser {
     fn set_file_drop_tab_target(&mut self, target: TabFileDropTarget) -> Task<Message> {
         self.hovered_entry = None;
         self.hovered_sidebar = None;
+        self.note_file_drag_spring_hover(None);
         let target_changed = self.set_file_drop_target(Some(FileDropTarget::Tab(target.clone())));
         self.update_file_drop_visuals(Some(&FileDropTarget::Tab(target.clone())));
         if target_changed {
@@ -724,6 +757,9 @@ impl FileBrowser {
         self.hovered_entry = None;
         self.hovered_sidebar = None;
         self.sidebar_bookmark_drop_slot = None;
+        // spring 候选不在这里清:布局硬失效重测(拖拽中途)也走本函数,
+        // 清掉会丢 fired 防抖标记;候选生命周期由悬停态收敛(note)与
+        // tick 的拖拽会话兜底检查共同维护。
     }
 
     fn clear_internal_file_drop_visuals(&mut self) {

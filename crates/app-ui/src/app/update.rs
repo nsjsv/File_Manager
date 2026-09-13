@@ -229,6 +229,7 @@ impl FileBrowser {
                     self.operation_progress_animation_frame.wrapping_add(1);
                 Task::none()
             }
+            Message::FileDragSpringOpenTick => self.handle_file_drag_spring_open_tick(),
             Message::DesktopNotificationPublished(outcome) => {
                 self.accept_desktop_notification_published(outcome)
             }
@@ -397,6 +398,24 @@ impl FileBrowser {
                     self.handle_drop_target_hovered(directory)
                 } else if self.file_drag.is_some() {
                     self.handle_file_drag_drop_target_hovered_in_pane(pane_id, directory)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::BreadcrumbDropTargetHovered(pane_id, directory) => {
+                if pane_id == self.active_pane_id() {
+                    self.handle_breadcrumb_drop_target_hovered(directory)
+                } else if self.file_drag.is_some() {
+                    self.handle_file_drag_drop_target_hovered_in_pane(pane_id, directory)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::BreadcrumbDropTargetHoverCleared(pane_id, directory) => {
+                if pane_id == self.active_pane_id() {
+                    self.handle_breadcrumb_drop_target_hover_cleared(directory)
+                } else if self.file_drag.is_some() {
+                    self.handle_file_drag_drop_target_hover_cleared_in_pane(pane_id, directory)
                 } else {
                     Task::none()
                 }

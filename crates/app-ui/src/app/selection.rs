@@ -10,7 +10,8 @@ use super::{FileBrowser, DOUBLE_CLICK_THRESHOLD};
 
 use crate::model::{
     BrowserPaneId, BrowserViewMode, ContextMenuState, FileContextMenuExpansion,
-    FileContextMenuState, FileDeleteAction, FileDragStationaryAction, LastActivationClick, Message,
+    FileContextMenuState, FileDeleteAction, FileDragSpringSource, FileDragStationaryAction,
+    LastActivationClick, Message,
 };
 use crate::selection_summary::{summarize_selected_entries, PaneSelectionSummary};
 
@@ -26,6 +27,8 @@ mod file_drop;
 mod file_drop_target;
 mod keyboard_navigation;
 mod marquee;
+// spring_open 的 tick 间隔常量由 app.rs 的 subscription 引用。
+pub(super) mod spring_open;
 #[cfg(test)]
 mod tests;
 mod visible_paths;
@@ -176,6 +179,10 @@ impl FileBrowser {
         self.cursor_paste_directory = Some(self.entry_parent_directory(&path));
         if self.file_drag.is_some() {
             self.set_file_drag_target(self.directory_drop_target_for_entry(&path));
+            self.note_file_drag_spring_hover(
+                (self.entry_kind(&path) == Some(FileKind::Directory))
+                    .then(|| (self.active_pane_id(), path.clone(), FileDragSpringSource::Entry)),
+            );
         } else if self.selection_marquee.is_none() {
             self.extend_drag_selection_to(path);
         }
@@ -186,16 +193,55 @@ impl FileBrowser {
         if self.hovered_entry.as_ref() == Some(&path) {
             self.hovered_entry = None;
             self.cursor_paste_directory = Some(self.entry_parent_directory(&path));
+            self.note_file_drag_spring_hover(None);
         }
         Task::none()
     }
 
     pub(super) fn handle_drop_target_hovered(&mut self, directory: PathBuf) -> Task<Message> {
         self.hovered_entry = None;
+        self.note_file_drag_spring_hover(None);
         if self.file_drag.is_some() {
             self.set_file_drag_target(directory);
         } else {
             self.cursor_paste_directory = Some(directory);
+        }
+        Task::none()
+    }
+
+    /// 面包屑段落悬停:落点高亮/粘贴目录语义与空白区一致,但 spring
+    /// 候选来源标记为面包屑(悬停导航回该级;资格 gate 统一在 note)。
+    pub(super) fn handle_breadcrumb_drop_target_hovered(&mut self, directory: PathBuf) -> Task<Message> {
+        self.hovered_entry = None;
+        if self.file_drag.is_some() {
+            self.set_file_drag_target(directory.clone());
+            self.note_file_drag_spring_hover(Some((
+                self.active_pane_id(),
+                directory.clone(),
+                FileDragSpringSource::Breadcrumb,
+            )));
+        } else {
+            self.cursor_paste_directory = Some(directory);
+        }
+        Task::none()
+    }
+
+    /// 面包屑悬停离开:仅当当前候选正是该面包屑段落时清除,避免与相邻
+    /// 条目/段落的 enter 事件乱序时误杀新候选。
+    pub(super) fn handle_breadcrumb_drop_target_hover_cleared(&mut self, directory: PathBuf) -> Task<Message> {
+        if self.file_drag.is_none() && self.cursor_paste_directory.as_ref() == Some(&directory) {
+            self.cursor_paste_directory = None;
+        }
+        self.clear_file_drag_target_if_matching(&directory);
+        let cleared_matches = self
+            .file_drag_spring_hover
+            .as_ref()
+            .is_some_and(|candidate| {
+                candidate.source == FileDragSpringSource::Breadcrumb
+                    && candidate.directory == directory
+            });
+        if cleared_matches {
+            self.note_file_drag_spring_hover(None);
         }
         Task::none()
     }

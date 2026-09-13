@@ -200,10 +200,11 @@ mod drag;
 pub(crate) use drag::{
     BreadcrumbDropTargetBounds, DirectoryFileDragTargetBounds, FileDragBlockedDirectoryBounds,
     FileDragDropIntent, FileDragHitTestBounds, FileDragNativeDndState, FileDragPhase,
-    FileDragPreviewEntry, FileDragState, FileDragStationaryAction, FileDropEntryTargetBounds,
-    FileDropHitTestBounds, LastActivationClick, PaneDragPointerPress, PaneDragState,
-    PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot, SidebarFileDragTargetBounds,
-    TabDragMode, TabDragState, TabSplitTarget,
+    FileDragPreviewEntry, FileDragSpringHover, FileDragSpringSource, FileDragState,
+    FileDragStationaryAction,
+    FileDropEntryTargetBounds, FileDropHitTestBounds, LastActivationClick, PaneDragPointerPress,
+    PaneDragState, PaneDropTarget, SidebarBookmarkDragState, SidebarBookmarkDropSlot,
+    SidebarFileDragTargetBounds, TabDragMode, TabDragState, TabSplitTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -439,6 +440,9 @@ pub(crate) enum Message {
     FileOperationFinished(u64, FileOperationCompletion),
     FileOperationPersistenceFinished(crate::operation_queue::FileOperationPersistenceOutcome),
     OperationProgressAnimationTick,
+    FileDragSpringOpenTick,
+    BreadcrumbDropTargetHovered(BrowserPaneId, PathBuf),
+    BreadcrumbDropTargetHoverCleared(BrowserPaneId, PathBuf),
     DesktopNotificationPublished(Result<(), String>),
     FileOperationIndicatorPressed,
     FileOperationPauseToggled(u64),

@@ -615,7 +615,9 @@ pub(crate) fn column_directories_for_pane(pane: BrowserPaneView<'_>) -> Vec<Path
     directories
 }
 
-fn append_column_directory_chain(
+/// 从 current_dir 向 deepest 逐级展开祖先链;拖拽扩链(spring_open)
+/// 复用同一规则,保证快照写回与渲染链一致。
+pub(crate) fn append_column_directory_chain(
     directories: &mut Vec<PathBuf>,
     current_dir: &Path,
     selected_directory: &Path,

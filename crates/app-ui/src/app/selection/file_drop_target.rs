@@ -28,6 +28,7 @@ pub(super) fn freeze_file_drop_hit_test_bounds(
                     })
                     .flatten()
                     .map(|directory| FileDropEntryTargetBounds {
+                        pane_id: entry.pane_id,
                         directory,
                         path: entry.path,
                         bounds: entry.bounds,

@@ -14,6 +14,7 @@ use crate::appearance::{
 };
 use crate::config::ViewDensityLevel;
 use crate::file_entry_presentation::SelectionRunPosition;
+use crate::file_drag_spring_ring::file_drag_spring_ring;
 use crate::icons::{file_entry_icon_symbol, IconSymbol};
 use crate::matugen_theme::ui_colors;
 use crate::model::{FileEntryContentModifier, Message};
@@ -232,7 +233,9 @@ pub(crate) fn entry_thumbnail_or_icon<'a>(
     let modifier = browser.file_entry_content_modifier(&entry.path);
     let thumbnail_edge = density.thumbnail_edge();
     let thumbnail_size = density.thumbnail_size();
-    if let Some(thumbnail) = browser
+    // spring 候选目录条目:图标槽外圈显示自动打开进度环。
+    let spring_progress = browser.file_drag_spring_open_progress(&entry.path);
+    let decorated: Element<'a, Message> = if let Some(thumbnail) = browser
         .thumbnail_cache
         .ready_for_entry(entry, thumbnail_edge)
     {
@@ -244,18 +247,25 @@ pub(crate) fn entry_thumbnail_or_icon<'a>(
         .width(Length::Fixed(thumbnail_size))
         .height(Length::Fixed(thumbnail_size))
         .into();
-        return decorate_file_entry_icon(thumbnail, thumbnail_size, modifier);
-    }
-
-    let icon_size = density.icon_size();
-    centered_file_entry_icon_slot(
-        entry_icon(entry, tone, density)
-            .opacity(modifier.opacity())
+        decorate_file_entry_icon(thumbnail, thumbnail_size, modifier)
+    } else {
+        let icon_size = density.icon_size();
+        centered_file_entry_icon_slot(
+            entry_icon(entry, tone, density)
+                .opacity(modifier.opacity())
+                .into(),
+            icon_size,
+            thumbnail_size,
+            modifier,
+        )
+    };
+    match spring_progress {
+        Some(progress) => Stack::with_children([decorated, file_drag_spring_ring(progress)])
+            .width(Length::Fixed(thumbnail_size))
+            .height(Length::Fixed(thumbnail_size))
             .into(),
-        icon_size,
-        thumbnail_size,
-        modifier,
-    )
+        None => decorated,
+    }
 }
 
 fn centered_file_entry_icon_slot<'a, Renderer>(

@@ -38,6 +38,7 @@ mod directory_summary;
 mod document_preview;
 mod file_drag_hit_test_bounds;
 mod file_drag_hit_test_marker;
+mod file_drag_spring_ring;
 mod file_entry_presentation;
 mod file_entry_view;
 mod floating_surface;
