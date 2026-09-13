@@ -27,6 +27,7 @@ use iced::futures::stream::BoxStream;
 use iced::futures::SinkExt;
 use iced::Subscription;
 
+use crate::localization::translate_current;
 use crate::model::Message;
 use crate::operation_history::{
     CompletedTransfer, FileOperationCompletion, FileOperationHistoryEligibility,
@@ -432,10 +433,12 @@ async fn run_queued_create_directory(
         .wait_until_running()
         .await
         .map_err(|error| error.to_string())?;
-    let path = parent.join(NEW_DIRECTORY_NAME);
-    create_directory(&path)
-        .await
-        .map_err(|error| error.to_string())?;
+    let path = create_new_entry(
+        parent,
+        &translate_current(NEW_DIRECTORY_NAME),
+        NewEntryKind::Directory,
+    )
+    .await?;
     send_file_operation_progress(
         output,
         task_id,
@@ -458,10 +461,12 @@ async fn run_queued_create_empty_file(
         .wait_until_running()
         .await
         .map_err(|error| error.to_string())?;
-    let path = parent.join(NEW_FILE_NAME);
-    create_empty_file(&path)
-        .await
-        .map_err(|error| error.to_string())?;
+    let path = create_new_entry(
+        parent,
+        &translate_current(NEW_FILE_NAME),
+        NewEntryKind::EmptyFile,
+    )
+    .await?;
     send_file_operation_progress(
         output,
         task_id,
@@ -472,6 +477,50 @@ async fn run_queued_create_empty_file(
     )
     .await;
     Ok(FileOperationOutcome::CreateEmptyFile { path })
+}
+
+/// 「New...」菜单新建条目的唯一名落地:基名跟随界面语言,候选名按共享
+/// 命名规则生成(基名、基名 2、基名 3…),由创建操作的 AlreadyExists
+/// 原子裁决逐个后移——与「收纳新文件夹」执行侧的就地重选同一套命名规则。
+async fn create_new_entry(
+    parent: PathBuf,
+    base_name: &str,
+    kind: NewEntryKind,
+) -> Result<PathBuf, String> {
+    let mut name_taken_error = None;
+    for name in crate::model::suffixed_name_candidates(std::ffi::OsStr::new(base_name), "", false) {
+        let path = parent.join(name);
+        let result = match kind {
+            NewEntryKind::Directory => create_directory(&path).await,
+            NewEntryKind::EmptyFile => create_empty_file(&path).await,
+        };
+        match result {
+            Ok(path) => return Ok(path),
+            Err(error) if create_entry_name_taken(&error) => {
+                name_taken_error = Some(error.to_string());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err(name_taken_error.unwrap_or_else(|| {
+        format!("no available name for new entry in {}", parent.display())
+    }))
+}
+
+/// 候选名被占用的错误形态:create_dir / create_new 的 AlreadyExists 就是
+/// 占用判定本身,先探测再创建反而引入 TOCTOU。
+fn create_entry_name_taken(error: &FileError) -> bool {
+    match error {
+        FileError::CreateDirectory { source, .. } | FileError::CreateFile { source, .. } => {
+            source.kind() == std::io::ErrorKind::AlreadyExists
+        }
+        _ => false,
+    }
+}
+
+enum NewEntryKind {
+    Directory,
+    EmptyFile,
 }
 
 async fn run_queued_gather_selection_into_new_folder(
@@ -787,6 +836,44 @@ impl QueuedTransferMode {
             Self::Copy => RecoverableTransferOperation::Copy,
             Self::Move => RecoverableTransferOperation::Move,
         }
+    }
+}
+
+#[cfg(test)]
+mod create_new_entry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn create_new_entry_skips_taken_candidates() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("新建文件夹")).unwrap();
+
+        let created = create_new_entry(
+            directory.path().to_path_buf(),
+            "新建文件夹",
+            NewEntryKind::Directory,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created, directory.path().join("新建文件夹 2"));
+        assert!(created.is_dir());
+    }
+
+    #[tokio::test]
+    async fn create_new_entry_creates_base_name_when_free() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let created = create_new_entry(
+            directory.path().to_path_buf(),
+            "新建文件",
+            NewEntryKind::EmptyFile,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created, directory.path().join("新建文件"));
+        assert!(created.is_file());
     }
 }
 

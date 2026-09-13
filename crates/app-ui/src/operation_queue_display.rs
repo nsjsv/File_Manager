@@ -35,10 +35,14 @@ impl QueuedFileOperation {
                     items.len(),
                 ),
             },
-            Self::CreateDirectory { parent } => {
-                created_entry_path_lines(parent, NEW_DIRECTORY_NAME)
-            }
-            Self::CreateEmptyFile { parent } => created_entry_path_lines(parent, NEW_FILE_NAME),
+            Self::CreateDirectory { parent } => created_entry_path_lines(
+                parent,
+                &crate::localization::translate_current(NEW_DIRECTORY_NAME),
+            ),
+            Self::CreateEmptyFile { parent } => created_entry_path_lines(
+                parent,
+                &crate::localization::translate_current(NEW_FILE_NAME),
+            ),
             Self::Trash { paths } | Self::DeletePermanently { paths } => {
                 path_lines_from_paths(paths)
             }

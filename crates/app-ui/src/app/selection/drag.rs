@@ -13,17 +13,6 @@ use crate::model::{
 };
 use crate::operation_queue::{QueuedFileOperation, QueuedTransfer};
 
-/// 移动空操作判定:源等于落点、落入自身子树、或已在落点目录内,
-/// 移动落地不会产生任何变化。动作胶囊的显示条件与落地过滤共用此
-/// 不变量——部分源为空操作时其余条目仍可移动。
-fn is_no_op_move(source: &Path, target: &Path, target_directory: &Path) -> bool {
-    source == target
-        || target.starts_with(source)
-        || source
-            .parent()
-            .is_some_and(|parent| parent == target_directory)
-}
-
 impl FileBrowser {
     pub(crate) fn update_file_drag(&mut self, position: iced::Point) -> Task<Message> {
         let mut activated = false;
@@ -418,7 +407,7 @@ impl FileBrowser {
         // 才无事发生。与 file_drag_directory_capsule 的显示条件同判定。
         let movable = transfer_targets
             .into_iter()
-            .filter(|(source, target)| !is_no_op_move(source, target, &target_directory))
+            .filter(|(source, _)| !paths::move_is_no_op(source, &target_directory))
             .collect::<Vec<_>>();
         if movable.is_empty() {
             return Task::none();
@@ -541,7 +530,7 @@ impl FileBrowser {
         if intent == FileDragDropIntent::Move
             && sources
                 .iter()
-                .all(|source| is_no_op_move(source, directory, directory))
+                .all(|source| paths::move_is_no_op(source, directory))
         {
             return None;
         }
@@ -644,11 +633,7 @@ pub(super) fn safe_file_drop_target(
 }
 
 fn file_drag_directory_target_needs_fallback(sources: &[PathBuf], target: &Path) -> bool {
-    sources.iter().any(|source| {
-        source == target
-            || target.starts_with(source)
-            || source.parent().is_some_and(|parent| parent == target)
-    })
+    sources.iter().any(|source| paths::move_is_no_op(source, target))
 }
 
 #[cfg(test)]
@@ -823,33 +808,6 @@ mod tests {
             SidebarBookmarkDropSlot::Insert { index: 0 },
         ));
         assert!(browser.file_drag_action_capsule_label().is_none());
-    }
-
-    #[test]
-    fn no_op_move_predicate_matches_directory_relationships() {
-        let target_directory = Path::new("/data/project");
-        let dragged_folder = Path::new("/data/project");
-        let dragged_child = Path::new("/data/project/inner.txt");
-        let outsider = Path::new("/data/other.txt");
-
-        // 目录移入自身、源已在落点目录内、源等于落点:空操作。
-        assert!(is_no_op_move(
-            dragged_folder,
-            &target_directory.join("project"),
-            target_directory
-        ));
-        assert!(is_no_op_move(
-            dragged_child,
-            &target_directory.join("inner.txt"),
-            target_directory
-        ));
-        assert!(is_no_op_move(dragged_folder, target_directory, target_directory));
-        // 落点目录外的条目:可移动。
-        assert!(!is_no_op_move(
-            outsider,
-            &target_directory.join("other.txt"),
-            target_directory
-        ));
     }
 
     #[test]

@@ -440,12 +440,7 @@ impl FileBrowser {
                 (TransferConflictMode::Copy, transfers)
             }
             PendingOperation::Move(sources) => {
-                let transfers =
-                    paths::transfer_targets(&paste_directory, &sources, PasteTargetMode::Move)
-                        .into_iter()
-                        .filter(|(source, target)| source != target)
-                        .map(|(source, target)| QueuedTransfer::new(source, target))
-                        .collect::<Vec<_>>();
+                let transfers = move_paste_transfers(&paste_directory, &sources);
                 self.pending_operation = None;
                 (TransferConflictMode::Move, transfers)
             }
@@ -488,6 +483,17 @@ fn gather_sources_in_directory(selected: &[PathBuf], directory: &Path) -> Vec<Pa
         .iter()
         .filter(|path| path.parent() == Some(directory))
         .cloned()
+        .collect()
+}
+
+/// 粘贴移动的目标计算:与拖拽落地共用同一空操作不变量(源等于落点、
+/// 落入自身子树、已在落点目录),空操作源逐个跳过,而不是入队后由
+/// 传输引擎报错。
+fn move_paste_transfers(paste_directory: &Path, sources: &[PathBuf]) -> Vec<QueuedTransfer> {
+    paths::transfer_targets(paste_directory, sources, PasteTargetMode::Move)
+        .into_iter()
+        .filter(|(source, _)| !paths::move_is_no_op(source, paste_directory))
+        .map(|(source, target)| QueuedTransfer::new(source, target))
         .collect()
 }
 
@@ -666,6 +672,35 @@ mod tests {
         assert_eq!(
             browser.file_entry_content_modifier(&source),
             FileEntryContentModifier::None
+        );
+    }
+
+    #[test]
+    fn move_paste_into_own_subtree_enqueues_nothing() {
+        let project = PathBuf::from("/workspace/project");
+        let mut browser = browser_with_entries(std::slice::from_ref(&project));
+
+        // 与拖拽落地同一不变量:目录移入自身子树是空操作,直接跳过,
+        // 不入队由传输引擎报错。
+        drop(browser.paste_operation(
+            project.join("inner"),
+            PendingOperation::Move(vec![project.clone()]),
+        ));
+        assert!(browser.operation_queue.tasks().is_empty());
+    }
+
+    #[test]
+    fn move_paste_transfers_skips_no_op_sources_and_keeps_the_rest() {
+        let already_there = PathBuf::from("/workspace/project");
+        let outsider = PathBuf::from("/other/notes");
+
+        // 混合选择:已在落点目录内的源是空操作,其余条目照常移动。
+        let transfers =
+            move_paste_transfers(Path::new("/workspace"), &[already_there, outsider.clone()]);
+
+        assert_eq!(
+            transfers,
+            vec![QueuedTransfer::new(outsider, PathBuf::from("/workspace/notes"))]
         );
     }
 

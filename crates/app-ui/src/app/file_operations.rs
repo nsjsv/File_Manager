@@ -8,13 +8,25 @@ use super::FileBrowser;
 use crate::model::{IconGridExpansionMigration, Message};
 use crate::operation_history::{
     path_after_completed_migrations, CompletedPathMigration, FileOperationCompletion,
-    PendingHistoryOperation,
+    FileOperationOutcome, PendingHistoryOperation,
 };
 use crate::operation_queue::{
     file_operation_persistence_command, FileOperationEnqueueOutcome, FileOperationFinish,
     FileOperationPersistenceOutcome, QueuedFileOperation,
 };
 use crate::view::rename_input_id;
+
+/// 完成后自动进入重命名的入口跟随执行结果的真实路径:执行器按唯一名
+/// 规则落地时(重名换「新建文件夹 2」、收纳竞争重选),入队侧的预测
+/// 路径不再成立。
+fn outcome_created_path(outcome: &FileOperationOutcome) -> Option<PathBuf> {
+    match outcome {
+        FileOperationOutcome::CreateDirectory { path }
+        | FileOperationOutcome::CreateEmptyFile { path } => Some(path.clone()),
+        FileOperationOutcome::GatheredIntoNewFolder { directory, .. } => Some(directory.clone()),
+        _ => None,
+    }
+}
 
 // ponytail: 重命名会话短且输入有限，完整字符串快照的内存上限随编辑次数和名称长度增长；若支持长文本或长期会话，再升级为合并编辑事务。
 #[derive(Debug, Default)]
@@ -237,10 +249,9 @@ impl FileBrowser {
         let completed_successfully = matches!(completion, FileOperationCompletion::Succeeded(_));
         let is_history_replay = self.operation_history.is_replaying(task_id);
         let created_path = (completed_successfully && !is_history_replay)
-            .then(|| {
-                completed_operation
-                    .as_ref()
-                    .and_then(QueuedFileOperation::created_path)
+            .then(|| match &completion {
+                FileOperationCompletion::Succeeded(outcome) => outcome_created_path(outcome),
+                _ => None,
             })
             .flatten();
 
